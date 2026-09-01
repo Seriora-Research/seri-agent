@@ -33,6 +33,11 @@ export async function runWelcomeSplash(
   // Same synchronous-mirror pattern as guidedSetup.ts's own liveState/dispatch — see that file's
   // own comment for why a caller reading state right after a dispatch needs this rather than
   // React's own effect-scheduled commit.
+  // Computed before the first render so App's reducer can seed `authOffer` the same way
+  // `showSplash` seeds `pendingSplash`. `connectDispatch` still dispatches both actions, but
+  // those effects run after the first commit and cannot win the first paint.
+  const offerAuth = decideAuthOffer(configDir);
+
   let liveState: TuiState = initialTuiState(
     {
       id: randomUUID(),
@@ -41,7 +46,7 @@ export async function runWelcomeSplash(
       permissionMode: "approve-each",
       messages: [],
     },
-    { showSplash: true },
+    { showSplash: true, authOffer: offerAuth },
   );
   let reactDispatch: Dispatch | undefined;
   const dispatch: Dispatch = (action) => {
@@ -131,18 +136,19 @@ export async function runWelcomeSplash(
         home: process.env.HOME || homedir(),
       },
       onPreSessionSubmit,
+      showSplash: true,
+      authOffer: offerAuth,
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,
       onAuthResolved,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        // App's own internal `useReducer(tuiReducer, initialTuiState(session))` call never sees
-        // this phase's `showSplash` opt (that only seeds `liveState`, above) — `splash-requested`
-        // is what actually flips App's OWN rendered `pendingSplash` to true, the same "requested"
-        // dispatch every other pending panel already fires from its own connectDispatch.
+        // Same values already seeded on the initializer. Re-dispatching after the first paint is
+        // a no-op visually (`pendingSplash`/`authOffer` are already true) and keeps this mount's
+        // connectDispatch on the same "requested at mount" shape every other pending panel uses.
         dispatch({ type: "splash-requested" });
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+        dispatch({ type: "auth-offer", show: offerAuth });
       },
     }),
   );

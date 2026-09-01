@@ -1976,6 +1976,32 @@ describe("App", () => {
   });
 
   describe("welcome splash", () => {
+    // App used to mount from `initialTuiState(session)` with `pendingSplash: false`, so the first
+    // committed frame was session chrome (`starting session…`) until `connectDispatch` fired
+    // `splash-requested`. This mount passes the seeds and does not dispatch either action, so a
+    // pass cannot be the effect catching up.
+    test("a splash mount's first frame is the welcome splash, not session chrome", async () => {
+      const { setup } = await connect({
+        showSplash: true,
+        authOffer: true,
+        onSubmit: undefined,
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "groq",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Log in");
+      expect(frame).toContain("Sign up");
+      expect(frame).toContain("Continue without logging in");
+      expect(frame).not.toContain("starting session");
+      expect(frame).not.toContain("approve-each mode on");
+    });
+
     // ListRow always applies `truncate`: before this, WelcomeSplash's own row carried no wrap prop
     // at all, so a label wider than the terminal soft-wrapped onto a second row instead of
     // truncating — this pins both halves, the marker at a normal width and the truncation at a
@@ -2106,9 +2132,8 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("second");
     });
 
-    // The splash mount's own first frame lands before `connectDispatch` fires `splash-requested`,
-    // so `pendingSplash` is false there too. Without the `splashDone` latch that frame offered a
-    // live input box, and a fast typist could queue a task before answering the login gate.
+    // A mount that omits `showSplash` still has `pendingSplash` false on the first frame.
+    // `splashDone` is what keeps that frame from offering a live input box.
     test("no input box before the login choice is answered", async () => {
       const taken: string[] = [];
       const { setup } = await connect({

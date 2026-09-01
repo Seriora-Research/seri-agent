@@ -233,6 +233,13 @@ export type AppProps = {
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
   // rather than captured, and a skill approved since startup completes after a /clear.
   getCompletionSources?: () => readonly CompletionSource[];
+  // Seeds `pendingSplash` at `useReducer` init. `connectDispatch`'s `splash-requested` cannot win
+  // the first paint: that effect runs after the first commit. `runWelcomeSplash` is the only
+  // production caller that passes true; `runTui` / `runGuidedSetup` omit it.
+  showSplash?: boolean;
+  // Seeds `authOffer` the same way. Default false would paint the authenticated "Continue" menu
+  // on a splash first frame until `auth-offer` landed from `connectDispatch`.
+  authOffer?: boolean;
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;
@@ -346,8 +353,13 @@ export function App({
   onPreSessionSubmit,
   onCycleMode,
   skipPermissions,
+  showSplash,
+  authOffer,
 }: AppProps) {
-  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route, config }));
+  const [state, dispatch] = useReducer(
+    tuiReducer,
+    initialTuiState(session, { route, config, showSplash, authOffer }),
+  );
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);

@@ -2047,16 +2047,15 @@ async function startChild(
     // splash's keyboard handler is mounted, so the write below is the dismiss and not a no-op.
     await sawLine("Esc continue");
     child.stdin?.write("\x1b");
-    // `pendingSplash` starts false, so the first painted frame is session chrome (the mode line
-    // included). `splash-requested` then covers it. `sawLine` is cumulative, so a later wait on
-    // "approve-each mode on" is already true while the splash still owns the keyboard. A flat
-    // 100ms sleep after Escape is the same race under load: the next write lands on the splash
-    // and is dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can
-    // clear the overlay (a blank grid) before the next surface is interactive. Two consecutive
-    // non-blank polls with the splash hint gone are the signal that whatever replaced it (idle
-    // input, /setup, an approval prompt) will see the next stdin write. Frames are not compared
-    // for equality: a live elapsed-time row changes every second. A child that already exited
-    // has nothing left to type into.
+    // `sawLine` is cumulative. Waiting on the mode line is not a dismiss signal: that text can
+    // appear in a later frame while leftover splash input is still being dropped. A flat 100ms
+    // sleep after Escape is the same race under load: the next write lands on the splash and is
+    // dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can clear the
+    // overlay (a blank grid) before the next surface is interactive. Two consecutive non-blank
+    // polls with the splash hint gone are the signal that whatever replaced it (idle input,
+    // /setup, an approval prompt) will see the next stdin write. Frames are not compared for
+    // equality: a live elapsed-time row changes every second. A child that already exited has
+    // nothing left to type into.
     const dismissed = Date.now() + 20_000;
     let sawHint = false;
     let hintGone = false;
