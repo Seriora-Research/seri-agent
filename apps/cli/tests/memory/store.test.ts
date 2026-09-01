@@ -12,6 +12,7 @@ import {
   type MemoryFile,
   memoryFilePath,
   projectDirToken,
+  renderArchivistMemory,
   renderMemoryTier,
 } from "../../src/memory/store";
 
@@ -443,5 +444,30 @@ describe("renderMemoryTier", () => {
     expect(rendered).toContain("# Memory");
     expect(rendered).toContain("prefers tabs");
     expect(rendered).toMatch(/\d+% — \d+\/1375 chars/);
+    expect(rendered).toContain("You cannot edit these directly");
+  });
+});
+
+describe("renderArchivistMemory", () => {
+  test("empty files render empty, same as renderMemoryTier", () => {
+    const ctx = makeCtx();
+    expect(renderArchivistMemory(loadMemory(ctx))).toBe("");
+  });
+
+  test("keeps entries and budgets without the coding-agent intro", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
+    const rendered = renderArchivistMemory(loadMemory(ctx));
+    expect(rendered).toContain("prefers tabs");
+    expect(rendered).toMatch(/\d+% — \d+\/1375 chars/);
+    expect(rendered).not.toContain("You cannot edit these directly");
+    expect(rendered).not.toContain("frozen for this session");
+    expect(rendered).not.toContain("# Memory");
+    // Parent renderer still carries the intro — this function is not a replacement for it.
+    expect(renderMemoryTier(loadMemory(ctx))).toContain("You cannot edit these directly");
   });
 });
