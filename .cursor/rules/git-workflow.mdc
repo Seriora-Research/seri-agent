@@ -7,10 +7,9 @@ alwaysApply: true
 
 ## Feature branches + PRs, not direct pushes to main
 Starting 2026-08-02 (user directive): new work lands via a feature branch and a pull
-request, not a direct push to `main`. This applies to engineering-loop work too — when
-an implementer subagent's work (in its own worktree/branch) is verified and ready to
-land, push that branch to `origin` and open a PR (`gh pr create`) instead of the
-orchestrator fast-forward-merging it into local `main` and pushing `main` directly.
+request, not a direct push to `main`. When an implementer's work is verified and ready
+to land, push that branch to `origin` and open a PR instead of fast-forward-merging
+into local `main` and pushing `main` directly.
 
 **Why:** `main` already has a GitHub branch-protection rule requiring PRs
 ("Changes must be made through a pull request") — the direct push that landed Stage 3's

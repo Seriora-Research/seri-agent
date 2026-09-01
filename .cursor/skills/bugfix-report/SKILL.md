@@ -1,6 +1,6 @@
 ---
 name: bugfix-report
-description: Reproduce a bug, write a failing regression test, fix it, and produce a structured bugfix report. Used by the engineering loop in bugfix mode.
+description: Reproduce a bug, write a failing regression test, fix it, and produce a structured bugfix report.
 argument-hint: "<bug description>"
 allowed-tools: Read, Grep, Glob, Bash
 model: inherit

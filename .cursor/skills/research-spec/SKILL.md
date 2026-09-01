@@ -1,6 +1,6 @@
 ---
 name: research-spec
-description: Explore a topic, library, or codebase; compare alternatives and tradeoffs; produce a structured markdown research spec / build contract. Used by the engineering loop in research mode.
+description: Explore a topic, library, or codebase; compare alternatives and tradeoffs; produce a structured markdown research spec / build contract.
 argument-hint: "<task prompt>"
 context: fork
 allowed-tools: Read, Grep, Glob, WebSearch, WebFetch

@@ -6,20 +6,6 @@
         "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/record-session.ps1"
       }
     ],
-    "subagentStop": [
-      {
-        "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/log-trajectory.ps1"
-      }
-    ],
-    "preToolUse": [
-      {
-        "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/protect-loop-core.ps1",
-        "matcher": "Write|StrReplace"
-      },
-      {
-        "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/goal-audit-gate.ps1"
-      }
-    ],
     "beforeShellExecution": [
       {
         "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/block-dangerous.ps1"

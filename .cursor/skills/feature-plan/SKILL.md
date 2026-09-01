@@ -1,6 +1,6 @@
 ---
 name: feature-plan
-description: Turn exploration into a structured, reviewable implementation plan with file-level changes, test strategy, and acceptance criteria. Used by the engineering loop in feature mode.
+description: Turn exploration into a structured, reviewable implementation plan with file-level changes, test strategy, and acceptance criteria.
 argument-hint: "<task prompt>"
 allowed-tools: Read, Grep, Glob
 model: inherit
