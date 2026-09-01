@@ -50,8 +50,8 @@ export type SetupState =
       busy: boolean;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
-  | { step: "confirm-connect" }
-  | { step: "confirm-disconnect" };
+  | { step: "confirm-connect"; provider: "xai" | "openai" }
+  | { step: "confirm-disconnect"; provider: "xai" | "openai" };
 
 export type AuthMode = "login" | "signup" | "grok";
 

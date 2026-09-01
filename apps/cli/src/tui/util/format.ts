@@ -2,6 +2,7 @@
 // terminal" property reducer.ts already has.
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
+import { describeCodexSetupStatus } from "../../auth/codexBin";
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
@@ -9,7 +10,6 @@ import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
-import { describeCodexSetupStatus } from "../../auth/codexBin";
 import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
@@ -335,14 +335,18 @@ export function formatDoneLine(
 // bug of promising a fallback that does not exist.
 // Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
 // persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
-// they can never independently drift on what "your key"/"→ provider"/"provided"/"no key" means
-// for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
-// `formatModeDetail`'s caller passed a real plan-coverage predicate/route.
+// they can never independently drift on what "your key"/"plan"/"→ provider"/"provided"/"no key"
+// means for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
+// `formatModeDetail`'s caller passed a real plan-coverage predicate/route. `subscriptionCovered`
+// is the ChatGPT-plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
+// row still reads as included.
 export function formatRouteLabel(input: {
   keyConfigured: boolean;
   rerouteTo?: ModelProvider;
   gatewayReachable?: boolean;
+  subscriptionCovered?: boolean;
 }): string {
+  if (input.subscriptionCovered) return "plan";
   if (input.keyConfigured) return "your key";
   if (input.rerouteTo) return `→ ${input.rerouteTo}`;
   if (input.gatewayReachable) return "provided";
@@ -353,9 +357,10 @@ export function formatRouteLabel(input: {
 // the same reason formatModelRow's own comment gives — unit-testable without mounting Ink.
 // `route.rerouted` alone used to disambiguate "your key" from "→ provider", back when a
 // gateway-served route was indistinguishable from a local one here — both have `rerouted: false`.
-// `route.credential` is what tells them apart now: `keyConfigured` is true only when NEITHER is
-// set, and `gatewayReachable` is threaded through so a gateway-served route reads "provided" here
-// exactly as it already does in the model picker's Route column.
+// `route.credential` is what tells them apart now: `keyConfigured` is true only for a
+// non-rerouted `key` credential, `subscriptionCovered` for `subscription`, and `gatewayReachable`
+// for `gateway` — so a ChatGPT-plan route reads "plan" here exactly as it already does in the
+// model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
 // App before any provider key exists, so there is genuinely no route to show yet. Falls back to no
 // suffix — showing a fabricated route would misreport "your key"/"→ provider" during the exact
@@ -382,7 +387,8 @@ export function formatModeDetail(
   if (route === undefined) return "";
   const model = `  ${truncate(route.model, NAME_WIDTH)}`;
   const routeLabel = formatRouteLabel({
-    keyConfigured: !route.rerouted && route.credential !== "gateway",
+    keyConfigured: !route.rerouted && route.credential === "key",
+    subscriptionCovered: !route.rerouted && route.credential === "subscription",
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.credential === "gateway",
   });
@@ -421,8 +427,14 @@ export function pickerLabelWidth(terminalCols: number): number {
 // returns the full five columns plus suffix. When the full string overflows, drop the suffix
 // first; if still over, drop the Route column. Context and Cost stay.
 export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): string {
-  const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable } = row;
-  const route = formatRouteLabel({ keyConfigured, rerouteTo, gatewayReachable });
+  const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable, subscriptionCovered } =
+    row;
+  const route = formatRouteLabel({
+    keyConfigured,
+    rerouteTo,
+    gatewayReachable,
+    subscriptionCovered,
+  });
   const suffix =
     keyConfigured && alternatives > 0
       ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}`
@@ -431,7 +443,7 @@ export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): stri
     truncatePad(entry.displayName, NAME_WIDTH),
     truncatePad(entry.provider, PROVIDER_WIDTH),
     formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
-    truncatePad(formatCost(entry.pricing), COST_WIDTH),
+    truncatePad(subscriptionCovered ? "included" : formatCost(entry.pricing), COST_WIDTH),
     truncatePad(route, ROUTE_WIDTH),
   ];
   const full = columns.join(" ") + suffix;
@@ -479,7 +491,7 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     .split(/\s+/)
     .filter((term) => term.length > 0);
   if (terms.length === 0) return true;
-  const { entry } = row;
+  const { entry, subscriptionCovered } = row;
   const haystacks = [
     entry.id.toLowerCase(),
     entry.displayName.toLowerCase(),
@@ -490,6 +502,7 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     (entry.family ?? "").toLowerCase(),
     entry.provider.toLowerCase(),
     priceLabel(entry),
+    ...(subscriptionCovered ? ["included", "plan"] : []),
   ];
   return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }

@@ -572,7 +572,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
   );
 
   test(
-    "write_file always restages, regardless of a preceding non-destructive bash call",
+    "write_file after a shell snapshot still restages the whole worktree",
     () => {
       const snapshot = checkpointer();
       snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
@@ -584,6 +584,58 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
       expect(
         plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
       ).toContain("new.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "later write_file restages a previous write without walking the rest of the worktree",
+    () => {
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      writeFileSync(join(workTree, "a.txt"), "first\n");
+      writeFileSync(join(workTree, "sneaky.txt"), "unrelated\n");
+      snapshot(
+        mutation({
+          toolCallId: "c2",
+          args: { path: join(workTree, "b.txt") },
+        }),
+      );
+
+      const records = toolRecords();
+      expect(plainGit(join(storeDir, "git"), ["show", `${records[1]?.tree}:a.txt`])).toBe(
+        "first\n",
+      );
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).not.toContain("sneaky.txt");
+      expect(
+        plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", records[1]?.tree ?? ""]),
+      ).not.toContain("b.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "later write_file of a gitignored path does not latch checkpointing off",
+    () => {
+      writeFileSync(join(workTree, ".gitignore"), "*.log\n");
+      const snapshot = checkpointer();
+      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot(
+        mutation({
+          toolCallId: "c2",
+          args: { path: join(workTree, "secret.log") },
+        }),
+      );
+      writeFileSync(join(workTree, "a.txt"), "after\n");
+      snapshot(mutation({ toolCallId: "c3" }));
+
+      expect(toolRecords().map((record) => record.toolCallId)).toEqual(["c1", "c2", "c3"]);
+      expect(warnings.some((message) => message.startsWith("checkpointing is off"))).toBe(false);
+      expect(plainGit(join(storeDir, "git"), ["show", `${toolRecords()[2]?.tree}:a.txt`])).toBe(
+        "after\n",
+      );
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -859,7 +911,9 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
       recordWrite(storeDir, join(workTree, "seri-made.txt"), "seri wrote this\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
-      const result = undo(2);
+      // c2 snapshotted write_file of a.txt, so the new file is not in that tree — the two
+      // records share one filesystem checkpoint, and one undo step lands on "before".
+      const result = undo(1);
 
       expect(result.deleted).toContain("seri-made.txt");
       expect(result.preserved).not.toContain("seri-made.txt");
@@ -882,7 +936,7 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
       // on disk.
       writeFileSync(join(workTree, "written-then-edited.txt"), "edited by someone else\n");
 
-      const result = undo(2);
+      const result = undo(1);
 
       expect(result.deleted).not.toContain("written-then-edited.txt");
       expect(result.preserved).toContain("written-then-edited.txt");
@@ -911,7 +965,7 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
         storeDir,
         worktree: workTree,
         sessionId: SESSION,
-        steps: 2,
+        steps: 1,
         onPlan: (plan) => {
           // The first check passed — raced.txt hashes to what recordWrite vouched for.
           expect(plan.deleted).toContain("raced.txt");

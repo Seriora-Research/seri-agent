@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../auth/authStore";
+import { CODEX_IGNORE_FILENAME } from "../auth/codexIgnore";
 import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
@@ -30,9 +31,9 @@ export const DAEMON_DESCRIPTOR_FILENAME = "daemon.json";
 export const DAEMON_LOCK_FILENAME = "daemon.lock";
 
 // The full names of every sibling a profile directory would collide with under the default root.
-// The three file-backed entries are read from the file that owns them (config.json, auth.json,
-// permissions.yaml), so this set cannot drift out of sync with the literal each of those modules
-// actually writes. sessions/, checkpoints/, rg/ (the shared vendored-rg cache) and bin/
+// The file-backed entries are read from the file that owns them (config.json, auth.json,
+// permissions.yaml, codex-ignore), so this set cannot drift out of sync with the literal each of
+// those modules actually writes. sessions/, checkpoints/, rg/ (the shared vendored-rg cache) and bin/
 // (install.ps1 installs the Windows binary to ~\.seri\bin) have no single file that
 // already owns them, so they stay literals here. Caveat: install.ps1 resolves that path from
 // $env:USERPROFILE, not $HOME, so a user with HOME set to something other than USERPROFILE on
@@ -53,6 +54,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     CONFIG_FILENAME,
     AUTH_FILENAME,
     PERMISSIONS_FILENAME,
+    CODEX_IGNORE_FILENAME,
     "sessions",
     "checkpoints",
     "rg",

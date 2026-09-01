@@ -4267,6 +4267,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     });
     snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
     writeFileSync(join(workTree, "a.txt"), "after\n");
@@ -4377,6 +4378,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
     // The agent's own write_file call, not a second checkpoint: recordWrite is what write_file's
     // onAfterMutation populates on every successful write, independent of whether a new snapshot
@@ -4492,6 +4494,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         worktree: workTree2,
         sessionId: SESSION_ID,
         onWarning: () => {},
+        cwd: workTree2,
       });
       snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
       writeFileSync(join(workTree2, "a.txt"), "after\n");
@@ -4525,6 +4528,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
     saveSession(
       {

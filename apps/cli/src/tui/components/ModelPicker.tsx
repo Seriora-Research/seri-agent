@@ -20,7 +20,7 @@ import {
 } from "../util/format";
 import { isDismiss, isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
-const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
+const FILTER_PLACEHOLDER = 'Type to filter — try "included", "free" or "paid"…';
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
 // exactly: its own keyboard handler, a single-bordered box, mutually exclusive with InputBox.

@@ -12,6 +12,9 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
+import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
+import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { refreshCodexSubscription, resetCodexModelCache } from "../../src/auth/codexRefresh";
 import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
@@ -253,6 +256,57 @@ describe("decideModelPickerOpen", () => {
     expect(openrouterRow?.gatewayReachable).toBe(true);
     expect(anthropicRow?.gatewayReachable).toBe(false);
   });
+
+  test("subscriptionCovered is false on every row when subscribed is omitted", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "gpt-5.6-terra", provider: "openai" }),
+        catalogEntry({ id: "llama-3.3-70b-versatile", provider: "groq" }),
+      ],
+    };
+    const rows = decideModelPickerOpen(catalog, new Set());
+    expect(rows.every((row) => row.subscriptionCovered === false)).toBe(true);
+  });
+
+  test("a subscribed openai row is plan-covered without flipping keyConfigured", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "gpt-5.6-terra", provider: "openai" }),
+        catalogEntry({ id: "openai/gpt-5.6-terra", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideModelPickerOpen(
+      catalog,
+      new Set(),
+      () => false,
+      new Set<ModelProvider>(["openai"]),
+    );
+    const openaiRow = rows.find((row) => row.entry.provider === "openai");
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+    expect(openaiRow?.subscriptionCovered).toBe(true);
+    expect(openaiRow?.keyConfigured).toBe(false);
+    expect(openaiRow?.rerouteTo).toBeUndefined();
+    expect(openrouterRow?.subscriptionCovered).toBe(false);
+    expect(openrouterRow?.rerouteTo).toBe("openai");
+  });
+
+  test("a subscribed openai row with an API key keeps keyConfigured true", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "gpt-5.6-terra", provider: "openai" })],
+    };
+    const rows = decideModelPickerOpen(
+      catalog,
+      new Set<ModelProvider>(["openai"]),
+      () => false,
+      new Set<ModelProvider>(["openai"]),
+    );
+    expect(rows[0]?.keyConfigured).toBe(true);
+    expect(rows[0]?.subscriptionCovered).toBe(true);
+    expect(rows[0]?.rerouteTo).toBeUndefined();
+  });
 });
 
 // byok-guided-setup-default-model bugfix report, Decision 3: the guided-setup picker must never
@@ -373,6 +427,7 @@ describe("decideSetupOpen", () => {
     else process.env.CODEX_HOME = originalCodexHome;
     if (originalCodexBin === undefined) delete process.env.SERI_CODEX_BIN;
     else process.env.SERI_CODEX_BIN = originalCodexBin;
+    resetCodexModelCache();
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
@@ -457,6 +512,48 @@ describe("decideSetupOpen", () => {
     const rows = decideSetupOpen(setupConfigDir);
     const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
     expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(true);
+  });
+
+  test("a chatgpt login with a profile ignore is an ignored, non-removable row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    ignoreCodexSubscription(setupConfigDir);
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "ignored" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(false);
+  });
+
+  test("a connected Codex row includes planType after account/read", async () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const rpc: CodexJsonRpc = {
+      request: async () => ({ account: { type: "chatgpt", planType: "plus" } }),
+      notify: () => {},
+      close: () => {},
+    };
+    await refreshCodexSubscription(setupConfigDir, { rpc, env: { CODEX_HOME: setupConfigDir } });
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({
+      status: "connected",
+      planType: "plus",
+    });
   });
 
   test("an API-key Codex login is not-logged-in, even without an access token", () => {
@@ -490,6 +587,23 @@ describe("decideSetupOpen", () => {
     expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBe(
       "unused because a ChatGPT plan is connected",
     );
+  });
+
+  test("an openai key is used when the ChatGPT plan is ignored", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    ignoreCodexSubscription(setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBeUndefined();
   });
 });
 
@@ -634,7 +748,8 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 1,
     });
     // Written directly, bypassing the checkpointer's onAfterMutation — no ledger entry, so a
-    // restore back past this point cannot prove seri wrote it.
+    // restore back past this point cannot prove seri wrote it. The second write_file restages
+    // a.txt only (unchanged), so the two records share one tree and `/undo 1` is the step.
     writeFileSync(join(workTree, "b.txt"), "created outside write_file\n");
     snapshot({
       tool: "write_file",
@@ -643,7 +758,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 2,
     });
 
-    const { plan, message } = decideUndo(session(), ["2"], {
+    const { plan, message } = decideUndo(session(), ["1"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
       configDir: root,
@@ -653,7 +768,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     expect(plan.deleted).toEqual([]);
     expect(plan.preserved).toEqual(["b.txt"]);
     expect(message).toBe(
-      "Already at checkpoint 2; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
+      "Already at checkpoint 1; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
     );
   }, 30_000);
 

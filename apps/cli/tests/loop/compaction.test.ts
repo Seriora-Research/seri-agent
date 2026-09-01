@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { JSONValue, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { compactMessages, findSafeEvictionBoundary } from "../../src/loop/compaction";
+import {
+  compactMessages,
+  elideOversizedStrings,
+  findSafeEvictionBoundary,
+  SUMMARIZER_STRING_CAP_BYTES,
+} from "../../src/loop/compaction";
 import { streamResult, textOnlyChunks } from "./fixtures";
 
 function usage(inputTotal: number, outputTotal: number) {
@@ -35,6 +40,16 @@ function toolResultMsg(id: string, value: JSONValue): ModelMessage {
       },
     ],
   };
+}
+
+function summarizerUserText(model: MockLanguageModelV4): string {
+  const user = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+  const content = user && "content" in user ? user.content : undefined;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => (part && typeof part === "object" && "text" in part ? String(part.text) : ""))
+    .join("");
 }
 
 // One leading user message, then `pairs` adjacent {assistant tool-call, tool result} pairs.
@@ -71,6 +86,57 @@ describe("findSafeEvictionBoundary", () => {
   test("returns null when fewer than minEvictable messages would be evicted", () => {
     const messages = buildAlternatingMessages(10);
     expect(findSafeEvictionBoundary(messages, messages.length)).toBeNull();
+  });
+});
+
+describe("elideOversizedStrings", () => {
+  test("passes strings at or under the cap and replaces oversized ones with originalBytes", () => {
+    expect(elideOversizedStrings("short")).toBe("short");
+    const atCap = "a".repeat(SUMMARIZER_STRING_CAP_BYTES);
+    expect(elideOversizedStrings(atCap)).toBe(atCap);
+    const over = "a".repeat(SUMMARIZER_STRING_CAP_BYTES + 1);
+    expect(elideOversizedStrings(over)).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(over, "utf8"),
+    });
+  });
+
+  test("walks nested objects and arrays without mutating the input", () => {
+    const input = {
+      keep: "ok",
+      nested: { body: "x".repeat(SUMMARIZER_STRING_CAP_BYTES + 1), path: "src/foo.ts" },
+      list: ["y".repeat(SUMMARIZER_STRING_CAP_BYTES + 1), 7, null],
+    };
+    const snapshot = structuredClone(input);
+    const out = elideOversizedStrings(input) as {
+      keep: string;
+      nested: { body: { elided: true; originalBytes: number }; path: string };
+      list: unknown[];
+    };
+    expect(input).toEqual(snapshot);
+    expect(out.keep).toBe("ok");
+    expect(out.nested.path).toBe("src/foo.ts");
+    expect(out.nested.body).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(input.nested.body, "utf8"),
+    });
+    expect(out.list[0]).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(input.list[0] as string, "utf8"),
+    });
+    expect(out.list[1]).toBe(7);
+    expect(out.list[2]).toBeNull();
+  });
+
+  test("caps by UTF-8 bytes, not string length", () => {
+    const twoByte = "é";
+    expect(Buffer.byteLength(twoByte, "utf8")).toBe(2);
+    const overByBytes = twoByte.repeat(SUMMARIZER_STRING_CAP_BYTES / 2 + 1);
+    expect(overByBytes.length).toBeLessThanOrEqual(SUMMARIZER_STRING_CAP_BYTES);
+    expect(elideOversizedStrings(overByBytes)).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(overByBytes, "utf8"),
+    });
   });
 });
 
@@ -140,5 +206,67 @@ describe("compactMessages", () => {
 
     expect(result.summary.progress).toBe("streamed");
     expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  test("does not send oversized tool-result bodies to the summarizer, and does not mutate the evicted messages", async () => {
+    const largeBody = `UNIQUE_FILE_BODY_${"x".repeat(50_000)}`;
+    const shortLiteral = "SHORT_ID_7";
+    const userText = "do the task involving src/foo.ts";
+    const messages: ModelMessage[] = [
+      { role: "user", content: userText },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-read",
+            toolName: "read_file",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-read",
+            toolName: "read_file",
+            output: { type: "json", value: largeBody },
+          },
+        ],
+      },
+      assistantToolCallMsg("call-write"),
+      toolResultMsg("call-write", shortLiteral),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: `read src/foo.ts and saw ${shortLiteral}`,
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const result = await compactMessages(messages, model, 5);
+
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const sent = summarizerUserText(model);
+    expect(sent).not.toContain(largeBody);
+    expect(sent).not.toContain("UNIQUE_FILE_BODY_");
+    expect(sent).toContain(shortLiteral);
+    expect(sent).toContain(userText);
+    expect(sent).toContain("src/foo.ts");
+    expect(sent).toContain('"elided":true');
+    expect(sent).toContain(`"originalBytes":${Buffer.byteLength(largeBody)}`);
+    expect(JSON.stringify(messages)).toContain(largeBody);
+    expect(result.evictedCount).toBe(5);
   });
 });

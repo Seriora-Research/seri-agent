@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 // spawnSync buffers the child's entire stdout and kills it the moment the buffer fills, and the
 // overflow arrives as `status: null` with an empty stderr — indistinguishable from a crashed git.
@@ -272,8 +272,21 @@ export function treeExists(gitDir: string, treeish: string): boolean {
 // repo, where no `.gitignore`, no `git clean` and no repo deletion will ever reach it. That is a
 // security regression traded for an undo nobody asked for. `.claude/` and `dist/` fall outside the
 // undo for the same reason.
-export function writeTree(gitDir: string, workTree: string): string {
-  git(gitDir, workTree, ["add", "-A"]);
+//
+// `paths` omitted: `add -A`, the whole worktree minus ignores — first snapshot, shell, restore.
+// `paths` provided: `git add -- <those that exist>` then `write-tree`. `--` so a path that
+// looks like a flag is still a path. Missing entries are skipped (`git add -- missing` exits
+// 128); callers must not pass ignored paths (`git add -- ignored` exits 1, no `-f`). Empty
+// after that filter is write-tree only: the index is already the snapshot.
+export function writeTree(gitDir: string, workTree: string, paths?: readonly string[]): string {
+  if (paths === undefined) {
+    git(gitDir, workTree, ["add", "-A"]);
+  } else {
+    const existing = paths.filter((path) =>
+      existsSync(isAbsolute(path) ? path : join(workTree, path)),
+    );
+    if (existing.length > 0) git(gitDir, workTree, ["add", "--", ...existing]);
+  }
   return git(gitDir, workTree, ["write-tree"]).trim();
 }
 
