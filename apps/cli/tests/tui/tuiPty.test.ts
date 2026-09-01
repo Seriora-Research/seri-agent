@@ -27,27 +27,9 @@ function requireSessionId(sessionsDir: string): string {
   return id;
 }
 
-function sessionDbPaths(sessionsDir: string): string[] {
-  const configDir = configDirForStore(sessionsDir, "sessions");
-  return [DATABASE_FILENAME, `${DATABASE_FILENAME}-wal`, `${DATABASE_FILENAME}-shm`].map((name) =>
-    join(configDir, name),
-  );
-}
-
-function chmodIfPresent(path: string, mode: number): void {
-  try {
-    chmodSync(path, mode);
-  } catch (err) {
-    // SQLite can checkpoint and unlink WAL/SHM between a stat and chmod. The main db
-    // file is what must exist after the child's first save; a vanished sidecar is that
-    // race, not a missing store.
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-}
-
 const exclusiveLocks = new Map<string, Database>();
 
-function makeSessionStoreReadOnly(sessionsDir: string): void {
+function lockSessionStore(sessionsDir: string): void {
   // chmod of seri.db does not fail a write on a connection that already has the file
   // open — the kernel checks access at open, not at write. The child holds one
   // SessionDatabase for the process, so the parent takes an exclusive lock instead:
@@ -62,18 +44,14 @@ function makeSessionStoreReadOnly(sessionsDir: string): void {
 
 function restoreSessionStore(sessionsDir: string): void {
   const lock = exclusiveLocks.get(sessionsDir);
-  if (lock !== undefined) {
-    exclusiveLocks.delete(sessionsDir);
-    try {
-      lock.exec("ROLLBACK");
-    } catch {
-      // already rolled back or connection closed
-    }
-    lock.close();
+  if (lock === undefined) return;
+  exclusiveLocks.delete(sessionsDir);
+  try {
+    lock.exec("ROLLBACK");
+  } catch {
+    // already rolled back or connection closed
   }
-  for (const path of sessionDbPaths(sessionsDir)) {
-    chmodIfPresent(path, 0o600);
-  }
+  lock.close();
 }
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
@@ -2377,10 +2355,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // session" tests, elsewhere) while the identical failure from Shift+Tab became an unhandled
   // rejection instead. `runtime/renderer.ts`'s own `process.on("unhandledRejection", ...)` handler
   // calls `process.exit(1)` — the whole TUI would crash from a keypress that, via /mode, degrades
-  // gracefully. Sabotages `sessionsDir` the same way the /clear persist-failure test above does, so
-  // Shift+Tab's own save fails, and confirms both the error surfaces AND the process is still
-  // alive afterward (answers a second, unrelated keypress) — a crash would fail the second half
-  // silently, not loudly, since `sawLine` would just hang until the test's own timeout.
+  // gracefully. Takes an exclusive SQLite lock so Shift+Tab's save hits SQLITE_BUSY (chmod does
+  // not fail a write on a connection the child already holds), and confirms both the error
+  // surfaces AND the process is still alive afterward (answers a second, unrelated keypress) — a
+  // crash would fail the second half silently, not loudly, since `sawLine` would just hang until
+  // the test's own timeout.
   test("shift+tab shows an error instead of crashing the TUI when its own persist fails", async () => {
     const scriptPath = join(dir, "child-input-cycle-persist-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -2392,7 +2371,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("approve-each mode on");
 
       // Exclusive lock: the child's held connection would still write after chmod.
-      makeSessionStoreReadOnly(sessionsDir);
+      lockSessionStore(sessionsDir);
 
       child.stdin?.write("\x1b[Z");
       await sawLine("could not save the session");
@@ -3768,11 +3747,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // onSessionChange used to call saveSession bare, with nothing to catch a throw. The session
-  // database is made read-only AFTER prepareSession's own initial save has already succeeded —
-  // deterministic and cross-platform, unlike trying to fill a real disk. A bare throw escaped the
-  // React effect entirely and Ink's own renderer dumped a raw stack trace across the terminal;
-  // "could not save the session" never appeared and the pending `/mode` never completed.
+  // onSessionChange used to call saveSession bare, with nothing to catch a throw. After
+  // prepareSession's own initial save has succeeded, the parent takes an exclusive SQLite lock so
+  // the child's held connection hits SQLITE_BUSY — chmod would not, because the kernel checks
+  // access at open, not at write. A bare throw escaped the React effect entirely and Ink's own
+  // renderer dumped a raw stack trace across the terminal; "could not save the session" never
+  // appeared and the pending `/mode` never completed.
   test("a session-save failure surfaces as a command error instead of hanging forever (finding 1)", async () => {
     const scriptPath = join(dir, "child-save-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -3782,9 +3762,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_READY");
 
-      // Sabotage AFTER the initial save succeeds — prepareSession's own unconditional saveSession
+      // Lock AFTER the initial save succeeds — prepareSession's own unconditional saveSession
       // call, unrelated to the bug under test, must be given a real chance to land first.
-      makeSessionStoreReadOnly(sessionsDir);
+      lockSessionStore(sessionsDir);
 
       child.stdin?.write("/mode");
       await sawLine("/mode");
@@ -6238,8 +6218,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // throws when the persist promise rejects, but `dispatch({ type: "session-updated", ... })`
     // (tuiPresenter's own sessionUpdated) already ran synchronously before that rejection — so
     // `liveState.session.id` has already changed by the time onSubmit's `finally` runs, regardless
-    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Makes
-    // the session database read-only so the NEW session's `saveSession` call fails, and confirms
+    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Takes an
+    // exclusive SQLite lock so the NEW session's `saveSession` call fails, and confirms
     // the checkpointer still moved off the old session's ref despite that failure — this is what
     // would go red if the rebind were still living in the `try` block it used to (onSubmit's own
     // comment explains why).
@@ -6268,7 +6248,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const refsBeforeClear = listSessionRefs(gitDir);
 
         // Exclusive lock: the child's held connection would still write after chmod.
-        makeSessionStoreReadOnly(sessionsDir);
+        lockSessionStore(sessionsDir);
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
