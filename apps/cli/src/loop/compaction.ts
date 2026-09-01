@@ -99,6 +99,52 @@ export function elideOversizedStrings(
 // {assistant tool-call, tool result} pair pushed by loop.ts, and evicting one half while
 // keeping the other reproduces the AI_MissingToolResultsError class of bug (fixed in
 // 24c2aa1).
+const OVERFLOW_MARKERS = [
+  "too many tokens",
+  "maximum context",
+  "context_length",
+  "token limit",
+];
+
+function errorSearchText(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current !== undefined && current !== null; depth++) {
+    if (typeof current === "string") {
+      parts.push(current);
+      break;
+    }
+    if (current instanceof Error) {
+      parts.push(current.message);
+      current = current.cause;
+      continue;
+    }
+    if (typeof current === "object" && "message" in current) {
+      const message = (current as { message?: unknown }).message;
+      if (typeof message === "string") parts.push(message);
+    }
+    break;
+  }
+  return parts.join(" ").toLowerCase();
+}
+
+function statusCodeOf(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "statusCode" in err) {
+    const code = (err as { statusCode?: unknown }).statusCode;
+    if (typeof code === "number") return code;
+  }
+  return undefined;
+}
+
+export function isContextOverflowError(err: unknown): boolean {
+  const text = errorSearchText(err);
+  if (OVERFLOW_MARKERS.some((marker) => text.includes(marker))) return true;
+  if (/\bcontext\b/.test(text) && /window|length|exceed|limit|too (?:long|large)|overflow/.test(text)) {
+    return true;
+  }
+  return statusCodeOf(err) === 400 && /\bcontext\b/.test(text);
+}
+
 export function findSafeEvictionBoundary(
   messages: ModelMessage[],
   keepRecentTokens: number,

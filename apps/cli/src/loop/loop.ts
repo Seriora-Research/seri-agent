@@ -24,7 +24,9 @@ import {
   type CompactionSummary,
   compactMessages,
   DEFAULT_PRESERVE_RECENT_TOKENS,
+  estimateTokens,
   findSafeEvictionBoundary,
+  isContextOverflowError,
   MAX_RETRIES,
 } from "./compaction";
 
@@ -322,6 +324,37 @@ export async function* runLoop(opts: {
     }),
   ) as ToolSet;
 
+  async function* tryCompact(
+    onSummarizerFail: "soft" | "hard",
+  ): AsyncGenerator<LoopEvent, "ok" | "skipped" | "failed" | "aborted"> {
+    const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
+    if (evictBoundary === null) return "skipped";
+    try {
+      const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
+        stream: opts.credential === "subscription" && opts.provider === "openai",
+      });
+      messages.splice(0, messages.length, ...compacted.messages);
+      for (let attempt = 1; attempt <= compacted.retries; attempt++) {
+        yield { type: "retry", attempt };
+      }
+      yield {
+        type: "compacted",
+        summary: compacted.summary,
+        evictedCount: compacted.evictedCount,
+        usage: compacted.usage,
+      };
+      yield { type: "messages-updated", messages: [...messages] };
+      return "ok";
+    } catch (err) {
+      if (opts.signal?.aborted) {
+        yield { type: "done", reason: "aborted" };
+        return "aborted";
+      }
+      yield { type: "error", error: errorText(err) };
+      return onSummarizerFail === "hard" ? "failed" : "skipped";
+    }
+  }
+
   let lastInputTokens = 0;
   // Copied, not aliased: opts.allowedTools is a seed the caller owns. Run-local and read on every
   // gate check, so an "always" answer takes effect on the very next call in the same turn — which
@@ -341,50 +374,15 @@ export async function* runLoop(opts: {
       return;
     }
 
-    if (lastInputTokens / contextWindowSize >= compactionThreshold) {
-      const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
-      if (evictBoundary !== null) {
-        try {
-          const compacted = await compactMessages(
-            messages,
-            opts.model,
-            evictBoundary,
-            opts.signal,
-            {
-              stream: opts.credential === "subscription" && opts.provider === "openai",
-            },
-          );
-          messages.splice(0, messages.length, ...compacted.messages);
-          // Drained here for the same reason the stream's retries are drained below: compaction is
-          // a model call the user never asked for, and until now a 429'd summariser was ~6 s of
-          // silence before `⚙ compacted`. compactMessages cannot yield and does no I/O, so its
-          // count comes back as a return value and becomes events here — one per retry, before the
-          // `compacted` event, because that is the order they happened in.
-          for (let attempt = 1; attempt <= compacted.retries; attempt++) {
-            yield { type: "retry", attempt };
-          }
-          yield {
-            type: "compacted",
-            summary: compacted.summary,
-            evictedCount: compacted.evictedCount,
-            usage: compacted.usage,
-          };
-          yield { type: "messages-updated", messages: [...messages] };
-        } catch (err) {
-          // A cancel lands here as an AbortError, and this catch otherwise reports it and falls
-          // through into a fresh streamText call in this same iteration — so the top-of-iteration
-          // check above cannot be what stops it. Checked here, where the abort actually surfaces.
-          if (opts.signal?.aborted) {
-            yield { type: "done", reason: "aborted" };
-            return;
-          }
-          yield { type: "error", error: errorText(err) };
-        }
-      }
+    const tokens = Math.max(lastInputTokens, estimateTokens(messages));
+    if (tokens / contextWindowSize >= compactionThreshold) {
+      const thresholdOutcome = yield* tryCompact("soft");
+      if (thresholdOutcome === "aborted") return;
     }
 
     let text = "";
     const toolCalls: { toolCallId: string; toolName: string; input: unknown }[] = [];
+    let overflowRetried = false;
 
     // streamText runs each attempt inside its retry wrapper (ai@7.0.48 dist/index.js:9684) and
     // notifies onLanguageModelCallStart from inside that closure, immediately before doStream
@@ -404,6 +402,12 @@ export async function* runLoop(opts: {
         ? buildReasoningProviderOptions(opts.provider, legalReasoningEffort)
         : undefined;
     const providerOptions = withCodexStoreOption(opts.provider, opts.credential, reasoningOptions);
+
+    streamAttempt: while (true) {
+    text = "";
+    toolCalls.length = 0;
+    modelCallStarts = 0;
+    reportedRetries = 0;
 
     try {
       const result = streamText({
@@ -440,6 +444,14 @@ export async function* runLoop(opts: {
             input: part.input,
           });
         } else if (part.type === "error") {
+          if (!overflowRetried && isContextOverflowError(part.error)) {
+            const overflowOutcome = yield* tryCompact("hard");
+            if (overflowOutcome === "aborted") return;
+            if (overflowOutcome === "ok") {
+              overflowRetried = true;
+              continue streamAttempt;
+            }
+          }
           yield { type: "error", error: errorText(part.error) };
           // A call that streamed text and then failed was billed for the text it streamed, and
           // this is the exit that used to drop it. Measured against ai@7.0.48: consuming this
@@ -521,8 +533,19 @@ export async function* runLoop(opts: {
         yield { type: "done", reason: "aborted" };
         return;
       }
+      if (!overflowRetried && isContextOverflowError(err)) {
+        const overflowOutcome = yield* tryCompact("hard");
+        if (overflowOutcome === "aborted") return;
+        if (overflowOutcome === "ok") {
+          overflowRetried = true;
+          continue;
+        }
+      }
       yield { type: "error", error: errorText(err) };
       return;
+    }
+
+    break;
     }
 
     if (toolCalls.length === 0) {
