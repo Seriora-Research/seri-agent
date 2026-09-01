@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
@@ -44,13 +45,32 @@ function chmodIfPresent(path: string, mode: number): void {
   }
 }
 
+const exclusiveLocks = new Map<string, Database>();
+
 function makeSessionStoreReadOnly(sessionsDir: string): void {
-  const [db, ...sidecars] = sessionDbPaths(sessionsDir);
-  chmodSync(db!, 0o400);
-  for (const path of sidecars) chmodIfPresent(path, 0o400);
+  // chmod of seri.db does not fail a write on a connection that already has the file
+  // open — the kernel checks access at open, not at write. The child holds one
+  // SessionDatabase for the process, so the parent takes an exclusive lock instead:
+  // the child's next save hits SQLITE_BUSY and surfaces as "could not save the session".
+  restoreSessionStore(sessionsDir);
+  const path = join(configDirForStore(sessionsDir, "sessions"), DATABASE_FILENAME);
+  const lock = new Database(path);
+  lock.exec("PRAGMA busy_timeout = 0");
+  lock.exec("BEGIN EXCLUSIVE");
+  exclusiveLocks.set(sessionsDir, lock);
 }
 
 function restoreSessionStore(sessionsDir: string): void {
+  const lock = exclusiveLocks.get(sessionsDir);
+  if (lock !== undefined) {
+    exclusiveLocks.delete(sessionsDir);
+    try {
+      lock.exec("ROLLBACK");
+    } catch {
+      // already rolled back or connection closed
+    }
+    lock.close();
+  }
   for (const path of sessionDbPaths(sessionsDir)) {
     chmodIfPresent(path, 0o600);
   }
@@ -2371,7 +2391,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("approve-each mode on");
 
-      // Read-only database files: the next saveSession write cannot land.
+      // Exclusive lock: the child's held connection would still write after chmod.
       makeSessionStoreReadOnly(sessionsDir);
 
       child.stdin?.write("\x1b[Z");
@@ -6247,7 +6267,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(oldCommitBeforeClear).toBeDefined();
         const refsBeforeClear = listSessionRefs(gitDir);
 
-        // Read-only database files: the next saveSession write cannot land.
+        // Exclusive lock: the child's held connection would still write after chmod.
         makeSessionStoreReadOnly(sessionsDir);
 
         child.stdin?.write("/clear");
