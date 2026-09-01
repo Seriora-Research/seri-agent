@@ -95,6 +95,9 @@ export function buildRunManifest(opts: {
     seed: sampling.seedRecord,
     reasoningEffort: loadReasoningEffortConfig(loadConfig(configDir)) ?? null,
     maxIterations: opts.maxIterations,
-    context: hashContextFiles(opts.contextFiles ?? collectContextFiles({ cwd: opts.cwd }), opts.cwd),
+    context: hashContextFiles(
+      opts.contextFiles ?? collectContextFiles({ cwd: opts.cwd }),
+      opts.cwd,
+    ),
   };
 }
