@@ -1856,6 +1856,64 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.pendingTool).toBeUndefined();
   });
 
+  test("a child tool-result clears currentTool so a later error is not a false throw", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-result",
+        name: "read_file",
+        result: "ok",
+      }),
+    );
+
+    const afterResult = panel(state).subagents[0];
+    expect(afterResult?.currentTool).toBeUndefined();
+
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "error",
+        error: "lint could not be run",
+      }),
+    );
+    const child = panel(state).subagents[0];
+    expect(child?.currentTool).toBeUndefined();
+    expect(child?.status).toBe("error");
+    expect(child?.toolActivity[0]?.anomalyLines).toEqual([]);
+  });
+
+  test("a child permission-denied clears currentTool", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "permission-denied",
+        name: "read_file",
+        reason: "hook",
+      }),
+    );
+    expect(panel(state).subagents[0]?.currentTool).toBeUndefined();
+  });
+
   test("a child tool-call then error settles an anomaly and clears currentTool", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));

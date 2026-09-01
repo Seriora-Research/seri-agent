@@ -684,6 +684,11 @@ export async function* runLoop(opts: {
           if (opts.signal?.aborted) break;
           throw err;
         }
+        // The TUI treats an `error` event while `pendingTool` is set as that in-flight call
+        // throwing. A later read's PreToolUse can fail without blocking and still run; flushing
+        // first closes the previous read's call/result pair so this error is a system line, not a
+        // false throw on a sibling that actually succeeded.
+        if ((hook.errors?.length ?? 0) > 0 && (yield* flushReadBatch()) === "aborted") break;
         for (const error of hook.errors ?? []) yield { type: "error", error };
         // A new await is a new window for an abort to land in, and a check placed after a different
         // await does not cover it — same reason as the re-check below, whose comment spells the

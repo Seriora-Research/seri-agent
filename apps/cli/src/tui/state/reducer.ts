@@ -577,11 +577,16 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
           child.currentTool?.args,
           event.result,
         ),
+        // Same slot as the parent's pendingTool: an error while this is set is treated as
+        // that call throwing. A settled call has to drop it or a later hook error paints
+        // as a false throw on a tool that already succeeded.
+        currentTool: undefined,
       };
     case "permission-denied":
       return {
         ...child,
         toolActivity: recordDenial(child.toolActivity, event.name, event.reason),
+        currentTool: undefined,
       };
     case "error": {
       // Thrown execute is tool-call then error, no tool-result — same as the parent reducer.
