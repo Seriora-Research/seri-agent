@@ -48,9 +48,7 @@ function summarizerUserText(model: MockLanguageModelV4): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
   return content
-    .map((part) =>
-      part && typeof part === "object" && "text" in part ? String(part.text) : "",
-    )
+    .map((part) => (part && typeof part === "object" && "text" in part ? String(part.text) : ""))
     .join("");
 }
 
