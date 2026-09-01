@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { streamText } from "ai";
 import { AUTH_FILENAME, loadAuthSession, saveAuthSession } from "../../src/auth/authStore";
 import type { refreshSession as refreshSessionReal } from "../../src/auth/refresh";
-import { getGatewayModel } from "../../src/provider/gateway";
+import { gatewayBaseUrl, getGatewayModel } from "../../src/provider/gateway";
 
 let tmpRoot: string;
 
@@ -112,7 +112,37 @@ describe("getGatewayModel — login requirement", () => {
   });
 });
 
+describe("gatewayBaseUrl — default host", () => {
+  test("returns https://api.seriora.ai/api/gateway when SERI_GATEWAY_URL is unset", () => {
+    delete process.env.SERI_GATEWAY_URL;
+    expect(gatewayBaseUrl(tmpRoot)).toBe("https://api.seriora.ai/api/gateway");
+  });
+
+  test("does not default to the non-resolving gateway.seriora.ai host", () => {
+    delete process.env.SERI_GATEWAY_URL;
+    expect(gatewayBaseUrl(tmpRoot)).not.toBe("https://gateway.seriora.ai/api/gateway");
+  });
+});
+
 describe("getGatewayModel — outgoing request", () => {
+  test("uses the live default host when SERI_GATEWAY_URL is unset", async () => {
+    delete process.env.SERI_GATEWAY_URL;
+    seedAuthJson(tmpRoot);
+    let captured: { url: string } | undefined;
+    const fetchFn = (async (input: RequestInfo | URL) => {
+      captured = { url: String(input) };
+      return sseResponse();
+    }) as unknown as typeof fetch;
+
+    const model = getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+      fetchFn,
+      refreshSession: refreshNeverCalled,
+    });
+    await streamText({ model, prompt: "hi" }).text;
+
+    expect(captured?.url.startsWith("https://api.seriora.ai/api/gateway")).toBe(true);
+  });
+
   test("carries the access token, session id, and a URL under SERI_GATEWAY_URL", async () => {
     process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
     seedAuthJson(tmpRoot);
