@@ -79,6 +79,7 @@ import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import type { SetupProviderRow } from "./state/commands";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore } from "./theme/spacing";
 import { theme } from "./theme/theme";
@@ -171,9 +172,9 @@ export type AppProps = {
   // into cli.ts's own handlers, which recompute the whole next
   // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
   // the decision" split every other interactive command in this file already has.
-  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
-  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupRemove?: (row: SetupProviderRow) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
   // AuthPanel's own "result" step (a device-flow failure — a denied/expired code, a network error,

@@ -5,8 +5,11 @@ import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
+import { GROK_BORROWED_CLIENT_WARNING } from "../../../auth/xaiConnect";
 import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
+import type { SetupProviderRow, SetupSubscriptionRow } from "../../state/commands";
+import { isSetupActionRow, setupRowId } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
@@ -16,11 +19,12 @@ import { ListRow } from "../../ui/ListRow";
 import { formatSetupRow } from "../../util/format";
 import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
-// /setup's own live state (tui/state/reducer.ts's pendingSetup) — mirrors ModelPicker's mutual-
-// exclusion role, dispatching to one of two step-specific sub-components below for the steps that
-// still own input handling and local state (the same reasoning ApprovalBox/ModelPicker are
-// separate components rather than one component branching internally); the confirm-remove step
-// delegates to the shared ConfirmPrompt (ui/ConfirmPrompt.tsx) instead.
+const SUBSCRIPTION_ROW: SetupSubscriptionRow = {
+  kind: "subscription",
+  provider: "xai",
+  connected: false,
+};
+
 export function SetupPanel({
   pendingSetup,
   onSetupSelect,
@@ -30,9 +34,9 @@ export function SetupPanel({
   onSetupClose,
 }: {
   pendingSetup: SetupState;
-  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
-  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupRemove?: (row: SetupProviderRow) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
 }) {
@@ -51,7 +55,33 @@ export function SetupPanel({
     return (
       <ConfirmPrompt
         subject={`Remove ${keyName} (${provider})`}
-        onConfirm={() => onSetupRemove?.(provider)}
+        onConfirm={() =>
+          onSetupRemove?.({
+            kind: "key",
+            provider,
+            keyName,
+            source: "config",
+            masked: undefined,
+            removable: true,
+          })
+        }
+        onCancel={() => onSetupBack?.()}
+      />
+    );
+  }
+  if (pendingSetup.step === "confirm-connect") {
+    return (
+      <SetupConnectWarning
+        onConfirm={() => onSetupRemove?.(SUBSCRIPTION_ROW)}
+        onCancel={() => onSetupBack?.()}
+      />
+    );
+  }
+  if (pendingSetup.step === "confirm-disconnect") {
+    return (
+      <ConfirmPrompt
+        subject="Disconnect Grok subscription (local credential only; xAI access is not revoked)"
+        onConfirm={() => onSetupRemove?.({ ...SUBSCRIPTION_ROW, connected: true })}
         onCancel={() => onSetupBack?.()}
       />
     );
@@ -66,6 +96,33 @@ export function SetupPanel({
   );
 }
 
+function SetupConnectWarning({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useKeyboard((key) => {
+    if (isEnter(key)) {
+      onCancel();
+      return;
+    }
+    if (!isPrintableKey(key)) return;
+    if (key.sequence.toLowerCase() === "y") {
+      onConfirm();
+      return;
+    }
+    onCancel();
+  });
+  return (
+    <box {...FRAME} flexDirection="column" borderColor={theme.warning}>
+      <text fg={theme.warning}>{GROK_BORROWED_CLIENT_WARNING}</text>
+      <text fg={theme.muted}>Shown before the browser opens. [y]es connect / [N]o cancel</text>
+    </box>
+  );
+}
+
 function SetupList({
   pendingSetup,
   onSetupSelect,
@@ -73,16 +130,11 @@ function SetupList({
   onSetupClose,
 }: {
   pendingSetup: Extract<SetupState, { step: "list" }>;
-  onSetupSelect?: (provider: ModelProvider) => void;
-  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
+  onSetupRemove?: (row: SetupProviderRow) => void;
   onSetupClose?: (leftoverInput?: string) => void;
 }) {
   const { rows } = pendingSetup;
-  // Seeded from the reducer's own `selected` (set by whichever handler brought this step back into
-  // view — cli.ts's own onSetupBack/onSetupKeyEntered), then moved locally — the same "reducer
-  // supplies the starting point, the component owns live navigation" split ModelPicker's own
-  // `selectedIndex` already has, for the identical reason (transient UI data with no reason to
-  // round-trip through cli.ts on every arrow key).
   const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
     rows,
     pendingSetup.selected,
@@ -95,34 +147,50 @@ function SetupList({
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
+    if (row === undefined || !isSetupActionRow(row)) return;
     if (isEnter(key)) {
-      if (row !== undefined) onSetupSelect?.(row.provider);
+      onSetupSelect?.(row);
       return;
     }
     if (key.name === "delete") {
-      if (row?.removable) onSetupRemove?.(row.provider);
+      if (row.kind === "key" && row.removable) onSetupRemove?.(row);
+      if (row.kind === "subscription" && row.connected) onSetupSelect?.(row);
       return;
     }
     if (!isPrintableKey(key)) return;
-    if (row === undefined) return;
     const typed = key.sequence.toLowerCase();
     if (typed === "a") {
-      onSetupSelect?.(row.provider);
+      onSetupSelect?.(row);
       return;
     }
-    if (typed === "r" && row.removable) {
-      onSetupRemove?.(row.provider);
+    if (typed === "r") {
+      if (row.kind === "key" && row.removable) onSetupRemove?.(row);
+      if (row.kind === "subscription" && row.connected) onSetupSelect?.(row);
     }
   });
+
+  const selectedRow = rows[selected];
+  const hint =
+    selectedRow?.kind === "subscription"
+      ? selectedRow.connected
+        ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
+        : "↑/↓ move · Enter connect · Esc/Ctrl-D close"
+      : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (
     <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/setup — provider API keys</text>
-      {visible.map(({ row, isSelected }) => (
-        <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
-      ))}
+      {visible.map(({ row, isSelected }) =>
+        row.kind === "heading" ? (
+          <text key={setupRowId(row)} fg={theme.muted}>
+            {row.label}
+          </text>
+        ) : (
+          <ListRow key={setupRowId(row)} selected={isSelected} label={formatSetupRow(row)} />
+        ),
+      )}
       {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
-      <text fg={theme.muted}>↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close</text>
+      <text fg={theme.muted}>{hint}</text>
     </box>
   );
 }

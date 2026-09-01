@@ -20,6 +20,7 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
+import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
   checkpointStoreDir,
@@ -194,19 +195,43 @@ export function decideGuidedModelPickerOpen(
   return keyed.map((row) => ({ ...row, alternatives: shownAlternatives.get(row.entry) ?? 0 }));
 }
 
-// One row per provider — /setup's own table. `removable` is false only when config.json
-// genuinely has nothing to unset for this provider — an env-sourced
-// row IS removable when a config.json entry also sits underneath it (providerKeyState's own
-// `hasConfigEntry`, independent of which source wins for display); only a row with no config
-// entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
-// (the panel states why, for the env case — App.tsx's own SetupPanel).
-export type SetupProviderRow = {
+// One /setup list row. A heading is not selectable for a side-effect; a key row is a BYOK
+// provider; a subscription row is the Grok consumer-plan connect/disconnect action. The union is
+// what lets one list carry both sections without keying selection on provider alone (xAI has a
+// key row AND a subscription row).
+export type SetupHeadingRow = { kind: "heading"; label: string };
+export type SetupKeyRow = {
+  kind: "key";
   provider: ModelProvider;
   keyName: string;
   source: "env" | "config" | "unset";
   masked: string | undefined;
   removable: boolean;
+  unusedBecauseSubscription?: boolean;
 };
+export type SetupSubscriptionRow = {
+  kind: "subscription";
+  provider: "xai";
+  connected: boolean;
+};
+export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
+
+export function setupRowId(row: SetupProviderRow): string {
+  if (row.kind === "heading") return `heading:${row.label}`;
+  if (row.kind === "subscription") return `subscription:${row.provider}`;
+  return `key:${row.provider}`;
+}
+
+export function isSetupActionRow(
+  row: SetupProviderRow,
+): row is SetupKeyRow | SetupSubscriptionRow {
+  return row.kind !== "heading";
+}
+
+export function firstSetupActionIndex(rows: readonly SetupProviderRow[]): number {
+  const index = rows.findIndex(isSetupActionRow);
+  return index < 0 ? 0 : index;
+}
 
 // The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
 // to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
@@ -219,7 +244,9 @@ export type SetupProviderRow = {
 // of the identical file to open /setup, or to refresh it after any add/remove — was never applied
 // here. `allProviderKeyStates` loads config.json exactly once for all five.
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
-  return allProviderKeyStates(configDir).map((state) => ({
+  const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => ({
+    kind: "key",
     provider: state.provider,
     keyName: state.keyName,
     source: state.source,
@@ -229,7 +256,14 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     // permanently unremovable from /setup the moment the same-named env var got exported.
     // `hasConfigEntry` is independent of which source wins for display.
     removable: state.hasConfigEntry,
+    unusedBecauseSubscription: grokConnected && state.provider === "xai" && state.source !== "unset",
   }));
+  return [
+    { kind: "heading", label: "API keys" },
+    ...keyRows,
+    { kind: "heading", label: "Subscriptions" },
+    { kind: "subscription", provider: "xai", connected: grokConnected },
+  ];
 }
 
 // The decide* functions below share the same contract as every decide* function above: recompute
@@ -346,13 +380,13 @@ export function configKeyInfo(key: string): ConfigKeyInfo {
   );
 }
 
-// Never listed by /config, even if present in config.json: the OAuth client id /login's device
-// flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
+// Never listed by /config, even if present in config.json: OAuth client ids (/login's WorkOS
+// device flow, /setup's Grok connect) are internal/advanced settings, not ones a common
 // /config user should see or change. (process.env never adds a row on its own — it only affects
 // the source/value of a key already in the list below — so no separate env guard is needed
 // here.) This is a display policy, not a lock: `seri config set SERI_WORKOS_CLIENT_ID <value>`
 // (config/commands.ts) still writes it deliberately, for whoever needs the escape hatch.
-const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
+const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_GROK_CLIENT_ID"];
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
 // keys" tail below must not emit: the two known keys (already shown, in their own fixed order),

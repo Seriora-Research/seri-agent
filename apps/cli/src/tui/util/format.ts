@@ -475,14 +475,17 @@ export function envShadowReason(keyName: string): string {
 // impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
 // "the panel states why, for the env case," which was false for exactly this state until now.
 export function formatSetupRow(row: SetupProviderRow): string {
+  if (row.kind === "heading") return row.label;
+  if (row.kind === "subscription") {
+    const name = truncatePad("grok", PROVIDER_WIDTH);
+    return row.connected ? `${name} connected` : `${name} not connected`;
+  }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
-  // `singleLine`, not `row.masked` raw: `maskValue` keeps a value's first/last 4
-  // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
-  // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
-  // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not
-  // a real case being papered over.
   const masked = singleLine(row.masked ?? "");
+  if (row.unusedBecauseSubscription === true) {
+    return `${name} ${masked} (unused — Grok subscription is connected)`;
+  }
   if (row.source === "env") {
     return row.removable
       ? `${name} ${masked} (env, config entry underneath — removable)`

@@ -150,7 +150,7 @@ export function dispatchModel(
       throw new Error(`No subscription client for provider: ${JSON.stringify(route.provider)}`);
     }
     const getXaiSubscriptionModelFn = deps.getXaiSubscriptionModel ?? getXaiSubscriptionModelReal;
-    return getXaiSubscriptionModelFn(route.model, configDir);
+    return getXaiSubscriptionModelFn(route.model, configDir, sessionId);
   }
   return getModel(route.model, route.provider, sessionId, deps, configDir);
 }

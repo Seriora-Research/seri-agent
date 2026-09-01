@@ -14,13 +14,14 @@ export const XAI_ISSUER_DEFAULT = "https://auth.x.ai";
 // token available at all, and `grok-cli:access` is what the inference surface checks.
 export const XAI_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 
-// DELIBERATELY NO DEFAULT. xAI allowlists OAuth client ids and publishes no third-party
-// registration, so the only id known to work belongs to someone else. Shipping it would be the
-// client impersonation issue #209 rules out, and it would attribute seri's traffic to another
-// party's registration. Absent means the connect flow is unreachable and no request is ever made.
-// See docs/specs/040-grok-subscription/research.md for the probe evidence.
-export function xaiClientId(configDir?: string): string | undefined {
-  return getApiKey("SERI_GROK_CLIENT_ID", configDir);
+// Grok Build's own client id. xAI allowlists OAuth clients and has not issued seri one, so this
+// is borrowed. Traffic from a connected SuperGrok account is attributed to an id seri does not
+// own; if xAI rate-limits, revokes, or rotates it, the user's subscription is what stops working.
+// SERI_GROK_CLIENT_ID still overrides it. /setup must say this before the browser opens.
+export const XAI_CLIENT_ID_DEFAULT = "b1a00492-073a-47ea-816f-4c329264a828";
+
+export function xaiClientId(configDir?: string): string {
+  return getApiKey("SERI_GROK_CLIENT_ID", configDir) ?? XAI_CLIENT_ID_DEFAULT;
 }
 
 export function xaiIssuer(configDir?: string): string {
@@ -30,7 +31,41 @@ export function xaiIssuer(configDir?: string): string {
 export type XaiEndpoints = {
   deviceAuthorizationEndpoint: string;
   tokenEndpoint: string;
+  userinfoEndpoint: string;
 };
+
+export function xaiUserinfoUrl(issuer: string): string {
+  return `${issuer.replace(/\/$/, "")}/oauth2/userinfo`;
+}
+
+// Printable ASCII, 1–1024 chars: the same bound fx applies before putting `sub` in an HTTP header.
+export function validXaiAccountId(accountId: string): boolean {
+  if (accountId.length === 0 || accountId.length > 1024) return false;
+  for (let i = 0; i < accountId.length; i++) {
+    const code = accountId.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+export async function fetchXaiAccountId(
+  accessToken: string,
+  userinfoEndpoint: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<string> {
+  const response = await fetchFn(userinfoEndpoint, {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    throw new Error(`xAI userinfo failed with status ${response.status}`);
+  }
+  const body = await parseResponseBody(response);
+  const sub = body.sub;
+  if (typeof sub !== "string" || !validXaiAccountId(sub)) {
+    throw new Error("xAI userinfo returned no usable account id");
+  }
+  return sub;
+}
 
 // Discovery is re-fetched rather than persisted: a cached endpoint that goes stale is a hard
 // failure with no recovery path, while a re-discovered one self-heals.
@@ -70,6 +105,10 @@ export async function discoverXaiEndpoints(
       body.device_authorization_endpoint,
     ),
     tokenEndpoint: pin("token_endpoint", body.token_endpoint),
+    userinfoEndpoint: pin(
+      "userinfo_endpoint",
+      body.userinfo_endpoint ?? xaiUserinfoUrl(issuer),
+    ),
   };
 }
 

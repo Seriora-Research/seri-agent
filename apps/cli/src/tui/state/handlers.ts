@@ -8,6 +8,7 @@
 // boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
+import { connectGrok as connectGrokReal, disconnectGrok as disconnectGrokReal } from "../../auth/xaiConnect";
 import { getWorkosClientId } from "../../auth/deviceFlow";
 import type { CliDeps } from "../../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
@@ -25,6 +26,9 @@ import {
   decideConfigOpen,
   decidePermissionsOpen,
   decideSetupOpen,
+  firstSetupActionIndex,
+  setupRowId,
+  type SetupProviderRow,
 } from "./commands";
 import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } from "./reducer";
 
@@ -43,27 +47,24 @@ export function createSetupHandlers(opts: {
   dispatch: Dispatch;
   getPendingSetup: () => SetupState | undefined;
   configDir: string;
-  // Called after `setup-resolved` when a list refresh failed and the panel had to close itself.
-  // runTui needs nothing more — clearing `pendingSetup` returns the user to InputBox. The
-  // guided-setup mount has no InputBox and resolves only through its own `closed` promise, so it
-  // passes that promise's resolve here; without it, closing the panel there hangs the process.
   onPanelClosed?: () => void;
+  onConnectGrok?: () => Promise<void>;
 }): {
-  onSetupSelect: (provider: ModelProvider) => void;
+  onSetupSelect: (row: SetupProviderRow) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
-  onSetupRemove: (provider: ModelProvider) => void;
+  onSetupRemove: (row: SetupProviderRow) => void;
   onSetupBack: () => void;
 } {
-  const { dispatch, getPendingSetup, configDir, onPanelClosed } = opts;
+  const { dispatch, getPendingSetup, configDir, onPanelClosed, onConnectGrok } = opts;
 
-  function setupListState(selectedProvider?: ModelProvider): SetupState {
+  function setupListState(selectedId?: string): SetupState {
     const rows = decideSetupOpen(configDir);
     const selected =
-      selectedProvider === undefined
-        ? 0
+      selectedId === undefined
+        ? firstSetupActionIndex(rows)
         : Math.max(
-            0,
-            rows.findIndex((row) => row.provider === selectedProvider),
+            firstSetupActionIndex(rows),
+            rows.findIndex((row) => setupRowId(row) === selectedId),
           );
     return { step: "list", rows, selected };
   }
@@ -79,9 +80,9 @@ export function createSetupHandlers(opts: {
   // promise when that happens. NOT used by onSetupKeyEntered's own success path: that one needs its
   // OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just showing a
   // command-error while leaving the panel's own busy gate stuck — see its own comment.
-  function dispatchSetupList(selectedProvider?: ModelProvider): void {
+  function dispatchSetupList(selectedId?: string): void {
     try {
-      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
+      dispatch({ type: "setup-step", state: setupListState(selectedId) });
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -96,13 +97,21 @@ export function createSetupHandlers(opts: {
   // (PROVIDER_API_KEY_NAMES), so `decideSetupOpen(configDir).find(...)` — the full 5-provider
   // scan, just to pull one static field back out of it — would be both slower and a needless
   // crash surface for a value that never needs I/O to produce.
-  function onSetupSelect(provider: ModelProvider): void {
+  function onSetupSelect(row: SetupProviderRow): void {
+    if (row.kind === "heading") return;
+    if (row.kind === "subscription") {
+      dispatch({
+        type: "setup-step",
+        state: { step: row.connected ? "confirm-disconnect" : "confirm-connect" },
+      });
+      return;
+    }
     dispatch({
       type: "setup-step",
       state: {
         step: "enter-key",
-        provider,
-        keyName: PROVIDER_API_KEY_NAMES[provider],
+        provider: row.provider,
+        keyName: PROVIDER_API_KEY_NAMES[row.provider],
         busy: false,
       },
     });
@@ -166,7 +175,7 @@ export function createSetupHandlers(opts: {
     // for a failure in the read that happened after their write already landed. SetupEnterKey's own
     // `if (busy) return;` gate is what makes resetting `busy: false` here necessary.
     try {
-      dispatch({ type: "setup-step", state: setupListState(provider) });
+      dispatch({ type: "setup-step", state: setupListState(`key:${provider}`) });
     } catch (err) {
       dispatch({
         type: "setup-step",
@@ -186,10 +195,27 @@ export function createSetupHandlers(opts: {
   // props total, no separate "request confirmation" one — so which one this call means is read
   // off the CURRENT live reducer state, the same "trust liveState, not a caller-captured copy"
   // pattern this closure already uses throughout (this function's own top comment).
-  function onSetupRemove(provider: ModelProvider): void {
+  function onSetupRemove(row: SetupProviderRow): void {
     const pending = getPendingSetup();
+    if (pending?.step === "confirm-disconnect") {
+      try {
+        disconnectGrokReal(configDir, (message) => {
+          dispatch({ type: "transcript-append", line: message });
+        });
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+        return;
+      }
+      dispatchSetupList("subscription:xai");
+      return;
+    }
+    if (pending?.step === "confirm-connect") {
+      dispatch({ type: "setup-resolved" });
+      void onConnectGrok?.();
+      return;
+    }
     if (pending?.step === "confirm-remove") {
-      const { keyName } = pending;
+      const { keyName, provider } = pending;
       try {
         unsetConfigValue(keyName, configDir);
       } catch (err) {
@@ -200,16 +226,13 @@ export function createSetupHandlers(opts: {
         return;
       }
       dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
-      dispatchSetupList(provider);
+      dispatchSetupList(`key:${provider}`);
       return;
     }
-    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
-    // five — still real I/O (config.json), so still needs its own guard: without it, a malformed
-    // file here would throw straight out of this `useInput` callback, the same class of bug the
-    // /setup-OPEN interceptor already guards against.
+    if (row.kind !== "key") return;
     let state: ProviderKeyState;
     try {
-      state = providerKeyState(provider, configDir);
+      state = providerKeyState(row.provider, configDir);
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -220,15 +243,21 @@ export function createSetupHandlers(opts: {
     if (!state.hasConfigEntry) return;
     dispatch({
       type: "setup-step",
-      state: { step: "confirm-remove", provider, keyName: state.keyName },
+      state: { step: "confirm-remove", provider: row.provider, keyName: state.keyName },
     });
   }
 
   function onSetupBack(): void {
     const current = getPendingSetup();
-    const provider =
-      current !== undefined && current.step !== "list" ? current.provider : undefined;
-    dispatchSetupList(provider);
+    const selectedId =
+      current?.step === "enter-key"
+        ? `key:${current.provider}`
+        : current?.step === "confirm-remove"
+          ? `key:${current.provider}`
+          : current?.step === "confirm-connect" || current?.step === "confirm-disconnect"
+            ? "subscription:xai"
+            : undefined;
+    dispatchSetupList(selectedId);
   }
 
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
@@ -248,16 +277,18 @@ export function createAuthHandlers(opts: {
   // Pick, not the full CliDeps: this factory only ever reads these two injection seams, and naming
   // them here documents the actual contract instead of overstating it with cli.ts's ~20-field deps
   // bag (any CliDeps value still satisfies this — every caller keeps passing its own `deps` as-is).
-  deps: Pick<CliDeps, "login" | "logout">;
+  deps: Pick<CliDeps, "login" | "logout" | "connectGrok">;
   configDir: string;
 }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => void;
   onAbandon: () => void;
+  onConnectGrok: () => Promise<void>;
 } {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
+  const connectGrokFn = deps.connectGrok ?? connectGrokReal;
   // `attemptCounter` alone only mutes a dismissed attempt's own DISPATCHES — the underlying
   // login() would keep polling in the background regardless (a device code stays valid for
   // minutes) and could still call saveAuthSession later, with zero UI trace since the dispatches
@@ -321,6 +352,46 @@ export function createAuthHandlers(opts: {
     }
   }
 
+  async function onConnectGrok(): Promise<void> {
+    const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
+    dispatch({ type: "auth-requested", mode: "grok" });
+    try {
+      await connectGrokFn(configDir, {
+        onDeviceCode: (device) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({
+            type: "auth-step",
+            state: {
+              step: "device",
+              mode: "grok",
+              verificationUri: device.verificationUri,
+              userCode: device.userCode,
+            },
+          });
+        },
+        onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({ type: "transcript-append", line: message });
+        },
+        signal: controller.signal,
+      });
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+    } catch (err) {
+      if (myAttempt !== attemptCounter) return;
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: messageOf(err),
+          error: true,
+        },
+      });
+    }
+  }
+
   // Sync, not async — logoutFn (typeof logoutReal) is fully synchronous; the call site already
   // just `await`s this either way, which works fine on a non-async function too.
   function onLogout(): void {
@@ -351,7 +422,7 @@ export function createAuthHandlers(opts: {
     currentController?.abort();
   }
 
-  return { onLogin, onLogout, onAbandon };
+  return { onLogin, onLogout, onAbandon, onConnectGrok };
 }
 
 // SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are only ever read once, at prepareSession's own

@@ -63,6 +63,22 @@ describe("printCost", () => {
     expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
     expect(line).not.toBe("(cost: $0.0020)");
   });
+
+  test("renders a subscription turn as included, never a dollar figure", () => {
+    const [line] = captureLog(() =>
+      printCost({ amountUsd: undefined, status: "included", source: "custom_contract" }),
+    );
+    expect(line).toBe("(cost: included)");
+    expect(line).not.toContain("$");
+  });
+
+  test("included wins over a leftover dollar amount from an earlier turn", () => {
+    const [line] = captureLog(() =>
+      printCost({ amountUsd: 0.002, status: "included", source: "custom_contract" }),
+    );
+    expect(line).toBe("(cost: included)");
+    expect(line).not.toContain("$");
+  });
 });
 
 function archivistReport(overrides: Partial<ArchivistReport> = {}): ArchivistReport {

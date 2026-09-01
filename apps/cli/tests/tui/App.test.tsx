@@ -9,6 +9,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
+import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
 import { App, type AppProps } from "../../src/tui/app";
 import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
@@ -2380,6 +2381,7 @@ describe("App", () => {
     function setupRows(): SetupProviderRow[] {
       return [
         {
+          kind: "key",
           provider: "groq",
           keyName: "GROQ_API_KEY",
           source: "unset",
@@ -2387,6 +2389,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
           source: "config",
@@ -2394,6 +2397,7 @@ describe("App", () => {
           removable: true,
         },
         {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "env",
@@ -2401,6 +2405,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openai",
           keyName: "OPENAI_API_KEY",
           source: "unset",
@@ -2408,6 +2413,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "google",
           keyName: "GOOGLE_GENERATIVE_AI_API_KEY",
           source: "unset",
@@ -2422,8 +2428,11 @@ describe("App", () => {
     // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
     // entry underneath that removal was impossible when it was not.
     describe("formatSetupRow", () => {
-      function row(overrides: Partial<SetupProviderRow> = {}): SetupProviderRow {
+      function row(
+        overrides: Partial<Extract<SetupProviderRow, { kind: "key" }>> = {},
+      ): Extract<SetupProviderRow, { kind: "key" }> {
         return {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "unset",
@@ -2459,6 +2468,29 @@ describe("App", () => {
         expect(text).toContain("removable");
         expect(text).toContain("sk-a...wxyz");
       });
+
+      test("subscription: grok connected / not connected", () => {
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: false }),
+        ).toContain("not connected");
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: true }),
+        ).toContain("connected");
+      });
+
+      test("xai key unused because a subscription is connected", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "xai",
+            keyName: "XAI_API_KEY",
+            source: "config",
+            masked: "xai-...key1",
+            unusedBecauseSubscription: true,
+          }),
+        );
+        expect(text).toContain("unused");
+        expect(text).toContain("Grok subscription is connected");
+      });
     });
 
     test("the list step shows all five provider rows, masked values included", async () => {
@@ -2483,9 +2515,9 @@ describe("App", () => {
     // `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
     // ("Enter/a add or replace") promising both work.
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
-      const selected: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
+        onSetupSelect: (row) => selected.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2497,15 +2529,16 @@ describe("App", () => {
       setup.mockInput.pressEnter();
       await flush(setup);
 
-      expect(selected).toEqual(["openrouter"]);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // Same bug, the Delete branch: OpenTUI's Delete key (`\x1b[3~`) is a DIFFERENT sequence from
     // backspace's — distinct enough that fixing Enter alone would not have proven this branch too.
     test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
-      const removeRequested: ModelProvider[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2517,18 +2550,19 @@ describe("App", () => {
       setup.mockInput.pressKey(DELETE_KEY);
       await flush(setup);
 
-      expect(removeRequested).toEqual(["openrouter"]);
+      expect(removeRequested).toHaveLength(1);
+      expect(removeRequested[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // The negative control this pair rests on: a non-removable row's Delete must still be a no-op,
     // the same guard the 'r' shortcut already had — proving the fix didn't drop that check while
     // moving the branch earlier.
     test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
-      const selected: ModelProvider[] = [];
-      const removeRequested: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupSelect: (row) => selected.push(row),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       // groq (index 0, the default selection) is source: "unset", removable: false.
@@ -2645,10 +2679,10 @@ describe("App", () => {
     });
 
     test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2680,7 +2714,8 @@ describe("App", () => {
       setup.mockInput.pressKey("y");
       await flush(setup);
 
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // ConfirmPrompt's own guards (ui/ConfirmPrompt.tsx): `key.ctrl || key.meta` and
@@ -2689,10 +2724,10 @@ describe("App", () => {
     // destructive prompt — the same class of bug ApprovalBox's own arrow/backspace test above
     // exists for.
     test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2714,7 +2749,54 @@ describe("App", () => {
       // Still live, not silently cancelled: an actual "y" still confirms.
       setup.mockInput.pressKey("y");
       await flush(setup);
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
+    });
+
+    test("confirm-connect shows the borrowed-client warning before any connect action", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Grok Build's OAuth client id");
+      expect(frame).toContain("Shown before the browser opens");
+      expect(GROK_BORROWED_CLIENT_WARNING).toContain("Grok Build's OAuth client id");
+      expect(confirmed).toEqual([]);
+
+      setup.mockInput.pressKey("n");
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+    });
+
+    test("confirm-connect: 'y' confirms via onSetupRemove, Enter cancels", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed).toHaveLength(1);
+      expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "xai" });
     });
 
     // Render precedence (app.tsx's own render ternary): pendingApproval beats pendingModelPicker

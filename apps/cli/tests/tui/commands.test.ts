@@ -12,6 +12,7 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
+import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
   checkpointStoreDir,
@@ -367,27 +368,39 @@ describe("decideSetupOpen", () => {
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns exactly 5 rows, in CATALOG_PROVIDERS order, all unset by default", () => {
+  test("returns API-keys heading, five key rows in CATALOG_PROVIDERS order, Subscriptions heading, and the grok row", () => {
     const rows = decideSetupOpen(setupConfigDir);
-    expect(rows.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
-    expect(rows.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
-    expect(rows.every((row) => row.removable === false)).toBe(true);
+    expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
+    const keys = rows.filter((row) => row.kind === "key");
+    expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
+    expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
+    expect(keys.every((row) => row.removable === false)).toBe(true);
+    expect(rows.at(-2)).toEqual({ kind: "heading", label: "Subscriptions" });
+    expect(rows.at(-1)).toEqual({ kind: "subscription", provider: "xai", connected: false });
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
-    expect(row?.source).toBe("config");
-    expect(row?.masked).toBeDefined();
-    expect(row?.removable).toBe(true);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (r) => r.kind === "key" && r.provider === "anthropic",
+    );
+    expect(row?.kind).toBe("key");
+    if (row?.kind !== "key") return;
+    expect(row.source).toBe("config");
+    expect(row.masked).toBeDefined();
+    expect(row.removable).toBe(true);
   });
 
   // D8: an env-sourced row cannot be removed from here — there is no config.json entry to unset.
   test("an env-shadowed row (no config entry) is source: env and NOT removable", () => {
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
-    expect(row?.source).toBe("env");
-    expect(row?.removable).toBe(false);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (r) => r.kind === "key" && r.provider === "anthropic",
+    );
+    expect(row?.kind).toBe("key");
+    if (row?.kind !== "key") return;
+    expect(row.source).toBe("env");
+    expect(row.removable).toBe(false);
   });
 
   // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
@@ -398,9 +411,32 @@ describe("decideSetupOpen", () => {
   test("an env-shadowed row WITH a config entry underneath is source: env and IS removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
-    expect(row?.source).toBe("env");
-    expect(row?.removable).toBe(true);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (r) => r.kind === "key" && r.provider === "anthropic",
+    );
+    expect(row?.kind).toBe("key");
+    if (row?.kind !== "key") return;
+    expect(row.source).toBe("env");
+    expect(row.removable).toBe(true);
+  });
+
+  test("a connected Grok subscription marks the grok row connected and the xai key unused", () => {
+    saveXaiSubscription(
+      {
+        accessToken: "a",
+        refreshToken: "r",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-1",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("XAI_API_KEY", "xai-key", setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    expect(rows.at(-1)).toEqual({ kind: "subscription", provider: "xai", connected: true });
+    const xaiKey = rows.find((r) => r.kind === "key" && r.provider === "xai");
+    expect(xaiKey?.kind).toBe("key");
+    if (xaiKey?.kind !== "key") return;
+    expect(xaiKey.unusedBecauseSubscription).toBe(true);
   });
 });
 
