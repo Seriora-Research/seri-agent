@@ -561,6 +561,7 @@ export function formatSetupRow(row: SetupProviderRow): string {
     return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
   }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
+  if (row.source === "hosted") return `${name} provided`;
   if (row.source === "unset") return `${name} not set`;
   const masked = singleLine(row.masked ?? "");
   if (row.unusedBecause !== undefined) {

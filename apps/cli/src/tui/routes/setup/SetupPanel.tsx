@@ -13,7 +13,7 @@ import type {
   SetupProviderRow,
   SetupSubscriptionRow,
 } from "../../state/commands";
-import { isSetupActionRow, setupRowId } from "../../state/commands";
+import { isHostedSetupKey, isSetupActionRow, setupRowId } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
@@ -226,7 +226,9 @@ function SetupList({
           : selectedRow.status.status === "ignored"
             ? "↑/↓ move · Enter re-enable · Esc/Ctrl-D close"
             : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
-      : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
+      : selectedRow !== undefined && isHostedSetupKey(selectedRow)
+        ? "↑/↓ move · Enter/a add your own key · Esc/Ctrl-D close"
+        : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (
     <PanelBox title="/setup — provider API keys">

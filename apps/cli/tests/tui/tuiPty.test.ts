@@ -3997,7 +3997,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // default columns before panels took their `PAD_X` interior padding (theme/spacing.ts), so
       // at 80 the row now middle-truncates and the phrase below never appears whole. The
       // truncation is pinned by its own test further down rather than left to break this one.
-      const { child, sawLine } = await startChild(scriptPath, dir, {
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
         terminalSize: { cols: 100, rows: 30 },
       });
       try {
@@ -4011,6 +4011,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("sk-a...efgh");
         await sawLine("set by $GROQ_API_KEY in your environment");
+        // BYOK /setup (GROQ env, no login) must not list the hosted OpenRouter offer.
+        expect(rawOccurrences("openrouter")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4063,27 +4065,26 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — one Down
-        // reaches openrouter, unset at this point (only GROQ_API_KEY is set, as an env var).
+        // BYOK /setup omits the hosted OpenRouter offer, so one Down from groq reaches anthropic.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
-        const secret = "sk-or-added-secret-key";
+        const secret = "sk-ant-added-secret-key";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
         // caught elsewhere in this file (waitForConfig's own comment).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secret,
+          (c) => c.ANTHROPIC_API_KEY === secret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secret);
 
         // The negative control at the process level: the raw key must never have reached stdout,
         // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
@@ -4308,10 +4309,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
-        // anthropic=2, openai=3).
-        child.stdin?.write("\x1b[B");
-        await wait100ms();
+        // Down to anthropic, openai — two Downs (groq=0, anthropic=1, openai=2). OpenRouter is
+        // omitted from BYOK /setup until a local key exists.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4356,10 +4355,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("config entry underneath — removable");
         expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
+        // Down to anthropic, openai — two Downs (groq=0, anthropic=1, openai=2).
         // anthropic=2, openai=3).
-        child.stdin?.write("\x1b[B");
-        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4467,6 +4464,41 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // pass vacuously either way. A stack frame's file path is not interleaved the same way
         // (confirmed the same way), so this checks for that instead.
         expect(rawOccurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a logged-in /setup lists OpenRouter as provided, and r does not remove coverage", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-provided.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, rawOccurrences, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("done ·");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("provided");
+
+        // groq is first; one Down highlights the hosted OpenRouter row.
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        expect(lastFrame()).toContain("provided");
+        expect(lastFrame()).toContain("add your own key");
+        expect(lastFrame()).not.toContain("r remove");
+
+        child.stdin?.write("r");
+        await wait100ms();
+        expect(rawOccurrences("Remove OPENROUTER_API_KEY")).toBe(0);
+        expect(lastFrame()).toContain("provided");
       } finally {
         child.kill("SIGKILL");
       }
@@ -4901,28 +4933,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // If the picker silently replaced this mid-typing (the bug), the rest of this input would
-        // land in ModelPicker's own filter box instead, and "Saved OPENROUTER_API_KEY." would
+        // land in ModelPicker's own filter box instead, and "Saved ANTHROPIC_API_KEY." would
         // never print — sawLine's own bounded poll is what turns that into a real test failure
         // rather than a hang.
         const secondSecret = "sk-guided-setup-second-key-secret";
         child.stdin?.write(secondSecret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secondSecret,
+          (c) => c.ANTHROPIC_API_KEY === secondSecret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secondSecret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secondSecret);
         expect(config.GROQ_API_KEY).toBe(secret);
 
         // The flow still completes normally afterward: back at the list step, a fresh Escape opens
@@ -5018,7 +5050,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
         // is still true.
@@ -5042,10 +5074,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — two Downs
-        // reach anthropic (same navigation the /setup "remove" pty tests above already use).
-        child.stdin?.write("\x1b[B");
-        await wait100ms();
+        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
@@ -5217,18 +5246,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         const secret = "sk-guided-setup-catalog-missing-provider-secret";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
         await wait100ms();
@@ -5869,7 +5898,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-zero-key.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
@@ -5881,8 +5912,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
-        // rather than bypassing it.
+        // rather than bypassing it. That panel is BYOK-only — OpenRouter is the hosted offer.
         await sawLine("/setup — provider API keys");
+        expect(rawOccurrences("openrouter")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

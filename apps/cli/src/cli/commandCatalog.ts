@@ -144,7 +144,7 @@ export const COMMAND_META: readonly CommandMeta[] = [
   {
     name: "/setup",
     surface: "tui",
-    description: "add, replace, or remove a provider API key",
+    description: "add or replace a provider API key; hosted OpenRouter coverage is provided by your account",
     argsUsage: "",
     accepts: (args) => args.length === 0,
   },

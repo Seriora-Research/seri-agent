@@ -3205,6 +3205,26 @@ describe("guided setup gate", () => {
       else process.env.CODEX_HOME = originalCodexHome;
     }
   });
+
+  test("a Codex-shaped auth.json is still a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = mkdtempSync(join(tmpdir(), "seri-cli-test-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      writeFileSync(
+        join(configDir, AUTH_FILENAME),
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: { access_token: "tok", account_id: "acct" },
+        }),
+      );
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("run (permanent permissions)", () => {

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveAuthSession } from "../../src/auth/authStore";
 import { CODEX_IGNORE_FILENAME, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { needsGuidedSetup } from "../../src/cli";
+import { setConfigValue } from "../../src/config/config";
 import {
   createConfigHandlers,
   createEffortHandlers,
@@ -45,6 +48,85 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     expect(actions.map((a) => a.type)).toEqual(["setup-step"]);
     const [action] = actions;
     expect(action?.type === "setup-step" && action.state.step).toBe("list");
+  });
+
+  test("a hosted OpenRouter row cannot be removed", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      configDir,
+    );
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupRemove } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => ({
+        step: "list",
+        rows: [],
+        selected: 0,
+      }),
+      configDir,
+    });
+    onSetupRemove({
+      kind: "key",
+      provider: "openrouter",
+      keyName: "OPENROUTER_API_KEY",
+      source: "hosted",
+      masked: undefined,
+      removable: false,
+    });
+    expect(actions).toEqual([]);
+  });
+
+  test("removing a local OpenRouter key while logged in leaves hosted coverage, not a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      setConfigValue("OPENROUTER_API_KEY", "sk-or-own", configDir);
+      const { actions, dispatch } = actionsCollector();
+      const { onSetupRemove } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => ({
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        }),
+        configDir,
+      });
+      onSetupRemove({
+        kind: "key",
+        provider: "openrouter",
+        keyName: "OPENROUTER_API_KEY",
+        source: "config",
+        masked: "sk-o...own1",
+        removable: true,
+      });
+      const step = actions.find((a) => a.type === "setup-step");
+      expect(step?.type === "setup-step" && step.state.step).toBe("list");
+      if (step?.type !== "setup-step" || step.state.step !== "list") return;
+      const row = step.state.rows.find(
+        (entry) => entry.kind === "key" && entry.provider === "openrouter",
+      );
+      expect(row).toMatchObject({ source: "hosted", removable: false });
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
   });
 
   test("onSetupBack on a corrupted config.json closes the panel instead of leaving confirm-remove stuck", () => {

@@ -271,6 +271,10 @@ export function createSetupHandlers(opts: {
       return;
     }
     if (row.kind !== "key") return;
+    // The hosted OpenRouter row is not a config.json entry. 'r' is already gated on
+    // `removable` in the panel; this is the handler-side half so a stale row object
+    // cannot unset a key that does not exist and leave the session looking keyless.
+    if (row.source === "hosted") return;
     let state: ProviderKeyState;
     try {
       state = providerKeyState(row.provider, configDir);

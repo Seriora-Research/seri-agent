@@ -402,6 +402,7 @@ const ALL_KEY_NAMES = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
+  "XAI_API_KEY",
 ];
 const originalKeyEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, process.env[name]]));
 
@@ -431,12 +432,14 @@ describe("decideSetupOpen", () => {
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns API-keys heading, five key rows, Subscriptions heading, and both plan rows", () => {
+  test("returns API-keys heading, BYOK key rows without the hosted OpenRouter offer, Subscriptions heading, and both plan rows", () => {
     const rows = decideSetupOpen(setupConfigDir);
     expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
     const keys = rows.filter((row) => row.kind === "key");
     const plans = rows.filter((row) => row.kind === "subscription");
-    expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
+    expect(keys.map((row) => row.provider)).toEqual(
+      CATALOG_PROVIDERS.filter((provider) => provider !== "openrouter"),
+    );
     expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
     expect(keys.every((row) => row.removable === false)).toBe(true);
     expect(rows[keys.length + 1]).toEqual({ kind: "heading", label: "Subscriptions" });
@@ -446,6 +449,95 @@ describe("decideSetupOpen", () => {
     expect(plans[1] && "status" in plans[1] ? plans[1].status.status : undefined).toBe(
       "not-installed",
     );
+  });
+
+  test("a hosted login with no local OpenRouter key shows that row as provided, not removable", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      provider: "openrouter",
+      source: "hosted",
+      removable: false,
+      masked: undefined,
+    });
+  });
+
+  test("a Codex-shaped auth.json in the same directory is not a hosted OpenRouter offer", () => {
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    expect(keys.some((row) => row.provider === "openrouter")).toBe(false);
+  });
+
+  test("a local OpenRouter key still appears when the user is not logged in", () => {
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      provider: "openrouter",
+      source: "config",
+      removable: true,
+    });
+  });
+
+  test("an env OpenRouter key is a BYOK row, not the hosted offer, even when logged in", () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-env";
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      source: "env",
+      removable: false,
+    });
+  });
+
+  test("removing a local OpenRouter key while logged in returns the row to provided, not unset", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    unsetConfigValue("OPENROUTER_API_KEY", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({ source: "hosted", removable: false });
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {

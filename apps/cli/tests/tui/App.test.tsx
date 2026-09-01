@@ -2607,6 +2607,13 @@ describe("App", () => {
         expect(formatSetupRow(row())).toContain("not set");
       });
 
+      test("hosted: the provider name and 'provided', never 'not set'", () => {
+        const text = formatSetupRow(row({ provider: "openrouter", source: "hosted" }));
+        expect(text).toContain("openrouter");
+        expect(text).toContain("provided");
+        expect(text).not.toContain("not set");
+      });
+
       test("config: the masked value, labeled (config)", () => {
         const text = formatSetupRow(row({ source: "config", masked: "sk-a...wxyz" }));
         expect(text).toContain("anthropic");
@@ -2780,6 +2787,40 @@ describe("App", () => {
       await flush(setup);
 
       expect(selected).toEqual([]);
+      expect(removeRequested).toEqual([]);
+    });
+
+    test("a hosted OpenRouter row says provided, offers add-your-own, and ignores r/Delete", async () => {
+      const removeRequested: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => removeRequested.push(row),
+      });
+
+      dispatch({
+        type: "setup-requested",
+        rows: [
+          {
+            kind: "key",
+            provider: "openrouter",
+            keyName: "OPENROUTER_API_KEY",
+            source: "hosted",
+            masked: undefined,
+            removable: false,
+          },
+        ],
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("provided");
+      expect(frame).not.toContain("not set");
+      expect(frame).toContain("add your own key");
+      expect(frame).not.toContain("r remove");
+
+      setup.mockInput.pressKey("r");
+      await flush(setup);
+      setup.mockInput.pressKey(DELETE_KEY);
+      await flush(setup);
       expect(removeRequested).toEqual([]);
     });
 

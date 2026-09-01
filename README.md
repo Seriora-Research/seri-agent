@@ -126,7 +126,9 @@ seri
 That opens the TUI. On a first run, guided setup asks how you want to pay: paste a provider
 key and pick a model, or connect a Grok or ChatGPT (Codex) subscription from `/setup`. Signing
 into a hosted account on the welcome splash (`Log in` / `Sign up`) skips setup — the hosted
-gateway covers OpenRouter without a local key. Setting a key in the environment before you
+gateway covers OpenRouter without a local key, and `/setup` lists that row as provided
+(not removable). Starting without logging in means you brought your own key, so `/setup`
+does not offer the hosted OpenRouter slot. Setting a key in the environment before you
 launch (`GROQ_API_KEY` or `XAI_API_KEY`, say) also skips setup.
 
 ```text
@@ -158,7 +160,7 @@ Everything below is a slash command inside the session.
 | `/usage` | hosted-gateway spend vs allowance |
 | `/exit` | end the session (or Ctrl-D) |
 | `/model` | open the model picker across all six providers and subscription routes |
-| `/setup` | add or remove a provider key; connect or disconnect a Grok or Codex subscription |
+| `/setup` | add or replace a provider key (a hosted login shows OpenRouter as provided, not a paste slot); connect or disconnect a Grok or Codex subscription |
 | `/login` | sign in to a hosted seri account |
 | `/signup` | create a hosted seri account |
 | `/logout` | leave a hosted seri account |
