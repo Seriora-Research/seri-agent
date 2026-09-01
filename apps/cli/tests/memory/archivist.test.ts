@@ -14,6 +14,7 @@ import {
   runLoop,
 } from "../../src/loop/loop";
 import {
+  ARCHIVIST_PROMPT,
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
   createArchivistState,
@@ -609,6 +610,20 @@ describe("maybeRunArchivist", () => {
   });
 });
 
+describe("ARCHIVIST_PROMPT", () => {
+  test("evaluates memory and skill independently, and does not treat a fact as evidence against a skill", () => {
+    expect(ARCHIVIST_PROMPT).toMatch(/independently/i);
+    expect(ARCHIVIST_PROMPT).not.toMatch(/rarely also produced a good skill/i);
+    expect(ARCHIVIST_PROMPT).not.toMatch(/Most sessions warrant neither/i);
+  });
+
+  test("states the mechanical write rules the tools enforce and the skill body format", () => {
+    expect(ARCHIVIST_PROMPT).toMatch(/one line/i);
+    expect(ARCHIVIST_PROMPT).toContain("$ARGUMENTS");
+    expect(ARCHIVIST_PROMPT).toMatch(/durable false/i);
+  });
+});
+
 describe("buildArchivistGoal", () => {
   test("embeds both the current memory content and the transcript slice", () => {
     const ctx = makeCtx();
@@ -617,6 +632,23 @@ describe("buildArchivistGoal", () => {
     expect(goal).toContain("Trigger: tool-count");
     expect(goal).toContain("all three files are empty");
     expect(goal).toContain('"hi"');
+  });
+
+  // renderMemoryTier's intro is for the coding agent ("frozen", "cannot edit these directly").
+  // The archivist's job is to write those files, and it reloads them live — that intro in the
+  // goal is a direct contradiction. Sections + budgets stay; the parent-facing intro must not.
+  test("a non-empty memory goal keeps the entries and budgets, not the coding-agent intro", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      ctx,
+      "2026-08-11",
+    );
+    const goal = buildArchivistGoal([{ role: "user", content: "hi" }], loadMemory(ctx), "tool-count");
+    expect(goal).toContain("prefers tabs");
+    expect(goal).toMatch(/\d+% — \d+\/1375 chars/);
+    expect(goal).not.toContain("You cannot edit these directly");
+    expect(goal).not.toContain("frozen for this session");
   });
 
   // Up to ARCHIVIST_TOOL_CALL_INTERVAL tool calls between two runs can include large outputs
