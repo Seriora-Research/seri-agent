@@ -22,6 +22,7 @@ import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
+  APP_CHROME_ROWS,
   DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
@@ -1018,7 +1019,10 @@ describe("App", () => {
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
+      const frame = setup.captureCharFrame();
+      expect(frame).toMatch(/\d+s .*↑, .*↓/);
+      // Negative control: the floor hairline is the row that would have stolen this.
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
     });
   });
 
@@ -3066,7 +3070,18 @@ describe("App", () => {
     });
   });
 
+  test("a live input sits under a full-width hairline", async () => {
+    const { setup } = await connect();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("─".repeat(DEFAULT_WIDTH));
+    expect(frame).toContain("describe a task");
+  });
+
   describe("listWindowSize", () => {
+    test("APP_CHROME_ROWS is one row each for mode and commandError", () => {
+      expect(APP_CHROME_ROWS).toBe(2);
+    });
+
     // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
@@ -4364,6 +4379,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
       // Content that doesn't fit the fixed-height root box doesn't grow the frame taller — an
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
       // header line; both must render intact once the reservation accounts for commandError.

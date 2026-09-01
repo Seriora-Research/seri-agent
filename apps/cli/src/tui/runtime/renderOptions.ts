@@ -52,9 +52,11 @@ export const MAIN_TUI_RENDERER_CONFIG: CliRendererConfig = {
   useMouse: false,
 };
 
-// Opt-in: the TUI renders on whatever ground the terminal already has unless SERI_TUI_BACKGROUND
-// names a `#rrggbb` color, because painting one breaks terminal transparency, background blur and
-// theme matching for anyone who set those up on purpose (docs/design/tui.md).
+// Default paper `#141413` (docs/design/tui.md): the border and user-band tokens were sampled
+// against this ground, and an unset preference now paints it. `SERI_TUI_BACKGROUND=terminal`
+// (or any non-hex) restores the previous leave-alone path, because painting a ground still
+// breaks terminal transparency, background blur and theme matching for anyone who set those
+// up on purpose.
 //
 // A `setBackgroundColor` call rather than a `backgroundColor` field on the config above:
 // `@opentui/core` 0.5.6 declares `CliRendererConfig.backgroundColor` but its `CliRenderer`
@@ -72,7 +74,9 @@ export function applyTuiBackground(renderer: CliRenderer, configDir: string): vo
 // costs the user a background preference, not a launch.
 function readTuiBackground(configDir: string): string | undefined {
   try {
-    return tuiBackgroundColor(configValue("SERI_TUI_BACKGROUND", loadConfig(configDir)));
+    const raw = configValue("SERI_TUI_BACKGROUND", loadConfig(configDir));
+    if (raw === undefined) return "#141413";
+    return tuiBackgroundColor(raw);
   } catch {
     return undefined;
   }

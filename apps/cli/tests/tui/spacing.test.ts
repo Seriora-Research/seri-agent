@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { gapBefore } from "../../src/tui/theme/spacing";
+import { gapBefore, hairlineRow } from "../../src/tui/theme/spacing";
 import type { TranscriptRole } from "../../src/tui/util/format";
 
 const ROLES: TranscriptRole[] = ["user", "assistant", "system"];
@@ -12,6 +12,17 @@ const TABLE: [TranscriptRole | undefined, Record<TranscriptRole, 0 | 1>][] = [
   ["assistant", { user: 1, assistant: 0, system: 0 }],
   ["system", { user: 1, assistant: 0, system: 0 }],
 ];
+
+describe("hairlineRow", () => {
+  test("is a mark of ─, one per column", () => {
+    expect(hairlineRow(4)).toBe("────");
+  });
+
+  test("empty at zero columns, never negative", () => {
+    expect(hairlineRow(0)).toBe("");
+    expect(hairlineRow(-2)).toBe("");
+  });
+});
 
 describe("gapBefore", () => {
   for (const [prev, row] of TABLE) {

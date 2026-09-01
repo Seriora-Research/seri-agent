@@ -8,6 +8,14 @@ import { theme } from "./theme";
 // rows per panel and shrink every list by that much.
 export const PAD_X = 1;
 
+// A full-width rule, not a box. Surfaces that are not framed use this mark so the floor
+// (status + input + mode) reads as one join without inventing a second border family.
+export const HAIRLINE_CHAR = "─";
+
+export function hairlineRow(columns: number): string {
+  return HAIRLINE_CHAR.repeat(Math.max(0, columns));
+}
+
 // The frame for every bordered surface in the TUI, the input box included: one four-side box is
 // the house style and there is no second family. `border` stays unset because BoxRenderable's own
 // constructor (@opentui/core) promotes a box carrying `borderStyle`/`borderColor` to all four

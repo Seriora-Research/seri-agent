@@ -3013,8 +3013,12 @@ async function runTui(
         // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
         // lands in the transcript either way, regardless of which console stream it would have
         // gone to on a non-TTY run.
-        for (const { text } of prepared.preMountMessages) {
-          dispatch({ type: "transcript-append", line: text });
+        for (const { text, stream } of prepared.preMountMessages) {
+          dispatch({
+            type: "transcript-append",
+            line: text,
+            muted: stream === "stdout",
+          });
         }
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,

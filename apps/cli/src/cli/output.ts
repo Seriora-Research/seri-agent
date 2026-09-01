@@ -475,5 +475,5 @@ export function pendingQueueNotice(memoryCount: number, skillCount: number): str
     memoryCount > 0 ? "/memory pending" : undefined,
     skillCount > 0 ? "/skills pending" : undefined,
   ].filter((c) => c !== undefined);
-  return `${parts.join(" and ")} waiting for review · ${review.join(", ")}`;
+  return `! ${parts.join(" and ")} waiting for review · ${review.join(", ")}`;
 }
