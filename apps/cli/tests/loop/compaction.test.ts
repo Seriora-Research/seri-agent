@@ -141,4 +141,66 @@ describe("compactMessages", () => {
     expect(result.summary.progress).toBe("streamed");
     expect(model.doGenerateCalls).toHaveLength(0);
   });
+
+  test("does not send oversized tool-result bodies to the summarizer, and does not mutate the evicted messages", async () => {
+    const largeBody = `UNIQUE_FILE_BODY_${"x".repeat(50_000)}`;
+    const shortLiteral = "SHORT_ID_7";
+    const userText = "do the task involving src/foo.ts";
+    const messages: ModelMessage[] = [
+      { role: "user", content: userText },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-read",
+            toolName: "read_file",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-read",
+            toolName: "read_file",
+            output: { type: "json", value: largeBody },
+          },
+        ],
+      },
+      assistantToolCallMsg("call-write"),
+      toolResultMsg("call-write", shortLiteral),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: `read src/foo.ts and saw ${shortLiteral}`,
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const result = await compactMessages(messages, model, 5);
+
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const sent = JSON.stringify(model.doGenerateCalls[0]?.prompt);
+    expect(sent).not.toContain(largeBody);
+    expect(sent).not.toContain("UNIQUE_FILE_BODY_");
+    expect(sent).toContain(shortLiteral);
+    expect(sent).toContain(userText);
+    expect(sent).toContain("src/foo.ts");
+    expect(sent).toMatch(/"elided"\s*:\s*true/);
+    expect(sent).toContain(String(Buffer.byteLength(largeBody)));
+    expect(JSON.stringify(messages)).toContain(largeBody);
+    expect(result.evictedCount).toBe(5);
+  });
 });
