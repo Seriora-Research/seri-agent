@@ -10,7 +10,9 @@ import {
   formatModeDetail,
   formatTokenProgress,
   MODE_CYCLE_HINT,
+  MODE_HINT_COLS,
   MODE_LABEL,
+  modeRowHintVisible,
   type TokenProgress,
 } from "../../src/tui/util/format";
 import { route } from "./helpers";
@@ -307,6 +309,23 @@ describe("formatModeDetail", () => {
     for (const width of [10, modelOnly.length, DEFAULT_COLUMNS, 100]) {
       expect(formatModeDetail(undefined, width, "high")).toBe("");
     }
+  });
+});
+
+describe("modeRowHintVisible", () => {
+  test("hint at MODE_HINT_COLS with empty detail", () => {
+    expect(modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, 0)).toBe(true);
+  });
+
+  test("hint hidden when detail+hint overflow even if remaining >= MODE_HINT_COLS", () => {
+    const detail = "  claude-sonnet-5 · your key";
+    expect(
+      modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, detail.length),
+    ).toBe(false);
+    const worstDetail = `  ${"n".repeat(22)} · → openrouter · high`;
+    expect(modeRowHintVisible(DEFAULT_COLUMNS, MODE_LABEL.auto.length, worstDetail.length)).toBe(
+      false,
+    );
   });
 });
 

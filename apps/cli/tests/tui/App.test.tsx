@@ -3547,12 +3547,10 @@ describe("App", () => {
       expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
     });
 
-    // Regression: the fix above only reserved the right-side banner's width in the call to
-    // formatModeDetail (which gates the model/route detail), not in the hint's own visibility check
-    // a few lines below — so at a width narrower than 80 (no room for the model anyway, so the
-    // first fix's own test never exercised this), the hint alone could still collide with the
-    // banner. 60 columns: "⏸ approve-each mode on" (22) + hint (21) = 43, well under 52
-    // (MODE_HINT_COLS against the raw width) even though 43 + the banner's 26 = 69 > 60.
+    // Regression: leftover packing and the hint-yield check both see remaining width after the
+    // right-side banner is reserved. At 60 columns the banner (26) plus approve-each (22) plus
+    // hint (21) would wrap; the hint must yield (remaining 34 is also below MODE_HINT_COLS) so
+    // OpenTUI does not split the banner mid-word.
     test("the scroll banner and the hint coexist at a narrow width without wrapping", async () => {
       const { setup, dispatch } = await connect();
       await resize(setup, 60, DEFAULT_HEIGHT);

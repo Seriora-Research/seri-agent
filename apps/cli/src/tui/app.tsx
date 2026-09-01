@@ -91,8 +91,8 @@ import {
   FALLBACK_CHROME_ROWS,
   formatModeDetail,
   MODE_CYCLE_HINT,
-  MODE_HINT_COLS,
   MODE_LABEL,
+  modeRowHintVisible,
 } from "./util/format";
 
 export type AppProps = {
@@ -268,10 +268,10 @@ export type AppProps = {
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
 // two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL) —
-// `formatModeDetail` (below) picks its display tier off this width, and a stray `0` would collapse
-// it to the narrowest tier for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the
-// same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
-// there is no real terminal width `0` is ever the correct value for.
+// leftover packing of the mode-row detail (below) would otherwise see a 0 leftover and drop the
+// suffix for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the same as
+// `undefined`/`null`, which is exactly the substitution a column count of zero needs — there is
+// no real terminal width `0` is ever the correct value for.
 function resolveWidth(columns: number): number {
   return columns || DEFAULT_COLUMNS;
 }
@@ -504,12 +504,11 @@ export function App({
   const noPanelOpen = !pagingPanelOpen && state.pendingApproval === undefined;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
-  // "space-between"`, below) — the row's own tier thresholds are sized against the LEFT side
-  // alone, so once the right side is actually showing, its own width has to come out of the
-  // budget BOTH the hint's own visibility check and `formatModeDetail` see, or the two collide and
-  // OpenTUI wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and
-  // status, only when both are shown at once. Also what the JSX below renders, rather than
-  // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
+  // "space-between"`, below) — leftover packing of the left-side detail and the hint-yield check
+  // both see remaining width after the right side is reserved, or the two collide and OpenTUI
+  // wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and status,
+  // only when both are shown at once. Also what the JSX below renders, rather than re-typing the
+  // banner string a second time — the two can't drift apart if there's only one copy.
   const rightSideText = scrolledUp && !pagingPanelOpen ? "↑ scrolled — End to follow" : "";
   const rawRightSideWidth =
     rightSideText.length +
@@ -518,8 +517,8 @@ export function App({
   // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/model/route,
   // it's never hidden or shortened as the terminal narrows (there's nothing smaller to fall back
   // to than the mode's own name). So on a narrow enough terminal, indicatorText + the right side
-  // together can still exceed `width` even after the hint/detail have already given up all the
-  // room they can. Rather than let that wrap the row, the right side loses instead: it only shows
+  // together can still exceed `width` even after leftover packing has already given up all the
+  // room it can. Rather than let that wrap the row, the right side loses instead: it only shows
   // when there's room for it alongside the label, which — like the hint/detail split above — is
   // real terminal width, not a real cell-width measurement (`.length`, not `stringWidth`; the
   // banner's own `—`/`↑` and `state.status`'s `…` can in principle render wider than 1 cell on a
@@ -534,7 +533,13 @@ export function App({
     resolveReasoningEffort(state.session, state.config),
     catalogEntry,
   );
-  const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);
+  const remaining = width - rightSideWidth;
+  const modeDetail = formatModeDetail(
+    state.route,
+    Math.max(0, remaining - indicatorText.length),
+    effortTier,
+  );
+  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
@@ -933,9 +938,7 @@ export function App({
         hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
-          {width - rightSideWidth >= MODE_HINT_COLS && (
-            <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>
-          )}
+          {showModeHint && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>

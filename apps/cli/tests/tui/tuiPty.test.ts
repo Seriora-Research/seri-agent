@@ -1846,12 +1846,13 @@ const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 // window size on the pty `pty.spawn` allocates — confirmed live (an `@opentui/core`
 // `createCliRenderer` probe run over the identical harness): a fresh pty with no winsize ioctl ever
 // applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
-// for "no real size available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts)
-// gates the mode row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider
-// than that 80-column default — so no test using the plain `target` can ever observe that suffix,
-// regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that: it
-// prefixes an `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before
-// exec'ing the real one. Every other call site omits it and keeps the exact behavior it always had.
+// for "no real size available," not a real terminal's dimensions. `formatModeDetail` leftover-packs
+// the mode row's model/route/effort suffix into whatever columns remain after the indicator, so a
+// typical model name's ` · your key` suffix IS visible at that 80-column default. `terminalSize`,
+// below, still widens the pty when a test needs a guaranteed-wide row (a NAME_WIDTH model plus
+// reroute plus effort, or an assertion that must not depend on leftover packing): it prefixes an
+// `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before exec'ing
+// the real one. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -5502,8 +5503,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
     // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
     // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
-    // `terminalSize` widens the pty past `MODE_ROUTE_MIN_COLS` (`startChild`'s own comment has the
-    // full account of why every other test in this file can't observe this suffix at all).
+    // `terminalSize` widens the pty so leftover packing of the effort-tier suffix is not tight
+    // against the default 80-column fallback (`startChild`'s own comment has the full account).
     test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any turn runs", async () => {
       seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
       const scriptPath = join(dir, "child-effort-default-mount.mjs");
