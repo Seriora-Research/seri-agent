@@ -1956,6 +1956,18 @@ async function runTui(
       startedAt: Date.now(),
       inputEstimate: inputText === undefined ? 0 : estimateTokens(inputText),
     });
+    // The turn's own user message, committed before the model is called. Until this dispatch, the
+    // row `withUserTurn` merged into `session` at submit reached reducer state only if the loop
+    // echoed it back in a `messages-updated` — and a cancel landing before the first assistant
+    // message is pushed yields none (see loop.ts's own comment on why its stream catch discards
+    // what it holds). The prompt therefore died with the turn, while the transcript line kept
+    // showing it and the next turn was handed a message array with no trace of what was cancelled.
+    // The task a session STARTS with was never losable this way — prepareSession pushes it and
+    // saves before the first call — so the gap was only ever turns submitted from inside the TUI.
+    //
+    // A `/name` direct dispatch passes its session through unchanged (driveLoop appends the user
+    // row itself there), so this merges an identical array and changes nothing for it.
+    dispatch({ type: "user-turn-committed", messages: session.messages });
     // A rerouted OR gateway-served pair is never silent on the TUI path either — see
     // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
