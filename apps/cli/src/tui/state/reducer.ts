@@ -14,6 +14,7 @@ import { ERROR_MARK } from "../theme/theme";
 import {
   estimateTokens,
   formatDoneLine,
+  formatReasoningCaret,
   type SkillsPanelRow,
   type TokenProgress,
   type TranscriptEntry,
@@ -251,6 +252,14 @@ export type TuiState = {
   // the scrollbox (`undefined` = parent). Arrows never change `pendingChildView`.
   subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
+  // In-flight thought span for the parent chat only. Settled rows live on
+  // `transcript` (`kind: "reasoning"`). Not session JSON.
+  reasoning: ReasoningState;
+};
+
+export type ReasoningState = {
+  expanded: boolean;
+  live?: { text: string; startedAt: number };
 };
 
 export type ChildView = {
@@ -276,8 +285,11 @@ export type ChildView = {
 // instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
 // nothing stops it either) would otherwise corrupt every other state — including a concurrent test
 // — that spread from this same constant.
-const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming" | "toolActivity">> =
-  Object.freeze({
+const EMPTY_REASONING: ReasoningState = Object.freeze({ expanded: false });
+
+const EMPTY_TRANSCRIPT: Readonly<
+  Pick<TuiState, "transcript" | "streaming" | "toolActivity" | "reasoning">
+> = Object.freeze({
     // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
     // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
     // genuinely different types — frozen at runtime regardless of this cast, which only restores the
@@ -285,6 +297,7 @@ const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming" | "to
     transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
     streaming: "",
     toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
+    reasoning: EMPTY_REASONING,
   });
 
 const EMPTY_ROSTER: Readonly<
@@ -493,6 +506,11 @@ export type TuiAction =
   // and clearing TurnStatus's own state on any of those made a turn that was still very much in
   // progress look like it had silently died.
   | { type: "turn-ended" }
+  // streamDispatch drains buffered thought text with the wall-clock of the first
+  // delta, not the drain tick — otherwise a think that lasted seconds would settle
+  // as `0s` because start and end would share one Date.now().
+  | { type: "reasoning-flushed"; text: string; startedAt: number }
+  | { type: "reasoning-toggled" }
   // The message queue's own eight actions (MessageQueue, above). Three of them — selection-moved,
   // edit-started, item-dropped — deliberately no-op while `editing`, which is a correctness fix
   // rather than politeness: without the first of those, two items queued, Ctrl+E on row 1 and then
@@ -560,6 +578,8 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
       return child;
     case "text-delta":
       return { ...child, streaming: child.streaming + event.text };
+    case "reasoning-delta":
+      return child;
     case "tool-call": {
       const flushed = flushChildStreaming(child);
       return {
@@ -820,6 +840,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         ...EMPTY_ROSTER,
+        reasoning: EMPTY_REASONING,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -836,8 +857,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "turn-ended":
       // Flush first: loop.ts's mid-stream / streamText catch yields error then return with no
       // done, so this is the only commit point for tools already recorded. After a real done
-      // the accumulator is already [], so the flush is a no-op.
-      return { ...flushToolActivity(state), turn: undefined };
+      // the accumulator is already [], so the flush is a no-op. A live thought that never
+      // saw text-delta / tool-call / done (error-then-return) settles here so the caret is
+      // not dropped with the pin.
+      return { ...flushToolActivity(settleReasoning(state, Date.now())), turn: undefined };
+    case "reasoning-flushed":
+      return openOrAppendReasoning(state, action.text, action.startedAt);
+    case "reasoning-toggled":
+      return toggleReasoning(state);
     case "queue-appended":
       // `selected` and `editing` are carried through untouched, not reset: a message queued while
       // the user is part-way through editing an earlier row must not move the band out from under
@@ -1019,40 +1046,111 @@ function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): Tok
   };
 }
 
+function openOrAppendReasoning(state: TuiState, text: string, startedAt: number): TuiState {
+  if (text.length === 0) return state;
+  if (state.reasoning.live !== undefined) {
+    return {
+      ...state,
+      reasoning: {
+        ...state.reasoning,
+        live: { ...state.reasoning.live, text: state.reasoning.live.text + text },
+      },
+    };
+  }
+  return {
+    ...state,
+    reasoning: { ...state.reasoning, live: { text, startedAt } },
+  };
+}
+
+function settleReasoning(state: TuiState, now: number): TuiState {
+  const live = state.reasoning.live;
+  if (live === undefined) return state;
+  if (live.text.length === 0) {
+    return { ...state, reasoning: { ...state.reasoning, live: undefined } };
+  }
+  const expanded = state.reasoning.expanded;
+  const elapsedMs = now - live.startedAt;
+  const entry: TranscriptEntry = {
+    role: "system",
+    text: formatReasoningCaret(expanded, elapsedMs),
+    muted: true,
+    kind: "reasoning",
+    body: live.text,
+    expanded,
+    elapsedMs,
+  };
+  return {
+    ...state,
+    transcript: [...state.transcript, entry],
+    reasoning: { ...state.reasoning, live: undefined },
+  };
+}
+
+function toggleReasoning(state: TuiState): TuiState {
+  if (state.reasoning.live !== undefined) {
+    return { ...state, reasoning: { ...state.reasoning, expanded: !state.reasoning.expanded } };
+  }
+  let last = -1;
+  for (let i = state.transcript.length - 1; i >= 0; i--) {
+    if (state.transcript[i]?.kind === "reasoning") {
+      last = i;
+      break;
+    }
+  }
+  if (last < 0) return state;
+  const entry = state.transcript[last];
+  if (entry === undefined) return state;
+  const expanded = !entry.expanded;
+  const next = [...state.transcript];
+  next[last] = {
+    ...entry,
+    expanded,
+    text: formatReasoningCaret(expanded, entry.elapsedMs ?? 0),
+  };
+  return { ...state, transcript: next, reasoning: { ...state.reasoning, expanded } };
+}
+
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
   switch (event.type) {
     // `state.turn` is left untouched (not seeded here) when it's `undefined` — a `text-delta`
     // arriving without a preceding `turn-started` would only happen out of order, which nothing in
     // this file crashes on; see this switch's other cases for the same posture.
-    case "text-delta":
+    case "text-delta": {
+      const settled = settleReasoning(state, Date.now());
       return {
-        ...state,
-        streaming: state.streaming + event.text,
-        turn: state.turn && {
-          ...state.turn,
+        ...settled,
+        streaming: settled.streaming + event.text,
+        turn: settled.turn && {
+          ...settled.turn,
           tokens: {
-            ...state.turn.tokens,
-            liveOutputEstimate: state.turn.tokens.liveOutputEstimate + estimateTokens(event.text),
+            ...settled.turn.tokens,
+            liveOutputEstimate: settled.turn.tokens.liveOutputEstimate + estimateTokens(event.text),
             // A fresh live estimate has started for whichever call is now streaming — even
             // right after a `"usage"` event reconciled the PREVIOUS call and set this `true`.
             exact: false,
           },
         },
       };
+    }
+    case "reasoning-delta":
+      return openOrAppendReasoning(state, event.text, Date.now());
     // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
     // on `toolActivity` — the live-paint source during the turn (app.tsx) — and flush as muted
     // compact lines on done (not error: loop.ts yields error and continues). pendingTool is set
     // for every tool name so the live status slot (app.tsx) can show the in-flight call.
     // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
     // has a group for recordThrow to settle.
-    case "tool-call":
+    case "tool-call": {
+      const settled = settleReasoning(state, Date.now());
       return {
-        ...flushStreaming(state),
+        ...flushStreaming(settled),
         // dispatch_subagents' live surface is the child panel, not a footer raw-id string.
         status: event.name === "dispatch_subagents" ? "" : `Running ${event.name}…`,
         pendingTool: { name: event.name, args: event.args },
-        toolActivity: recordCall(state.toolActivity, event.name, event.args),
+        toolActivity: recordCall(settled.toolActivity, event.name, event.args),
       };
+    }
     case "tool-result":
       return {
         ...state,
@@ -1112,11 +1210,12 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // effect watching `state.session`) what actually lands on disk.
     case "messages-updated":
       return { ...state, session: { ...state.session, messages: event.messages } };
-    case "done":
+    case "done": {
+      const settled = settleReasoning(state, Date.now());
       return {
         ...pushLine(
-          flushToolActivity(state),
-          formatDoneLine(event.reason, state.turn?.tokens),
+          flushToolActivity(settled),
+          formatDoneLine(event.reason, settled.turn?.tokens),
           "system",
           true,
           true,
@@ -1124,6 +1223,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         status: "",
         pendingTool: undefined,
       };
+    }
     // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
     // (TuiAction) for why only that action, not this event, ends a turn. toolActivity is
     // also left in place: an error is not turn-end, and flushing here would drop calls

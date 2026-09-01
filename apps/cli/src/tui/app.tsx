@@ -68,7 +68,7 @@ import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
 import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
-import { TranscriptList } from "./components/TranscriptList";
+import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
 import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
@@ -368,6 +368,8 @@ export function App({
   );
   const stream = useMemo(() => createStreamDispatch(setState), []);
   const dispatch = stream.dispatch;
+  const [pendingReasoning, setPendingReasoning] = useState("");
+  useEffect(() => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())), [stream]);
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
@@ -578,6 +580,9 @@ export function App({
   useKeyboard((key) => {
     if (!noPanelOpen) return;
     if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
+    // Mouse reporting is off, so the live pin cannot be clicked. ctrl+t does
+    // not steal ↑/↓ or shift+tab; InputBox already ignores key.ctrl.
+    if (key.ctrl && key.name === "t") dispatch({ type: "reasoning-toggled" });
   });
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
@@ -715,6 +720,15 @@ export function App({
                 sticky={!scrolledUp}
                 columns={width}
               />
+              {state.reasoning.expanded &&
+                ((state.reasoning.live?.text ?? "") + pendingReasoning).length > 0 && (
+                  <text
+                    fg={theme.muted}
+                    marginTop={gapBefore(state.transcript.at(-1)?.role, "system")}
+                  >
+                    {indentReasoningBody((state.reasoning.live?.text ?? "") + pendingReasoning)}
+                  </text>
+                )}
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
               flushToolActivity, toolActivity is [] and this region unmounts in the same
@@ -761,6 +775,11 @@ export function App({
             tokenProgress={turn.tokens}
             pendingLiveOutputEstimate={stream.getPendingLiveOutputEstimate}
             subscribePendingLive={stream.subscribe}
+            thinking={
+              (state.reasoning.live?.text.length ?? 0) > 0 || pendingReasoning.length > 0
+            }
+            thinkingExpanded={state.reasoning.expanded}
+            toolInFlight={state.pendingTool !== undefined}
           />
         )}
       </box>

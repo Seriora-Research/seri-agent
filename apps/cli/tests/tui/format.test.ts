@@ -5,6 +5,8 @@ import {
   estimateTokens,
   formatDoneLine,
   formatElapsed,
+  formatLiveThinkingStatus,
+  formatReasoningCaret,
   formatHomePath,
   formatMcpRow,
   formatModeDetail,
@@ -34,6 +36,23 @@ describe("formatElapsed", () => {
   // rendering "-1s".
   test("a negative elapsed clamps to 0s instead of going negative", () => {
     expect(formatElapsed(-1000)).toBe("0s");
+  });
+});
+
+describe("reasoning caret", () => {
+  test("settled caret is span time only", () => {
+    expect(formatReasoningCaret(false, 4_000)).toBe("▸ thought · 4s");
+    expect(formatReasoningCaret(true, 4_000)).toBe("▾ thought · 4s");
+    expect(formatReasoningCaret(false, 72_000)).toBe("▸ thought · 1m 12s");
+  });
+
+  test("live pin joins thinking, elapsed, and tokens with dots", () => {
+    expect(formatLiveThinkingStatus(false, "4s", "~2100 ↑, ~180 ↓")).toBe(
+      "▸ thinking · 4s · ~2100 ↑, ~180 ↓",
+    );
+    expect(formatLiveThinkingStatus(true, "4s", "~2100 ↑, ~180 ↓")).toBe(
+      "▾ thinking · 4s · ~2100 ↑, ~180 ↓",
+    );
   });
 });
 

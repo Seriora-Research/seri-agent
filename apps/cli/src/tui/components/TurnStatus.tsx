@@ -7,18 +7,29 @@
 // accumulating error (vercel-labs/fx's own technique).
 import { useEffect, useState } from "react";
 import { theme } from "../theme/theme";
-import { formatElapsed, formatTokenProgress, type TokenProgress } from "../util/format";
+import {
+  formatElapsed,
+  formatLiveThinkingStatus,
+  formatTokenProgress,
+  type TokenProgress,
+} from "../util/format";
 
 export function TurnStatus({
   startedAt,
   tokenProgress,
   pendingLiveOutputEstimate,
   subscribePendingLive,
+  thinking = false,
+  thinkingExpanded = false,
+  toolInFlight = false,
 }: {
   startedAt: number;
   tokenProgress: TokenProgress;
   pendingLiveOutputEstimate?: () => number;
   subscribePendingLive?: (listener: () => void) => () => void;
+  thinking?: boolean;
+  thinkingExpanded?: boolean;
+  toolInFlight?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [pendingExtra, setPendingExtra] = useState(0);
@@ -44,11 +55,19 @@ export function TurnStatus({
   // rows.
   return (
     <text fg={theme.muted} truncate wrapMode="none">
-      {formatElapsed(now - startedAt)}{" "}
-      {formatTokenProgress({
-        ...tokenProgress,
-        liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
-      })}
+      {thinking && !toolInFlight
+        ? formatLiveThinkingStatus(
+            thinkingExpanded,
+            formatElapsed(now - startedAt),
+            formatTokenProgress({
+              ...tokenProgress,
+              liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+            }),
+          )
+        : `${formatElapsed(now - startedAt)} ${formatTokenProgress({
+            ...tokenProgress,
+            liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+          })}`}
     </text>
   );
 }
