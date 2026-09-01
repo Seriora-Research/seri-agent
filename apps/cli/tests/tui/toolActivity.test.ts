@@ -138,13 +138,16 @@ describe("detailLinesForResult", () => {
   });
 
   test("grep content mode lists each file once, not once per match line", () => {
+    // Basename only: `trimPath` on a slashed relative path is `docs\…` on win32
+    // (`path.relative` rewrites the separator). The files_with_matches test
+    // above already uses that shape (`one.ts`, not `docs/one.ts`).
     const matches = Array.from({ length: 100 }, (_, i) => ({
-      file: "docs/ARCHITECTURE.md",
+      file: "ARCHITECTURE.md",
       line: i + 1,
       text: "implemented",
     }));
     expect(detailLinesForResult("grep", { mode: "content", matches, truncated: false })).toEqual([
-      "docs/ARCHITECTURE.md",
+      "ARCHITECTURE.md",
     ]);
   });
 
