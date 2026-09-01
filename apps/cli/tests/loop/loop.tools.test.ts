@@ -605,7 +605,10 @@ describe("runLoop", () => {
     // command does — nothing inside it cooperates — so the only thing that can stop it is the kill
     // spawnCollect performs on being handed the signal. Guarded on bash's availability the same way
     // tests/tools/bash.test.ts's tree-kill case is.
-    test.skipIf(!isBashAvailable())(
+    // spawnCollect.test.ts skips the kill-on-signal / cancelled-command cases on win32: Git Bash
+    // does not reliably deliver abort to the tree, and `sleep 30` then runs to completion (~30s)
+    // instead of being killed. This test is that same primitive through runLoop.
+    test.skipIf(!isBashAvailable() || process.platform === "win32")(
       "a cancel does not wait for a bash command that ignores it",
       async () => {
         const controller = new AbortController();

@@ -391,33 +391,54 @@ export function formatModeDetail(
   return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;
 }
 
-export function formatModelRow(row: ModelPickerEntry): string {
+// Inside FRAME (single border 1+1, PAD_X 1+1) the ListRow marker ("> "/"  ", 2 cols) leaves this
+// many columns for the label. Numeric, not imported PAD_X: spacing.ts type-imports this file.
+export const PICKER_LABEL_CHROME = 6;
+
+export function pickerLabelWidth(terminalCols: number): number {
+  return Math.max(0, (terminalCols || DEFAULT_COLUMNS) - PICKER_LABEL_CHROME);
+}
+
+// Optional `labelWidth` is the columns ListRow has for this string (pickerLabelWidth). Omitted
+// returns the full five columns plus suffix. When the full string overflows, drop the suffix
+// first; if still over, drop the Route column. Context and Cost stay.
+export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): string {
   const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable } = row;
   const route = formatRouteLabel({ keyConfigured, rerouteTo, gatewayReachable });
   const suffix =
     keyConfigured && alternatives > 0
       ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}`
       : "";
-  return (
-    [
-      truncatePad(entry.displayName, NAME_WIDTH),
-      truncatePad(entry.provider, PROVIDER_WIDTH),
-      formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
-      truncatePad(formatCost(entry.pricing), COST_WIDTH),
-      truncatePad(route, ROUTE_WIDTH),
-    ].join(" ") + suffix
-  );
+  const columns = [
+    truncatePad(entry.displayName, NAME_WIDTH),
+    truncatePad(entry.provider, PROVIDER_WIDTH),
+    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+    truncatePad(formatCost(entry.pricing), COST_WIDTH),
+    truncatePad(route, ROUTE_WIDTH),
+  ];
+  const full = columns.join(" ") + suffix;
+  if (labelWidth === undefined || full.length <= labelWidth) return full;
+  const withoutSuffix = columns.join(" ");
+  if (withoutSuffix.length <= labelWidth) return withoutSuffix;
+  return columns.slice(0, 4).join(" ");
 }
 
-// The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
-// flush above the rows it names regardless of terminal width.
-export const MODEL_PICKER_HEADER = [
-  truncatePad("Name", NAME_WIDTH),
-  truncatePad("Provider", PROVIDER_WIDTH),
-  "Context".padStart(CONTEXT_WIDTH),
-  truncatePad("Cost", COST_WIDTH),
-  truncatePad("Route", ROUTE_WIDTH),
-].join(" ");
+// Same five header cells as the unbounded MODEL_PICKER_HEADER. Omitted width, or a width the
+// five-column string already fits, keeps Route; otherwise drop Route in lockstep with formatModelRow.
+export function formatModelPickerHeader(labelWidth?: number): string {
+  const columns = [
+    truncatePad("Name", NAME_WIDTH),
+    truncatePad("Provider", PROVIDER_WIDTH),
+    "Context".padStart(CONTEXT_WIDTH),
+    truncatePad("Cost", COST_WIDTH),
+    truncatePad("Route", ROUTE_WIDTH),
+  ];
+  const full = columns.join(" ");
+  if (labelWidth === undefined || full.length <= labelWidth) return full;
+  return columns.slice(0, 4).join(" ");
+}
+
+export const MODEL_PICKER_HEADER = formatModelPickerHeader();
 
 function priceLabel(entry: ModelCatalogEntry): string {
   if (entry.pricing === undefined) return "";
