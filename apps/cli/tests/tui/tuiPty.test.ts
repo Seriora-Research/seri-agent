@@ -4388,33 +4388,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/login, /signup, /logout", () => {
-    test("the banner appears at mount when no auth.json exists, alongside the ordinary input box", async () => {
+    test("the sign-in banner does not appear at mount when no auth.json exists", async () => {
       const scriptPath = join(dir, "child-auth-banner.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
-        // Non-blocking proof: the ordinary input box still accepts a task, exactly as it would
-        // with the banner absent — the pty counterpart of App.test.tsx's own "still typing" test.
+        // Non-blocking proof: the ordinary input box still accepts a task — the pty counterpart
+        // of App.test.tsx's own "still typing" test.
         child.stdin?.write("still typing");
         await sawLine("still typing");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // "The banner is gone from the newest frame" (App.test.tsx's own "clears the panel entirely,
-    // restoring InputBox" test) is asserted there, at the component level, via lastFrame() — this
-    // harness's own `lastFrame()`/`frameOccurrences` could check the same thing, but `sawLine`/
-    // `rawOccurrences` are what every other "X disappeared" case in this file already uses, and
-    // they see the WHOLE accumulated pty stdout, which still contains the banner's original bytes
-    // from mount even after Ink redraws without it (every other such case — /setup's own cancel
-    // test — checks a FILE, not stdout, for the same reason). This test's own job is end to end:
-    // the real login()/logout() deps seam, the real reducer dispatches, and auth.json actually
-    // landing on disk.
+    // This test's own job is end to end: the real login()/logout() deps seam, the real reducer
+    // dispatches, and auth.json actually landing on disk. The sign-in chrome lives on the splash
+    // (and on `/login` itself), not as a persistent main-TUI banner.
     test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
@@ -4422,7 +4417,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
 
         child.stdin?.write("/login");
         await sawLine("/login");
@@ -4569,16 +4563,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the banner returns", async () => {
+    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the sign-in banner does not return", async () => {
       seedAuth(dir);
       const scriptPath = join(dir, "child-auth-logout.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        // seedAuth already wrote auth.json before spawn — decideAuthOffer is false at mount, so no
-        // banner line is expected yet here.
 
         child.stdin?.write("/logout");
         await sawLine("/logout");
@@ -4587,7 +4579,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Logged out.");
 
         expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4597,14 +4589,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // reuses childScriptGuidedSetup (no key, no auth.json — the same script the "genuinely blank
     // first run" describe block below already uses) rather than a new script, since the scenario
     // is identical; only the assertions differ.
-    test("gate composition: zero keys and no auth.json show both /setup and the auth banner; adding a key falls through to the main view with the banner still showing", async () => {
+    test("gate composition: zero keys and no auth.json show /setup without the sign-in banner; adding a key falls through to the main view still without it", async () => {
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
         child.stdin?.write("a");
         await wait100ms();
@@ -4625,10 +4617,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The fall-through to the main view (prepareSession -> runTui), same sync point
-        // childScriptGuidedSetup's own describe block below uses — and the banner is still
-        // showing there too, since no /login has happened in this run.
+        // childScriptGuidedSetup's own describe block below uses — login stays on the splash
+        // and on /login, not as a persistent banner after Continue.
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -5708,7 +5700,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-existing-key.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
@@ -5724,6 +5718,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // Falls through into the ordinary flow rather than replacing it.
         await sawLine("RUNLOOP_READY");
+        // Continue without logging in is the login choice. The splash already offered
+        // Log in / Sign up; the main TUI must not re-offer them as a persistent banner.
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
