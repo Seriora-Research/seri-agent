@@ -1364,6 +1364,47 @@ function childScriptGuidedSetup(dir: string): string {
   ].join("\n");
 }
 
+// The hosted-login counterpart of childScriptGuidedSetup: still zero local keys (every
+// provider env var deleted), but prepareSession can resolve via the gateway because this
+// script mocks /account-status and injects getGatewayModel. Used with a host-side auth.json
+// (seedAuth) so the first-run gate sees a real session and must skip /setup.
+function childScriptLoggedInZeroKeys(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.XAI_API_KEY;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGatewayModel: (id) => ({ id, via: "gateway" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
 // SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
 // against the bundled manifest), which would make this script incapable of ever observing the bug
@@ -5842,6 +5883,30 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
         // rather than bypassing it.
         await sawLine("/setup — provider API keys");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The hosted-login cell of the same gate: auth.json is already on disk (seedAuth), zero
+    // local keys, splash dismissed via Continue. Before the gate treated a hosted session as
+    // blank, this path mounted /setup and never reached RUNLOOP_READY. Reverting
+    // needsGuidedSetup's loadAuthSession check against this script reproduces that.
+    test("a logged-in user with zero local keys continues past splash into the main TUI, not /setup", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
+      try {
+        await sawLine(SPLASH_MARK);
+        await sawLine("> Continue");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY");
+        expect(rawOccurrences("/setup — provider API keys")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

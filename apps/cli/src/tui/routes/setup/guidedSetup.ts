@@ -31,9 +31,11 @@ const GUIDED_MODEL_LOADING = "Loading available models…";
 // Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
-// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
-// configured anywhere (env or config.json) — the "genuinely blank first run" case that would
-// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Renders
+// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and
+// `needsGuidedSetup` is true — no BYOK key, no vendor subscription, and no hosted login. A
+// logged-in session reaches models via the gateway without a local key, so that case must
+// not land here. The remaining blank-first-run case is what would otherwise hard-exit
+// before the TUI ever mounts. Renders
 // `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
 // action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
 // The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s

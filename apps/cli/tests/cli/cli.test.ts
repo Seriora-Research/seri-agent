@@ -9,11 +9,18 @@ import type { LanguageModelUsage, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
-import { saveAuthSession } from "../../src/auth/authStore";
+import { AUTH_FILENAME, saveAuthSession } from "../../src/auth/authStore";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
+import {
+  addCost,
+  chooseInterfaceOutput,
+  needsGuidedSetup,
+  run,
+  SLASH_COMMANDS,
+  tuiPresenter,
+} from "../../src/cli";
 import { printUsage, recoveryLines, USAGE, undoPlanLines } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
@@ -3161,6 +3168,42 @@ describe("guided setup gate", () => {
   test("one key configured via env var: configuredProviders(dir).size === 0 is false", () => {
     process.env.OPENROUTER_API_KEY = "fake-test-key";
     expect(configuredProviders(configDir).size === 0).toBe(false);
+  });
+
+  test("a hosted login with zero keys does not need guided setup", () => {
+    // Isolates Codex's ambient ~/.codex/auth.json so this assertion is about auth.json
+    // only, not a ChatGPT plan the machine happens to have connected.
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      expect(needsGuidedSetup(configDir)).toBe(true);
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a corrupted auth.json is still a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      writeFileSync(join(configDir, AUTH_FILENAME), "{not valid json");
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
   });
 });
 

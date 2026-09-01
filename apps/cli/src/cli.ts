@@ -20,6 +20,7 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
+import { loadAuthSession } from "./auth/authStore";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
@@ -1238,9 +1239,25 @@ export function tuiPresenter(
   };
 }
 
+// The mandatory first-run /setup panel exists only when the session has no way to reach a
+// model: no BYOK key, no vendor subscription, and no hosted login. A hosted login is not an
+// API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it is
+// the third credential resolveRoute already accepts — `credential: "gateway"`, paid by the
+// seri plan and forwarded to OpenRouter server-side. Treating it as "blank" here dumps a
+// logged-in user into /setup asking them to paste a key they do not need; /setup's own key
+// rows still say "not set" if they later open the panel, which is correct — they have
+// gateway access, not a local OPENROUTER_API_KEY.
+export function needsGuidedSetup(configDir: string): boolean {
+  return (
+    configuredProviders(configDir).size === 0 &&
+    subscribedProviders(configDir).size === 0 &&
+    loadAuthSession(configDir) === undefined
+  );
+}
+
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
-    return configuredProviders(configDir).size === 0 && subscribedProviders(configDir).size === 0;
+    return needsGuidedSetup(configDir);
   } catch (err) {
     // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
     // message is terminal for the run — nothing re-enters it after this catch returns. No

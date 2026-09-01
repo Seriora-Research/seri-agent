@@ -124,9 +124,10 @@ seri
 ```
 
 That opens the TUI. On a first run, guided setup asks how you want to pay: paste a provider
-key and pick a model, sign into a hosted account (`/login` / `/signup`), or connect a Grok or
-ChatGPT (Codex) subscription from `/setup`. Setting a key in the environment before you launch
-(`GROQ_API_KEY` or `XAI_API_KEY`, say) skips setup.
+key and pick a model, or connect a Grok or ChatGPT (Codex) subscription from `/setup`. Signing
+into a hosted account on the welcome splash (`Log in` / `Sign up`) skips setup — the hosted
+gateway covers OpenRouter without a local key. Setting a key in the environment before you
+launch (`GROQ_API_KEY` or `XAI_API_KEY`, say) also skips setup.
 
 ```text
 seri <task>                   one-shot, non-interactive
