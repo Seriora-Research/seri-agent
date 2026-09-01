@@ -2649,6 +2649,54 @@ describe("tuiReducer: reasoning spans", () => {
     expect(rows[1]?.text).toBe("▸ thought · 3s");
   });
 
+  test("a second think after a tool flushes the tool tree between the two carets", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "052 shipped" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const kinds = state.transcript.map((entry) =>
+      entry.kind === "reasoning" ? `thought:${entry.body}` : `${entry.role}:${entry.text}`,
+    );
+    const thoughtIdx = kinds.findIndex((line) => line === "thought:first");
+    const toolIdx = kinds.findIndex((line) => line.includes("Read"));
+    const thought2Idx = kinds.findIndex((line) => line === "thought:second");
+    const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
+    const doneIdx = kinds.findIndex((line) => line === "system:done" || line.startsWith("system:done ·"));
+    expect(thoughtIdx).toBeGreaterThanOrEqual(0);
+    expect(toolIdx).toBeGreaterThan(thoughtIdx);
+    expect(thought2Idx).toBeGreaterThan(toolIdx);
+    expect(answerIdx).toBeGreaterThan(thought2Idx);
+    expect(doneIdx).toBeGreaterThan(answerIdx);
+  });
+
   test("no reasoning-delta leaves today's transcript with no caret", () => {
     let state = withUser();
     state = tuiReducer(state, {

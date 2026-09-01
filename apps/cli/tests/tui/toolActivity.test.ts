@@ -136,6 +136,27 @@ describe("detailLinesForResult", () => {
     ).toEqual(["a.ts", "b.ts"]);
   });
 
+  test("grep content mode lists each file once, not once per match line", () => {
+    const matches = Array.from({ length: 100 }, (_, i) => ({
+      file: "docs/ARCHITECTURE.md",
+      line: i + 1,
+      text: "implemented",
+    }));
+    expect(
+      detailLinesForResult("grep", { mode: "content", matches, truncated: false }),
+    ).toEqual(["docs/ARCHITECTURE.md"]);
+  });
+
+  test("grep content mode overflow counts unique files, not match rows", () => {
+    const files = ["a.ts", "b.ts", "c.ts", "d.ts"];
+    const matches = files.flatMap((file) =>
+      [1, 2, 3].map((line) => ({ file, line, text: "x" })),
+    );
+    expect(
+      detailLinesForResult("grep", { mode: "content", matches, truncated: false }),
+    ).toEqual(["a.ts", "b.ts", "c.ts", "…1 more"]);
+  });
+
   test("grep count mode reads count files", () => {
     expect(
       detailLinesForResult("grep", {
