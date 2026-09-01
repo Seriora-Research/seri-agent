@@ -307,6 +307,13 @@ export function createCheckpointer(opts: {
   // from before the process restarted — for the resumed session's first call, silently skipping the
   // real snapshot that would have caught anything the user or filesystem changed in between.
   let snapshottedThisProcess = false;
+  // Worktree-relative posix paths of write_file calls this process has already snapshotted.
+  // Later write_file restages these (the ones that now exist) instead of `add -A`. Cleared
+  // whenever a full add rebuilds the index from disk.
+  const pendingWritePaths = new Set<string>();
+  // A bash/powershell snapshot is `add -A` *before* the command. The command may then touch any
+  // path, so the next snapshot cannot be path-scoped — it has to `add -A` again.
+  let needsFullAdd = false;
 
   function start(): boolean {
     // Degrade, never fail: refusing to edit files because an *undo* feature is unavailable makes
@@ -364,6 +371,27 @@ export function createCheckpointer(opts: {
     const inside = relative(opts.worktree, absolute);
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return "outside";
     return isIgnored(gitDir, opts.worktree, absolute) ? "ignored" : "checkpointed";
+  }
+
+  function relativeInside(absolute: string): string | undefined {
+    const inside = relative(opts.worktree, absolute);
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return undefined;
+    return inside.replaceAll("\\", "/");
+  }
+
+  // A write_file path this process may later restage. Ignored and outside paths are never
+  // remembered: `git add --` of either is a non-zero exit (1 / 128) and would latch
+  // checkpointing off. The file does not have to exist yet — a new write is snapshotted
+  // before it lands, and the next snapshot is when the path is addable.
+  function writePathRel(declared: string): string | undefined {
+    let scope = scopeCache.get(declared);
+    if (scope === undefined) {
+      scope = scopeOf(declared);
+      scopeCache.set(declared, scope);
+    }
+    if (scope !== "checkpointed") return undefined;
+    const absolute = isAbsolute(declared) ? declared : resolve(sessionCwd, declared);
+    return relativeInside(absolute);
   }
 
   function warnIfNotCheckpointed(tool: string, args: unknown, toolCallId: string): void {
@@ -431,13 +459,14 @@ export function createCheckpointer(opts: {
     }
 
     // `add -A` covers the whole worktree minus its ignores, so a project with no .gitignore at all
-    // — seri launched in $HOME, or beside an unignored node_modules — hashes every file on every
-    // mutating tool call. No limit is imposed: a threshold that silently narrowed the snapshot would
-    // be the skipped pre-state this design already refused to accept. The size is reported instead,
-    // once, so it is a number the user saw rather than one they find out from a deletion.
+    // — seri launched in $HOME, or beside an unignored node_modules — hashes every file on the
+    // first snapshot and on shell mutations. Later write_file restages only remembered paths.
+    // No limit is imposed: a threshold that silently narrowed the snapshot would be the skipped
+    // pre-state this design already refused to accept. The size is reported instead, once, so it
+    // is a number the user saw rather than one they find out from a deletion.
     if (files > LARGE_WORKTREE_FILES) {
       messages.push(
-        `checkpointing ${files} files under ${opts.worktree} on every file-modifying tool call — /undo's removal pass only covers files it recorded writing; a .gitignore would narrow it`,
+        `checkpointing ${files} files under ${opts.worktree} on the first snapshot and on shell mutations — later write_file restages only paths this session wrote; a .gitignore would narrow it`,
       );
     }
 
@@ -458,11 +487,11 @@ export function createCheckpointer(opts: {
 
       warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
-      // writeTree's own two spawns (`add -A` + `write-tree`) run only when the call might have
-      // changed something: `write_file` always might; a bash/powershell call only when its command
-      // matches DESTRUCTIVE_COMMAND_PATTERNS; and the very first checkpoint of THIS PROCESS always
-      // does regardless of command, because a resumed session's `previousTree` came from an earlier
-      // process and cannot be trusted to still match what is on disk now.
+      // writeTree runs only when the call might have changed something: `write_file` always might;
+      // a bash/powershell call only when its command matches DESTRUCTIVE_COMMAND_PATTERNS; and the
+      // very first checkpoint of THIS PROCESS always does regardless of command, because a resumed
+      // session's `previousTree` came from an earlier process and cannot be trusted to still match
+      // what is on disk now.
       const command = commandOf(context.args);
       const mustSnapshot =
         context.tool === "write_file" ||
@@ -470,14 +499,34 @@ export function createCheckpointer(opts: {
         command === undefined ||
         isDestructiveCommand(command);
 
+      const declared =
+        context.tool === "write_file" ? (context.args as { path?: unknown }).path : undefined;
+      const writeRel = typeof declared === "string" ? writePathRel(declared) : undefined;
+      // Later write_file: restage remembered write paths, not the whole worktree. First snapshot,
+      // any shell snapshot, and the write_file after a shell snapshot still `add -A`.
+      const pathScoped =
+        mustSnapshot && context.tool === "write_file" && snapshottedThisProcess && !needsFullAdd;
+
       // `previousTree` is only reused here when `mustSnapshot` is false, which — per the OR above —
       // means this process has already taken one real snapshot, so `previousTree` is already a
       // string from that call.
-      const tree = mustSnapshot ? writeTree(gitDir, opts.worktree) : (previousTree as string);
-      if (mustSnapshot) snapshottedThisProcess = true;
-      if (mustSnapshot && !scoped) {
-        scoped = true;
-        warnAboutScope();
+      const restage = pathScoped
+        ? [
+            ...new Set([...pendingWritePaths, ...(writeRel !== undefined ? [writeRel] : [])]),
+          ].filter((rel) => existsSync(join(opts.worktree, rel)))
+        : undefined;
+      const tree = mustSnapshot
+        ? writeTree(gitDir, opts.worktree, restage)
+        : (previousTree as string);
+      if (mustSnapshot) {
+        snapshottedThisProcess = true;
+        if (!pathScoped) pendingWritePaths.clear();
+        needsFullAdd = context.tool !== "write_file";
+        if (writeRel !== undefined) pendingWritePaths.add(writeRel);
+        if (!scoped) {
+          scoped = true;
+          warnAboutScope();
+        }
       }
       // An unchanged tree means nothing happened since the last checkpoint, so commit-tree and
       // update-ref are skipped — 48.5 ms instead of 107.2 ms, measured. This is also what makes a
@@ -548,6 +597,8 @@ export function createCheckpointer(opts: {
     // tree, corrupting that record rather than merely chaining the next commit onto a stale parent
     // (the lesser failure `previousCommit` staying unresolved below produces instead).
     snapshottedThisProcess = false;
+    pendingWritePaths.clear();
+    needsFullAdd = false;
     previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
   };
 

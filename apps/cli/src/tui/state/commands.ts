@@ -20,8 +20,10 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
-import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
-import { findCodexBin, type CodexSetupStatus } from "../../auth/codexBin";
+import { loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
+import { type CodexSetupStatus, findCodexBin } from "../../auth/codexBin";
+import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
+import { codexPlanType } from "../../auth/codexRefresh";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
@@ -51,6 +53,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "../../provider/routing";
+import { codexSubscriptionActive } from "../../provider/subscriptions";
 import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
 import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
@@ -105,6 +108,10 @@ export type ModelPickerEntry = {
   // never `undefined`) — so every consumer gets a real boolean too, with no `undefined` case to
   // handle that can't actually occur.
   gatewayReachable: boolean;
+  // Same shape as gatewayReachable: always a real boolean. True when this row's provider is in
+  // the subscribed set the caller passed — a ChatGPT-plan overlay, not an API key. Distinct
+  // from keyConfigured so /setup's key rows stay honest when both a plan and a key exist.
+  subscriptionCovered: boolean;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
@@ -133,36 +140,47 @@ export function decideModelPickerOpen(
   // routesFor's own O(catalog size) scan on every one of the ~350 rows this loop emits.
   planCoverage: (entry: ModelCatalogEntry, group: readonly ModelCatalogEntry[]) => boolean = () =>
     false,
+  // Providers whose catalog rows are actually plan-scoped (Codex overlay applied, not merely
+  // hasCodexSubscription). Default empty so a caller that passes nothing sees the same picker
+  // as before this set existed. Distinct from `configured`: a subscription is not an API key.
+  subscribed: ReadonlySet<ModelProvider> = new Set(),
 ): ModelPickerEntry[] {
   const groups = groupRoutes(filterCatalogEntries(catalog.entries));
   const rows: ModelPickerEntry[] = [];
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
     // Computed once per GROUP, not per row: resolveRoute's rule 2 depends only on the group's
-    // siblings and `configured`, never on which keyless member is asking, so every keyless row
-    // in a group shares the same answer — and calling resolveRoute itself, through any one
-    // keyless member as the "requested" pair, ties this display to the actual routing decision
-    // instead of a hand-rolled second copy of its tie-break that could silently drift from it
-    // (a per-row `ordered.find` re-deriving resolveRoute's own filter+sort rather than calling it
-    // would be an O(n^2)-per-group re-derivation of one answer).
-    const firstKeyless = ordered.find((candidate) => !configured.has(candidate.provider));
+    // siblings and `configured`/`subscribed`, never on which unresolved member is asking, so
+    // every still-unresolved row in a group shares the same answer — and calling resolveRoute
+    // itself, through any one of those members as the "requested" pair, ties this display to
+    // the actual routing decision instead of a hand-rolled second copy of its tie-break.
+    // A subscribed member is reachable without a key, so it must not be the probe: using it
+    // would make resolveRoute return no-reroute and wipe the fallback a real keyless sibling
+    // still needs.
+    const firstUnresolved = ordered.find(
+      (candidate) => !configured.has(candidate.provider) && !subscribed.has(candidate.provider),
+    );
     const resolved =
-      firstKeyless === undefined
+      firstUnresolved === undefined
         ? undefined
         : resolveRoute(
             catalog,
-            { model: firstKeyless.id, provider: firstKeyless.provider },
+            { model: firstUnresolved.id, provider: firstUnresolved.provider },
             configured,
+            null,
+            subscribed,
           );
     const rerouteTarget = resolved?.rerouted ? resolved.provider : undefined;
     for (const entry of ordered) {
       const keyConfigured = configured.has(entry.provider);
+      const subscriptionCovered = subscribed.has(entry.provider);
       rows.push({
         entry,
         keyConfigured,
         alternatives: group.length - 1,
-        rerouteTo: keyConfigured ? undefined : rerouteTarget,
+        rerouteTo: keyConfigured || subscriptionCovered ? undefined : rerouteTarget,
         gatewayReachable: planCoverage(entry, group),
+        subscriptionCovered,
       });
     }
   }
@@ -224,7 +242,7 @@ export type SetupCodexSubscriptionRow = {
   kind: "subscription";
   provider: "openai";
   status: CodexSetupStatus;
-  removable: false;
+  removable: boolean;
 };
 export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
 export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
@@ -248,7 +266,7 @@ export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubsc
   return row.kind === "subscription";
 }
 
-function codexSetupRow(): SetupSubscriptionRow {
+function codexSetupRow(configDir?: string): SetupSubscriptionRow {
   if (findCodexBin() === undefined) {
     return {
       kind: "subscription",
@@ -259,11 +277,20 @@ function codexSetupRow(): SetupSubscriptionRow {
   }
   const auth = loadCodexAuth();
   if (auth !== undefined && auth.authMode === "chatgpt") {
+    if (configDir !== undefined && isCodexSubscriptionIgnored(configDir)) {
+      return {
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "ignored" },
+        removable: false,
+      };
+    }
+    const planType = codexPlanType();
     return {
       kind: "subscription",
       provider: "openai",
-      status: { status: "connected" },
-      removable: false,
+      status: planType === undefined ? { status: "connected" } : { status: "connected", planType },
+      removable: true,
     };
   }
   const mode = readCodexAuthMode();
@@ -285,7 +312,7 @@ function codexSetupRow(): SetupSubscriptionRow {
 
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
-  const openaiSubscribed = hasCodexSubscription();
+  const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
   const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
     let unusedBecause: string | undefined;
     if (grokConnected && state.provider === "xai" && state.source !== "unset") {
@@ -308,7 +335,7 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
     { kind: "subscription", provider: "xai", connected: grokConnected },
-    codexSetupRow(),
+    codexSetupRow(configDir),
   ];
 }
 

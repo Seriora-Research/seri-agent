@@ -22,7 +22,8 @@ export function findCodexBin(env: NodeJS.ProcessEnv = process.env): string | und
 export type CodexSetupStatus =
   | { status: "not-installed" }
   | { status: "not-logged-in"; reason: "no-auth" | "api-key" }
-  | { status: "connected" };
+  | { status: "connected"; planType?: string }
+  | { status: "ignored" };
 
 export function describeCodexSetupStatus(status: CodexSetupStatus): string {
   switch (status.status) {
@@ -31,7 +32,11 @@ export function describeCodexSetupStatus(status: CodexSetupStatus): string {
     case "not-logged-in":
       return status.reason === "api-key" ? "API-key login. Run `codex login`" : "run `codex login`";
     case "connected":
-      return "ChatGPT plan connected";
+      return status.planType === undefined
+        ? "ChatGPT plan connected"
+        : `ChatGPT ${status.planType} plan connected`;
+    case "ignored":
+      return "ChatGPT plan ignored";
   }
 }
 
@@ -45,5 +50,7 @@ export function codexSetupAction(status: CodexSetupStatus): string {
         : "Codex is installed but not logged in. Run `codex login` to attach your ChatGPT plan.";
     case "connected":
       return "Using your ChatGPT plan via Codex. Turns are included in the plan. seri identifies as seri; it does not host the login or store a client id.";
+    case "ignored":
+      return "This profile ignores the ChatGPT plan. Enter re-enables it. The Codex CLI login is unchanged.";
   }
 }
