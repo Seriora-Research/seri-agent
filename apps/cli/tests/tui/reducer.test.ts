@@ -1283,6 +1283,10 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
     expect(initialTuiState(session(), { showSplash: true }).pendingSplash).toBe(true);
   });
 
+  test("initialTuiState with authOffer: true sets authOffer", () => {
+    expect(initialTuiState(session(), { authOffer: true }).authOffer).toBe(true);
+  });
+
   test("splash-requested sets pendingSplash to true from a default-false state", () => {
     const state = tuiReducer(initialTuiState(session()), { type: "splash-requested" });
 

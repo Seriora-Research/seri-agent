@@ -209,6 +209,32 @@ describe("ModelPicker (OpenTUI)", () => {
     });
   }
 
+  test("at 80 columns a row with +1 route still shows intact Context and Cost", async () => {
+    const rows: ModelPickerEntry[] = [
+      {
+        entry: {
+          id: "openai/gpt-oss-120b",
+          displayName: "GPT OSS 120B",
+          provider: "groq",
+          family: "gpt-oss",
+          contextWindow: 131_072,
+          maxOutputTokens: 32_768,
+          toolCall: true,
+          reasoning: false,
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+        },
+        keyConfigured: true,
+        alternatives: 1,
+        gatewayReachable: false,
+      },
+    ];
+    const setup = await createTestRenderer({ width: 80, height: 10 });
+    await mountPicker(setup, () => {}, undefined, rows);
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("128K");
+    expect(frame).toContain("$0.15/$0.60");
+  });
+
   // Re-test of ui/ListRow.tsx's own truncate-with-multiple-children bug (see that file's comment):
   // a selectable row whose label overflows the terminal width must still render, not go blank.
   test("a row whose label overflows the terminal width still renders, not blank", async () => {

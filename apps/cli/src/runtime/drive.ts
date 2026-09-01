@@ -102,11 +102,11 @@ export type DriveLoopResult = {
   // user would otherwise watch a roster row appear and vanish with nothing to show for it.
   directSummary: string | undefined;
   // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
-  // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
-  // `false` here: an idle TUI session the user quit without ever submitting a task never calls
-  // driveLoop at all, so its own closure copy of this flag stays at its initial `false`. Not
-  // optional — driveLoop setting it unconditionally is what makes `false` mean exactly one thing
-  // (nothing ever ran) instead of also being read as "the non-interactive caller didn't bother."
+  // `false` is produced only by callers that never invoke driveLoop: runTui's quit() when the user
+  // closed an idle TUI without submitting a task, and run()'s non-interactive skip of a bare
+  // `--continue`/`--resume` whose session no longer awaitsReply. Not optional — driveLoop setting
+  // it unconditionally is what makes `false` mean exactly one thing (nothing ever ran) instead of
+  // also being read as "the caller didn't bother to set the field."
   ranAnyTurn: boolean;
 };
 

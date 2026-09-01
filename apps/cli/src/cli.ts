@@ -3024,9 +3024,9 @@ async function runTui(
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session
         // still awaitsReply (session/awaitsReply.ts), and "idle" (bare `seri`, no resume, no task)
-        // starts nothing. TUI-mount-only: the non-interactive branch below (`isTTY` false) still
-        // starts a turn unconditionally on "resume" — a known, narrower scope for this gate, not
-        // an oversight; see that branch's own comment.
+        // starts nothing. The non-interactive branch below (`isTTY` false) uses this same
+        // `shouldRunTurn` predicate — keep them in lockstep; do not move the check into driveLoop
+        // (daemon scheduled resume has empty taskText and must still drive).
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
         const shouldRunTurn =
@@ -3193,13 +3193,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared: PreparedRun | number = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
-  // The non-interactive branch below still calls driveLoop unconditionally on a bare
-  // `--continue`/`--resume` (no new task text) — the same redundant-turn defect
-  // session/awaitsReply.ts's own comment describes for the TUI mount path above, left open here
-  // deliberately: piped/scripted invocations are a separate, unaudited surface (their own usage
-  // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
-  // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
-  // different call site. Tracked as a known gap, not an oversight.
   let runResult: DriveLoopResult;
   if (isTTY) {
     // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
@@ -3215,17 +3208,38 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return fatalDuringTui(err, prepared.preMountMessages);
     }
   } else {
-    runResult = await driveLoop(
-      prepared,
-      ctx,
-      deps,
-      maxTurns,
-      printEvent,
-      () => prepared.permissionMode,
-      (session) => saveSession(session, ctx.sessionsDir),
-      makeApprovalPrompt(deps.createInterface),
-      createArchivistState(prepared.session),
-    );
+    // Same shouldRunTurn predicate as runTui's connectDispatch: a bare `--continue`/`--resume`
+    // with no new task text starts a turn only if the session still awaitsReply. Idle non-TTY
+    // already usage-errored above; the skip is a finished session. Keep the gate here, not
+    // inside driveLoop — daemon scheduled resume is `runStart === "resume"` with empty
+    // taskText and must still drive.
+    const start = runStart(ctx);
+    const shouldRunTurn =
+      start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
+    if (shouldRunTurn) {
+      runResult = await driveLoop(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        printEvent,
+        () => prepared.permissionMode,
+        (session) => saveSession(session, ctx.sessionsDir),
+        makeApprovalPrompt(deps.createInterface),
+        createArchivistState(prepared.session),
+      );
+    } else {
+      runResult = {
+        doneReason: undefined,
+        cancelledBy: undefined,
+        usage: { inputTokens: undefined, outputTokens: undefined },
+        cost: undefined,
+        refusedWithoutRunning: false,
+        archivist: undefined,
+        directSummary: undefined,
+        ranAnyTurn: false,
+      };
+    }
   }
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     runResult;
@@ -3303,11 +3317,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
   // second aborter this same fallback would also cover, unchanged.
   //
-  // `!ranAnyTurn` (bare `seri`, quit before ever submitting a task) is placed after the usage/cost/
-  // signal handling above, but before the doneReason-based exit mapping below: `doneReason` stays
-  // `undefined` for that session, and that mapping would otherwise fall through to the final
-  // `return 1` and call an idle session the user simply closed a failure. `ranAnyTurn` is always
-  // `true` on the non-interactive path (DriveLoopResult's own comment), where this never fires.
+  // `!ranAnyTurn` is placed after the usage/cost/signal handling above, but before the
+  // doneReason-based exit mapping below: `doneReason` stays `undefined` when nothing ran, and
+  // that mapping would otherwise fall through to the final `return 1`. Two producers: TUI quit
+  // before any task, and a non-interactive bare `--continue`/`--resume` of a session that no
+  // longer awaitsReply — both are a successful "nothing to do", not a failed turn.
   return exitCodeFromDriveResult(runResult);
 }
 

@@ -352,9 +352,11 @@ export class SessionDatabase {
     ensureOwnerOnlyDir(configDir);
     this.database = new Database(join(configDir, DATABASE_FILENAME), { create: true });
     try {
+      // busy_timeout first: `journal_mode=WAL` is a write, and a second connection opening the
+      // same file hits SQLITE_BUSY on that pragma if the timeout is not already set.
+      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
-      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.migrate();
       // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, so a missing FTS5 build
       // would not throw. A hyphenated token is FTS column syntax (`fts-probe` means column

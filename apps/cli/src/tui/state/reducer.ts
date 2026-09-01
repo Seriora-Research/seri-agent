@@ -216,18 +216,18 @@ export type TuiState = {
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
-  // The welcome-splash mount's own blocking panel. `initialTuiState`'s own `showSplash` opt (below)
-  // only seeds the value App.tsx's OWN internal `useReducer(tuiReducer, initialTuiState(session))`
-  // call starts from — that call never passes `showSplash`, so every App instance still mounts with
-  // this `false` until `runWelcomeSplash`'s own `connectDispatch` fires `splash-requested` on mount,
-  // the same "seed false, flip true via a requested action fired at mount" shape `pendingSetup`/
-  // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
-  // separate App instances never render WelcomeSplash for the same launch.
+  // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
+  // which App forwards from its `showSplash` prop so the first committed frame is already the
+  // splash. `splash-requested` (runWelcomeSplash's connectDispatch) still sets it true after mount,
+  // but that effect cannot win the first paint — it runs after the first commit. `runTui` and
+  // `runGuidedSetup` omit the prop, so their App instances never render WelcomeSplash for the same
+  // launch.
   pendingSplash: boolean;
   // Latched by `splash-resolved`, never cleared. `pendingSplash` alone cannot tell "before the
-  // splash" from "after it": both are `false`, and the splash mount's own first frame lands in
-  // the first of those, before `connectDispatch` fires `splash-requested`. The pre-session
-  // input box (app.tsx) keys off this so it cannot appear until the login choice is answered.
+  // splash" from "after it": both are `false`. The pre-session input box (app.tsx) keys off this
+  // so it cannot appear until the login choice is answered. A mount that forgets `showSplash`
+  // still lands its first frame in the before-splash state; this latch is what keeps that frame
+  // from offering a live input box.
   splashDone: boolean;
   // The status bar's own model+route label reads this, not `AppProps.route` (App.tsx's own
   // comment on that prop) — the prop only seeds this field at mount; every later switch reaches
@@ -320,7 +320,12 @@ function normalizeQueue(items: QueuedMessage[], selected: number, editing: boole
 
 export function initialTuiState(
   session: SessionState<ModelMessage>,
-  opts?: { showSplash?: boolean; route?: ResolvedRoute; config?: Record<string, string> },
+  opts?: {
+    showSplash?: boolean;
+    authOffer?: boolean;
+    route?: ResolvedRoute;
+    config?: Record<string, string>;
+  },
 ): TuiState {
   return {
     session,
@@ -336,7 +341,7 @@ export function initialTuiState(
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
     pendingSetup: undefined,
-    authOffer: false,
+    authOffer: opts?.authOffer ?? false,
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,

@@ -27,6 +27,7 @@ import {
   DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
+  formatModelPickerHeader,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
@@ -36,6 +37,7 @@ import {
   MODE_LABEL,
   matchesFilter,
   NAME_WIDTH,
+  pickerLabelWidth,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
@@ -1976,6 +1978,32 @@ describe("App", () => {
   });
 
   describe("welcome splash", () => {
+    // App used to mount from `initialTuiState(session)` with `pendingSplash: false`, so the first
+    // committed frame was session chrome (`starting session…`) until `connectDispatch` fired
+    // `splash-requested`. This mount passes the seeds and does not dispatch either action, so a
+    // pass cannot be the effect catching up.
+    test("a splash mount's first frame is the welcome splash, not session chrome", async () => {
+      const { setup } = await connect({
+        showSplash: true,
+        authOffer: true,
+        onSubmit: undefined,
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "groq",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Log in");
+      expect(frame).toContain("Sign up");
+      expect(frame).toContain("Continue without logging in");
+      expect(frame).not.toContain("starting session");
+      expect(frame).not.toContain("approve-each mode on");
+    });
+
     // ListRow always applies `truncate`: before this, WelcomeSplash's own row carried no wrap prop
     // at all, so a label wider than the terminal soft-wrapped onto a second row instead of
     // truncating — this pins both halves, the marker at a normal width and the truncation at a
@@ -2106,9 +2134,8 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("second");
     });
 
-    // The splash mount's own first frame lands before `connectDispatch` fires `splash-requested`,
-    // so `pendingSplash` is false there too. Without the `splashDone` latch that frame offered a
-    // live input box, and a fast typist could queue a task before answering the login gate.
+    // A mount that omits `showSplash` still has `pendingSplash` false on the first frame.
+    // `splashDone` is what keeps that frame from offering a live input box.
     test("no input box before the login choice is answered", async () => {
       const taken: string[] = [];
       const { setup } = await connect({
@@ -3003,6 +3030,73 @@ describe("App", () => {
       const row = formatModelRow(pickerRow({ entry: entry({ displayName: "A".repeat(40) }) }));
       expect(row).toContain("…");
       expect(row.indexOf("A".repeat(40))).toBe(-1);
+    });
+
+    // Unbounded form: five columns (74) plus ` +1 route` is what ListRow middle-truncates at 80.
+    test("formatModelRow unbounded with +1 route is longer than 74 and still carries cost", () => {
+      const row = formatModelRow(
+        pickerRow({
+          alternatives: 1,
+          entry: entry({
+            pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+            contextWindow: 131_072,
+          }),
+        }),
+      );
+      expect(row.length).toBeGreaterThan(74);
+      expect(row).toContain("+1 route");
+      expect(row).toContain("$0.15/$0.60");
+    });
+
+    test("pickerLabelWidth at 80 is 74, and 0 falls back the same as 80", () => {
+      expect(pickerLabelWidth(80)).toBe(74);
+      expect(pickerLabelWidth(0)).toBe(pickerLabelWidth(80));
+    });
+
+    test("formatModelRow at pickerLabelWidth(80) drops the suffix but keeps Context and Cost", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(80));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("+1 route");
+      expect(row.length).toBeLessThanOrEqual(74);
+    });
+
+    test("formatModelRow at pickerLabelWidth(100) keeps the +1 route suffix", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      expect(formatModelRow(priced, pickerLabelWidth(100))).toContain("+1 route");
+      expect(formatModelRow(priced)).toContain("+1 route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(80) still contains Route", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(80))).toContain("Route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(70) drops Route; the row keeps Context and Cost", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(70))).not.toContain("Route");
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(70));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("your key");
     });
 
     // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming

@@ -2,7 +2,7 @@
 // Ported from panels/ModelPicker.tsx: same logic, OpenTUI's element/hook names.
 
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
@@ -11,7 +11,13 @@ import type { ModelPickerEntry } from "../state/commands";
 import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
-import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../util/format";
+import {
+  DEFAULT_COLUMNS,
+  formatModelPickerHeader,
+  formatModelRow,
+  matchesFilter,
+  pickerLabelWidth,
+} from "../util/format";
 import { isDismiss, isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
 const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
@@ -35,6 +41,8 @@ export function ModelPicker({
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
+  const { width: rawWidth } = useTerminalDimensions();
+  const labelWidth = pickerLabelWidth(rawWidth || DEFAULT_COLUMNS);
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
@@ -144,20 +152,20 @@ export function ModelPicker({
       </box>
       {/* The 2-space indent and the header text are separate `<text>` siblings, not one string —
       ui/ListRow.tsx's own comment explains why: a single truncated `<text>` whose content spans
-      more than one child renders BLANK once it overflows, and `MODEL_PICKER_HEADER`'s own fixed
-      column widths sum to ~87 chars, wider than a typical 80-column terminal once the border and
-      indent are subtracted — this is the common case, not an edge case. */}
+      more than one child renders BLANK once it overflows. The five columns are 74 chars; at 80
+      they fit inside FRAME + the ListRow marker. `truncate` stays as a last-resort clip once
+      Route is already dropped on a narrower-than-80 terminal. */}
       <box flexDirection="row">
         <text fg={theme.muted}>{"  "}</text>
         <text fg={theme.muted} truncate>
-          {MODEL_PICKER_HEADER}
+          {formatModelPickerHeader(labelWidth)}
         </text>
       </box>
       {visible.map(({ row, isSelected }) => (
         <ListRow
           key={`${row.entry.provider}/${row.entry.id}`}
           selected={isSelected}
-          label={formatModelRow(row)}
+          label={formatModelRow(row, labelWidth)}
         />
       ))}
       {remainingCount > 0 && (

@@ -11,9 +11,9 @@ import { configuredProviders } from "./keys";
 // from auth/authStore.ts, not a provider API key from keys.ts — the whole point of the file is
 // that it talks to OUR OWN server, which forwards to the real provider on seri's own key.
 
-// Provisional: apps/server has no confirmed production domain yet. SERI_GATEWAY_URL overrides
-// this, so pointing the CLI at a local apps/server needs no rebuild.
-const DEFAULT_GATEWAY_URL = "https://gateway.seriora.ai/api/gateway";
+// Production apps/server. SERI_GATEWAY_URL overrides this, so pointing the CLI at a local
+// apps/server or a staging profile needs no rebuild.
+const DEFAULT_GATEWAY_URL = "https://api.seriora.ai/api/gateway";
 
 // Exported so accountStatus.ts can reach the same server without a second SERI_GATEWAY_URL
 // resolution — both files talk to the same apps/server deployment.

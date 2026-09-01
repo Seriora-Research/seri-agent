@@ -2048,16 +2048,15 @@ async function startChild(
     // splash's keyboard handler is mounted, so the write below is the dismiss and not a no-op.
     await sawLine("Esc continue");
     child.stdin?.write("\x1b");
-    // `pendingSplash` starts false, so the first painted frame is session chrome (the mode line
-    // included). `splash-requested` then covers it. `sawLine` is cumulative, so a later wait on
-    // "approve-each mode on" is already true while the splash still owns the keyboard. A flat
-    // 100ms sleep after Escape is the same race under load: the next write lands on the splash
-    // and is dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can
-    // clear the overlay (a blank grid) before the next surface is interactive. Two consecutive
-    // non-blank polls with the splash hint gone are the signal that whatever replaced it (idle
-    // input, /setup, an approval prompt) will see the next stdin write. Frames are not compared
-    // for equality: a live elapsed-time row changes every second. A child that already exited
-    // has nothing left to type into.
+    // `sawLine` is cumulative. Waiting on the mode line is not a dismiss signal: that text can
+    // appear in a later frame while leftover splash input is still being dropped. A flat 100ms
+    // sleep after Escape is the same race under load: the next write lands on the splash and is
+    // dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can clear the
+    // overlay (a blank grid) before the next surface is interactive. Two consecutive non-blank
+    // polls with the splash hint gone are the signal that whatever replaced it (idle input,
+    // /setup, an approval prompt) will see the next stdin write. Frames are not compared for
+    // equality: a live elapsed-time row changes every second. A child that already exited has
+    // nothing left to type into.
     const dismissed = Date.now() + 20_000;
     let sawHint = false;
     let hintGone = false;
@@ -2683,11 +2682,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // A real wait, not sawLine("GPT OSS 120B"): that line already appeared during the FIRST
-      // picker open above, so the cumulative check would resolve instantly here too, racing the
-      // actual component mount the same way childScriptModelSwitch's own comment documents for
-      // the InputBox->ModelPicker transition.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // A real wait on the picker's own chrome in `lastFrame`, not sawLine("GPT OSS 120B")
+      // and not a flat 100ms sleep: that line already appeared during the FIRST picker open,
+      // so the cumulative check would resolve instantly here too, and 100ms under macOS CI
+      // load is not always enough for the filter's useKeyboard to be mounted. Typing before
+      // that commit drops the filter text.
+      await sawInFrameTimes("Type to filter", 1);
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
