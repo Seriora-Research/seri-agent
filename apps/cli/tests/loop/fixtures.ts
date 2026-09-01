@@ -41,6 +41,25 @@ export function toolCallChunks(
   ];
 }
 
+export function multiToolCallChunks(
+  calls: readonly { toolCallId: string; toolName: string; input: unknown }[],
+  tokenUsage = usage(5, 5),
+): LanguageModelV4StreamPart[] {
+  return [
+    ...calls.map((call) => ({
+      type: "tool-call" as const,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      input: JSON.stringify(call.input),
+    })),
+    {
+      type: "finish",
+      finishReason: { unified: "tool-calls", raw: undefined },
+      usage: tokenUsage,
+    },
+  ];
+}
+
 export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs?: number) {
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }

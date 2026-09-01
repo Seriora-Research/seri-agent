@@ -92,6 +92,14 @@ function snapshot(parent?: string): { tree: string; commit: string } {
   return { tree, commit: commitTree(gitDir, workTree, tree, parent) };
 }
 
+function treeNames(tree: string): string {
+  const result = spawnSync("git", [`--git-dir=${gitDir}`, "ls-tree", "-r", "--name-only", tree], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return result.stdout;
+}
+
 describe.skipIf(!isGitAvailable())("shadowGit", () => {
   test(
     "restores byte-identical content after five mutating checkpoints",
@@ -229,6 +237,39 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       expect(readFileSync(join(workTree, "secret.log"), "utf8")).toBe("mutated secret\n");
       expect(readFileSync(join(workTree, "node_modules", "dep.js"), "utf8")).toBe("mutated dep\n");
       expect([...restored, ...deleted]).toEqual(["lf.txt"]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "path-scoped writeTree restages one file and leaves a sibling untracked",
+    () => {
+      seedWorktree(workTree);
+      initShadow(gitDir);
+      const first = writeTree(gitDir, workTree);
+
+      writeFileSync(join(workTree, "lf.txt"), "mutated\n");
+      writeFileSync(join(workTree, "sneaky.txt"), "unrelated\n");
+      const scoped = writeTree(gitDir, workTree, ["lf.txt"]);
+
+      expect(scoped).not.toBe(first);
+      expect(treeNames(scoped)).toContain("lf.txt");
+      expect(treeNames(scoped)).not.toContain("sneaky.txt");
+
+      const full = writeTree(gitDir, workTree);
+      expect(treeNames(full)).toContain("sneaky.txt");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "path-scoped writeTree skips a missing path rather than failing",
+    () => {
+      seedWorktree(workTree);
+      initShadow(gitDir);
+      const first = writeTree(gitDir, workTree);
+
+      expect(writeTree(gitDir, workTree, ["does-not-exist.txt"])).toBe(first);
     },
     GIT_TEST_TIMEOUT_MS,
   );

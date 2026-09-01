@@ -112,7 +112,11 @@ import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { getModelCatalog, prewarmModelCatalog } from "./provider/catalog";
+import {
+  getModelCatalog,
+  isCodexPlanCatalogApplied,
+  prewarmModelCatalog,
+} from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
@@ -151,7 +155,7 @@ import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
-import type { AgentSpec } from "./subagents/registry";
+import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
@@ -1291,8 +1295,9 @@ async function runTui(
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
-  // action — the identical computation React's own `useReducer` (App.tsx) will ALSO run against
-  // its OWN copy, moments later. Every read in this file that used to go through `liveSession` (a
+  // action. App.tsx coalesces text-delta off the React path (streamDispatch.ts) and still
+  // runs tuiReducer for every other action; this funnel applies every action immediately,
+  // including text-delta. Every read in this file that used to go through `liveSession` (a)
   // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
   // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
   // runs asynchronously after a render commits, never synchronously with the dispatch that
@@ -1375,9 +1380,9 @@ async function runTui(
   // "high". Reading config.json fresh at the comparison site below removes the staleness entirely
   // — there is no cached value left to go stale, whether it's this /config bypass or a process
   // killed between a session-only /effort merge and the first turn that would have persisted it.
-  // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
-  // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
-  // what every other function in this closure actually calls now.
+  // The `connectDispatch` dispatch App.tsx hands back — stream-coalesced for text-delta —
+  // renamed from this file's old, single `dispatch` variable so that name is free for the wrapper
+  // below, which is what every other function in this closure actually calls now.
   let reactDispatch: Dispatch | undefined;
   // The single dispatch funnel every dispatch in this closure now goes through — driveLoop's own
   // onEvent mapping (runTurn, below), onSubmit, quit(), tuiPresenter, tuiApprovalPrompt. Updates
@@ -1831,39 +1836,55 @@ async function runTui(
   // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
   // catalog commands, then agents, then skills.
   //
-  // Recomputed on demand rather than captured once. The registries are frozen for a session, but
-  // `/clear` mints a conceptually new one and bindSession (runtime/prepare.ts) reassigns
-  // `prepared.agents`/`prepared.skills` to freshly-loaded registries in the same process — that
-  // reload is the whole point of doing it there, so a skill approved or deleted since startup is
-  // live afterwards. A captured array would keep offering the pre-clear list while `onSubmit`
-  // resolved against the new one, so the popup could hand back a name that then failed with
-  // "Unrecognized command", and a genuinely new skill would not complete until the process
-  // restarted.
-  const buildCompletionSources = (): readonly CompletionSource[] => [
-    {
-      id: "commands",
-      trigger: "/",
-      // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
-      // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
-      lineStartOnly: true,
-      items: [
-        ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
-        ...[...prepared.agents.values()].map((agent) => ({
-          name: `/${agent.name}`,
-          description: describeCompletion("subagent", agent.description),
-        })),
-        // Skills last so an agent of the same name wins the list the way it wins the lookup —
-        // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
-        ...[...prepared.skills.values()].map((skill) => ({
-          name: `/${skill.name}`,
-          description: describeCompletion("skill", skill.description),
-        })),
-      ]
-        .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((item) => ({ value: item.name, description: item.description })),
-    },
-  ];
+  // Recomputed when `prepared.agents` / `prepared.skills` identity changes, not on every App
+  // render. Those registries are frozen for a session, but `/clear` mints a conceptually new one
+  // and bindSession (runtime/prepare.ts) reassigns them to freshly-loaded registries in the same
+  // process — that reload is the whole point of doing it there, so a skill approved or deleted
+  // since startup is live afterwards. A captured array would keep offering the pre-clear list
+  // while `onSubmit` resolved against the new one, so the popup could hand back a name that then
+  // failed with "Unrecognized command", and a genuinely new skill would not complete until the
+  // process restarted.
+  let completionSourceCache:
+    | { agents: AgentRegistry; skills: SkillRegistry; sources: readonly CompletionSource[] }
+    | undefined;
+  const buildCompletionSources = (): readonly CompletionSource[] => {
+    if (
+      completionSourceCache !== undefined &&
+      completionSourceCache.agents === prepared.agents &&
+      completionSourceCache.skills === prepared.skills
+    ) {
+      return completionSourceCache.sources;
+    }
+    const sources: readonly CompletionSource[] = [
+      {
+        id: "commands",
+        trigger: "/",
+        // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
+        // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
+        lineStartOnly: true,
+        items: [
+          ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+          ...[...prepared.agents.values()].map((agent) => ({
+            name: `/${agent.name}`,
+            description: describeCompletion("subagent", agent.description),
+          })),
+          // Skills last so an agent of the same name wins the list the way it wins the lookup —
+          // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
+          ...[...prepared.skills.values()].map((skill) => ({
+            name: `/${skill.name}`,
+            description: describeCompletion("skill", skill.description),
+          })),
+        ]
+          .filter(
+            (item, index, all) => all.findIndex((other) => other.name === item.name) === index,
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((item) => ({ value: item.name, description: item.description })),
+      },
+    ];
+    completionSourceCache = { agents: prepared.agents, skills: prepared.skills, sources };
+    return sources;
+  };
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -2369,6 +2390,9 @@ async function runTui(
             // the whole catalog once and hands back each entry's own group here, so this avoids
             // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
             (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
+            // Overlay-applied openai only: hasCodexSubscription without a successful model/list
+            // overlay still leaves the API catalog on screen, and those rows are not plan-included.
+            isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
           ),
         });
       } catch (err) {

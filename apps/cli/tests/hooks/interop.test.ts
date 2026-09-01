@@ -23,48 +23,64 @@ function spec(path: string): HookSpec {
     script: "block-dangerous",
     path,
     matcher: undefined,
-    timeoutMs: DEFAULT_HOOK_TIMEOUT_MS,
+    // windows-latest cold-starts powershell.exe past bun's 5000 ms default. Same margins as
+    // tests/hooks/run.test.ts's real-powershell block: 15s on the hook, 20s on the bun test.
+    timeoutMs: process.platform === "win32" ? 15_000 : DEFAULT_HOOK_TIMEOUT_MS,
     source: "project",
     filePath: join(HOOK_DIR, "hooks.yaml"),
   };
 }
+
+const TEST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
 
 // A checkout without `.cursor/` is a valid checkout, and a missing reference implementation is not
 // this feature's failure. Skipped rather than failed, and named so a skip is visible.
 const describeIfPresent = existsSync(blockDangerous) ? describe : describe.skip;
 
 describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchanged", () => {
-  test("an ordinary command is allowed", async () => {
-    const outcome = await runHook(spec(blockDangerous), {
-      hook_event_name: "PreToolUse",
-      tool_name: "bash",
-      cwd: REPO_ROOT,
-      tool_input: { command: "git status" },
-    });
-    expect(outcome.kind).toBe("ok");
-  });
+  test(
+    "an ordinary command is allowed",
+    async () => {
+      const outcome = await runHook(spec(blockDangerous), {
+        hook_event_name: "PreToolUse",
+        tool_name: "bash",
+        cwd: REPO_ROOT,
+        tool_input: { command: "git status" },
+      });
+      expect(outcome.kind).toBe("ok");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
   // The negative control above is what makes this one mean anything: a runner that blocked
   // everything would pass this test and fail that one.
-  test("rm -rf / is blocked, and the script's own stderr is the reason", async () => {
-    const outcome = await runHook(spec(blockDangerous), {
-      hook_event_name: "PreToolUse",
-      tool_name: "bash",
-      cwd: REPO_ROOT,
-      tool_input: { command: "rm -rf /" },
-    });
-    expect(outcome.kind).toBe("block");
-    if (outcome.kind !== "block") return;
-    expect(outcome.reason).toContain("BLOCKED");
-  });
+  test(
+    "rm -rf / is blocked, and the script's own stderr is the reason",
+    async () => {
+      const outcome = await runHook(spec(blockDangerous), {
+        hook_event_name: "PreToolUse",
+        tool_name: "bash",
+        cwd: REPO_ROOT,
+        tool_input: { command: "rm -rf /" },
+      });
+      expect(outcome.kind).toBe("block");
+      if (outcome.kind !== "block") return;
+      expect(outcome.reason).toContain("BLOCKED");
+    },
+    TEST_TIMEOUT_MS,
+  );
 
-  test("a .env read is blocked through the file_path field, not the command one", async () => {
-    const outcome = await runHook(spec(blockEnvRead), {
-      hook_event_name: "PreToolUse",
-      tool_name: "read_file",
-      cwd: REPO_ROOT,
-      tool_input: { file_path: join(REPO_ROOT, ".env") },
-    });
-    expect(outcome.kind).toBe("block");
-  });
+  test(
+    "a .env read is blocked through the file_path field, not the command one",
+    async () => {
+      const outcome = await runHook(spec(blockEnvRead), {
+        hook_event_name: "PreToolUse",
+        tool_name: "read_file",
+        cwd: REPO_ROOT,
+        tool_input: { file_path: join(REPO_ROOT, ".env") },
+      });
+      expect(outcome.kind).toBe("block");
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

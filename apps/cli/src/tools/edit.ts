@@ -66,32 +66,57 @@ function tryLineTrimmedMatch(content: string, oldString: string): Span | null {
   return matches[0];
 }
 
-function tryWhitespaceNormalizedMatch(content: string, oldString: string): Span | null {
-  // Build the normalized content alongside parallel arrays mapping each normalized
-  // character back to the original [start, end) span in `content` it came from, so a
-  // match found in normalized space can be mapped back to the original span.
-  const normalizedChars: string[] = [];
-  const normStart: number[] = [];
-  const normEnd: number[] = [];
+type WsRun = {
+  origStart: number;
+  origEnd: number;
+  normPos: number;
+};
 
-  let i = 0;
-  while (i < content.length) {
-    if (/\s/.test(content[i])) {
-      let j = i;
-      while (j < content.length && /\s/.test(content[j])) j++;
-      normalizedChars.push(" ");
-      normStart.push(i);
-      normEnd.push(j);
-      i = j;
+function lastRunAtOrBefore(runs: readonly WsRun[], normIndex: number): WsRun | undefined {
+  let lo = 0;
+  let hi = runs.length - 1;
+  let found: WsRun | undefined;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (runs[mid].normPos <= normIndex) {
+      found = runs[mid];
+      lo = mid + 1;
     } else {
-      normalizedChars.push(content[i]);
-      normStart.push(i);
-      normEnd.push(i + 1);
-      i++;
+      hi = mid - 1;
     }
   }
+  return found;
+}
 
-  const normalizedContent = normalizedChars.join("");
+function origSpanForNormChar(runs: readonly WsRun[], normIndex: number): Span {
+  const run = lastRunAtOrBefore(runs, normIndex);
+  if (run === undefined) return { start: normIndex, end: normIndex + 1 };
+  if (run.normPos === normIndex) return { start: run.origStart, end: run.origEnd };
+  const orig = run.origEnd + (normIndex - run.normPos - 1);
+  return { start: orig, end: orig + 1 };
+}
+
+function whitespaceRuns(content: string): WsRun[] {
+  const runs: WsRun[] = [];
+  let extra = 0;
+  const wsRe = /\s+/g;
+  let ws: RegExpExecArray | null;
+  while ((ws = wsRe.exec(content)) !== null) {
+    runs.push({
+      origStart: ws.index,
+      origEnd: ws.index + ws[0].length,
+      normPos: ws.index - extra,
+    });
+    extra += ws[0].length - 1;
+  }
+  return runs;
+}
+
+function tryWhitespaceNormalizedMatch(content: string, oldString: string): Span | null {
+  // Native replace builds the haystack (same /\s/ class as oldString). A compact
+  // list of whitespace runs maps a normalized match back to the original span
+  // without a column per code unit.
+  const normalizedContent = content.replace(/\s+/g, " ");
   const normalizedOld = oldString.replace(/\s+/g, " ");
 
   const matchStart = normalizedContent.indexOf(normalizedOld);
@@ -103,7 +128,13 @@ function tryWhitespaceNormalizedMatch(content: string, oldString: string): Span 
   }
 
   const matchEnd = matchStart + normalizedOld.length;
-  return { start: normStart[matchStart], end: normEnd[matchEnd - 1] };
+  if (matchEnd === 0) return { start: 0, end: 0 };
+
+  const runs = whitespaceRuns(content);
+  return {
+    start: origSpanForNormChar(runs, matchStart).start,
+    end: origSpanForNormChar(runs, matchEnd - 1).end,
+  };
 }
 
 export function edit(content: string, oldString: string, newString: string): string {
