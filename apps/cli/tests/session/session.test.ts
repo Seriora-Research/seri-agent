@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { foldsCase } from "../../src/caseFold";
+import { SessionDatabase } from "../../src/session/database";
 import {
   findMostRecentSession,
   findMostRecentSessionForCwd,
@@ -199,3 +200,67 @@ test("separate profile roots never see each other's sessions", () => {
     rmSync(parent, { recursive: true, force: true });
   }
 }, 20_000);
+
+describe("held SessionDatabase reuse", () => {
+  test("saveSession with a held database does not close it; without one it does", () => {
+    const database = new SessionDatabase(configDir);
+    const originalClose = SessionDatabase.prototype.close;
+    let closes = 0;
+    SessionDatabase.prototype.close = function (this: SessionDatabase) {
+      closes++;
+      return originalClose.call(this);
+    };
+    try {
+      const state: SessionState = {
+        id: "held",
+        cwd: "/repo",
+        systemPrompt: "system",
+        permissionMode: "approve-each",
+        messages: [{ n: 1 }],
+      };
+      saveSession(state, sessionsDir, database);
+      saveSession({ ...state, messages: [{ n: 1 }, { n: 2 }] }, sessionsDir, database);
+      expect(closes).toBe(0);
+      expect(loadSession("held", sessionsDir, () => {}, database).messages).toEqual([
+        { n: 1 },
+        { n: 2 },
+      ]);
+
+      const beforeUnheld = closes;
+      saveSession({ ...state, id: "unheld", messages: [] }, sessionsDir);
+      expect(closes).toBeGreaterThan(beforeUnheld);
+    } finally {
+      SessionDatabase.prototype.close = originalClose;
+      database.close();
+    }
+  });
+
+  test("saveSession with a held database does not import legacy sessions again", () => {
+    const database = new SessionDatabase(configDir);
+    const originalImport = SessionDatabase.prototype.importLegacySessions;
+    let imports = 0;
+    SessionDatabase.prototype.importLegacySessions = function (this: SessionDatabase, dir: string) {
+      imports++;
+      return originalImport.call(this, dir);
+    };
+    try {
+      database.importLegacySessions(sessionsDir);
+      expect(imports).toBe(1);
+      saveSession(
+        { id: "held", cwd: "/repo", systemPrompt: "", permissionMode: "auto", messages: [] },
+        sessionsDir,
+        database,
+      );
+      expect(imports).toBe(1);
+
+      saveSession(
+        { id: "unheld", cwd: "/repo", systemPrompt: "", permissionMode: "auto", messages: [] },
+        sessionsDir,
+      );
+      expect(imports).toBeGreaterThan(1);
+    } finally {
+      SessionDatabase.prototype.importLegacySessions = originalImport;
+      database.close();
+    }
+  });
+});

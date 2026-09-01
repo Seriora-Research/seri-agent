@@ -20,7 +20,12 @@ export type SessionState<TMessage = unknown> = {
   messages: TMessage[];
 };
 
-function withDatabase<T>(sessionsDir: string, fn: (database: SessionDatabase) => T): T {
+function withDatabase<T>(
+  sessionsDir: string,
+  fn: (database: SessionDatabase) => T,
+  held?: SessionDatabase,
+): T {
+  if (held !== undefined) return fn(held);
   const database = new SessionDatabase(configDirForStore(sessionsDir, "sessions"));
   try {
     return fn(database);
@@ -29,32 +34,54 @@ function withDatabase<T>(sessionsDir: string, fn: (database: SessionDatabase) =>
   }
 }
 
-export function saveSession(state: SessionState, sessionsDir: string): void {
-  withDatabase(sessionsDir, (database) => {
-    database.importLegacySessions(sessionsDir);
-    database.saveSession(state);
-  });
+export function saveSession(
+  state: SessionState,
+  sessionsDir: string,
+  database?: SessionDatabase,
+): void {
+  withDatabase(
+    sessionsDir,
+    (db) => {
+      // A held connection already ran import at process open; repeating it on every
+      // messages-updated persist is the cost this optional argument exists to skip.
+      if (database === undefined) db.importLegacySessions(sessionsDir);
+      db.saveSession(state);
+    },
+    database,
+  );
 }
 
 export function loadSession<TMessage = unknown>(
   id: string,
   sessionsDir: string,
   onTruncated: () => void = () => {},
+  database?: SessionDatabase,
 ): SessionState<TMessage> {
-  return withDatabase(sessionsDir, (database) => {
-    const imported = database.importLegacySessions(sessionsDir);
-    if (imported.truncatedSessionIds.includes(id)) onTruncated();
-    const state = database.loadSession<TMessage>(id);
-    if (state === undefined) throw new Error(`Session "${id}" not found in ${sessionsDir}`);
-    return state;
-  });
+  return withDatabase(
+    sessionsDir,
+    (db) => {
+      const imported = db.importLegacySessions(sessionsDir);
+      if (imported.truncatedSessionIds.includes(id)) onTruncated();
+      const state = db.loadSession<TMessage>(id);
+      if (state === undefined) throw new Error(`Session "${id}" not found in ${sessionsDir}`);
+      return state;
+    },
+    database,
+  );
 }
 
-export function findMostRecentSession(sessionsDir: string): string | undefined {
-  return withDatabase(sessionsDir, (database) => {
-    database.importLegacySessions(sessionsDir);
-    return database.listSessionsByRecent()[0]?.id;
-  });
+export function findMostRecentSession(
+  sessionsDir: string,
+  database?: SessionDatabase,
+): string | undefined {
+  return withDatabase(
+    sessionsDir,
+    (db) => {
+      db.importLegacySessions(sessionsDir);
+      return db.listSessionsByRecent()[0]?.id;
+    },
+    database,
+  );
 }
 
 function normalizedCwd(cwd: string): string {
@@ -62,29 +89,45 @@ function normalizedCwd(cwd: string): string {
   return foldsCase() ? resolved.toLowerCase() : resolved;
 }
 
-export function findMostRecentSessionForCwd(sessionsDir: string, cwd: string): string | undefined {
-  return withDatabase(sessionsDir, (database) => {
-    database.importLegacySessions(sessionsDir);
-    const target = normalizedCwd(cwd);
-    return database.listSessionsByRecent().find((session) => normalizedCwd(session.cwd) === target)
-      ?.id;
-  });
+export function findMostRecentSessionForCwd(
+  sessionsDir: string,
+  cwd: string,
+  database?: SessionDatabase,
+): string | undefined {
+  return withDatabase(
+    sessionsDir,
+    (db) => {
+      db.importLegacySessions(sessionsDir);
+      const target = normalizedCwd(cwd);
+      return db.listSessionsByRecent().find((session) => normalizedCwd(session.cwd) === target)?.id;
+    },
+    database,
+  );
 }
 
 export function searchSessions(
   query: string,
   sessionsDir: string,
   options: SessionSearchOptions = {},
+  database?: SessionDatabase,
 ): SessionSearchResult[] {
-  return withDatabase(sessionsDir, (database) => {
-    database.importLegacySessions(sessionsDir);
-    return database.searchSessions(query, options);
-  });
+  return withDatabase(
+    sessionsDir,
+    (db) => {
+      db.importLegacySessions(sessionsDir);
+      return db.searchSessions(query, options);
+    },
+    database,
+  );
 }
 
-export function listSessionIds(sessionsDir: string): string[] {
-  return withDatabase(sessionsDir, (database) => {
-    database.importLegacySessions(sessionsDir);
-    return database.listSessionsByRecent().map((session) => session.id);
-  });
+export function listSessionIds(sessionsDir: string, database?: SessionDatabase): string[] {
+  return withDatabase(
+    sessionsDir,
+    (db) => {
+      db.importLegacySessions(sessionsDir);
+      return db.listSessionsByRecent().map((session) => session.id);
+    },
+    database,
+  );
 }

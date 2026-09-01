@@ -40,6 +40,7 @@ type WriterOpts = {
   retentionDays: number;
   now?: () => Date;
   onWarning: (message: string) => void;
+  database?: SessionDatabase;
 };
 
 function messageOf(err: unknown): string {
@@ -90,6 +91,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         now: now(),
         retentionDays: opts.retentionDays,
         ...(keepSessionId !== undefined ? { keepSessionId } : {}),
+        ...(opts.database !== undefined ? { database: opts.database } : {}),
       });
     } catch (err) {
       opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
@@ -109,16 +111,21 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         model: opts.model,
         provider: opts.provider,
       };
+      const record = {
+        v: TRAJECTORY_SCHEMA_VERSION,
+        ts: now().toISOString(),
+        sessionId: opts.sessionId,
+        actor,
+        ...kind,
+      } as Omit<TrajectoryRecord, "seq">;
+      if (opts.database !== undefined) {
+        opts.database.appendTrajectory(header, record);
+        return;
+      }
       const database = new SessionDatabase(configDirForStore(opts.dir, "trajectories"));
       try {
         database.importLegacyTrajectories(opts.dir);
-        database.appendTrajectory(header, {
-          v: TRAJECTORY_SCHEMA_VERSION,
-          ts: now().toISOString(),
-          sessionId: opts.sessionId,
-          actor,
-          ...kind,
-        } as Omit<TrajectoryRecord, "seq">);
+        database.appendTrajectory(header, record);
       } finally {
         database.close();
       }

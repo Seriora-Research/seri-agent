@@ -150,6 +150,7 @@ import {
   exitCodeFromDriveResult,
 } from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
+import { configDirForStore, SessionDatabase } from "./session/database";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
@@ -1141,6 +1142,9 @@ export type RunContext = CommandDirs & {
   // Explicit working directory for a new session. Direct CLI/TUI callers pass process.cwd(); the
   // daemon passes the session's stored cwd and never calls process.chdir.
   cwd: string;
+  // One SQLite handle for the process. Opened in run() / startDaemon, closed by those same
+  // callers — not by saveSession or the trajectory writer.
+  database?: SessionDatabase;
 };
 
 // Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
@@ -1512,7 +1516,7 @@ async function runTui(
       provider: confirmedModel.provider,
     };
     try {
-      saveSession(toPersist, ctx.sessionsDir);
+      saveSession(toPersist, ctx.sessionsDir, ctx.database);
     } catch (err) {
       const message = `could not save the session: ${messageOf(err)}`;
       // Not `printWarning(message)`: its default sink is `console.error`, a raw write that bypasses
@@ -3155,6 +3159,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
 
+  const database = new SessionDatabase(configDirForStore(ctx.sessionsDir, "sessions"));
+  ctx.database = database;
+  try {
+    database.importLegacySessions(ctx.sessionsDir);
+    const trajectoriesDir = getTrajectoriesDir(ctx.configDir);
+    if (database.configDir === configDirForStore(trajectoriesDir, "trajectories")) {
+      database.importLegacyTrajectories(trajectoriesDir);
+    }
+    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, isTTY);
+  } finally {
+    database.close();
+  }
+}
+
+async function finishCliRun(
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+  skipPermissions: boolean,
+  isTTY: boolean,
+): Promise<number> {
   // Below every early-return above it, so `--help`, `--version` and `--selftest` never start a fetch
   // they have no use for, and above the splash, so the fetch runs while the user is reading it.
   // This is the only reason the pre-session window (App's own `starting session…` state) is short
@@ -3248,7 +3273,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
         maxTurns,
         printEvent,
         () => prepared.permissionMode,
-        (session) => saveSession(session, ctx.sessionsDir),
+        (session) => saveSession(session, ctx.sessionsDir, ctx.database),
         makeApprovalPrompt(deps.createInterface),
         createArchivistState(prepared.session),
       );
