@@ -204,6 +204,7 @@ describe("Ctrl-V", () => {
             keyConfigured: true,
             alternatives: 0,
             gatewayReachable: false,
+            subscriptionCovered: false,
           },
         ]}
       />,

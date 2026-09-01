@@ -776,6 +776,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     keyConfigured: true,
     alternatives: 0,
     gatewayReachable: false,
+    subscriptionCovered: false,
   };
 
   test("model-picker-requested sets pendingModelPicker", () => {

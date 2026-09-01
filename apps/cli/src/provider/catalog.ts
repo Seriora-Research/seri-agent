@@ -46,12 +46,21 @@ export function catalogWithFallback(
 // resolves the SAME cached inner promise — the outer promise's own identity can't distinguish "the
 // same fetch" from "a different call".
 let warnedFallback = false;
+let codexPlanCatalogApplied = false;
 
 // Test-only reset, mirroring `resetCatalogCache`'s own contract (@seri/model-catalog): a test that
 // exercises the fetch-fails-and-falls-back path more than once in the same `bun test` process needs
 // to clear this alongside that cache, or only the first call in the whole process would ever warn.
 export function resetFallbackWarning(): void {
   warnedFallback = false;
+}
+
+export function isCodexPlanCatalogApplied(): boolean {
+  return codexPlanCatalogApplied;
+}
+
+export function resetCodexPlanCatalogApplied(): void {
+  codexPlanCatalogApplied = false;
 }
 
 // Starts the models.dev fetch without waiting for it, so it overlaps whatever the user is doing on
@@ -98,7 +107,7 @@ export async function getModelCatalog(
   if (configDir !== undefined && hasXaiSubscription(configDir)) {
     merged = await mergeGrokSubscriptionModels(merged, configDir, fetchFn);
   }
-  return withCodexSubscriptionCatalog(merged);
+  return withCodexSubscriptionCatalog(merged, sink);
 }
 
 const CODEX_DEFAULT_CONTEXT = 272_000;
@@ -139,11 +148,30 @@ export function overlayCodexModels(
   };
 }
 
-export async function withCodexSubscriptionCatalog(catalog: ModelCatalog): Promise<ModelCatalog> {
-  if (!hasCodexSubscription()) return catalog;
+export async function withCodexSubscriptionCatalog(
+  catalog: ModelCatalog,
+  sink?: (line: string) => void,
+  listFn: () => Promise<readonly CodexListedModel[]> = listCodexModels,
+): Promise<ModelCatalog> {
+  if (!hasCodexSubscription()) {
+    codexPlanCatalogApplied = false;
+    return catalog;
+  }
   try {
-    return overlayCodexModels(catalog, await listCodexModels());
+    const models = await listFn();
+    if (models.length === 0) {
+      codexPlanCatalogApplied = false;
+      return catalog;
+    }
+    const overlaid = overlayCodexModels(catalog, models);
+    codexPlanCatalogApplied = true;
+    return overlaid;
   } catch {
+    codexPlanCatalogApplied = false;
+    printWarning(
+      "could not load the ChatGPT plan model list; showing the API catalog. Included models may be missing or mispriced until the next refresh.",
+      sink,
+    );
     return catalog;
   }
 }
