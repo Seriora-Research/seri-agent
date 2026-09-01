@@ -42,6 +42,18 @@ function toolResultMsg(id: string, value: JSONValue): ModelMessage {
   };
 }
 
+function summarizerUserText(model: MockLanguageModelV4): string {
+  const user = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+  const content = user && "content" in user ? user.content : undefined;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) =>
+      part && typeof part === "object" && "text" in part ? String(part.text) : "",
+    )
+    .join("");
+}
+
 // One leading user message, then `pairs` adjacent {assistant tool-call, tool result} pairs.
 function buildAlternatingMessages(pairs: number): ModelMessage[] {
   const messages: ModelMessage[] = [{ role: "user", content: "do the task" }];
@@ -248,14 +260,14 @@ describe("compactMessages", () => {
     const result = await compactMessages(messages, model, 5);
 
     expect(model.doGenerateCalls).toHaveLength(1);
-    const sent = JSON.stringify(model.doGenerateCalls[0]?.prompt);
+    const sent = summarizerUserText(model);
     expect(sent).not.toContain(largeBody);
     expect(sent).not.toContain("UNIQUE_FILE_BODY_");
     expect(sent).toContain(shortLiteral);
     expect(sent).toContain(userText);
     expect(sent).toContain("src/foo.ts");
-    expect(sent).toMatch(/"elided"\s*:\s*true/);
-    expect(sent).toContain(String(Buffer.byteLength(largeBody)));
+    expect(sent).toContain('"elided":true');
+    expect(sent).toContain(`"originalBytes":${Buffer.byteLength(largeBody)}`);
     expect(JSON.stringify(messages)).toContain(largeBody);
     expect(result.evictedCount).toBe(5);
   });
