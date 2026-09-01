@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import { clearCodexSubscriptionIgnore, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { getModel } from "../../src/provider/model";
 import {
   resolveLegalReasoningTiers,
@@ -521,5 +522,64 @@ describe("a connected subscription as a credential", () => {
       new Set(),
     );
     expect(route.credential).toBe("key");
+  });
+});
+
+describe("Codex profile ignore vs an OpenAI key", () => {
+  const openaiCatalog: ModelCatalog = {
+    fetchedAt: "",
+    entries: [entry({ id: "gpt-5.6-terra", provider: "openai" })],
+  };
+  let codexHome: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  beforeEach(() => {
+    codexHome = mkdtempSync(join(tmpdir(), "seri-routing-codex-"));
+    process.env.CODEX_HOME = codexHome;
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    rmSync(codexHome, { recursive: true, force: true });
+  });
+
+  test("a ChatGPT plan plus an OpenAI key uses the subscription", () => {
+    const route = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  test("ignoring the plan falls back to the OpenAI key", () => {
+    ignoreCodexSubscription(tmpRoot);
+    const ignored = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(ignored.credential).toBe("key");
+    clearCodexSubscriptionIgnore(tmpRoot);
+    const restored = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(restored.credential).toBe("subscription");
   });
 });

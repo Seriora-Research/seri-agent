@@ -13,6 +13,7 @@ import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
+import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { refreshCodexSubscription, resetCodexModelCache } from "../../src/auth/codexRefresh";
 import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
@@ -511,6 +512,24 @@ describe("decideSetupOpen", () => {
     const rows = decideSetupOpen(setupConfigDir);
     const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
     expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(true);
+  });
+
+  test("a chatgpt login with a profile ignore is an ignored, non-removable row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    ignoreCodexSubscription(setupConfigDir);
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "ignored" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(false);
   });
 
   test("a connected Codex row includes planType after account/read", async () => {
@@ -568,6 +587,23 @@ describe("decideSetupOpen", () => {
     expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBe(
       "unused because a ChatGPT plan is connected",
     );
+  });
+
+  test("an openai key is used when the ChatGPT plan is ignored", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    ignoreCodexSubscription(setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBeUndefined();
   });
 });
 

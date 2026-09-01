@@ -2599,11 +2599,22 @@ describe("App", () => {
           kind: "subscription",
           provider: "openai",
           status: { status: "connected" },
-          removable: false,
+          removable: true,
         });
         expect(text).toContain("codex");
         expect(text).toContain("ChatGPT plan connected");
         expect(text).not.toContain("openai");
+      });
+
+      test("an ignored Codex row names the ignore, not connected", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "ignored" },
+          removable: false,
+        });
+        expect(text).toContain("ChatGPT plan ignored");
+        expect(text).not.toContain("connected");
       });
 
       test("a Codex connected row surfaces planType when known", () => {
@@ -2611,7 +2622,7 @@ describe("App", () => {
           kind: "subscription",
           provider: "openai",
           status: { status: "connected", planType: "free" },
-          removable: false,
+          removable: true,
         });
         expect(text).toContain("ChatGPT free plan connected");
       });
@@ -2898,7 +2909,7 @@ describe("App", () => {
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
-      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
       await flush(setup);
 
       const frame = setup.captureCharFrame();
@@ -2921,19 +2932,62 @@ describe("App", () => {
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
-      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
       await flush(setup);
       setup.mockInput.pressEnter();
       await flush(setup);
       expect(confirmed).toEqual([]);
       expect(backCalls).toEqual([0]);
 
-      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
       await flush(setup);
       setup.mockInput.pressKey("y");
       await flush(setup);
       expect(confirmed).toHaveLength(1);
       expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "xai" });
+    });
+
+    test("confirm-disconnect for Codex names the local ignore, not Grok's client id", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-disconnect", provider: "openai" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("local ignore only");
+      expect(frame).toContain("Codex CLI login is not revoked");
+      expect(frame).not.toContain("Grok Build");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed).toHaveLength(1);
+      expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "openai" });
+    });
+
+    test("confirm-connect for Codex re-enables without the Grok warning", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "openai" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Re-enable ChatGPT plan");
+      expect(frame).toContain("local ignore");
+      expect(frame).not.toContain("Grok Build's OAuth client id");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed[0]).toMatchObject({
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "ignored" },
+      });
     });
 
     // Render precedence (app.tsx's own render ternary): pendingApproval beats pendingModelPicker

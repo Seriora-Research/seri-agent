@@ -20,8 +20,9 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
-import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
+import { loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
 import { type CodexSetupStatus, findCodexBin } from "../../auth/codexBin";
+import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
 import { codexPlanType } from "../../auth/codexRefresh";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
@@ -52,6 +53,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "../../provider/routing";
+import { codexSubscriptionActive } from "../../provider/subscriptions";
 import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
 import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
@@ -240,7 +242,7 @@ export type SetupCodexSubscriptionRow = {
   kind: "subscription";
   provider: "openai";
   status: CodexSetupStatus;
-  removable: false;
+  removable: boolean;
 };
 export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
 export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
@@ -264,7 +266,7 @@ export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubsc
   return row.kind === "subscription";
 }
 
-function codexSetupRow(): SetupSubscriptionRow {
+function codexSetupRow(configDir?: string): SetupSubscriptionRow {
   if (findCodexBin() === undefined) {
     return {
       kind: "subscription",
@@ -275,12 +277,20 @@ function codexSetupRow(): SetupSubscriptionRow {
   }
   const auth = loadCodexAuth();
   if (auth !== undefined && auth.authMode === "chatgpt") {
+    if (configDir !== undefined && isCodexSubscriptionIgnored(configDir)) {
+      return {
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "ignored" },
+        removable: false,
+      };
+    }
     const planType = codexPlanType();
     return {
       kind: "subscription",
       provider: "openai",
       status: planType === undefined ? { status: "connected" } : { status: "connected", planType },
-      removable: false,
+      removable: true,
     };
   }
   const mode = readCodexAuthMode();
@@ -302,7 +312,7 @@ function codexSetupRow(): SetupSubscriptionRow {
 
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
-  const openaiSubscribed = hasCodexSubscription();
+  const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
   const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
     let unusedBecause: string | undefined;
     if (grokConnected && state.provider === "xai" && state.source !== "unset") {
@@ -325,7 +335,7 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
     { kind: "subscription", provider: "xai", connected: grokConnected },
-    codexSetupRow(),
+    codexSetupRow(configDir),
   ];
 }
 

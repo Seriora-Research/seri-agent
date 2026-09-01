@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
+import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import {
   isCodexPlanCatalogApplied,
   overlayCodexModels,
@@ -126,5 +127,33 @@ describe("withCodexSubscriptionCatalog", () => {
     expect(result).toBe(catalog);
     expect(isCodexPlanCatalogApplied()).toBe(false);
     expect(warnings.some((line) => line.includes("plan model list"))).toBe(true);
+  });
+
+  test("a profile ignore skips overlay even when a chatgpt login is on disk", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-catalog-"));
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const configDir = mkdtempSync(join(tmpdir(), "seri-codex-catalog-cfg-"));
+    ignoreCodexSubscription(configDir);
+    try {
+      const result = await withCodexSubscriptionCatalog(
+        catalog,
+        undefined,
+        async () => {
+          throw new Error("should not list");
+        },
+        configDir,
+      );
+      expect(result).toBe(catalog);
+      expect(isCodexPlanCatalogApplied()).toBe(false);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });

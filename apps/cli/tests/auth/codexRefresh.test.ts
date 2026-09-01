@@ -152,6 +152,10 @@ describe("describeCodexSetupStatus", () => {
       "ChatGPT pro plan connected",
     );
   });
+
+  test("ignored is local-only copy, not connected", () => {
+    expect(describeCodexSetupStatus({ status: "ignored" })).toBe("ChatGPT plan ignored");
+  });
 });
 
 describe("listCodexModels", () => {
