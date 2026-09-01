@@ -10,6 +10,7 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
+import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
   reportForOpenRouter,
@@ -18,7 +19,7 @@ import {
 } from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
 import type { RouteCredential } from "../provider/routing";
-import { withCodexStoreOption } from "../provider/codex";
+import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import {
   type CompactionSummary,
   compactMessages,
@@ -200,6 +201,10 @@ async function decidePermission(
     return "allow-new";
   }
   return answer === "no" ? "deny-declined" : "allow";
+}
+
+function isConcurrentReadTool(name: string): boolean {
+  return (READ_ONLY_TOOL_NAMES as readonly string[]).includes(name);
 }
 
 export async function* runLoop(opts: {
@@ -544,6 +549,87 @@ export async function* runLoop(opts: {
     // Only the calls whose `execute` resolved, for onToolPhaseEnd below. Rebuilt per iteration, not
     // per turn: the callback answers for the round that just ran.
     const executed: { toolName: string; input: unknown }[] = [];
+
+    type ToolCall = (typeof toolCalls)[number];
+    type ReadOutcome =
+      | { kind: "ok"; value: unknown }
+      | { kind: "error"; error: unknown }
+      | { kind: "aborted" };
+    type ReadBatchItem = {
+      call: ToolCall;
+      subject: string;
+      yieldedCall: boolean;
+      outcome: Promise<ReadOutcome>;
+    };
+    const readBatch: ReadBatchItem[] = [];
+
+    type ToolExecute = NonNullable<NonNullable<(typeof opts.tools)[string]>["execute"]>;
+    const startReadExecute = (call: ToolCall, execute: ToolExecute): Promise<ReadOutcome> =>
+      Promise.resolve(
+        execute(call.input, {
+          toolCallId: call.toolCallId,
+          messages,
+          context: {},
+          abortSignal: opts.signal,
+        }),
+      ).then(
+        (value): ReadOutcome => ({ kind: "ok", value }),
+        (error): ReadOutcome =>
+          opts.signal?.aborted ? { kind: "aborted" } : { kind: "error", error },
+      );
+
+    async function* flushReadBatch(): AsyncGenerator<LoopEvent, "aborted" | "ok"> {
+      if (readBatch.length === 0) return "ok";
+      const items = readBatch.splice(0, readBatch.length);
+      const outcomes = await Promise.all(items.map((item) => item.outcome));
+      let aborted = false;
+      for (const [i, item] of items.entries()) {
+        const out = outcomes[i];
+        if (out === undefined) continue;
+        if (!item.yieldedCall) {
+          if (out.kind === "aborted") {
+            aborted = true;
+            continue;
+          }
+          yield { type: "tool-call", name: item.subject, args: item.call.input };
+        }
+        if (out.kind === "aborted") {
+          aborted = true;
+          continue;
+        }
+        if (out.kind === "error") {
+          const error = `Tool "${item.subject}" threw during execution: ${errorText(out.error)}`;
+          yield { type: "error", error };
+          toolResults.push({
+            type: "tool-result",
+            toolCallId: item.call.toolCallId,
+            toolName: item.call.toolName,
+            output: { type: "error-text", value: error },
+          });
+          continue;
+        }
+        yield { type: "tool-result", name: item.subject, result: out.value };
+        executed.push({ toolName: item.call.toolName, input: item.call.input });
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: item.call.toolCallId,
+          toolName: item.call.toolName,
+          output: { type: "json", value: (out.value ?? null) as JSONValue },
+        });
+        if (opts.onAfterTool !== undefined) {
+          let afterMessages: readonly string[];
+          try {
+            afterMessages = await opts.onAfterTool(item.subject, item.call.input, out.value);
+          } catch (err) {
+            if (opts.signal?.aborted) return "aborted";
+            throw err;
+          }
+          for (const error of afterMessages) yield { type: "error", error };
+        }
+      }
+      return aborted || opts.signal?.aborted === true ? "aborted" : "ok";
+    }
+
     for (const call of toolCalls) {
       // Before the call, therefore upstream of the checkpoint snapshot taken inside the wrapper at
       // toolDef.execute — and this is the only point that sees all seven tools, since wrapTools
@@ -562,6 +648,7 @@ export async function* runLoop(opts: {
       // costs nothing to give it first.
       const toolDef = opts.tools[call.toolName];
       if (!toolDef?.execute) {
+        if ((yield* flushReadBatch()) === "aborted") break;
         const error = `Unknown tool "${call.toolName}": no matching tool definition.`;
         yield { type: "error", error };
         toolResults.push({
@@ -597,12 +684,18 @@ export async function* runLoop(opts: {
           if (opts.signal?.aborted) break;
           throw err;
         }
+        // The TUI treats an `error` event while `pendingTool` is set as that in-flight call
+        // throwing. A later read's PreToolUse can fail without blocking and still run; flushing
+        // first closes the previous read's call/result pair so this error is a system line, not a
+        // false throw on a sibling that actually succeeded.
+        if ((hook.errors?.length ?? 0) > 0 && (yield* flushReadBatch()) === "aborted") break;
         for (const error of hook.errors ?? []) yield { type: "error", error };
         // A new await is a new window for an abort to land in, and a check placed after a different
         // await does not cover it — same reason as the re-check below, whose comment spells the
         // argument out. Without this a cancel lands as a hook verdict.
         if (opts.signal?.aborted) break;
         if (hook.block !== undefined) {
+          if ((yield* flushReadBatch()) === "aborted") break;
           yield { type: "permission-denied", name: subject, reason: "hook" };
           toolResults.push({
             type: "tool-result",
@@ -641,6 +734,7 @@ export async function* runLoop(opts: {
       if (verdict === "allow-new") yield { type: "tool-allowed", name: subject };
 
       if (verdict === "deny-blocked" || verdict === "deny-declined") {
+        if ((yield* flushReadBatch()) === "aborted") break;
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
         // the user asked. See MAX_CONSECUTIVE_DENIALS.
         if (verdict === "deny-declined") consecutiveDenials++;
@@ -674,6 +768,29 @@ export async function* runLoop(opts: {
       // probe a write three times, scattered turns apart, would die at repeated-denials having
       // done nothing wrong. See MAX_CONSECUTIVE_DENIALS for the padding risk this accepts instead.
       consecutiveDenials = 0;
+
+      if (isConcurrentReadTool(call.toolName)) {
+        const execute = toolDef.execute;
+        if (readBatch.length === 0) {
+          yield { type: "tool-call", name: subject, args: call.input };
+          readBatch.push({
+            call,
+            subject,
+            yieldedCall: true,
+            outcome: startReadExecute(call, execute),
+          });
+        } else {
+          readBatch.push({
+            call,
+            subject,
+            yieldedCall: false,
+            outcome: startReadExecute(call, execute),
+          });
+        }
+        continue;
+      }
+
+      if ((yield* flushReadBatch()) === "aborted") break;
 
       yield { type: "tool-call", name: subject, args: call.input };
       let toolResult: unknown;
@@ -716,9 +833,9 @@ export async function* runLoop(opts: {
       // their own site, applied to a third one. The next iteration's abort check then breaks, and
       // the unanswered-row loop fills in every call behind this one.
       if (opts.onAfterTool !== undefined) {
-        let messages: readonly string[];
+        let afterMessages: readonly string[];
         try {
-          messages = await opts.onAfterTool(subject, call.input, toolResult);
+          afterMessages = await opts.onAfterTool(subject, call.input, toolResult);
         } catch (err) {
           // Same catch as the pre-hook above and as the `execute` call itself: a cancelled hook
           // rejects, and an escaping rejection would take the generator down without a `done`
@@ -726,16 +843,19 @@ export async function* runLoop(opts: {
           if (opts.signal?.aborted) break;
           throw err;
         }
-        for (const error of messages) yield { type: "error", error };
+        for (const error of afterMessages) yield { type: "error", error };
       }
     }
 
-    // Every path through the body above either pushes exactly one row and carries on, or breaks, so
-    // rows and calls stay index-aligned and whatever is past the end of toolResults was never
-    // answered. Derived rather than recorded: an index assigned at each of the three break sites
-    // would make the guarantee below depend on three assignments each being right, where this
-    // depends on the rows the loop actually pushed.
-    const unanswered = toolCalls.slice(toolResults.length);
+    yield* flushReadBatch();
+
+    // Parallel reads can finish out of start order, so a missing row is identified by toolCallId
+    // rather than as a suffix of `toolCalls`. A break still leaves every unfinished call without a
+    // row; the fill below answers them. Completed reads keep the result they actually produced.
+    const answeredIds = new Set(
+      toolResults.flatMap((row) => ("toolCallId" in row ? [row.toolCallId] : [])),
+    );
+    const unanswered = toolCalls.filter((call) => !answeredIds.has(call.toolCallId));
 
     // A cancelled call still gets a row, and so does every call after it. The assistant message
     // carrying the tool calls was already pushed and already persisted by cli.ts, so leaving any
@@ -766,10 +886,9 @@ export async function* runLoop(opts: {
     messages.push({ role: "tool", content: toolResults });
     yield { type: "messages-updated", messages: [...messages] };
 
-    // A break is the only way to leave a call unanswered, and all three break sites are the abort
-    // checks above, so a non-empty `unanswered` is exactly "the turn was cancelled". Read off the
-    // rows the loop actually pushed rather than off a flag, which is one more thing each of those
-    // three sites could be written without.
+    // A break or an aborted in-flight read is the way a call is left unanswered. Read off the
+    // rows the loop actually pushed rather than off a flag, which is one more thing each abort
+    // site could be written without.
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
       return;

@@ -129,8 +129,9 @@ export type TuiState = {
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
   // The in-flight tool call, if any — set on every tool-call event, cleared on its
   // tool-result/permission-denied, or on an error that arrives while this slot is set (thrown
-  // execute: tool-call then error, no tool-result). Single-slot: loop.ts runs tools strictly
-  // sequentially, so the next result's args are always this pending call's. A dedicated field
+  // execute: tool-call then error, no tool-result). Single-slot: the loop still yields one
+  // call/result pair at a time even when consecutive read-only executes overlap, so the next
+  // result's args are always this pending call's. A dedicated field
   // rather than App.tsx string-matching `status`'s rendered text (`"Running write_file…"`)
   // against the last transcript line, which only worked by coincidence and would silently stop
   // working the moment either string changed.
@@ -576,11 +577,16 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
           child.currentTool?.args,
           event.result,
         ),
+        // Same slot as the parent's pendingTool: an error while this is set is treated as
+        // that call throwing. A settled call has to drop it or a later hook error paints
+        // as a false throw on a tool that already succeeded.
+        currentTool: undefined,
       };
     case "permission-denied":
       return {
         ...child,
         toolActivity: recordDenial(child.toolActivity, event.name, event.reason),
+        currentTool: undefined,
       };
     case "error": {
       // Thrown execute is tool-call then error, no tool-result — same as the parent reducer.
