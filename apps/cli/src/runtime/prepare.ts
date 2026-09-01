@@ -267,15 +267,16 @@ export function createSessionTrajectory(
 // `taskText`) — one function rather than two independent booleans over the same inputs, which used
 // to require its own comment on the second one just to defend it against the first ("deliberately
 // NOT !hasNewTask(ctx)"). Shared by prepareSession (decides whether to push the initial user
-// message), run()'s own usage-error gate, and runTui's own connectDispatch (decides whether to echo
-// the task and whether to auto-start a turn) — one function, not the same distinction repeated at
-// every call site, so they can't silently drift out of sync with each other.
+// message), run()'s own usage-error gate and non-interactive turn start, and runTui's own
+// connectDispatch (decides whether to echo the task and whether to auto-start a turn) — one
+// function, not the same distinction repeated at every call site, so they can't silently drift
+// out of sync with each other.
 //   "task"   — real task text was given (new session or --continue/--resume with new text): push,
 //              echo, and start a turn on it.
 //   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
 //              actually starts is a separate question the session's own messages answer, not
-//              this classification alone — see session/awaitsReply.ts, and connectDispatch's use
-//              of it, below.
+//              this classification alone — see session/awaitsReply.ts, used by both
+//              connectDispatch (TUI) and run()'s non-interactive branch.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 export type RunStart = "idle" | "task" | "resume";
 
