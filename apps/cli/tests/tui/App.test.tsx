@@ -327,6 +327,32 @@ describe("App", () => {
     expect(frame).toContain("line 299");
   });
 
+  // After mouse reporting is off, a real wheel notch arrives as Up/Down, not as an OpenTUI
+  // mouse-scroll event. `mockMouse.scroll` below still exercises the mouse path (useful if a
+  // future surface turns reporting on); this test is the one that matches what a terminal
+  // actually delivers today. Without an Up handler the banner stays off and the newest line stays
+  // on screen — that is the negative control, and it is how this case looked before the arrows
+  // were routed to the scrollbox.
+  test("Up arrow scrolls the transcript the way a wheel notch does once mouse reporting is off", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    expect(setup.captureCharFrame()).toContain("line 299");
+
+    for (let i = 0; i < 8; i++) {
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+    }
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+  });
+
   // Regression guard: the scrollbox's own mouse-wheel handling moves its real scroll position
   // independently of the keyboard handler that used to be the only place `scrolledUp` was set, so a
   // wheel-up scroll used to move the viewport away from the tail with no banner ever appearing to
@@ -4816,6 +4842,26 @@ describe("App", () => {
       expect(frame).toContain(ARCHIVIST_MARK);
       expect(frame).toContain("(archivist:");
       expect(panelBand(frame).band).not.toContain("explore");
+    });
+
+    test("empty InputBox Down while scrolled up moves the transcript, not the roster", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      const afterDown = setup.captureCharFrame();
+      expect(panelBand(afterDown).band).not.toContain("> ");
+      expect(afterDown).toContain("↑ scrolled");
     });
 
     test("empty InputBox Down focuses the panel; Esc blurs", async () => {

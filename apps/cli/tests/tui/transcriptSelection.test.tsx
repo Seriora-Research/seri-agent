@@ -134,7 +134,7 @@ describe("transcript selection", () => {
   // OpenTUI's in-app selection instead — the strategy issue #254 calls B, rejected in
   // docs/specs/044-tui-selection-copy/research.md over an upstream defect — through renderers of
   // its own, so none of it fails if this flag is dropped. Neither does anything built on top of it:
-  // runtime/renderer.ts's `?1007` suppression, app.tsx's approval-paging gate, its hidden
+  // app.tsx's Up/Down routing, its approval-paging gate, its hidden
   // scrollbar, or hooks/useClipboardPaste.ts's Ctrl-V would all stay green as accommodations for a
   // trade no longer being made. An opentui upgrade that conflicts on that file is the way this goes
   // quietly, which is what this is here to make loud.

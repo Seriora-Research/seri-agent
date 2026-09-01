@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import { useEffect, useRef, useState } from "react";
+import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
@@ -43,6 +43,7 @@ export function InputBox({
   inert,
   bare,
   completionSources,
+  arrowsReservedRef,
 }: {
   // Required, not optional. App renders this component only when a submitted line has somewhere to
   // go (see its own render ternary): the pre-session mounts — the welcome splash and the guided
@@ -81,6 +82,10 @@ export function InputBox({
   // Every source a typed trigger could open (util/completion.ts). Empty by default so the
   // pre-session mounts, which have no registry behind them, render exactly as before.
   completionSources?: readonly CompletionSource[];
+  // App reads this on the same keypress it might otherwise treat as a transcript scroll (a wheel
+  // notch is Up/Down once mouse reporting is off). Set for as long as the completion popup owns
+  // those arrows, cleared on unmount so a remount cannot leave the flag stuck.
+  arrowsReservedRef?: MutableRefObject<boolean>;
 }) {
   const sources = completionSources ?? EMPTY_SOURCES;
   const [value, setValue] = useState(prefill ?? "");
@@ -114,12 +119,15 @@ export function InputBox({
   }, [prefill, onPrefillConsumed]);
 
   // InputBox remounts fresh on every panel swap (see above), so a timer left running past unmount
-  // would fire into a NEW mount's setValue — clear it rather than let that happen.
+  // would fire into a NEW mount's setValue — clear it rather than let that happen. The reserved
+  // flag is the same shape: a remount that forgot to clear it would keep App from scrolling until
+  // some later keystroke rewrote it.
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
+      if (arrowsReservedRef !== undefined) arrowsReservedRef.current = false;
     };
-  }, []);
+  }, [arrowsReservedRef]);
 
   function flush() {
     timerRef.current = null;
@@ -134,6 +142,10 @@ export function InputBox({
     const current = pendingValueRef.current;
     if (inert || sources.length === 0 || current === dismissedFor) return undefined;
     return resolveCompletion(sources, current);
+  }
+
+  if (arrowsReservedRef !== undefined) {
+    arrowsReservedRef.current = liveCompletion() !== undefined;
   }
 
   // Every value change opens a fresh list, so the selection goes back to the top and any earlier

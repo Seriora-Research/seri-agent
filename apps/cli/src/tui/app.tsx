@@ -360,6 +360,11 @@ export function App({
   const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
+  // a half-typed `/` cycles the list instead of also scrolling the transcript. Read on the
+  // keypress, not copied into React state: the popup's open-ness is already InputBox-local, and
+  // mirroring it here would add a render for no paint.
+  const arrowsReservedRef = useRef(false);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
   // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
   // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
@@ -465,8 +470,9 @@ export function App({
   // An approval is the one overlay the keys stay live behind, because reading back what you are
   // approving is the entire point of the moment — the transcript above it is the diff, the command,
   // the path. It is also the one moment the user cannot recover from by learning a different key:
-  // the wheel that used to scroll behind a panel is gone with mouse reporting
-  // (runtime/renderOptions.ts). Nothing is silently mutated behind an approval either — the
+  // the wheel that used to scroll behind a panel now arrives as Up/Down (mouse reporting
+  // is off; runtime/renderOptions.ts) and this same handler routes those to the transcript.
+  // Nothing is silently mutated behind an approval either — the
   // ApprovalBox is the ONLY thing on screen the keys could confuse the reader about, it stays put
   // while the transcript moves under it, and the banner below is un-gated in the same breath so a
   // scrolled transcript always says so. The two must be gated on the same boolean, which is why
@@ -550,16 +556,21 @@ export function App({
   // dispatching into the reducer: scroll position is the scrollbox's own state now, not derived
   // state this component recomputes. The scrollbox itself is never given keyboard focus (no
   // `focused` prop, below), so its own internal `handleKeyPress` (which would otherwise also react
-  // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End are handled.
-  // Home/End's `scrollBy(∓1, "content")` matches `ScrollBarRenderable`'s own internal Home/End
-  // handling one-for-one (verified against @opentui/core's own compiled source). PageUp/PageDown's
-  // `scrollBy(∓1, "viewport")` deliberately does NOT match that same internal handling, which pages
-  // by half a viewport per press (`scrollBy(∓0.5, "viewport")`) — a full-viewport jump is the
-  // simpler of the two `scrollBy` unit multiples already available on this same API, chosen over
-  // reproducing the pre-migration reducer's own one-row-overlap pager convention
-  // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
-  // it from now that scroll position lives on the scrollbox itself. Gated on `pagingPanelOpen`
-  // rather than `noPanelOpen` — an approval is scrollable behind, see that boolean's own comment.
+  // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End/Up/Down are
+  // handled. Home/End's `scrollBy(∓1, "content")` matches `ScrollBarRenderable`'s own internal
+  // Home/End handling one-for-one (verified against @opentui/core's own compiled source).
+  // PageUp/PageDown's `scrollBy(∓1, "viewport")` deliberately does NOT match that same internal
+  // handling, which pages by half a viewport per press (`scrollBy(∓0.5, "viewport")`) — a
+  // full-viewport jump is the simpler of the two `scrollBy` unit multiples already available on
+  // this same API, chosen over reproducing the pre-migration reducer's own one-row-overlap pager
+  // convention (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved`
+  // pair to compute it from now that scroll position lives on the scrollbox itself.
+  // Up/Down use `step` (one row) because that is what a wheel notch becomes once mouse reporting
+  // is off: the terminal types one to three arrows per notch, and a viewport jump per arrow would
+  // page the transcript three times for one physical flick. Ctrl/Meta is left alone so the queue
+  // chords keep working; `arrowsReservedRef` is left alone so an open completion popup keeps
+  // owning the list. Gated on `pagingPanelOpen` rather than `noPanelOpen` — an approval is
+  // scrollable behind, see that boolean's own comment.
   useKeyboard((key) => {
     if (pagingPanelOpen) return;
     const el = transcriptRef.current;
@@ -568,6 +579,9 @@ export function App({
     else if (key.name === "pagedown") el.scrollBy(1, "viewport");
     else if (key.name === "home") el.scrollBy(-1, "content");
     else if (key.name === "end") el.scrollBy(1, "content");
+    else if (key.ctrl || key.meta || arrowsReservedRef.current) return;
+    else if (key.name === "up") el.scrollBy(-1, "step");
+    else if (key.name === "down") el.scrollBy(1, "step");
   });
 
   // The splash owns the whole terminal and returns before the session chrome below it renders.
@@ -883,10 +897,11 @@ export function App({
           prefill={state.pendingInputPrefill}
           onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
           onEmptyDown={
-            state.subagents.length > 0 && !state.queue.editing
+            state.subagents.length > 0 && !state.queue.editing && !scrolledUp
               ? () => dispatch({ type: "subagent-panel-focus" })
               : undefined
           }
+          arrowsReservedRef={arrowsReservedRef}
           // `state.queue.editing` joins the two subagent conditions: while a queue row holds its own
           // InputBox, two of them are mounted at once, and OpenTUI delivers every keypress to every
           // mounted handler — so without this a typed character lands in the row's editor AND in
