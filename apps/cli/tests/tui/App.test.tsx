@@ -12,7 +12,12 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
 import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
-import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  SetupKeyRow,
+  SetupProviderRow,
+} from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
@@ -2428,9 +2433,7 @@ describe("App", () => {
     // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
     // entry underneath that removal was impossible when it was not.
     describe("formatSetupRow", () => {
-      function row(
-        overrides: Partial<Extract<SetupProviderRow, { kind: "key" }>> = {},
-      ): Extract<SetupProviderRow, { kind: "key" }> {
+      function row(overrides: Partial<SetupKeyRow> = {}): SetupKeyRow {
         return {
           kind: "key",
           provider: "anthropic",
@@ -2485,11 +2488,36 @@ describe("App", () => {
             keyName: "XAI_API_KEY",
             source: "config",
             masked: "xai-...key1",
-            unusedBecauseSubscription: true,
+            unusedBecause: "unused because a Grok subscription is connected",
           }),
         );
         expect(text).toContain("unused");
         expect(text).toContain("Grok subscription is connected");
+      });
+
+      test("a Codex subscription row names the plan status, not an API key", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "connected" },
+          removable: false,
+        });
+        expect(text).toContain("codex");
+        expect(text).toContain("ChatGPT plan connected");
+        expect(text).not.toContain("openai");
+      });
+
+      test("an unused openai key names the ChatGPT plan as the reason", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "openai",
+            keyName: "OPENAI_API_KEY",
+            source: "config",
+            masked: "sk-o...abcd",
+            unusedBecause: "unused because a ChatGPT plan is connected",
+          }),
+        );
+        expect(text).toContain("unused because a ChatGPT plan is connected");
       });
     });
 

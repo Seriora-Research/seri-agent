@@ -9,6 +9,7 @@ import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
+import { describeCodexSetupStatus } from "../../auth/codexBin";
 import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
@@ -21,7 +22,7 @@ import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 // screen) — see `slideWindow`/`useListWindow.ts` for how the visible window slides to keep it in
 // view.
 // `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
-// (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
+// (SetupPanel's provider list already fits under it) — enough rows that a floor-clamped panel
 // still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
 // height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
 // sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
@@ -477,14 +478,17 @@ export function envShadowReason(keyName: string): string {
 export function formatSetupRow(row: SetupProviderRow): string {
   if (row.kind === "heading") return row.label;
   if (row.kind === "subscription") {
-    const name = truncatePad("grok", PROVIDER_WIDTH);
-    return row.connected ? `${name} connected` : `${name} not connected`;
+    if (row.provider === "xai") {
+      const name = truncatePad("grok", PROVIDER_WIDTH);
+      return row.connected ? `${name} connected` : `${name} not connected`;
+    }
+    return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
   }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
   const masked = singleLine(row.masked ?? "");
-  if (row.unusedBecauseSubscription === true) {
-    return `${name} ${masked} (unused — Grok subscription is connected)`;
+  if (row.unusedBecause !== undefined) {
+    return `${name} ${masked} (${row.source}, ${row.unusedBecause})`;
   }
   if (row.source === "env") {
     return row.removable

@@ -87,6 +87,40 @@ describe("dispatchSetupList (via onSetupBack)", () => {
   });
 });
 
+describe("onSetupSelect for a Codex subscription row", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "seri-tui-handlers-codex-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("does not open the API-key field", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+
+    onSetupSelect({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-installed" },
+      removable: false,
+    });
+
+    expect(actions.map((a) => a.type)).toEqual(["transcript-append"]);
+    expect(actions[0]).toMatchObject({
+      type: "transcript-append",
+      line: expect.stringContaining("Codex CLI is not installed"),
+    });
+  });
+});
+
 describe("dispatchConfigList (via onConfigBack)", () => {
   let configDir: string;
 

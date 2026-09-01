@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@seri/model-catalog";
 import {
   catalogWithFallback,
@@ -75,16 +78,23 @@ describe("catalogWithFallback", () => {
 // afterEach — makes the outcome independent of whatever the package script sets by default.
 describe("getModelCatalog", () => {
   const originalDisableFlag = process.env.SERI_DISABLE_MODELS_FETCH;
+  const originalCodexHome = process.env.CODEX_HOME;
+  let isolatedCodexHome: string;
 
   beforeEach(() => {
     resetCatalogCache();
     resetFallbackWarning();
     delete process.env.SERI_DISABLE_MODELS_FETCH;
+    isolatedCodexHome = mkdtempSync(join(tmpdir(), "seri-catalog-codex-"));
+    process.env.CODEX_HOME = isolatedCodexHome;
   });
 
   afterEach(() => {
     if (originalDisableFlag === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
     else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    rmSync(isolatedCodexHome, { recursive: true, force: true });
   });
 
   test("prints a warning exactly once when the live fetch fails, and returns the bundled fallback", async () => {

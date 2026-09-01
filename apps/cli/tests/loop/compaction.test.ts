@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { JSONValue, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { compactMessages, findSafeEvictionBoundary } from "../../src/loop/compaction";
+import { streamResult, textOnlyChunks } from "./fixtures";
 
 function usage(inputTotal: number, outputTotal: number) {
   return {
@@ -113,5 +114,31 @@ describe("compactMessages", () => {
     expect(result.summary.progress).toBeTruthy();
     expect(result.summary.blockers).toBeTruthy();
     expect(result.summary.nextSteps).toBeTruthy();
+  });
+
+  test("stream: true uses doStream because generateText is rejected on the ChatGPT-plan host", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("call-1"),
+      toolResultMsg("call-1", "ok"),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: "streamed",
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("generateText is rejected on the ChatGPT-plan host");
+      },
+      doStream: async () => streamResult(textOnlyChunks(JSON.stringify(summaryObj))),
+    });
+
+    const result = await compactMessages(messages, model, 3, undefined, { stream: true });
+
+    expect(result.summary.progress).toBe("streamed");
+    expect(model.doGenerateCalls).toHaveLength(0);
   });
 });

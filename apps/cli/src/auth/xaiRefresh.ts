@@ -128,11 +128,13 @@ export function subscriptionCredentialFromXai(
   subscription: XaiSubscription,
 ): SubscriptionCredential | undefined {
   if (subscription.accountId === undefined || subscription.accountId.length === 0) return undefined;
+  const expiresAt =
+    subscription.expiresAt !== undefined ? Date.parse(subscription.expiresAt) : Number.NaN;
   return {
     provider: "xai",
     accessToken: subscription.accessToken,
     accountId: subscription.accountId,
-    expiresAt: subscription.expiresAt === undefined ? 0 : Date.parse(subscription.expiresAt),
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : 0,
   };
 }
 
@@ -140,4 +142,22 @@ export const refreshGrokSubscription: RefreshSubscription = async (configDir) =>
   const result = await refreshXaiSubscription(configDir);
   if (result.status !== "ok") return undefined;
   return subscriptionCredentialFromXai(result.subscription);
+};
+
+export const refreshXaiCredential: RefreshSubscription = async (configDir) => {
+  const result = await refreshXaiSubscription(configDir);
+  if (result.status !== "ok") {
+    const message =
+      result.status === "error" ||
+      result.status === "tier-denied" ||
+      result.status === "reconnect-required"
+        ? result.message
+        : result.status;
+    throw new Error(message);
+  }
+  const credential = subscriptionCredentialFromXai(result.subscription);
+  if (credential === undefined) {
+    throw new Error("Grok subscription is missing accountId");
+  }
+  return credential;
 };

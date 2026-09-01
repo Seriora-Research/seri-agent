@@ -20,6 +20,8 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
+import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
+import { findCodexBin, type CodexSetupStatus } from "../../auth/codexBin";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
@@ -196,9 +198,13 @@ export function decideGuidedModelPickerOpen(
 }
 
 // One /setup list row. A heading is not selectable for a side-effect; a key row is a BYOK
-// provider; a subscription row is the Grok consumer-plan connect/disconnect action. The union is
-// what lets one list carry both sections without keying selection on provider alone (xAI has a
-// key row AND a subscription row).
+// provider; a subscription row is either Grok connect/disconnect or the Codex plan status.
+// The union is what lets one list carry both sections without keying selection on provider
+// alone (xAI and OpenAI each have a key row AND a subscription row).
+//
+// `removable` on a key row is false only when config.json genuinely has nothing to unset —
+// an env-sourced row IS removable when a config.json entry also sits underneath it
+// (providerKeyState's own `hasConfigEntry`).
 export type SetupHeadingRow = { kind: "heading"; label: string };
 export type SetupKeyRow = {
   kind: "key";
@@ -207,13 +213,20 @@ export type SetupKeyRow = {
   source: "env" | "config" | "unset";
   masked: string | undefined;
   removable: boolean;
-  unusedBecauseSubscription?: boolean;
+  unusedBecause?: string;
 };
-export type SetupSubscriptionRow = {
+export type SetupGrokSubscriptionRow = {
   kind: "subscription";
   provider: "xai";
   connected: boolean;
 };
+export type SetupCodexSubscriptionRow = {
+  kind: "subscription";
+  provider: "openai";
+  status: CodexSetupStatus;
+  removable: false;
+};
+export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
 export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
 
 export function setupRowId(row: SetupProviderRow): string {
@@ -231,37 +244,71 @@ export function firstSetupActionIndex(rows: readonly SetupProviderRow[]): number
   return index < 0 ? 0 : index;
 }
 
-// The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
-// to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
-// config.json) — the same contract decideUndo/decideRestore already have (this file's own header
-// comment: no saveSession, no console.log/print*, but a read is not a write).
-//
-// `allProviderKeyStates`, not five `providerKeyState` calls — the same anti-pattern already fixed
-// in `configuredProviders` (keys.ts): one `providerKeyState` call per CATALOG_PROVIDERS member
-// meant five redundant `loadConfig` reads
-// of the identical file to open /setup, or to refresh it after any add/remove — was never applied
-// here. `allProviderKeyStates` loads config.json exactly once for all five.
+export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubscriptionRow {
+  return row.kind === "subscription";
+}
+
+function codexSetupRow(): SetupSubscriptionRow {
+  if (findCodexBin() === undefined) {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-installed" },
+      removable: false,
+    };
+  }
+  const auth = loadCodexAuth();
+  if (auth !== undefined && auth.authMode === "chatgpt") {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "connected" },
+      removable: false,
+    };
+  }
+  const mode = readCodexAuthMode();
+  if (mode !== undefined && mode !== "chatgpt") {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-logged-in", reason: "api-key" },
+      removable: false,
+    };
+  }
+  return {
+    kind: "subscription",
+    provider: "openai",
+    status: { status: "not-logged-in", reason: "no-auth" },
+    removable: false,
+  };
+}
+
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
-  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => ({
-    kind: "key",
-    provider: state.provider,
-    keyName: state.keyName,
-    source: state.source,
-    masked: state.masked,
-    // NOT `state.source === "config"` — that would always be false whenever an env var shadowed a
-    // config.json entry, making a previously-saved secret
-    // permanently unremovable from /setup the moment the same-named env var got exported.
-    // `hasConfigEntry` is independent of which source wins for display.
-    removable: state.hasConfigEntry,
-    unusedBecauseSubscription:
-      grokConnected && state.provider === "xai" && state.source !== "unset",
-  }));
+  const openaiSubscribed = hasCodexSubscription();
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
+    let unusedBecause: string | undefined;
+    if (grokConnected && state.provider === "xai" && state.source !== "unset") {
+      unusedBecause = "unused because a Grok subscription is connected";
+    } else if (openaiSubscribed && state.provider === "openai" && state.source !== "unset") {
+      unusedBecause = "unused because a ChatGPT plan is connected";
+    }
+    return {
+      kind: "key",
+      provider: state.provider,
+      keyName: state.keyName,
+      source: state.source,
+      masked: state.masked,
+      removable: state.hasConfigEntry,
+      unusedBecause,
+    };
+  });
   return [
     { kind: "heading", label: "API keys" },
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
     { kind: "subscription", provider: "xai", connected: grokConnected },
+    codexSetupRow(),
   ];
 }
 

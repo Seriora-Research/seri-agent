@@ -353,10 +353,14 @@ const originalKeyEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, pro
 
 describe("decideSetupOpen", () => {
   let setupConfigDir: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCodexBin = process.env.SERI_CODEX_BIN;
 
   beforeEach(() => {
     for (const name of ALL_KEY_NAMES) delete process.env[name];
     setupConfigDir = mkdtempSync(join(tmpdir(), "seri-setup-commands-test-"));
+    process.env.CODEX_HOME = setupConfigDir;
+    delete process.env.SERI_CODEX_BIN;
   });
 
   afterEach(() => {
@@ -365,42 +369,46 @@ describe("decideSetupOpen", () => {
       if (original === undefined) delete process.env[name];
       else process.env[name] = original;
     }
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalCodexBin === undefined) delete process.env.SERI_CODEX_BIN;
+    else process.env.SERI_CODEX_BIN = originalCodexBin;
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns API-keys heading, five key rows in CATALOG_PROVIDERS order, Subscriptions heading, and the grok row", () => {
+  test("returns API-keys heading, five key rows, Subscriptions heading, and both plan rows", () => {
     const rows = decideSetupOpen(setupConfigDir);
     expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
     const keys = rows.filter((row) => row.kind === "key");
+    const plans = rows.filter((row) => row.kind === "subscription");
     expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
     expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
     expect(keys.every((row) => row.removable === false)).toBe(true);
-    expect(rows.at(-2)).toEqual({ kind: "heading", label: "Subscriptions" });
-    expect(rows.at(-1)).toEqual({ kind: "subscription", provider: "xai", connected: false });
+    expect(rows[keys.length + 1]).toEqual({ kind: "heading", label: "Subscriptions" });
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toEqual({ kind: "subscription", provider: "xai", connected: false });
+    expect(plans[1]?.provider).toBe("openai");
+    expect(plans[1] && "status" in plans[1] ? plans[1].status.status : undefined).toBe(
+      "not-installed",
+    );
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
-    const row = decideSetupOpen(setupConfigDir).find(
-      (r) => r.kind === "key" && r.provider === "anthropic",
-    );
-    expect(row?.kind).toBe("key");
-    if (row?.kind !== "key") return;
-    expect(row.source).toBe("config");
-    expect(row.masked).toBeDefined();
-    expect(row.removable).toBe(true);
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("config");
+    expect(row?.masked).toBeDefined();
+    expect(row?.removable).toBe(true);
   });
 
   // D8: an env-sourced row cannot be removed from here — there is no config.json entry to unset.
   test("an env-shadowed row (no config entry) is source: env and NOT removable", () => {
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find(
-      (r) => r.kind === "key" && r.provider === "anthropic",
-    );
-    expect(row?.kind).toBe("key");
-    if (row?.kind !== "key") return;
-    expect(row.source).toBe("env");
-    expect(row.removable).toBe(false);
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("env");
+    expect(row?.removable).toBe(false);
   });
 
   // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
@@ -411,13 +419,10 @@ describe("decideSetupOpen", () => {
   test("an env-shadowed row WITH a config entry underneath is source: env and IS removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find(
-      (r) => r.kind === "key" && r.provider === "anthropic",
-    );
-    expect(row?.kind).toBe("key");
-    if (row?.kind !== "key") return;
-    expect(row.source).toBe("env");
-    expect(row.removable).toBe(true);
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
+    expect(row?.source).toBe("env");
+    expect(row?.removable).toBe(true);
   });
 
   test("a connected Grok subscription marks the grok row connected and the xai key unused", () => {
@@ -432,11 +437,59 @@ describe("decideSetupOpen", () => {
     );
     setConfigValue("XAI_API_KEY", "xai-key", setupConfigDir);
     const rows = decideSetupOpen(setupConfigDir);
-    expect(rows.at(-1)).toEqual({ kind: "subscription", provider: "xai", connected: true });
+    const grok = rows.find((r) => r.kind === "subscription" && r.provider === "xai");
+    expect(grok).toEqual({ kind: "subscription", provider: "xai", connected: true });
     const xaiKey = rows.find((r) => r.kind === "key" && r.provider === "xai");
     expect(xaiKey?.kind).toBe("key");
     if (xaiKey?.kind !== "key") return;
-    expect(xaiKey.unusedBecauseSubscription).toBe(true);
+    expect(xaiKey.unusedBecause).toBe("unused because a Grok subscription is connected");
+  });
+
+  test("a chatgpt login with Codex on PATH is a connected subscription row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+  });
+
+  test("an API-key Codex login is not-logged-in, even without an access token", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }),
+    );
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({
+      status: "not-logged-in",
+      reason: "api-key",
+    });
+  });
+
+  test("an openai key is marked unused when a ChatGPT plan is connected", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBe(
+      "unused because a ChatGPT plan is connected",
+    );
   });
 });
 

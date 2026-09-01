@@ -2,6 +2,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
 import { getAnthropicModel as getAnthropicModelReal } from "./anthropic";
+import { getCodexSubscriptionModel as getCodexSubscriptionModelReal } from "./codex";
 import { getGatewayModel as getGatewayModelReal } from "./gateway";
 import { getGoogleModel as getGoogleModelReal } from "./google";
 import { getGroqModel as getGroqModelReal } from "./groq";
@@ -123,6 +124,7 @@ export function getModel(
 type DispatchModelDeps = ModelDeps & {
   getGatewayModel?: typeof getGatewayModelReal;
   getXaiSubscriptionModel?: typeof getXaiSubscriptionModelReal;
+  getCodexSubscriptionModel?: typeof getCodexSubscriptionModelReal;
 };
 
 // Dispatches to getGatewayModel instead of getModel's provider switch when the route resolved via
@@ -143,14 +145,16 @@ export function dispatchModel(
     return getGatewayModelFn(route.model, route.provider, sessionId, configDir);
   }
   if (route.credential === "subscription") {
-    // xai is the only provider a subscription can currently serve. A different provider here
-    // means routing produced a state this dispatcher has no client for, which is worth naming
-    // rather than silently falling through to the key path and failing on a missing key.
-    if (route.provider !== "xai") {
-      throw new Error(`No subscription client for provider: ${JSON.stringify(route.provider)}`);
+    if (route.provider === "xai") {
+      const getXaiSubscriptionModelFn = deps.getXaiSubscriptionModel ?? getXaiSubscriptionModelReal;
+      return getXaiSubscriptionModelFn(route.model, configDir, sessionId);
     }
-    const getXaiSubscriptionModelFn = deps.getXaiSubscriptionModel ?? getXaiSubscriptionModelReal;
-    return getXaiSubscriptionModelFn(route.model, configDir, sessionId);
+    if (route.provider === "openai") {
+      const getCodexSubscriptionModelFn =
+        deps.getCodexSubscriptionModel ?? getCodexSubscriptionModelReal;
+      return getCodexSubscriptionModelFn(route.model, configDir, sessionId);
+    }
+    throw new Error(`No subscription client for provider: ${JSON.stringify(route.provider)}`);
   }
   return getModel(route.model, route.provider, sessionId, deps, configDir);
 }

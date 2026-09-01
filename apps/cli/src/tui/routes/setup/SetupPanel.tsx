@@ -8,7 +8,7 @@ import { useState } from "react";
 import { GROK_BORROWED_CLIENT_WARNING } from "../../../auth/xaiConnect";
 import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
-import type { SetupProviderRow, SetupSubscriptionRow } from "../../state/commands";
+import type { SetupGrokSubscriptionRow, SetupProviderRow } from "../../state/commands";
 import { isSetupActionRow, setupRowId } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
@@ -19,7 +19,7 @@ import { ListRow } from "../../ui/ListRow";
 import { formatSetupRow } from "../../util/format";
 import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
-const SUBSCRIPTION_ROW: SetupSubscriptionRow = {
+const SUBSCRIPTION_ROW: SetupGrokSubscriptionRow = {
   kind: "subscription",
   provider: "xai",
   connected: false,
@@ -154,7 +154,9 @@ function SetupList({
     }
     if (key.name === "delete") {
       if (row.kind === "key" && row.removable) onSetupRemove?.(row);
-      if (row.kind === "subscription" && row.connected) onSetupSelect?.(row);
+      if (row.kind === "subscription" && row.provider === "xai" && row.connected) {
+        onSetupSelect?.(row);
+      }
       return;
     }
     if (!isPrintableKey(key)) return;
@@ -165,16 +167,20 @@ function SetupList({
     }
     if (typed === "r") {
       if (row.kind === "key" && row.removable) onSetupRemove?.(row);
-      if (row.kind === "subscription" && row.connected) onSetupSelect?.(row);
+      if (row.kind === "subscription" && row.provider === "xai" && row.connected) {
+        onSetupSelect?.(row);
+      }
     }
   });
 
   const selectedRow = rows[selected];
   const hint =
     selectedRow?.kind === "subscription"
-      ? selectedRow.connected
-        ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
-        : "↑/↓ move · Enter connect · Esc/Ctrl-D close"
+      ? selectedRow.provider === "xai"
+        ? selectedRow.connected
+          ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
+          : "↑/↓ move · Enter connect · Esc/Ctrl-D close"
+        : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
       : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (

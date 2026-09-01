@@ -1,4 +1,5 @@
 import type { ModelProvider } from "@seri/model-catalog";
+import { hasCodexSubscription } from "../auth/codexAuthStore";
 import { hasXaiSubscription } from "../auth/xaiAuthStore";
 
 // Deliberately NOT folded into provider/keys.ts's configuredProviders. That function answers
@@ -8,5 +9,6 @@ import { hasXaiSubscription } from "../auth/xaiAuthStore";
 export function subscribedProviders(configDir: string): ReadonlySet<ModelProvider> {
   const subscribed = new Set<ModelProvider>();
   if (hasXaiSubscription(configDir)) subscribed.add("xai");
+  if (hasCodexSubscription()) subscribed.add("openai");
   return subscribed;
 }

@@ -23,6 +23,7 @@ import {
   providerKeyState,
 } from "../../provider/keys";
 import { validateProviderKey } from "../../provider/validate";
+import { codexSetupAction } from "../../auth/codexBin";
 import {
   configKeyInfo,
   decideAuthOffer,
@@ -30,6 +31,7 @@ import {
   decidePermissionsOpen,
   decideSetupOpen,
   firstSetupActionIndex,
+  isSetupSubscriptionRow,
   type SetupProviderRow,
   setupRowId,
 } from "./commands";
@@ -102,11 +104,15 @@ export function createSetupHandlers(opts: {
   // crash surface for a value that never needs I/O to produce.
   function onSetupSelect(row: SetupProviderRow): void {
     if (row.kind === "heading") return;
-    if (row.kind === "subscription") {
-      dispatch({
-        type: "setup-step",
-        state: { step: row.connected ? "confirm-disconnect" : "confirm-connect" },
-      });
+    if (isSetupSubscriptionRow(row)) {
+      if (row.provider === "xai") {
+        dispatch({
+          type: "setup-step",
+          state: { step: row.connected ? "confirm-disconnect" : "confirm-connect" },
+        });
+        return;
+      }
+      dispatch({ type: "transcript-append", line: codexSetupAction(row.status) });
       return;
     }
     dispatch({
