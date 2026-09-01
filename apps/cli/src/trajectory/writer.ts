@@ -192,7 +192,10 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       return;
     }
     if (event.type === "compacted") {
-      writeRecord({ kind: "compacted", evictedCount: event.evictedCount }, actor);
+      writeRecord(
+        { kind: "compacted", evictedCount: event.evictedCount, tokensBefore: event.tokensBefore },
+        actor,
+      );
       writeRecord({ kind: "usage", usage: event.usage, source: "compaction" }, actor);
       return;
     }

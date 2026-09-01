@@ -3936,6 +3936,8 @@ describe("run (/clear)", () => {
     const compact = SLASH_COMMANDS.get("/compact");
     if (compact === undefined) throw new Error("/compact is not registered");
     expect(compact.mutatesRunState).toBe(true);
+    expect(compact.accepts([])).toBe(true);
+    expect(compact.accepts(["focus", "on", "the", "auth", "bug"])).toBe(true);
   });
 
   // Mirrors "`/mode is broken, fix it` stays a task", above: /clear's own accepts() form is the
@@ -4784,7 +4786,7 @@ describe("run (/compact)", () => {
     }
 
     expect(doGenerateCalls).toBe(1);
-    // findSafeEvictionBoundary(30 plain messages, preserve=20) = 10, min-evictable-clear.
+    // 30 padded messages at ~1000 tokens each: keep 20_000 tokens ≈ last 20, evict 10.
     expect(logs).toContain("⚙ compacted 10 messages");
     expect(logs).toContain("\n(tokens: 20 in, 10 out)");
 
@@ -4793,6 +4795,73 @@ describe("run (/compact)", () => {
     expect(saved.messages.slice(1)).toEqual(session.messages.slice(10));
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "compaction-barrier")).toBe(true);
+
+    const firstUser = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+    const sent =
+      firstUser && "content" in firstUser
+        ? typeof firstUser.content === "string"
+          ? firstUser.content
+          : Array.isArray(firstUser.content)
+            ? firstUser.content
+                .map((part) =>
+                  part && typeof part === "object" && "text" in part ? String(part.text) : "",
+                )
+                .join("")
+            : ""
+        : "";
+    expect(sent).not.toContain("Additional focus");
+  });
+
+  test("optional instructions are appended to the summarizer prompt", async () => {
+    seedCheckpointLog();
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await getCompact().run(
+        session,
+        ["focus", "on", "the", "auth", "bug"],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    const firstUser = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+    const sent =
+      firstUser && "content" in firstUser
+        ? typeof firstUser.content === "string"
+          ? firstUser.content
+          : Array.isArray(firstUser.content)
+            ? firstUser.content
+                .map((part) =>
+                  part && typeof part === "object" && "text" in part ? String(part.text) : "",
+                )
+                .join("")
+            : ""
+        : "";
+    expect(sent).toContain("Additional focus: focus on the auth bug");
   });
 
   test("no-op below the eviction boundary: leaves the session byte-identical, prints the no-op message, and never calls the model", async () => {

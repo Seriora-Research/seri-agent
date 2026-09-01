@@ -148,7 +148,7 @@ to a temporary copy.
 | `/permissions` | view or revoke tools you've permanently approved |
 | `/undo [n]`, `/rewind [n]`, `/restore <sha>` | step back through checkpoints |
 | `/clear` | start a new session (clears the conversation) — the previous one stays recoverable with `seri --resume <id>` |
-| `/compact` | summarize older messages in this session so the conversation fits the context window |
+| `/compact [instructions]` | summarize older messages in this session so the conversation fits the context window; optional words focus the recap |
 | `/memory` | review staged memory writes: preview a diff, approve or reject |
 | `/memory pending\|diff\|approve\|reject` | the same review as flat lines, for copy-pasting an id |
 | `/memory archivist on\|off` | turn the post-turn learning pass off entirely |

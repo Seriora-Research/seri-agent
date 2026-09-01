@@ -233,6 +233,7 @@ describe("observeArchivistEvent", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 1,
+      tokensBefore: 50,
       usage: {
         inputTokens: 9_999,
         inputTokenDetails: {
@@ -288,6 +289,7 @@ describe("observeArchivistEvent", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 3,
+      tokensBefore: 50,
       usage: {
         inputTokens: 1,
         inputTokenDetails: {

@@ -84,8 +84,8 @@ export const COMMAND_META: readonly CommandMeta[] = [
     name: "/compact",
     surface: "session",
     description: "summarize older messages so the conversation fits the context window",
-    argsUsage: "",
-    accepts: (args) => args.length === 0,
+    argsUsage: "[instructions]",
+    accepts: () => true,
     mutatesRunState: true,
   },
   {

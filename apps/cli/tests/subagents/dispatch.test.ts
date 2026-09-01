@@ -353,6 +353,7 @@ describe("dispatch_subagents", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 1,
+      tokensBefore: 40,
       usage: {
         inputTokens: 8,
         inputTokenDetails: {
@@ -389,6 +390,7 @@ describe("dispatch_subagents", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 1,
+      tokensBefore: 40,
       usage: {
         inputTokens: 8,
         inputTokenDetails: {
@@ -544,6 +546,7 @@ describe("dispatch_subagents", () => {
           type: "compacted",
           summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
           evictedCount: 2,
+          tokensBefore: 40,
           usage: {
             inputTokens: 4,
             inputTokenDetails: {

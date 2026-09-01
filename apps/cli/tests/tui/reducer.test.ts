@@ -313,6 +313,7 @@ describe("tuiReducer: transcript role tagging", () => {
         type: "compacted",
         summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
         evictedCount: 3,
+        tokensBefore: 100,
         usage: {
           inputTokens: 12,
           inputTokenDetails: {
@@ -585,6 +586,7 @@ describe("tuiReducer: loop-event", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 3,
+      tokensBefore: 100,
       usage: {
         inputTokens: 12,
         inputTokenDetails: {
@@ -1694,6 +1696,7 @@ describe("applyLoopEvent: compacted folds its own usage into turn.tokens", () =>
     type: "compacted",
     summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
     evictedCount: 3,
+    tokensBefore: 100,
     usage: usageOf(60, 15),
   };
 
@@ -2222,6 +2225,7 @@ describe("tuiReducer: subagent-child-event", () => {
         type: "compacted",
         summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
         evictedCount: 2,
+        tokensBefore: 100,
         usage: usageOf(60, 15),
       }),
     );

@@ -53,6 +53,7 @@ export type LoopEvent =
       summary: CompactionSummary;
       evictedCount: number;
       usage: LanguageModelUsage;
+      tokensBefore: number;
     }
   // Per completed model call, not a running total: the loop is stateless by design and summing
   // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
@@ -342,6 +343,7 @@ export async function* runLoop(opts: {
         summary: compacted.summary,
         evictedCount: compacted.evictedCount,
         usage: compacted.usage,
+        tokensBefore: compacted.tokensBefore,
       };
       yield { type: "messages-updated", messages: [...messages] };
       return "ok";

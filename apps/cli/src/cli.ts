@@ -595,7 +595,7 @@ async function rewindCommand(
 // function rather than forcing a split that would fight nothing but "no speculative abstraction."
 async function compactCommand(
   session: SessionState<ModelMessage>,
-  _args: string[],
+  args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter,
   deps: CliDeps = {},
@@ -632,7 +632,10 @@ async function compactCommand(
   });
   let compacted: Awaited<ReturnType<typeof compactMessages>>;
   try {
-    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal);
+    const customInstructions = args.join(" ").trim();
+    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal, {
+      customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
+    });
   } catch (err) {
     // `cancelledSignal` is guaranteed defined here: `controller.signal.aborted` is only ever set
     // by the onSignalCancel callback above.

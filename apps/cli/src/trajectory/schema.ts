@@ -45,7 +45,7 @@ export type TrajectoryKind =
   | { kind: "error"; error: string; errorElided?: Elision }
   | { kind: "retry"; attempt: number }
   | { kind: "tool_allowed"; name: string }
-  | { kind: "compacted"; evictedCount: number };
+  | { kind: "compacted"; evictedCount: number; tokensBefore: number };
 
 export type TrajectoryRecord = {
   v: typeof TRAJECTORY_SCHEMA_VERSION;
