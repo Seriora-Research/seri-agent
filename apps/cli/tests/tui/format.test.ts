@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { McpPanelRow } from "../../src/mcp/commands";
 import {
+  DEFAULT_COLUMNS,
   estimateTokens,
   formatDoneLine,
   formatElapsed,
@@ -201,46 +202,56 @@ describe("MODE_CYCLE_HINT", () => {
   });
 });
 
-// The mode-indicator row's own model/route suffix, factored out as a pure function so its tier
-// logic is testable without mounting a renderer (formatModelRow's own extraction already used
-// this reasoning). `route` can be undefined — runGuidedSetup (cli.ts) mounts App before any
-// provider key exists, so there is genuinely no route to show yet.
+// The mode-indicator row's own model/route suffix, factored out as a pure function so leftover
+// packing is testable without mounting a renderer (formatModelRow's own extraction already used
+// this reasoning). `width` is the detail budget (space after the indicator; the caller subtracts
+// it). Hint visibility is the caller's problem, not this function's. `route` can be undefined —
+// runGuidedSetup (cli.ts) mounts App before any provider key exists, so there is genuinely no
+// route to show yet.
 describe("formatModeDetail", () => {
   const nonRerouted = route();
   const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
+  const modelOnly = "  claude-sonnet-5";
+  const withRoute = "  claude-sonnet-5 · your key";
+  const withEffort = "  claude-sonnet-5 · your key · high";
+  const reroutedSuffix = "  claude-sonnet-5 · → openrouter";
+  const gatewaySuffix = "  claude-sonnet-5 · provided";
 
-  test("below MODE_MODEL_MIN_COLS (51, 52, 75): no detail", () => {
-    for (const width of [51, 52, 75]) {
-      expect(formatModeDetail(nonRerouted, width, undefined)).toBe("");
-    }
+  test("budget shorter than the model name: no detail", () => {
+    expect(formatModeDetail(nonRerouted, modelOnly.length - 1, undefined)).toBe("");
+    expect(formatModeDetail(nonRerouted, 0, undefined)).toBe("");
   });
 
-  test("at MODE_MODEL_MIN_COLS (76): model name, no route", () => {
-    expect(formatModeDetail(nonRerouted, 76, undefined)).toBe("  claude-sonnet-5");
+  test("budget that fits the model but not the route: model name, no route", () => {
+    expect(formatModeDetail(nonRerouted, modelOnly.length, undefined)).toBe(modelOnly);
+    expect(formatModeDetail(nonRerouted, withRoute.length - 1, undefined)).toBe(modelOnly);
   });
 
-  // The route label disappears at the terminal's own default 80 columns (below
-  // MODE_ROUTE_MIN_COLS), asserted here so a later widening of that threshold is a deliberate
-  // change, not a silent one.
-  test("at 80 columns (DEFAULT_COLUMNS): model name, still no route", () => {
-    expect(formatModeDetail(nonRerouted, 80, undefined)).toBe("  claude-sonnet-5");
+  // DEFAULT_COLUMNS is the typical terminal width, not the caller's detail budget — passing it
+  // here is a generous leftover. The regression this guards is that a budget of 80 must include
+  // the route suffix (length of `  claude-sonnet-5 · your key`), not drop it.
+  test("at 80 columns (DEFAULT_COLUMNS): model name and route suffix", () => {
+    expect(formatModeDetail(nonRerouted, DEFAULT_COLUMNS, undefined)).toBe(withRoute);
   });
 
-  test("just below MODE_ROUTE_MIN_COLS (99): model name, still no route", () => {
-    expect(formatModeDetail(nonRerouted, 99, undefined)).toBe("  claude-sonnet-5");
+  test("packs the longest suffix that fits the detail budget", () => {
+    expect(formatModeDetail(nonRerouted, withEffort.length, "high")).toBe(withEffort);
+    expect(formatModeDetail(nonRerouted, withEffort.length - 1, "high")).toBe(withRoute);
+    expect(formatModeDetail(nonRerouted, withRoute.length - 1, "high")).toBe(modelOnly);
+    expect(formatModeDetail(nonRerouted, modelOnly.length - 1, "high")).toBe("");
   });
 
-  test("at MODE_ROUTE_MIN_COLS (100): model name and 'your key'", () => {
-    expect(formatModeDetail(nonRerouted, 100, undefined)).toBe("  claude-sonnet-5 · your key");
+  test("budget that fits model+route: 'your key'", () => {
+    expect(formatModeDetail(nonRerouted, withRoute.length, undefined)).toBe(withRoute);
   });
 
-  test("at MODE_ROUTE_MIN_COLS with a rerouted route: '→ <provider>'", () => {
-    expect(formatModeDetail(rerouted, 100, undefined)).toBe("  claude-sonnet-5 · → openrouter");
+  test("a rerouted route: '→ <provider>' when the budget fits", () => {
+    expect(formatModeDetail(rerouted, reroutedSuffix.length, undefined)).toBe(reroutedSuffix);
   });
 
-  test("at MODE_ROUTE_MIN_COLS with a gateway-served route: 'provided'", () => {
+  test("a gateway-served route: 'provided' when the budget fits", () => {
     const gatewayRoute = route({ credential: "gateway" });
-    expect(formatModeDetail(gatewayRoute, 100, undefined)).toBe("  claude-sonnet-5 · provided");
+    expect(formatModeDetail(gatewayRoute, gatewaySuffix.length, undefined)).toBe(gatewaySuffix);
   });
 
   // Defensive: resolveRoute's own contract makes rerouted plus a "gateway" credential unreachable, but
@@ -253,48 +264,47 @@ describe("formatModeDetail", () => {
       reason: "ANTHROPIC_API_KEY",
       credential: "gateway",
     });
-    expect(formatModeDetail(reroutedAndGateway, 100, undefined)).toBe(
-      "  claude-sonnet-5 · → openrouter",
+    expect(formatModeDetail(reroutedAndGateway, reroutedSuffix.length, undefined)).toBe(
+      reroutedSuffix,
     );
   });
 
   // A real catalog id (an OpenRouter id is easily 40+ chars) would otherwise go into the row
-  // unbounded, overflowing the exact terminal width the tier boundary assumed it fit in — capped
-  // to NAME_WIDTH (22, the same width the picker table already truncates model names to), in both
-  // tiers that render the model name.
-  test("long model id is truncated to NAME_WIDTH in both the model-only and full tiers", () => {
+  // unbounded — capped to NAME_WIDTH (22, the same width the picker table already truncates model
+  // names to), whether the leftover only fits the model or also the route.
+  test("long model id is truncated to NAME_WIDTH in both the model-only and full leftovers", () => {
     const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
-    expect(formatModeDetail(longModel, 80, undefined)).toBe("  openrouter/deepseek/d…");
-    expect(formatModeDetail(longModel, 100, undefined)).toBe("  openrouter/deepseek/d… · your key");
+    const longModelOnly = "  openrouter/deepseek/d…";
+    const longWithRoute = "  openrouter/deepseek/d… · your key";
+    expect(formatModeDetail(longModel, longModelOnly.length, undefined)).toBe(longModelOnly);
+    expect(formatModeDetail(longModel, longWithRoute.length, undefined)).toBe(longWithRoute);
   });
 
   test("route === undefined: no detail at every width", () => {
-    for (const width of [10, 76, 80, 100]) {
+    for (const width of [10, modelOnly.length, DEFAULT_COLUMNS, 100]) {
       expect(formatModeDetail(undefined, width, undefined)).toBe("");
     }
   });
 
-  test("effortTier defined at MODE_ROUTE_MIN_COLS (100): appended after the route label", () => {
-    expect(formatModeDetail(nonRerouted, 100, "high")).toBe("  claude-sonnet-5 · your key · high");
+  test("effortTier defined and budget fits: appended after the route label", () => {
+    expect(formatModeDetail(nonRerouted, withEffort.length, "high")).toBe(withEffort);
   });
 
-  test("effortTier defined but width < MODE_ROUTE_MIN_COLS (76, 99): tier does not appear", () => {
-    expect(formatModeDetail(nonRerouted, 76, "high")).toBe("  claude-sonnet-5");
-    expect(formatModeDetail(nonRerouted, 99, "high")).toBe("  claude-sonnet-5");
+  test("effortTier defined but budget only fits model+route: tier does not appear", () => {
+    expect(formatModeDetail(nonRerouted, withRoute.length, "high")).toBe(withRoute);
   });
 
-  test("effortTier undefined at MODE_ROUTE_MIN_COLS (100): unchanged from today's route-only output", () => {
-    expect(formatModeDetail(nonRerouted, 100, undefined)).toBe("  claude-sonnet-5 · your key");
+  test("effortTier undefined: route-only output when the budget fits", () => {
+    expect(formatModeDetail(nonRerouted, withRoute.length, undefined)).toBe(withRoute);
   });
 
   test("an effortTier longer than EFFORT_WIDTH is truncated with a trailing ellipsis", () => {
-    expect(formatModeDetail(nonRerouted, 100, "extra-thinky")).toBe(
-      "  claude-sonnet-5 · your key · extra-t…",
-    );
+    const truncated = "  claude-sonnet-5 · your key · extra-t…";
+    expect(formatModeDetail(nonRerouted, truncated.length, "extra-thinky")).toBe(truncated);
   });
 
   test("route === undefined: no detail at every width, even with an effortTier", () => {
-    for (const width of [10, 76, 80, 100]) {
+    for (const width of [10, modelOnly.length, DEFAULT_COLUMNS, 100]) {
       expect(formatModeDetail(undefined, width, "high")).toBe("");
     }
   });

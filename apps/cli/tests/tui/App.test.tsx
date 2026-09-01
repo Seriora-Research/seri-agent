@@ -35,13 +35,13 @@ import {
   MODE_HINT_COLS,
   MODE_LABEL,
   matchesFilter,
+  NAME_WIDTH,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
 import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from "./helpers";
 
-// Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
-// 100 cols), is exercised by default,
+// Wide enough that leftover packing of the mode-row detail (model + route + effort) always fits,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
 // APP_CHROME_ROWS math: listWindowSize(height - 11), which reaches 10 at height >= 21). Deliberately
@@ -3153,11 +3153,13 @@ describe("App", () => {
     // (format.test.ts) already cover the tier DECISION logic as a pure function, so this is the
     // one mounted-level smoke test needed to confirm a real resize actually reaches the rendered
     // row end-to-end.
-    test("renders the model+route label at the default width, and drops it after a resize below MODE_MODEL_MIN_COLS", async () => {
+    test("renders the model+route label at the default width, and drops it after a resize too narrow for the model", async () => {
       const { setup } = await connect();
       expect(setup.captureCharFrame()).toContain("your key");
 
-      await resize(setup, 40, DEFAULT_HEIGHT);
+      // 30: approve-each (22) + `  claude-sonnet-5` (17) = 39, which cannot fit. 40 would now
+      // show the model (22 + 17 = 39 <= 40).
+      await resize(setup, 30, DEFAULT_HEIGHT);
 
       expect(setup.captureCharFrame()).not.toContain("claude-sonnet-5");
     });
@@ -3422,7 +3424,9 @@ describe("App", () => {
     });
 
     test("the shift+tab hint is present at MODE_HINT_COLS and absent below it", async () => {
-      const { setup } = await connect();
+      // Empty detail (`route: undefined`) so this asserts the 52-col floor itself, not leftover
+      // packing: with a route present the hint yields whenever indicator + hint + detail overflow.
+      const { setup } = await connect({ route: undefined });
       expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
 
       await resize(setup, MODE_HINT_COLS, DEFAULT_HEIGHT);
@@ -3432,9 +3436,53 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
     });
 
-    // Even with a route present, the row's own arithmetic (indicator + hint + the model-only
-    // detail the width ladder allows at this width) must actually fit 80 columns in the RENDERED
-    // row, not just in formatModeDetail's own return value.
+    test("at 80 columns, the idle mode row keeps the route suffix without wrapping", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        route: route(),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(MODE_LABEL["approve-each"]));
+      expect(modeLine).toBeDefined();
+      expect(modeLine).toContain("your key");
+      expect(modeLine).toContain("(shift+tab to cycle)");
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    test("at 80 columns, a worst-case left side drops the hint before the route", async () => {
+      const longModel = "n".repeat(NAME_WIDTH);
+      const { setup } = await connect({
+        session: session({ permissionMode: "auto", reasoningEffort: "high" }),
+        route: route({
+          model: longModel,
+          provider: "openrouter",
+          rerouted: true,
+          reason: "ANTHROPIC_API_KEY",
+        }),
+        catalog: catalogOf([
+          catalogEntry({
+            id: longModel,
+            provider: "openrouter",
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(MODE_LABEL.auto));
+      expect(modeLine).toBeDefined();
+      expect(modeLine).toContain("→ openrouter");
+      expect(modeLine).not.toContain("(shift+tab to cycle)");
+      expect(modeLine).toContain("high");
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // Even with a route present, the row's own arithmetic (indicator + hint + leftover-packed
+    // model+route) must actually fit 80 columns in the RENDERED row, not just in formatModeDetail's
+    // own return value.
     test("at 80 columns, the longest label with a route present fits the row and does not wrap", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "auto" }),
@@ -3442,7 +3490,7 @@ describe("App", () => {
       });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
 
-      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5`;
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · your key`;
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(expectedRow));
       expect(modeLine).toBeDefined();
@@ -3477,12 +3525,10 @@ describe("App", () => {
 
     // Regression (found live via tests/tui/tuiPty.test.ts's real-pty PageUp assertion, which
     // started failing once the label grew a glyph + persistent hint): the mode row and the
-    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`, but
-    // formatModeDetail's own width tiers only ever accounted for the row's LEFT-hand content. At 80
-    // columns with a route present, the model name showing on the left plus the banner on the
-    // right together exceed 80 cells, and OpenTUI wraps the row across two lines — splitting the
-    // banner's own text mid-word, so "sawLine" style assertions (and a real user) never see it
-    // intact.
+    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`. The
+    // right side's width has to come out of leftover packing's remaining budget, or OpenTUI wraps
+    // the row across two lines — splitting the banner's own text mid-word, so "sawLine" style
+    // assertions (and a real user) never see it intact.
     test("the scroll banner and the mode row's model name coexist at 80 columns without wrapping", async () => {
       const { setup, dispatch } = await connect({ route: route() });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
