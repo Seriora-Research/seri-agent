@@ -24,20 +24,64 @@ repository; general assistant work is a planned direction.
   ref, independent of your branch. `/undo`, `/rewind`, and `/restore` walk it back without
   touching your commit history.
 - **Subagents.** Built-in isolated-context roles (`explore`, `plan`, `code`, `test`, `oracle`)
-  plus user-defined agents in `.seri/agents/`.
+  plus user-defined agents in `.seri/agents/`. Dispatch with `/explore <task>` or let the model
+  pick one.
 - **Persistent memory.** After a turn, an archivist can stage facts to `MEMORY.md`/`USER.md`
   outside the repo. `/memory` reviews them; nothing is applied silently.
-- **Six providers, three ways to pay.** Groq, OpenRouter, Anthropic, OpenAI, Google, and xAI —
-  with a BYOK key, a hosted seri account (`/login`), or a Grok / ChatGPT (Codex) subscription
-  connected from `/setup`.
-- **Extensibility without a source change.** Skills, rules, hooks, and MCP servers are files you
-  drop in a directory.
+- **Six providers in one harness.** Groq, OpenRouter, Anthropic, OpenAI, Google, and xAI.
+  Switch with `/model` mid-session without losing context.
+- **Three ways to pay, including consumer subscriptions.** A BYOK API key, a hosted seri
+  account (`/login`), or a **Grok** or **ChatGPT (Codex)** subscription from `/setup`. Keys and
+  subscriptions live side by side in the same session.
+- **Extensibility without a source change.** Agents, skills, rules, MCP servers, and hooks are
+  files you drop in `.seri/` (this project) or under your profile (every project).
 - **Verify after write.** Point seri at your project's check command via `/config` and it runs
   after every successful write, feeding diagnostics back in the same turn.
-- **Profiles and compaction.** `/profile` isolates config, memory, and sessions.
-  `/compact [instructions]` summarizes older messages so the conversation fits the context
-  window. Local trajectory recording (`/trajectory`) is on by default — the research substrate,
-  not an evolution loop.
+- **Sessions, profiles, compaction.** `--continue` / `--resume <id>` reopen a conversation.
+  `/profile` isolates config, memory, and sessions. `/compact [instructions]` summarizes older
+  messages so the conversation fits the context window. Local trajectory recording
+  (`/trajectory`) is on by default — the research substrate, not an evolution loop.
+- **A local daemon.** `seri serve` starts a loopback daemon for the profile; `seri exec <task>`
+  runs one task through it.
+
+## Providers and how you pay
+
+The **provider** is the API surface. The **credential** is what pays. They are separate on
+purpose: the same model can be reached by a key, a subscription, or a hosted account.
+
+| Provider | Id | BYOK key |
+| --- | --- | --- |
+| Groq | `groq` | `GROQ_API_KEY` |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `OPENAI_API_KEY` |
+| Google | `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
+| xAI | `xai` | `XAI_API_KEY` |
+
+The provider is spelled `xai`, not `grok`. Grok is the model family; xAI is the company that
+serves it.
+
+| How you pay | What it is |
+| --- | --- |
+| **Key** | your own API key for that provider (`/setup`, or the env var above) |
+| **Subscription** | a consumer plan you already pay for — **Grok** (SuperGrok / X Premium+) on xAI, or **ChatGPT / Codex** on OpenAI |
+| **Hosted** | a seri account (`/signup` / `/login`) that routes on your behalf |
+
+`/setup` lists API keys and Subscriptions in one panel. Connect a Grok plan with a browser
+sign-in. Connect a ChatGPT plan by logging in with the Codex CLI (`codex login`); seri reads
+that login and does not host its own ChatGPT OAuth. Disconnect is local to this profile.
+
+A subscription and a metered key can both be present. For that vendor the subscription wins, and
+the key is marked unused. Turns on a subscription report `(cost: included)` instead of a dollar
+amount. seri never silently falls back from a refused subscription to a key that would charge
+you.
+
+`/model` lists every provider and every route to a given model, including plan-included rows.
+A pick whose next turn succeeds becomes the default for future sessions. If the pair you're on
+has no credential, seri reroutes to a configured provider that reaches the same model — native
+providers preferred over an aggregator — and says so once in the transcript.
+
+`SERI_PROVIDER` names which of the six `SERI_MODEL` is read against.
 
 ## Install
 
@@ -79,26 +123,21 @@ release — that catches a truncated or corrupted download, not a compromised re
 seri
 ```
 
-That opens the TUI. On a first run, guided setup asks how you want to pay for models: a
-provider API key, a hosted seri account (`/login` / `/signup`), or a Grok or ChatGPT
-subscription from `/setup`. Setting the matching environment variable before you launch
-(`GROQ_API_KEY`, say) works too.
+That opens the TUI. On a first run, guided setup asks how you want to pay: paste a provider
+key and pick a model, sign into a hosted account (`/login` / `/signup`), or connect a Grok or
+ChatGPT (Codex) subscription from `/setup`. Setting a key in the environment before you launch
+(`GROQ_API_KEY` or `XAI_API_KEY`, say) skips setup.
 
-`/model` switches provider and model mid-session without losing context. A pick whose next
-turn succeeds becomes the default for future sessions. If the pair you're on has no key, seri
-reroutes to a configured provider that reaches the same model — native providers preferred
-over an aggregator — and says so once in the transcript.
+```text
+seri <task>                   one-shot, non-interactive
+seri --continue [task]        reopen the most recent session
+seri --resume <id> [task]     reopen that session
+seri serve                    start the loopback daemon for this profile
+seri exec <task>              run one task through an already-running daemon
+```
 
-| provider | key |
-| --- | --- |
-| Groq | `GROQ_API_KEY` |
-| OpenRouter | `OPENROUTER_API_KEY` |
-| Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` |
-| Google | `GOOGLE_GENERATIVE_AI_API_KEY` |
-| xAI | `XAI_API_KEY` |
-
-`SERI_PROVIDER` names which of the six `SERI_MODEL` is read against.
+`--profile <name>` (or `SERI_PROFILE`) puts config, auth, permissions, sessions, and checkpoints
+under an isolated root.
 
 ## Commands
 
@@ -117,8 +156,8 @@ Everything below is a slash command inside the session.
 | `/trajectory` | show or turn local trajectory recording on or off |
 | `/usage` | hosted-gateway spend vs allowance |
 | `/exit` | end the session (or Ctrl-D) |
-| `/model` | open the model picker across all six providers |
-| `/setup` | add, replace, or remove a provider key; connect a subscription |
+| `/model` | open the model picker across all six providers and subscription routes |
+| `/setup` | add or remove a provider key; connect or disconnect a Grok or Codex subscription |
 | `/login` | sign in to a hosted seri account |
 | `/signup` | create a hosted seri account |
 | `/logout` | leave a hosted seri account |
