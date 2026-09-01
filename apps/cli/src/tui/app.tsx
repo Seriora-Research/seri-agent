@@ -881,40 +881,42 @@ export function App({
         </box>
       ) : (
         <>
-        {/* Input FRAME (3) + mode (1) + TurnStatus (1) is already five rows. A hairline
+          {/* Input FRAME (3) + mode (1) + TurnStatus (1) is already five rows. A hairline
         on a 5-row terminal would clip the status the short-terminal path exists to keep. */}
-        {rows >= 6 && <FloorHairline columns={width} />}
-        <InputBox
-          onSubmit={onSubmit}
-          onQuit={onQuit}
-          // Only while a turn is actually in flight and no queue row is open in its own editor.
-          // Undefined otherwise, so the Escape that dismisses a completion popup or closes a panel
-          // never reaches cli.ts at all — cli.ts guards this again on its own side, because an
-          // Escape delivered with signals.ts's cancel slot empty kills the process rather than
-          // no-opping. While a row IS being edited this box is inert anyway; passing undefined as
-          // well states the intent rather than relying on that.
-          onEscape={state.turn !== undefined && !state.queue.editing ? onEscape : undefined}
-          prefill={state.pendingInputPrefill}
-          onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
-          onEmptyDown={
-            state.subagents.length > 0 && !state.queue.editing && !scrolledUp
-              ? () => dispatch({ type: "subagent-panel-focus" })
-              : undefined
-          }
-          arrowsReservedRef={arrowsReservedRef}
-          // `state.queue.editing` joins the two subagent conditions: while a queue row holds its own
-          // InputBox, two of them are mounted at once, and OpenTUI delivers every keypress to every
-          // mounted handler — so without this a typed character lands in the row's editor AND in
-          // this box. `inert` no-ops exactly the set that must not double up (printables, paste,
-          // Enter, Ctrl-D) while keeping this mount, and so whatever draft was already typed here,
-          // alive. It deliberately still fires `onEmptyDown`, which is why that prop is suppressed
-          // above too: a Down pressed inside the row editor would otherwise hand the keyboard to
-          // the subagent roster mid-edit.
-          inert={
-            state.subagentPanelFocus || state.pendingChildView !== undefined || state.queue.editing
-          }
-          completionSources={getCompletionSources?.()}
-        />
+          {rows >= 6 && <FloorHairline columns={width} />}
+          <InputBox
+            onSubmit={onSubmit}
+            onQuit={onQuit}
+            // Only while a turn is actually in flight and no queue row is open in its own editor.
+            // Undefined otherwise, so the Escape that dismisses a completion popup or closes a panel
+            // never reaches cli.ts at all — cli.ts guards this again on its own side, because an
+            // Escape delivered with signals.ts's cancel slot empty kills the process rather than
+            // no-opping. While a row IS being edited this box is inert anyway; passing undefined as
+            // well states the intent rather than relying on that.
+            onEscape={state.turn !== undefined && !state.queue.editing ? onEscape : undefined}
+            prefill={state.pendingInputPrefill}
+            onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+            onEmptyDown={
+              state.subagents.length > 0 && !state.queue.editing && !scrolledUp
+                ? () => dispatch({ type: "subagent-panel-focus" })
+                : undefined
+            }
+            arrowsReservedRef={arrowsReservedRef}
+            // `state.queue.editing` joins the two subagent conditions: while a queue row holds its own
+            // InputBox, two of them are mounted at once, and OpenTUI delivers every keypress to every
+            // mounted handler — so without this a typed character lands in the row's editor AND in
+            // this box. `inert` no-ops exactly the set that must not double up (printables, paste,
+            // Enter, Ctrl-D) while keeping this mount, and so whatever draft was already typed here,
+            // alive. It deliberately still fires `onEmptyDown`, which is why that prop is suppressed
+            // above too: a Down pressed inside the row editor would otherwise hand the keyboard to
+            // the subagent roster mid-edit.
+            inert={
+              state.subagentPanelFocus ||
+              state.pendingChildView !== undefined ||
+              state.queue.editing
+            }
+            completionSources={getCompletionSources?.()}
+          />
         </>
       )}
       {state.subagents.length > 0 && (
