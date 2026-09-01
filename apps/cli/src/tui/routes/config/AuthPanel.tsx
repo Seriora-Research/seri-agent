@@ -7,24 +7,6 @@ import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
 import { isEnter } from "../../util/keys";
 
-// The non-blocking login/signup offer — a single bordered row, the same visual weight as
-// ApprovalBox's own bordered box, rendered ABOVE app.tsx's render ternary rather than as one of
-// its branches: unlike ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits
-// alongside it. Registers no keyboard handler of its own — acting on the offer means the user
-// types /login or /signup themselves, not a keypress this component intercepts.
-export function AuthBanner({ show }: { show: boolean }) {
-  if (!show) return null;
-  return (
-    <box {...FRAME}>
-      {/* `truncate`: APP_CHROME_ROWS (util/format.ts) counts this box as exactly 3 rows — 2
-      border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a second
-      text row, making the box 4 rows and pushing an open panel's own bottom row past the
-      alt-screen viewport. */}
-      <text truncate>Sign in with /login, or create an account with /signup</text>
-    </box>
-  );
-}
-
 // /login and /signup's own blocking device-flow panel — mirrors SetupPanel's step-dispatcher
 // shape, one branch per step. `onDismiss` is called from Escape on every step, plus Enter on
 // "result" only, where an explicit confirmation reads naturally (Escape alone covers
