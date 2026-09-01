@@ -491,7 +491,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -500,6 +500,7 @@ describe("runLoop", () => {
     );
     expect(compactedEvents).toHaveLength(1);
     expect(compactedEvents[0]?.evictedCount).toBeGreaterThan(0);
+    expect(compactedEvents[0]?.tokensBefore).toBeGreaterThan(0);
     // The summariser's own round-trip is billed like any other, and compactMessages has always
     // returned its usage — the loop dropped it, so no caller could see it. These are doGenerate's
     // usage(20, 10) above, which is the only place they can have come from.
@@ -578,7 +579,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -631,7 +632,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -672,7 +673,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 

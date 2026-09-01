@@ -87,7 +87,7 @@ import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
-  DEFAULT_PRESERVE_RECENT_MESSAGES,
+  DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
@@ -595,15 +595,12 @@ async function rewindCommand(
 // function rather than forcing a split that would fight nothing but "no speculative abstraction."
 async function compactCommand(
   session: SessionState<ModelMessage>,
-  _args: string[],
+  args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
-  const evictBoundary = findSafeEvictionBoundary(
-    session.messages,
-    DEFAULT_PRESERVE_RECENT_MESSAGES,
-  );
+  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_TOKENS);
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");
     return;
@@ -632,7 +629,10 @@ async function compactCommand(
   });
   let compacted: Awaited<ReturnType<typeof compactMessages>>;
   try {
-    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal);
+    const customInstructions = args.join(" ").trim();
+    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal, {
+      customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
+    });
   } catch (err) {
     // `cancelledSignal` is guaranteed defined here: `controller.signal.aborted` is only ever set
     // by the onSignalCancel callback above.

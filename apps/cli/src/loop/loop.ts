@@ -23,9 +23,14 @@ import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import {
   type CompactionSummary,
   compactMessages,
+  DEFAULT_PRESERVE_RECENT_TOKENS,
+  estimateTokens,
   findSafeEvictionBoundary,
+  isContextOverflowError,
   MAX_RETRIES,
 } from "./compaction";
+
+export { DEFAULT_PRESERVE_RECENT_TOKENS } from "./compaction";
 
 export type LoopEvent =
   | { type: "text-delta"; text: string }
@@ -48,6 +53,7 @@ export type LoopEvent =
       summary: CompactionSummary;
       evictedCount: number;
       usage: LanguageModelUsage;
+      tokensBefore: number;
     }
   // Per completed model call, not a running total: the loop is stateless by design and summing
   // across turns is the consumer's business. `usage` on `compacted` is the same quantity for the
@@ -129,7 +135,6 @@ const MAX_CONSECUTIVE_DENIALS = 3;
 // Fully overridable via opts.contextWindowSize.
 export const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
-export const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 
 const MAX_SERIALISED_ERROR_LENGTH = 500;
 
@@ -268,7 +273,7 @@ export async function* runLoop(opts: {
   system?: string;
   contextWindowSize?: number;
   compactionThreshold?: number;
-  preserveRecentMessages?: number;
+  preserveRecentTokens?: number;
   signal?: AbortSignal;
   // Which provider opts.model was constructed from, and the catalog to look it up in — both
   // optional so every existing caller (none of which pass these yet) keeps today's behaviour
@@ -308,7 +313,7 @@ export async function* runLoop(opts: {
   // the two from silently disagreeing.
   const legalReasoningEffort = appliedReasoningEffort(opts.reasoningEffort, catalogEntry);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
-  const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;
+  const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
 
   // The AI SDK auto-runs a tool's `execute` while streaming. Strip it so every
@@ -319,6 +324,38 @@ export async function* runLoop(opts: {
       return [name, rest];
     }),
   ) as ToolSet;
+
+  async function* tryCompact(
+    onSummarizerFail: "soft" | "hard",
+  ): AsyncGenerator<LoopEvent, "ok" | "skipped" | "failed" | "aborted"> {
+    const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
+    if (evictBoundary === null) return "skipped";
+    try {
+      const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
+        stream: opts.credential === "subscription" && opts.provider === "openai",
+      });
+      messages.splice(0, messages.length, ...compacted.messages);
+      for (let attempt = 1; attempt <= compacted.retries; attempt++) {
+        yield { type: "retry", attempt };
+      }
+      yield {
+        type: "compacted",
+        summary: compacted.summary,
+        evictedCount: compacted.evictedCount,
+        usage: compacted.usage,
+        tokensBefore: compacted.tokensBefore,
+      };
+      yield { type: "messages-updated", messages: [...messages] };
+      return "ok";
+    } catch (err) {
+      if (opts.signal?.aborted) {
+        yield { type: "done", reason: "aborted" };
+        return "aborted";
+      }
+      yield { type: "error", error: errorText(err) };
+      return onSummarizerFail === "hard" ? "failed" : "skipped";
+    }
+  }
 
   let lastInputTokens = 0;
   // Copied, not aliased: opts.allowedTools is a seed the caller owns. Run-local and read on every
@@ -339,50 +376,15 @@ export async function* runLoop(opts: {
       return;
     }
 
-    if (lastInputTokens / contextWindowSize >= compactionThreshold) {
-      const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentMessages);
-      if (evictBoundary !== null) {
-        try {
-          const compacted = await compactMessages(
-            messages,
-            opts.model,
-            evictBoundary,
-            opts.signal,
-            {
-              stream: opts.credential === "subscription" && opts.provider === "openai",
-            },
-          );
-          messages.splice(0, messages.length, ...compacted.messages);
-          // Drained here for the same reason the stream's retries are drained below: compaction is
-          // a model call the user never asked for, and until now a 429'd summariser was ~6 s of
-          // silence before `⚙ compacted`. compactMessages cannot yield and does no I/O, so its
-          // count comes back as a return value and becomes events here — one per retry, before the
-          // `compacted` event, because that is the order they happened in.
-          for (let attempt = 1; attempt <= compacted.retries; attempt++) {
-            yield { type: "retry", attempt };
-          }
-          yield {
-            type: "compacted",
-            summary: compacted.summary,
-            evictedCount: compacted.evictedCount,
-            usage: compacted.usage,
-          };
-          yield { type: "messages-updated", messages: [...messages] };
-        } catch (err) {
-          // A cancel lands here as an AbortError, and this catch otherwise reports it and falls
-          // through into a fresh streamText call in this same iteration — so the top-of-iteration
-          // check above cannot be what stops it. Checked here, where the abort actually surfaces.
-          if (opts.signal?.aborted) {
-            yield { type: "done", reason: "aborted" };
-            return;
-          }
-          yield { type: "error", error: errorText(err) };
-        }
-      }
+    const tokens = Math.max(lastInputTokens, estimateTokens(messages));
+    if (tokens / contextWindowSize >= compactionThreshold) {
+      const thresholdOutcome = yield* tryCompact("soft");
+      if (thresholdOutcome === "aborted") return;
     }
 
     let text = "";
     const toolCalls: { toolCallId: string; toolName: string; input: unknown }[] = [];
+    let overflowRetried = false;
 
     // streamText runs each attempt inside its retry wrapper (ai@7.0.48 dist/index.js:9684) and
     // notifies onLanguageModelCallStart from inside that closure, immediately before doStream
@@ -403,124 +405,149 @@ export async function* runLoop(opts: {
         : undefined;
     const providerOptions = withCodexStoreOption(opts.provider, opts.credential, reasoningOptions);
 
-    try {
-      const result = streamText({
-        model: opts.model,
-        tools: schemaOnlyTools,
-        messages,
-        system: opts.system,
-        abortSignal: opts.signal,
-        maxRetries: MAX_RETRIES,
-        ...(providerOptions ? { providerOptions } : {}),
-        onLanguageModelCallStart: () => {
-          modelCallStarts++;
-        },
-        // ai@7.0.48 defaults this to `({ error }) => console.error(error)` (dist/index.js:8792),
-        // which put 66 lines of raw APICallError — request body, every response header including
-        // set-cookie, a node_modules stack — on stderr from inside a generator this repo
-        // documents as never touching stdout/stdin. Measured for a doStream that rejects — the case
-        // the blob came from: the same error also arrives on fullStream as an `error` part and is
-        // yielded below, so nothing was silenced there that the consumer does not still get.
-        onError: () => {},
-      });
-      for await (const part of result.fullStream) {
-        while (reportedRetries < modelCallStarts - 1) {
-          reportedRetries++;
-          yield { type: "retry", attempt: reportedRetries };
-        }
-        if (part.type === "text-delta") {
-          text += part.text;
-          yield { type: "text-delta", text: part.text };
-        } else if (part.type === "tool-call") {
-          toolCalls.push({
-            toolCallId: part.toolCallId,
-            toolName: part.toolName,
-            input: part.input,
-          });
-        } else if (part.type === "error") {
-          yield { type: "error", error: errorText(part.error) };
-          // A call that streamed text and then failed was billed for the text it streamed, and
-          // this is the exit that used to drop it. Measured against ai@7.0.48: consuming this
-          // part and then awaiting result.usage resolves — with the provider's real numbers
-          // ({"inputTokens":900,"outputTokens":7,"totalTokens":907}) when the stream still carried
-          // a `finish`, and with an all-undefined usage when the failure cut the stream short. The
-          // await does not deadlock on the undrained stream: the `finish` is already through the
-          // transform by the time the `error` part reaches this consumer.
-          //
-          // Caught rather than awaited bare, for the third sub-path: when the failure IS the call
-          // — doStream rejecting with its retries exhausted, nothing streamed — result.usage
-          // REJECTS with AI_NoOutputGeneratedError. This await is inside the try below, so an
-          // uncaught rejection would not escape, it would do something worse: yield a second
-          // `error` naming "No output generated" as the failure, on top of the provider's real one.
-          // Through Promise.resolve because the SDK types this as a PromiseLike, which has no
-          // .catch — it is a real Promise at runtime, but the declared type is what tsc checks.
-          const failedUsage = await Promise.resolve(result.usage).catch(() => undefined);
-          if (failedUsage !== undefined) {
-            // A code-review finding, not hypothetical: this path used to yield `usage` with no
-            // `cost` field at all, which `addCost` (cli.ts) treats identically to "nothing new
-            // happened" — real billed tokens from a turn that streamed partway then failed would
-            // silently vanish from the running total instead of degrading it to `unknown`.
-            let failedCost: CostReport | undefined;
-            if (opts.credential === "subscription") {
-              failedCost = reportForSubscription();
-            } else if (opts.provider === "openrouter") {
-              const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
-                () => undefined,
-              );
-              failedCost = reportForOpenRouter(failedUsage, providerMetadata);
-            } else if (opts.provider && opts.modelId && opts.catalog) {
-              failedCost = reportFromCatalogPricing(
-                opts.modelId,
-                opts.provider,
-                failedUsage,
-                opts.catalog,
-              );
-            }
-            yield { type: "usage", usage: failedUsage, cost: failedCost };
+    streamAttempt: while (true) {
+      text = "";
+      toolCalls.length = 0;
+      modelCallStarts = 0;
+      reportedRetries = 0;
+
+      try {
+        const result = streamText({
+          model: opts.model,
+          tools: schemaOnlyTools,
+          messages,
+          system: opts.system,
+          abortSignal: opts.signal,
+          maxRetries: MAX_RETRIES,
+          ...(providerOptions ? { providerOptions } : {}),
+          onLanguageModelCallStart: () => {
+            modelCallStarts++;
+          },
+          // ai@7.0.48 defaults this to `({ error }) => console.error(error)` (dist/index.js:8792),
+          // which put 66 lines of raw APICallError — request body, every response header including
+          // set-cookie, a node_modules stack — on stderr from inside a generator this repo
+          // documents as never touching stdout/stdin. Measured for a doStream that rejects — the case
+          // the blob came from: the same error also arrives on fullStream as an `error` part and is
+          // yielded below, so nothing was silenced there that the consumer does not still get.
+          onError: () => {},
+        });
+        for await (const part of result.fullStream) {
+          while (reportedRetries < modelCallStarts - 1) {
+            reportedRetries++;
+            yield { type: "retry", attempt: reportedRetries };
           }
+          if (part.type === "text-delta") {
+            text += part.text;
+            yield { type: "text-delta", text: part.text };
+          } else if (part.type === "tool-call") {
+            toolCalls.push({
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              input: part.input,
+            });
+          } else if (part.type === "error") {
+            if (!overflowRetried && isContextOverflowError(part.error)) {
+              const overflowOutcome = yield* tryCompact("hard");
+              if (overflowOutcome === "aborted") return;
+              if (overflowOutcome === "ok") {
+                overflowRetried = true;
+                continue streamAttempt;
+              }
+            }
+            yield { type: "error", error: errorText(part.error) };
+            // A call that streamed text and then failed was billed for the text it streamed, and
+            // this is the exit that used to drop it. Measured against ai@7.0.48: consuming this
+            // part and then awaiting result.usage resolves — with the provider's real numbers
+            // ({"inputTokens":900,"outputTokens":7,"totalTokens":907}) when the stream still carried
+            // a `finish`, and with an all-undefined usage when the failure cut the stream short. The
+            // await does not deadlock on the undrained stream: the `finish` is already through the
+            // transform by the time the `error` part reaches this consumer.
+            //
+            // Caught rather than awaited bare, for the third sub-path: when the failure IS the call
+            // — doStream rejecting with its retries exhausted, nothing streamed — result.usage
+            // REJECTS with AI_NoOutputGeneratedError. This await is inside the try below, so an
+            // uncaught rejection would not escape, it would do something worse: yield a second
+            // `error` naming "No output generated" as the failure, on top of the provider's real one.
+            // Through Promise.resolve because the SDK types this as a PromiseLike, which has no
+            // .catch — it is a real Promise at runtime, but the declared type is what tsc checks.
+            const failedUsage = await Promise.resolve(result.usage).catch(() => undefined);
+            if (failedUsage !== undefined) {
+              // A code-review finding, not hypothetical: this path used to yield `usage` with no
+              // `cost` field at all, which `addCost` (cli.ts) treats identically to "nothing new
+              // happened" — real billed tokens from a turn that streamed partway then failed would
+              // silently vanish from the running total instead of degrading it to `unknown`.
+              let failedCost: CostReport | undefined;
+              if (opts.credential === "subscription") {
+                failedCost = reportForSubscription();
+              } else if (opts.provider === "openrouter") {
+                const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
+                  () => undefined,
+                );
+                failedCost = reportForOpenRouter(failedUsage, providerMetadata);
+              } else if (opts.provider && opts.modelId && opts.catalog) {
+                failedCost = reportFromCatalogPricing(
+                  opts.modelId,
+                  opts.provider,
+                  failedUsage,
+                  opts.catalog,
+                );
+              }
+              yield { type: "usage", usage: failedUsage, cost: failedCost };
+            }
+            return;
+          }
+        }
+        const resultUsage = await result.usage;
+        lastInputTokens = resultUsage.inputTokens ?? 0;
+        // Dollar cost, tagged with its provenance, alongside the raw usage. Only computed when the
+        // caller told us which provider/model/catalog this call used — providerMetadata is a Promise
+        // on streamText results (per reportForOpenRouter's own comment) and is only awaited for the
+        // provider that actually carries it.
+        let cost: CostReport | undefined;
+        if (opts.credential === "subscription") {
+          cost = reportForSubscription();
+        } else if (opts.provider === "openrouter") {
+          // A code-review finding: unguarded, a rejection here (providerMetadata is a Promise per
+          // reportForOpenRouter's own comment) would escape to the catch below and convert an
+          // already-successfully-completed turn into a lost `error` — discarding the text/tool-calls
+          // that already finished. Same treatment as the sibling `result.usage` await a few lines up.
+          const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
+            () => undefined,
+          );
+          cost = reportForOpenRouter(resultUsage, providerMetadata);
+        } else if (opts.provider && opts.modelId && opts.catalog) {
+          cost = reportFromCatalogPricing(opts.modelId, opts.provider, resultUsage, opts.catalog);
+        }
+        // The whole of it, not the one field the compaction trigger above needs: what the call cost
+        // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
+        yield { type: "usage", usage: resultUsage, cost };
+      } catch (err) {
+        // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
+        // fullStream yields an `abort` part and closes cleanly — the `for await` above does NOT
+        // throw — and it is `await result.usage` that rejects with AbortError. Without this branch a
+        // user pressing Ctrl-C would be told on stderr that their turn failed.
+        //
+        // Returning here is also what discards the partial assistant message: `text` accumulates in
+        // a local and only reaches `messages` below, so nothing was pushed and there is nothing to
+        // repair. Chosen, not defaulted — a truncated sentence re-fed as the model's own prior turn
+        // is worse context than none, and the user cancelled precisely so as not to have it.
+        if (opts.signal?.aborted) {
+          yield { type: "done", reason: "aborted" };
           return;
         }
-      }
-      const resultUsage = await result.usage;
-      lastInputTokens = resultUsage.inputTokens ?? 0;
-      // Dollar cost, tagged with its provenance, alongside the raw usage. Only computed when the
-      // caller told us which provider/model/catalog this call used — providerMetadata is a Promise
-      // on streamText results (per reportForOpenRouter's own comment) and is only awaited for the
-      // provider that actually carries it.
-      let cost: CostReport | undefined;
-      if (opts.credential === "subscription") {
-        cost = reportForSubscription();
-      } else if (opts.provider === "openrouter") {
-        // A code-review finding: unguarded, a rejection here (providerMetadata is a Promise per
-        // reportForOpenRouter's own comment) would escape to the catch below and convert an
-        // already-successfully-completed turn into a lost `error` — discarding the text/tool-calls
-        // that already finished. Same treatment as the sibling `result.usage` await a few lines up.
-        const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
-          () => undefined,
-        );
-        cost = reportForOpenRouter(resultUsage, providerMetadata);
-      } else if (opts.provider && opts.modelId && opts.catalog) {
-        cost = reportFromCatalogPricing(opts.modelId, opts.provider, resultUsage, opts.catalog);
-      }
-      // The whole of it, not the one field the compaction trigger above needs: what the call cost
-      // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
-      yield { type: "usage", usage: resultUsage, cost };
-    } catch (err) {
-      // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
-      // fullStream yields an `abort` part and closes cleanly — the `for await` above does NOT
-      // throw — and it is `await result.usage` that rejects with AbortError. Without this branch a
-      // user pressing Ctrl-C would be told on stderr that their turn failed.
-      //
-      // Returning here is also what discards the partial assistant message: `text` accumulates in
-      // a local and only reaches `messages` below, so nothing was pushed and there is nothing to
-      // repair. Chosen, not defaulted — a truncated sentence re-fed as the model's own prior turn
-      // is worse context than none, and the user cancelled precisely so as not to have it.
-      if (opts.signal?.aborted) {
-        yield { type: "done", reason: "aborted" };
+        if (!overflowRetried && isContextOverflowError(err)) {
+          const overflowOutcome = yield* tryCompact("hard");
+          if (overflowOutcome === "aborted") return;
+          if (overflowOutcome === "ok") {
+            overflowRetried = true;
+            continue;
+          }
+        }
+        yield { type: "error", error: errorText(err) };
         return;
       }
-      yield { type: "error", error: errorText(err) };
-      return;
+
+      break;
     }
 
     if (toolCalls.length === 0) {

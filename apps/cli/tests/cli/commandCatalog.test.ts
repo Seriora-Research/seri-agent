@@ -103,6 +103,10 @@ describe("command catalog completeness", () => {
     expect(missing).toEqual([]);
   });
 
+  test("README documents /compact optional instructions", () => {
+    expect(README).toContain("/compact [instructions]");
+  });
+
   test("the docs command reference names every catalog command as a /name token", () => {
     const missing = COMMAND_META.map((meta) => meta.name).filter(
       (name) => !mentionsName(DOCS_COMMANDS, name),
