@@ -3005,6 +3005,19 @@ describe("App", () => {
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
 
+    // Unbounded form: five columns (74) plus ` +1 route` is what ListRow middle-truncates at 80.
+    test("formatModelRow unbounded with +1 route is longer than 74 and still carries cost", () => {
+      const row = formatModelRow(
+        pickerRow({
+          alternatives: 1,
+          entry: entry({ pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 }, contextWindow: 131_072 }),
+        }),
+      );
+      expect(row.length).toBeGreaterThan(74);
+      expect(row).toContain("+1 route");
+      expect(row).toContain("$0.15/$0.60");
+    });
+
     // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming
     // convention this mirrors, e.g. "stealth/ox-alpha") is still discoverable by typing "free"
     // because matchesFilter also checks pricing, not just the name.
