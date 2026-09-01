@@ -2,11 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  buildSystemPrompt,
-  buildVolatileTier,
-  familyOverlay,
-} from "../../src/agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier, familyOverlay } from "../../src/agents/systemPrompt";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
 
 let configDir: string | undefined;
