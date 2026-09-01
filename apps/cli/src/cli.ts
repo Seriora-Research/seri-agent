@@ -1867,7 +1867,9 @@ async function runTui(
             description: describeCompletion("skill", skill.description),
           })),
         ]
-          .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
+          .filter(
+            (item, index, all) => all.findIndex((other) => other.name === item.name) === index,
+          )
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((item) => ({ value: item.name, description: item.description })),
       },
