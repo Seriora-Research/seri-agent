@@ -8,7 +8,7 @@ import { TranscriptList } from "../../src/tui/components/TranscriptList";
 import { MAIN_TUI_RENDERER_CONFIG } from "../../src/tui/runtime/renderOptions";
 import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
-import { flush, flushMarkdown } from "./helpers";
+import { flush, flushMarkdown, waitForSettledFrame } from "./helpers";
 
 // Characterization of what @opentui/core 0.5.6 lets a reader select and copy out of seri's real
 // transcript, and the rerunnable evidence behind docs/specs/044-tui-selection-copy/research.md
@@ -35,10 +35,11 @@ afterEach(() => {
 // scrolled-selection tests below depend on. Mounted without the surrounding <App> deliberately: the
 // scrollbox plus the real TranscriptList is the whole surface selection reaches.
 // `flush()` alone returns before sticky scroll has parked the transcript and painted it, which on a
-// loaded runner leaves the first capture reading a frame the drag then disagrees with — the shape of
-// the CI-only failure this waits out. The last entry is the settle signal for both geometries: it is
-// the bottom row unscrolled, and it is what `stickyStart="bottom"` scrolls to when there are more
-// rows than fit.
+// loaded runner leaves the first capture reading a frame the drag then disagrees with. The last
+// entry is the settle signal for both geometries: it is the bottom row unscrolled, and it is what
+// `stickyStart="bottom"` scrolls to when there are more rows than fit. `waitForSettledFrame` waits
+// until that entry is visible and the capture stops changing, so the probe's later capture and
+// drag share one geometry.
 async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRendererSetup> {
   const setup = await createTestRenderer({ width: TERMINAL_WIDTH, height: TERMINAL_HEIGHT });
   mountedRenderers.push(setup);
@@ -49,7 +50,9 @@ async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRende
   );
   await flush(setup);
   const last = transcript.at(-1);
-  if (last !== undefined) await setup.waitForFrame((frame) => frame.includes(last.text));
+  if (last !== undefined) {
+    await waitForSettledFrame(setup, (frame) => frame.includes(last.text));
+  }
   return setup;
 }
 
