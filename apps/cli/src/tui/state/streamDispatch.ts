@@ -40,27 +40,36 @@ export function createStreamDispatch(
 
   const drainThen = (action: TuiAction): void => {
     clearPaintTimer();
+    // Snapshot here, not inside the updater: React may defer `setState` until the next
+    // macrotask, and a later text-delta would otherwise be visible to already-queued
+    // updaters (transcript-append flushes `streaming`, which would commit buffered
+    // answer text as a transcript row before the action this drain belongs to).
+    const parentDrain = parentBuf;
+    parentBuf = "";
+    pendingLive = 0;
+    const childDrains: { meta: ChildMeta; text: string }[] = [];
+    for (const [childId, buf] of childBufs) {
+      if (buf.length === 0) continue;
+      const meta = childMeta.get(childId);
+      if (meta === undefined) continue;
+      childDrains.push({ meta, text: buf });
+    }
+    childBufs.clear();
     setState((state) => {
       let next = state;
-      if (parentBuf.length > 0) {
+      if (parentDrain.length > 0) {
         next = tuiReducer(next, {
           type: "loop-event",
-          event: { type: "text-delta", text: parentBuf },
+          event: { type: "text-delta", text: parentDrain },
         });
-        parentBuf = "";
-        pendingLive = 0;
       }
-      for (const [childId, buf] of childBufs) {
-        if (buf.length === 0) continue;
-        const meta = childMeta.get(childId);
-        if (meta === undefined) continue;
+      for (const { meta, text } of childDrains) {
         next = tuiReducer(next, {
           type: "subagent-child-event",
           ...meta,
-          event: { type: "text-delta", text: buf },
+          event: { type: "text-delta", text },
         });
       }
-      childBufs.clear();
       return tuiReducer(next, action);
     });
     notify();

@@ -4,6 +4,20 @@ import { initialTuiState, type TuiState } from "../../src/tui/state/reducer";
 import { createStreamDispatch } from "../../src/tui/state/streamDispatch";
 import { session } from "./helpers";
 
+function usageOf(inputTokens: number, outputTokens: number) {
+  return {
+    inputTokens,
+    inputTokenDetails: {
+      noCacheTokens: inputTokens,
+      cacheReadTokens: undefined,
+      cacheWriteTokens: undefined,
+    },
+    outputTokens,
+    outputTokenDetails: { textTokens: outputTokens, reasoningTokens: undefined },
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 function childEvent(
   childId: string,
   role: ChildEventPayload["role"],
@@ -65,7 +79,7 @@ describe("createStreamDispatch", () => {
     h.dispatch({ type: "loop-event", event: { type: "text-delta", text: "hello world" } });
     h.dispatch({
       type: "loop-event",
-      event: { type: "usage", usage: { inputTokens: 10, outputTokens: 5 } },
+      event: { type: "usage", usage: usageOf(10, 5) },
     });
 
     expect(h.state.turn?.tokens.liveOutputEstimate).toBe(0);
@@ -96,5 +110,29 @@ describe("createStreamDispatch", () => {
     const child = h.state.subagents[0];
     expect(child?.streaming).toBe("");
     expect(child?.transcript).toEqual([{ role: "assistant", text: "x".repeat(20) }]);
+  });
+
+  test("a text-delta after queued setState updaters does not drain into those updaters", () => {
+    let state: TuiState = initialTuiState(session());
+    const queued: Array<(s: TuiState) => TuiState> = [];
+    const stream = createStreamDispatch((updater) => {
+      queued.push(updater);
+    });
+
+    stream.dispatch({ type: "transcript-append", line: "line 0" });
+    stream.dispatch({ type: "loop-event", event: { type: "text-delta", text: "secret" } });
+    for (const updater of queued) state = updater(state);
+
+    expect(state.transcript).toEqual([{ role: "system", text: "line 0" }]);
+    expect(state.streaming).toBe("");
+
+    stream.dispatch({ type: "loop-event", event: { type: "tool-call", name: "read_file", args: {} } });
+    for (const updater of queued.slice(1)) state = updater(state);
+
+    expect(state.streaming).toBe("");
+    expect(state.transcript).toEqual([
+      { role: "system", text: "line 0" },
+      { role: "assistant", text: "secret" },
+    ]);
   });
 });
