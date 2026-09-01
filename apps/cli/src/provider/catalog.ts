@@ -4,11 +4,11 @@ import {
   type ModelCatalogEntry,
   type ModelProvider,
 } from "@seri/model-catalog";
-import { hasCodexSubscription } from "../auth/codexAuthStore";
 import { type CodexListedModel, listCodexModels } from "../auth/codexRefresh";
 import { hasXaiSubscription, loadXaiSubscription } from "../auth/xaiAuthStore";
 import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { printWarning } from "../cli/output";
+import { codexSubscriptionActive } from "./subscriptions";
 import bundledManifest from "./catalog-manifest.json";
 import { grokCatalogHeaders, grokProxyBaseUrl } from "./xai";
 
@@ -98,7 +98,7 @@ export async function getModelCatalog(
   if (configDir !== undefined && hasXaiSubscription(configDir)) {
     merged = await mergeGrokSubscriptionModels(merged, configDir, fetchFn);
   }
-  return withCodexSubscriptionCatalog(merged);
+  return withCodexSubscriptionCatalog(merged, configDir);
 }
 
 const CODEX_DEFAULT_CONTEXT = 272_000;
@@ -139,8 +139,11 @@ export function overlayCodexModels(
   };
 }
 
-export async function withCodexSubscriptionCatalog(catalog: ModelCatalog): Promise<ModelCatalog> {
-  if (!hasCodexSubscription()) return catalog;
+export async function withCodexSubscriptionCatalog(
+  catalog: ModelCatalog,
+  configDir?: string,
+): Promise<ModelCatalog> {
+  if (!codexSubscriptionActive(configDir)) return catalog;
   try {
     return overlayCodexModels(catalog, await listCodexModels());
   } catch {
