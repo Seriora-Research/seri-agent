@@ -2,13 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findCodexBin } from "../../src/auth/codexBin";
+import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
+import { describeCodexSetupStatus, findCodexBin } from "../../src/auth/codexBin";
 import {
+  codexPlanType,
+  listCodexModels,
+  parseAccountRead,
   parseModelList,
   refreshCodexSubscription,
   resetCodexModelCache,
 } from "../../src/auth/codexRefresh";
-import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
 
 describe("findCodexBin", () => {
   test("SERI_CODEX_BIN wins over PATH", () => {
@@ -117,5 +120,69 @@ describe("refreshCodexSubscription", () => {
       credential: { provider: "openai", accessToken: "new", accountId: "acct-1", expiresAt: 0 },
     });
     expect(methods).toEqual(["account/read"]);
+    expect(codexPlanType()).toBe("plus");
+  });
+});
+
+describe("parseAccountRead", () => {
+  test("reads nested account.planType and a flat planType", () => {
+    expect(parseAccountRead({ account: { type: "chatgpt", planType: "plus" } })).toEqual({
+      planType: "plus",
+    });
+    expect(parseAccountRead({ type: "chatgpt", planType: "free" })).toEqual({ planType: "free" });
+  });
+
+  test("malformed payloads yield no planType", () => {
+    expect(parseAccountRead(null)).toEqual({ planType: undefined });
+    expect(parseAccountRead({ account: "nope" })).toEqual({ planType: undefined });
+    expect(parseAccountRead({ planType: "" })).toEqual({ planType: undefined });
+  });
+});
+
+describe("describeCodexSetupStatus", () => {
+  test("connected without planType keeps the original copy", () => {
+    expect(describeCodexSetupStatus({ status: "connected" })).toBe("ChatGPT plan connected");
+  });
+
+  test("connected with planType names the tier", () => {
+    expect(describeCodexSetupStatus({ status: "connected", planType: "free" })).toBe(
+      "ChatGPT free plan connected",
+    );
+    expect(describeCodexSetupStatus({ status: "connected", planType: "pro" })).toBe(
+      "ChatGPT pro plan connected",
+    );
+  });
+});
+
+describe("listCodexModels", () => {
+  const originalHome = process.env.CODEX_HOME;
+  let home: string;
+
+  afterEach(() => {
+    resetCodexModelCache();
+    if (originalHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalHome;
+    if (home !== undefined) rmSync(home, { recursive: true, force: true });
+  });
+
+  test("reads model/list then account/read for planType", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-list-"));
+    process.env.CODEX_HOME = home;
+    const methods: string[] = [];
+    const rpc: CodexJsonRpc = {
+      request: async (method) => {
+        methods.push(method);
+        if (method === "model/list") {
+          return { data: [{ id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" }] };
+        }
+        return { type: "chatgpt", planType: "free" };
+      },
+      notify: () => {},
+      close: () => {},
+    };
+    const listed = await listCodexModels({ rpc, env: { CODEX_HOME: home } });
+    expect(listed.map((m) => m.id)).toEqual(["gpt-5.6-terra"]);
+    expect(methods).toEqual(["model/list", "account/read"]);
+    expect(codexPlanType()).toBe("free");
   });
 });

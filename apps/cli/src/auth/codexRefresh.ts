@@ -1,10 +1,10 @@
 import {
-  connectCodexAppServer,
   type CodexJsonRpc,
   type ConnectCodexAppServerOpts,
+  connectCodexAppServer,
 } from "./codexAppServer";
 import { credentialFromCodexAuth, hasCodexSubscription, loadCodexAuth } from "./codexAuthStore";
-import type { SubscriptionCredential, RefreshSubscription } from "./subscription";
+import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 
 export type CodexRefreshResult =
   | { status: "ok"; credential: SubscriptionCredential }
@@ -41,7 +41,8 @@ async function refreshCodexSubscriptionOnce(opts: RefreshCodexOpts): Promise<Cod
   const closeOwned = rpc === undefined;
   try {
     rpc ??= await connectCodexAppServer(opts);
-    await rpc.request("account/read", { refreshToken: true });
+    const account = await rpc.request("account/read", { refreshToken: true });
+    rememberPlanType(account);
     const auth = loadCodexAuth(opts.env ?? process.env);
     if (auth === undefined || auth.authMode !== "chatgpt") {
       return { status: "not-connected" };
@@ -123,9 +124,31 @@ export function parseModelList(result: unknown): CodexListedModel[] {
   return models;
 }
 
+export function parseAccountRead(result: unknown): { planType: string | undefined } {
+  if (typeof result !== "object" || result === null) return { planType: undefined };
+  const obj = result as Record<string, unknown>;
+  const nested =
+    typeof obj.account === "object" && obj.account !== null
+      ? (obj.account as Record<string, unknown>)
+      : obj;
+  const planType =
+    typeof nested.planType === "string" && nested.planType.length > 0 ? nested.planType : undefined;
+  return { planType };
+}
+
 let cachedModels: CodexListedModel[] | undefined;
 let cachedModelsAt = 0;
+let cachedPlanType: string | undefined;
 const MODEL_LIST_CACHE_MS = 60 * 60 * 1000;
+
+export function codexPlanType(): string | undefined {
+  return cachedPlanType;
+}
+
+function rememberPlanType(result: unknown): void {
+  const { planType } = parseAccountRead(result);
+  if (planType !== undefined) cachedPlanType = planType;
+}
 
 export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<CodexListedModel[]> {
   const now = Date.now();
@@ -137,6 +160,11 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
   try {
     rpc ??= await connectCodexAppServer(opts);
     const listed = parseModelList(await rpc.request("model/list"));
+    try {
+      rememberPlanType(await rpc.request("account/read"));
+    } catch {
+      // planType is chrome; a failed account/read must not drop the model list
+    }
     cachedModels = listed;
     cachedModelsAt = now;
     return listed;
@@ -148,4 +176,5 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
 export function resetCodexModelCache(): void {
   cachedModels = undefined;
   cachedModelsAt = 0;
+  cachedPlanType = undefined;
 }

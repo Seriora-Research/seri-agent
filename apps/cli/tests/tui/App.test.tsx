@@ -490,7 +490,13 @@ describe("App", () => {
     dispatch({
       type: "model-picker-requested",
       entries: [
-        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+        {
+          entry: catalogEntry(),
+          keyConfigured: true,
+          alternatives: 0,
+          gatewayReachable: false,
+          subscriptionCovered: false,
+        },
       ],
     });
     dispatch({
@@ -502,7 +508,7 @@ describe("App", () => {
     await flush(setup);
     let frame = setup.captureCharFrame();
     expect(frame).toContain("! Approve write_file");
-    expect(frame).not.toContain('Type to filter — try "free" or "paid"…');
+    expect(frame).not.toContain('Type to filter — try "included", "free" or "paid"…');
 
     setup.mockInput.pressKey(PAGE_UP);
     await flush(setup);
@@ -525,7 +531,13 @@ describe("App", () => {
     dispatch({
       type: "model-picker-requested",
       entries: [
-        { entry: catalogEntry(), keyConfigured: true, alternatives: 0, gatewayReachable: false },
+        {
+          entry: catalogEntry(),
+          keyConfigured: true,
+          alternatives: 0,
+          gatewayReachable: false,
+          subscriptionCovered: false,
+        },
       ],
     });
     await flush(setup);
@@ -2211,6 +2223,7 @@ describe("App", () => {
         keyConfigured: true,
         alternatives: 0,
         gatewayReachable: false,
+        subscriptionCovered: false,
       };
     }
 
@@ -2229,12 +2242,16 @@ describe("App", () => {
       dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).toContain(
+        'Type to filter — try "included", "free" or "paid"…',
+      );
 
       await setup.mockInput.typeText("8b");
       await flush(setup);
 
-      expect(setup.captureCharFrame()).not.toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).not.toContain(
+        'Type to filter — try "included", "free" or "paid"…',
+      );
     });
 
     // Pins the fix for a real regression, not a test-harness bug (confirmed against a direct mount
@@ -2587,6 +2604,16 @@ describe("App", () => {
         expect(text).toContain("codex");
         expect(text).toContain("ChatGPT plan connected");
         expect(text).not.toContain("openai");
+      });
+
+      test("a Codex connected row surfaces planType when known", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "connected", planType: "free" },
+          removable: false,
+        });
+        expect(text).toContain("ChatGPT free plan connected");
       });
 
       test("an unused openai key names the ChatGPT plan as the reason", () => {
@@ -2954,6 +2981,7 @@ describe("App", () => {
         keyConfigured: true,
         alternatives: 0,
         gatewayReachable: false,
+        subscriptionCovered: false,
         ...overrides,
       };
     }
@@ -3137,6 +3165,44 @@ describe("App", () => {
       expect(matchesFilter(unknownPrice, "free")).toBe(false);
     });
 
+    test("a subscription-covered row costs 'included' and routes as 'plan'", () => {
+      const row = pickerRow({
+        keyConfigured: false,
+        subscriptionCovered: true,
+        entry: entry({ provider: "openai", pricing: undefined }),
+      });
+      const rendered = formatModelRow(row);
+      expect(rendered).toContain("included");
+      expect(rendered).toContain("plan");
+      expect(rendered).not.toContain("no key");
+      expect(rendered).not.toContain("$");
+      expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
+    });
+
+    test("subscriptionCovered beats keyConfigured in the Route column", () => {
+      expect(formatRouteLabel({ keyConfigured: true, subscriptionCovered: true })).toBe("plan");
+    });
+
+    test("matchesFilter matches a subscription-covered row with 'included' and 'plan', not 'free'", () => {
+      const covered = pickerRow({
+        subscriptionCovered: true,
+        entry: entry({ provider: "openai", pricing: undefined }),
+      });
+      expect(matchesFilter(covered, "included")).toBe(true);
+      expect(matchesFilter(covered, "plan")).toBe(true);
+      expect(matchesFilter(covered, "free")).toBe(false);
+      const zeroPrice = pickerRow({
+        subscriptionCovered: false,
+        entry: entry({
+          id: "stealth/ox-alpha",
+          displayName: "Ox Alpha",
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+        }),
+      });
+      expect(matchesFilter(zeroPrice, "included")).toBe(false);
+      expect(matchesFilter(zeroPrice, "free")).toBe(true);
+    });
+
     test("matchesFilter still matches a model whose displayName literally contains 'free', regardless of price", () => {
       const namedFree = pickerRow({
         entry: entry({
@@ -3161,7 +3227,7 @@ describe("App", () => {
 
   // D1 (byok-open3-route-indicator feature-plan.md): formatModelRow's own tests above exercise
   // this indirectly through the picker's Route column; these test the vocabulary function itself,
-  // all 4 branches, so the persistent indicator below (which calls it directly, not through a
+  // all 5 branches, so the persistent indicator below (which calls it directly, not through a
   // ModelPickerEntry) has its own direct coverage too.
   describe("formatRouteLabel", () => {
     test("keyConfigured wins outright: 'your key'", () => {
@@ -3178,6 +3244,11 @@ describe("App", () => {
     // always-false) — exercised here only as a direct unit test of the vocabulary function itself.
     test("a keyless, no-reroute row with gatewayReachable: 'provided'", () => {
       expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("provided");
+    });
+
+    test("subscriptionCovered: 'plan', even when a key is also present", () => {
+      expect(formatRouteLabel({ keyConfigured: true, subscriptionCovered: true })).toBe("plan");
+      expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
     });
 
     test("the true dead end — no key, no reroute, no gateway: 'no key'", () => {
