@@ -154,6 +154,37 @@ describe("TurnStatus", () => {
     expect(setup.captureCharFrame()).toContain("~12 ↑, ~0 ↓");
   });
 
+  test("live output estimate updates from the pending store without a parent tokenProgress prop change, within ~200ms", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    mountedRenderers.push(setup);
+    let pending = 0;
+    const listeners = new Set<() => void>();
+
+    await mount(
+      setup,
+      <TurnStatus
+        startedAt={Date.now()}
+        tokenProgress={ZERO_TOKEN_PROGRESS}
+        pendingLiveOutputEstimate={() => pending}
+        subscribePendingLive={(listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        }}
+      />,
+    );
+
+    expect(setup.captureCharFrame()).toContain("~0 ↑, ~0 ↓");
+
+    await sleep(160);
+    pending = 100;
+    for (const listener of listeners) listener();
+    await settle(setup);
+
+    expect(setup.captureCharFrame()).toContain("~100 ↓");
+  });
+
   test("clears its own interval on unmount, leaving nothing running", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);

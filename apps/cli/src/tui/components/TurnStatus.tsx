@@ -12,6 +12,8 @@ import { formatElapsed, formatTokenProgress, type TokenProgress } from "../util/
 export function TurnStatus({
   startedAt,
   tokenProgress,
+  pendingLiveOutputEstimate,
+  subscribePendingLive,
 }: {
   startedAt: number;
   tokenProgress: TokenProgress;
@@ -19,11 +21,19 @@ export function TurnStatus({
   subscribePendingLive?: (listener: () => void) => () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [pendingExtra, setPendingExtra] = useState(0);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (subscribePendingLive === undefined || pendingLiveOutputEstimate === undefined) return;
+    const sync = () => setPendingExtra(pendingLiveOutputEstimate());
+    sync();
+    return subscribePendingLive(sync);
+  }, [subscribePendingLive, pendingLiveOutputEstimate]);
 
   // `truncate wrapMode="none"`: app.tsx reserves exactly one row for this component
   // (`scrollboxHeight = transcriptHeight - 1` while a turn is active), inside a wrapping box with
@@ -34,7 +44,11 @@ export function TurnStatus({
   // rows.
   return (
     <text fg={theme.muted} truncate wrapMode="none">
-      {formatElapsed(now - startedAt)} {formatTokenProgress(tokenProgress)}
+      {formatElapsed(now - startedAt)}{" "}
+      {formatTokenProgress({
+        ...tokenProgress,
+        liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+      })}
     </text>
   );
 }
