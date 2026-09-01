@@ -9,10 +9,13 @@ type ChildMeta = Omit<ChildEventPayload, "event">;
 export function createStreamDispatch(setState: (updater: (state: TuiState) => TuiState) => void): {
   dispatch: Dispatch;
   getPendingLiveOutputEstimate: () => number;
+  getPendingReasoning: () => string;
   subscribe: (listener: () => void) => () => void;
 } {
   let parentBuf = "";
   let pendingLive = 0;
+  let reasoningBuf = "";
+  let reasoningStartedAt: number | undefined;
   const childBufs = new Map<string, string>();
   const childMeta = new Map<string, ChildMeta>();
   const listeners = new Set<() => void>();
@@ -45,6 +48,10 @@ export function createStreamDispatch(setState: (updater: (state: TuiState) => Tu
     const parentDrain = parentBuf;
     parentBuf = "";
     pendingLive = 0;
+    const reasoningDrain = reasoningBuf;
+    const reasoningStart = reasoningStartedAt;
+    reasoningBuf = "";
+    reasoningStartedAt = undefined;
     const childDrains: { meta: ChildMeta; text: string }[] = [];
     for (const [childId, buf] of childBufs) {
       if (buf.length === 0) continue;
@@ -55,6 +62,13 @@ export function createStreamDispatch(setState: (updater: (state: TuiState) => Tu
     childBufs.clear();
     setState((state) => {
       let next = state;
+      if (reasoningDrain.length > 0 && reasoningStart !== undefined) {
+        next = tuiReducer(next, {
+          type: "reasoning-flushed",
+          text: reasoningDrain,
+          startedAt: reasoningStart,
+        });
+      }
       if (parentDrain.length > 0) {
         next = tuiReducer(next, {
           type: "loop-event",
@@ -80,6 +94,13 @@ export function createStreamDispatch(setState: (updater: (state: TuiState) => Tu
       schedulePaint();
       return;
     }
+    if (action.type === "loop-event" && action.event.type === "reasoning-delta") {
+      if (action.event.text.length === 0) return;
+      if (reasoningStartedAt === undefined) reasoningStartedAt = Date.now();
+      reasoningBuf += action.event.text;
+      schedulePaint();
+      return;
+    }
     if (action.type === "subagent-child-event") {
       childMeta.set(action.childId, {
         childId: action.childId,
@@ -100,6 +121,7 @@ export function createStreamDispatch(setState: (updater: (state: TuiState) => Tu
   return {
     dispatch,
     getPendingLiveOutputEstimate: () => pendingLive,
+    getPendingReasoning: () => reasoningBuf,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => {

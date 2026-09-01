@@ -66,7 +66,31 @@ export type TranscriptEntry = {
   text: string;
   muted?: boolean;
   markdown?: boolean;
+  // Settled thought caret. Not a fourth role: the gap table already treats this as
+  // system (same exchange as the answer). `body` is the raw trace; `expanded` is
+  // the open/closed caret. Absent unless a reasoning span actually settled.
+  kind?: "reasoning";
+  body?: string;
+  expanded?: boolean;
+  elapsedMs?: number;
 };
+
+export const REASONING_MARK_CLOSED = "▸";
+export const REASONING_MARK_OPEN = "▾";
+
+export function formatReasoningCaret(expanded: boolean, elapsedMs: number): string {
+  const mark = expanded ? REASONING_MARK_OPEN : REASONING_MARK_CLOSED;
+  return `${mark} thought · ${formatElapsed(elapsedMs)}`;
+}
+
+export function formatLiveThinkingStatus(
+  expanded: boolean,
+  elapsed: string,
+  tokens: string,
+): string {
+  const mark = expanded ? REASONING_MARK_OPEN : REASONING_MARK_CLOSED;
+  return `${mark} thinking · ${elapsed} · ${tokens}`;
+}
 
 // For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
 // only guards a value wider than the panel — it does nothing for a literal newline, which Ink still

@@ -261,6 +261,8 @@ export function printEvent(event: LoopEvent): void {
     case "text-delta":
       process.stdout.write(event.text);
       break;
+    case "reasoning-delta":
+      break;
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;

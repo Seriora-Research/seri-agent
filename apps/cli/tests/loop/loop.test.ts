@@ -6,6 +6,7 @@ import {
   baseMessages,
   collect,
   makeTools,
+  reasoningThenTextChunks,
   streamResult,
   textOnlyChunks,
   toolCallChunks,
@@ -29,6 +30,37 @@ describe("runLoop", () => {
       content: [{ type: "text", text: "Hello" }],
     });
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+  });
+
+  test("yields reasoning-delta before text-delta and does not put the thought in the assistant message", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(reasoningThenTextChunks("look at ROADMAP", "Hello")),
+    });
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    const types = events.map((event) => event.type);
+    expect(types.indexOf("reasoning-delta")).toBeGreaterThanOrEqual(0);
+    expect(types.indexOf("reasoning-delta")).toBeLessThan(types.indexOf("text-delta"));
+    expect(events).toContainEqual({ type: "reasoning-delta", text: "look at ROADMAP" });
+    expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
+    const update = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated",
+    );
+    expect(update?.messages.at(-1)).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Hello" }],
+    });
+  });
+
+  test("a text-only stream yields no reasoning-delta", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    expect(events.some((event) => event.type === "reasoning-delta")).toBe(false);
   });
 
   test("passes the system option through to streamText", async () => {

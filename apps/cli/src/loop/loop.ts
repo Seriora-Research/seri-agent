@@ -34,6 +34,9 @@ export { DEFAULT_PRESERVE_RECENT_TOKENS } from "./compaction";
 
 export type LoopEvent =
   | { type: "text-delta"; text: string }
+  // Display-only thought text from fullStream. Not appended to the assistant `text`
+  // accumulator — ModelMessage[] / compaction / resume never see it.
+  | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; name: string; args: unknown }
   | { type: "tool-result"; name: string; result: unknown }
   // "blocked" is the mode doing its job (checkPermission returned "block", e.g. read-only on a
@@ -439,6 +442,10 @@ export async function* runLoop(opts: {
           if (part.type === "text-delta") {
             text += part.text;
             yield { type: "text-delta", text: part.text };
+          } else if (part.type === "reasoning-delta") {
+            if (part.text.length > 0) {
+              yield { type: "reasoning-delta", text: part.text };
+            }
           } else if (part.type === "tool-call") {
             toolCalls.push({
               toolCallId: part.toolCallId,

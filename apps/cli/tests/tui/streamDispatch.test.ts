@@ -138,4 +138,34 @@ describe("createStreamDispatch", () => {
       { role: "assistant", text: "secret" },
     ]);
   });
+
+  test("N reasoning-deltas do not call setState", () => {
+    const h = harness();
+
+    for (let i = 0; i < 20; i++) {
+      h.dispatch({ type: "loop-event", event: { type: "reasoning-delta", text: "x" } });
+    }
+
+    expect(h.setStateCalls).toBe(0);
+    expect(h.state.transcript).toEqual([]);
+    expect(h.state.reasoning.live).toBeUndefined();
+  });
+
+  test("a following tool-call flushes reasoning without an assistant row", () => {
+    const h = harness();
+
+    for (let i = 0; i < 20; i++) {
+      h.dispatch({ type: "loop-event", event: { type: "reasoning-delta", text: "x" } });
+    }
+    h.dispatch({
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "a.txt" } },
+    });
+
+    expect(h.setStateCalls).toBe(1);
+    expect(h.state.streaming).toBe("");
+    expect(h.state.transcript.some((entry) => entry.role === "assistant")).toBe(false);
+    expect(h.state.transcript.filter((entry) => entry.kind === "reasoning")).toHaveLength(1);
+    expect(h.state.transcript[0]?.body).toBe("x".repeat(20));
+  });
 });

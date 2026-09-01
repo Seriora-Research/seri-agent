@@ -112,6 +112,7 @@ describe("createTrajectoryWriter SQLite persistence", () => {
     try {
       const writer = createTrajectoryWriter(writerOpts(dir));
       writer.recordLoopEvent({ type: "text-delta", text: "hi" });
+      writer.recordLoopEvent({ type: "reasoning-delta", text: "a thought" });
       expect(readdirSync(configDir)).toEqual([]);
 
       writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });

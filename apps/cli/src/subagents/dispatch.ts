@@ -186,6 +186,7 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
     case "messages-updated":
     case "retry":
     case "tool-allowed":
+    case "reasoning-delta":
       return false;
     default: {
       const _exhaustive: never = event;

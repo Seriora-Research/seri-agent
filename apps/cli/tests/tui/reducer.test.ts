@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
@@ -42,6 +42,7 @@ describe("initialTuiState", () => {
 
     expect(state.transcript).toEqual([]);
     expect(state.streaming).toBe("");
+    expect(state.reasoning).toEqual({ expanded: false });
     expect(state.session.permissionMode).toBe("read-only");
   });
 });
@@ -2551,5 +2552,152 @@ describe("message queue", () => {
   test("the queue survives a turn ending, which is the whole point of it", () => {
     const state = tuiReducer(queued("next up"), { type: "turn-ended" });
     expect(texts(state)).toEqual(["next up"]);
+  });
+});
+
+describe("tuiReducer: reasoning spans", () => {
+  function withUser(state = initialTuiState(session())) {
+    return tuiReducer(state, {
+      type: "transcript-append",
+      line: "> check the spec",
+      role: "user",
+    });
+  }
+
+  test("a reasoning span settles on the first tool-call with span time only", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "start at ROADMAP" },
+    });
+    now.mockReturnValue(5_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+    });
+    now.mockRestore();
+
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      role: "system",
+      muted: true,
+      kind: "reasoning",
+      body: "start at ROADMAP",
+      text: "▸ thought · 4s",
+    });
+    expect(rows[0]?.text).not.toContain("↑");
+    expect(state.reasoning.live).toBeUndefined();
+  });
+
+  test("a reasoning span settles on done when there is no tool-call", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "no tools needed" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    expect(state.transcript.filter((entry) => entry.kind === "reasoning")).toHaveLength(1);
+    expect(state.transcript.find((entry) => entry.kind === "reasoning")?.text).toBe(
+      "▸ thought · 2s",
+    );
+  });
+
+  test("a second span after a tool is a second row", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.body).toBe("first");
+    expect(rows[1]?.body).toBe("second");
+    expect(rows[1]?.text).toBe("▸ thought · 3s");
+  });
+
+  test("no reasoning-delta leaves today's transcript with no caret", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "just an answer" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+
+    expect(state.transcript.some((entry) => entry.kind === "reasoning")).toBe(false);
+    expect(state.transcript.some((entry) => entry.text.includes("thought"))).toBe(false);
+  });
+
+  test("opening a thought does not commit the answer buffer", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "thinking" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the secret answer" },
+    });
+    expect(state.streaming).toBe("the secret answer");
+    expect(state.transcript.some((entry) => entry.text.includes("the secret answer"))).toBe(false);
+
+    state = tuiReducer(state, { type: "reasoning-toggled" });
+    expect(state.streaming).toBe("the secret answer");
+    expect(state.transcript.some((entry) => entry.text.includes("the secret answer"))).toBe(false);
+    const thought = state.transcript.find((entry) => entry.kind === "reasoning");
+    expect(thought?.expanded).toBe(true);
+    expect(thought?.body).toBe("thinking");
+  });
+
+  test("transcript-cleared and turn-started drop a live span", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "ephemeral" },
+    });
+    expect(state.reasoning.live?.text).toBe("ephemeral");
+
+    const cleared = tuiReducer(state, { type: "transcript-cleared" });
+    expect(cleared.reasoning).toEqual({ expanded: false });
+    expect(cleared.transcript).toEqual([]);
+
+    const nextTurn = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    expect(nextTurn.reasoning).toEqual({ expanded: false });
   });
 });

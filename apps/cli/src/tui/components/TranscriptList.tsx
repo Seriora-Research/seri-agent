@@ -2,10 +2,10 @@
 import { getTreeSitterClient } from "@opentui/core";
 import { memo } from "react";
 import { useTranscriptWindow, type TranscriptWindowMetrics } from "../hooks/useTranscriptWindow";
-import { gapBefore } from "../theme/spacing";
+import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
-import type { TranscriptEntry } from "../util/format";
+import { formatReasoningCaret, type TranscriptEntry } from "../util/format";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
@@ -16,6 +16,16 @@ import type { TranscriptEntry } from "../util/format";
 // When App passes window metrics, only viewport+overscan rows mount; spacer boxes stand in for
 // the unmounted prefix/suffix so the scrollbox's `scrollHeight` stays the height of the full
 // array. Isolated mounts (tests, ChildTranscript) omit metrics and still map every entry.
+export function indentReasoningBody(body: string): string {
+  // Caret is already TOOL_INDENT + mark; the body sits one indent further so
+  // it hangs under the word, not under the arrow.
+  const pad = `${TOOL_INDENT}${TOOL_INDENT}`;
+  return body
+    .split("\n")
+    .map((line) => `${pad}${line}`)
+    .join("\n");
+}
+
 export const TranscriptList = memo(function TranscriptList({
   transcript,
   scrollTop,
@@ -138,6 +148,20 @@ const TranscriptRow = memo(function TranscriptRow({
     return (
       <box backgroundColor={theme.userBg} marginTop={gap}>
         <text fg={theme.text}>{entry.text}</text>
+      </box>
+    );
+  }
+  if (entry.kind === "reasoning") {
+    const caret = formatReasoningCaret(entry.expanded === true, entry.elapsedMs ?? 0);
+    return (
+      <box marginTop={gap} flexDirection="column">
+        <text fg={theme.muted}>
+          {TOOL_INDENT}
+          {caret}
+        </text>
+        {entry.expanded === true && entry.body !== undefined && entry.body.length > 0 ? (
+          <text fg={theme.muted}>{indentReasoningBody(entry.body)}</text>
+        ) : null}
       </box>
     );
   }

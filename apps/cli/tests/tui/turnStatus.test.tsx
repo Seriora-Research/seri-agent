@@ -97,6 +97,59 @@ describe("TurnStatus", () => {
     );
 
     expect(setup.captureCharFrame()).toContain("~0 ↑, ~5 ↓");
+    expect(setup.captureCharFrame()).not.toContain("thinking");
+  });
+
+  test("prefixes thinking and keeps elapsed plus tokens on one row", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 5 });
+    mountedRenderers.push(setup);
+
+    await mount(
+      setup,
+      <TurnStatus
+        startedAt={Date.now()}
+        tokenProgress={{
+          reconciledInputTokens: 0,
+          reconciledOutputTokens: 0,
+          liveInputEstimate: 2100,
+          carriedOutputEstimate: 0,
+          liveOutputEstimate: 180,
+          exact: false,
+          hasGap: false,
+        }}
+        thinking
+      />,
+    );
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("thinking");
+    expect(frame).toContain("▸");
+    expect(frame).toMatch(/\d+s/);
+    expect(frame).toContain("↑");
+    expect(frame).toContain("↓");
+    const lines = frame.split("\n");
+    expect(lines[0]).toContain("thinking");
+    for (const line of lines.slice(1)) expect(line.trim()).toBe("");
+  });
+
+  test("drops the thinking word while a tool is in flight", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 5 });
+    mountedRenderers.push(setup);
+
+    await mount(
+      setup,
+      <TurnStatus
+        startedAt={Date.now()}
+        tokenProgress={ZERO_TOKEN_PROGRESS}
+        thinking
+        toolInFlight
+      />,
+    );
+
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("thinking");
+    expect(frame).not.toContain("▸");
+    expect(frame).toMatch(/\d+s/);
   });
 
   // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: app.tsx reserves exactly one row

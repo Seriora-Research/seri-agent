@@ -135,7 +135,13 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   }
 
   function recordLoopEvent(event: LoopEvent, actor: TrajectoryActor = parent): void {
-    if (event.type === "text-delta" || event.type === "messages-updated") return;
+    if (
+      event.type === "text-delta" ||
+      event.type === "reasoning-delta" ||
+      event.type === "messages-updated"
+    ) {
+      return;
+    }
     if (event.type === "tool-call") {
       if (
         event.name === "write_file" &&
@@ -238,7 +244,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     },
     recordChildEvent: (payload) => {
       if (payload.event.type === "child-started") return;
-      if (payload.event.type === "text-delta") return;
+      if (payload.event.type === "text-delta" || payload.event.type === "reasoning-delta") return;
       if (payload.event.type === "usage") return;
       recordLoopEvent(payload.event, {
         type: "child",

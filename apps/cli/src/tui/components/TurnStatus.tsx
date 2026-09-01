@@ -7,18 +7,29 @@
 // accumulating error (vercel-labs/fx's own technique).
 import { useEffect, useState } from "react";
 import { theme } from "../theme/theme";
-import { formatElapsed, formatTokenProgress, type TokenProgress } from "../util/format";
+import {
+  formatElapsed,
+  formatLiveThinkingStatus,
+  formatTokenProgress,
+  type TokenProgress,
+} from "../util/format";
 
 export function TurnStatus({
   startedAt,
   tokenProgress,
   pendingLiveOutputEstimate,
   subscribePendingLive,
+  thinking = false,
+  thinkingExpanded = false,
+  toolInFlight = false,
 }: {
   startedAt: number;
   tokenProgress: TokenProgress;
   pendingLiveOutputEstimate?: () => number;
   subscribePendingLive?: (listener: () => void) => () => void;
+  thinking?: boolean;
+  thinkingExpanded?: boolean;
+  toolInFlight?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
   const [pendingExtra, setPendingExtra] = useState(0);
@@ -42,13 +53,16 @@ export function TurnStatus({
   // the wrapping box and get silently clipped by `overflow="hidden"` instead of just truncating
   // gracefully, the same reasoning `ErrorLine.tsx`/`ListRow.tsx` apply to their own single-line
   // rows.
+  const elapsed = formatElapsed(now - startedAt);
+  const tokens = formatTokenProgress({
+    ...tokenProgress,
+    liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+  });
   return (
     <text fg={theme.muted} truncate wrapMode="none">
-      {formatElapsed(now - startedAt)}{" "}
-      {formatTokenProgress({
-        ...tokenProgress,
-        liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
-      })}
+      {thinking && !toolInFlight
+        ? formatLiveThinkingStatus(thinkingExpanded, elapsed, tokens)
+        : `${elapsed} ${tokens}`}
     </text>
   );
 }

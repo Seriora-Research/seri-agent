@@ -82,4 +82,46 @@ describe("transcript vertical rhythm", () => {
 
     expect(rows).toEqual(["> one", "", "●", "", "> two"]);
   });
+
+  test("user then reasoning is one blank row, reasoning then assistant is tight", async () => {
+    const rows = await render([
+      { role: "user", text: "> check the spec" },
+      {
+        role: "system",
+        text: "▸ thought · 4s",
+        muted: true,
+        kind: "reasoning",
+        body: "start at ROADMAP",
+        elapsedMs: 4_000,
+      },
+      { role: "assistant", text: "I'll look at the roadmap" },
+    ]);
+
+    expect(rows[0]).toBe("> check the spec");
+    expect(rows[1]).toBe("");
+    expect(rows[2]).toContain("▸ thought · 4s");
+    expect(rows[2]).not.toContain("●");
+    expect(rows[2]).not.toContain("→");
+    expect(rows[3]).toBe("●");
+    expect(rows).not.toContain("start at ROADMAP");
+  });
+
+  test("an open reasoning body is muted indented text, not markdown", async () => {
+    const rows = await render([
+      {
+        role: "system",
+        text: "▾ thought · 4s",
+        muted: true,
+        kind: "reasoning",
+        body: "a *literal* star",
+        expanded: true,
+        elapsedMs: 4_000,
+      },
+    ]);
+
+    const joined = rows.join("\n");
+    expect(joined).toContain("▾ thought · 4s");
+    expect(joined).toContain("a *literal* star");
+    expect(joined).not.toContain("●");
+  });
 });
