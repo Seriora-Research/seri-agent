@@ -986,9 +986,11 @@ describe("run (task invocation)", () => {
     const createdId = listSessionIds(sessionsDir)[0]!;
     expect("allowedTools" in loadSession(createdId, sessionsDir)).toBe(false);
 
+    // First run ended on an assistant reply (answeredTurn), so a bare `--continue` would skip
+    // the turn. New task text is what actually starts the next one — the seed under test.
     const { fake: secondRun, capture } = fakeRunLoop();
     await captureLogs(() =>
-      run(["--continue"], {
+      run(["--continue", "next"], {
         runLoop: secondRun,
         loadAgentsFile: () => "",
         loadExtensions: () => ({
