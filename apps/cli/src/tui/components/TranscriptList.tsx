@@ -17,9 +17,12 @@ import { formatReasoningCaret, type TranscriptEntry } from "../util/format";
 // the unmounted prefix/suffix so the scrollbox's `scrollHeight` stays the height of the full
 // array. Isolated mounts (tests, ChildTranscript) omit metrics and still map every entry.
 export function indentReasoningBody(body: string): string {
+  // Caret is already TOOL_INDENT + mark; the body sits one indent further so
+  // it hangs under the word, not under the arrow.
+  const pad = `${TOOL_INDENT}${TOOL_INDENT}`;
   return body
     .split("\n")
-    .map((line) => `${TOOL_INDENT}${line}`)
+    .map((line) => `${pad}${line}`)
     .join("\n");
 }
 

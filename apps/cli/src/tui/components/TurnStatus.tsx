@@ -53,21 +53,16 @@ export function TurnStatus({
   // the wrapping box and get silently clipped by `overflow="hidden"` instead of just truncating
   // gracefully, the same reasoning `ErrorLine.tsx`/`ListRow.tsx` apply to their own single-line
   // rows.
+  const elapsed = formatElapsed(now - startedAt);
+  const tokens = formatTokenProgress({
+    ...tokenProgress,
+    liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+  });
   return (
     <text fg={theme.muted} truncate wrapMode="none">
       {thinking && !toolInFlight
-        ? formatLiveThinkingStatus(
-            thinkingExpanded,
-            formatElapsed(now - startedAt),
-            formatTokenProgress({
-              ...tokenProgress,
-              liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
-            }),
-          )
-        : `${formatElapsed(now - startedAt)} ${formatTokenProgress({
-            ...tokenProgress,
-            liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
-          })}`}
+        ? formatLiveThinkingStatus(thinkingExpanded, elapsed, tokens)
+        : `${elapsed} ${tokens}`}
     </text>
   );
 }
