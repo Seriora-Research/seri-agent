@@ -2052,29 +2052,32 @@ async function startChild(
     // "approve-each mode on" is already true while the splash still owns the keyboard. A flat
     // 100ms sleep after Escape is the same race under load: the next write lands on the splash
     // and is dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can
-    // clear the overlay before InputBox is interactive, and leftover CUP cells can reintroduce
-    // the mark. Two identical current frames that show a post-splash surface (the input
-    // placeholder, or /setup on a blank first run) and not the splash hint are the signal that
-    // the next stdin write will reach that surface. A child that already exited (driveLoop
-    // threw, uncaught) has nothing left to type into.
+    // clear the overlay (a blank grid) before the next surface is interactive. Two consecutive
+    // non-blank polls with the splash hint gone are the signal that whatever replaced it (idle
+    // input, /setup, an approval prompt) will see the next stdin write. Frames are not compared
+    // for equality: a live elapsed-time row changes every second. A child that already exited
+    // has nothing left to type into.
     const dismissed = Date.now() + 20_000;
-    let previous: string | undefined;
     let sawHint = false;
     let hintGone = false;
-    const postSplashReady = (): boolean =>
-      gridContains("describe a task") || gridContains("/setup — provider API keys");
+    let idlePolls = 0;
+    const frameIsBlank = (frame: string): boolean =>
+      !frame.split("\n").some((row) => row.trim().length > 0);
     while (spawnError === undefined && child.exitCode === null && Date.now() < dismissed) {
       const frame = lastFrame();
       if (gridContains("Esc continue")) sawHint = true;
       if (sawHint && !gridContains("Esc continue")) hintGone = true;
-      const idle = hintGone && postSplashReady();
-      if (idle && frame === previous) break;
-      previous = idle ? frame : undefined;
+      if (hintGone && !frameIsBlank(frame)) {
+        idlePolls++;
+        if (idlePolls >= 2) break;
+      } else {
+        idlePolls = 0;
+      }
       await new Promise((r) => setTimeout(r, 20));
     }
     if (spawnError !== undefined)
       throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (child.exitCode === null && !(hintGone && postSplashReady()))
+    if (child.exitCode === null && idlePolls < 2)
       throw new Error(`splash never dismissed\n--- lastFrame ---\n${lastFrame()}`);
   }
 
