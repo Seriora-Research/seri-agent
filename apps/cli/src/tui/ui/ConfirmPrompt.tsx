@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/react */
 import { useKeyboard } from "@opentui/react";
+import { theme } from "../theme/theme";
+import { OptionKeys } from "./OptionKeys";
+import { PanelBox } from "./PanelBox";
 import { isEnter, isPrintableKey } from "../util/keys";
-import { WarningBox } from "./WarningBox";
 
 // The shared y/N confirm step every SetupPanel/ConfigPanel/PermissionsPanel dispatcher uses:
 // Enter and anything unrecognised both cancel, only an explicit "y" confirms. `isPrintableKey`'s
@@ -11,10 +13,10 @@ import { WarningBox } from "./WarningBox";
 // here, not a cancel shortcut, same as it was under Ink (whose own `useInput` stripped the ESC
 // byte before this handler ever saw it).
 //
-// `subject` builds its own "? [y]es / [N]o" affordance rather than taking a pre-composed
-// `message` — the same reasoning `approvalPromptText` (cli/output.ts) already states for why its
-// prompt text is one function instead of written out at each call site: the text that promises
-// "N cancels" and the code that implements it must not be free to drift apart across callers.
+// `subject` builds its own question rather than taking a pre-composed `message` — the same
+// reasoning `approvalPromptText` (cli/output.ts) already states for why its prompt text is one
+// function instead of written out at each call site: the text that promises "N cancels" and the
+// code that implements it must not be free to drift apart across callers.
 export function ConfirmPrompt({
   subject,
   onConfirm,
@@ -36,5 +38,10 @@ export function ConfirmPrompt({
     }
     onCancel();
   });
-  return <WarningBox message={`${subject}? [y]es / [N]o`} />;
+  return (
+    <PanelBox title="confirm" right="">
+      <text fg={theme.text}>{`${subject}?`}</text>
+      <OptionKeys labels={["[y]es", "[N]o"]} />
+    </PanelBox>
+  );
 }

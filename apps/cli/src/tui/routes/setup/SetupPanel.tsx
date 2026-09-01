@@ -18,6 +18,7 @@ import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
+import { PanelBox } from "../../ui/PanelBox";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
 import { formatSetupRow } from "../../util/format";
@@ -228,8 +229,7 @@ function SetupList({
       : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (
-    <box {...FRAME} flexDirection="column">
-      <text fg={theme.muted}>/setup — provider API keys</text>
+    <PanelBox title="/setup — provider API keys">
       {visible.map(({ row, isSelected }) =>
         row.kind === "heading" ? (
           <text key={setupRowId(row)} fg={theme.muted}>
@@ -241,7 +241,7 @@ function SetupList({
       )}
       {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
       <text fg={theme.muted}>{hint}</text>
-    </box>
+    </PanelBox>
   );
 }
 
@@ -305,7 +305,7 @@ function SetupEnterKey({
   useClipboardPaste(insertPastedText);
 
   return (
-    <box {...FRAME} flexDirection="column">
+    <PanelBox title="/setup">
       <text fg={theme.muted}>{`${keyName} for ${provider}`}</text>
       <text>{"*".repeat(value.length)}</text>
       <ErrorLine message={error} />
@@ -314,6 +314,6 @@ function SetupEnterKey({
       ) : (
         <text fg={theme.muted}>Enter submit · Esc back · Ctrl-D close</text>
       )}
-    </box>
+    </PanelBox>
   );
 }

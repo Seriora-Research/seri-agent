@@ -8,7 +8,7 @@ import { useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { useListWindow } from "../hooks/useListWindow";
 import type { ModelPickerEntry } from "../state/commands";
-import { FRAME } from "../theme/spacing";
+import { PanelBox } from "../ui/PanelBox";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
 import {
@@ -128,7 +128,7 @@ export function ModelPicker({
   const showPlaceholder = filterQuery.length === 0;
 
   return (
-    <box {...FRAME} flexDirection="column">
+    <PanelBox title="/model">
       <box flexDirection="row">
         {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
         the placeholder (empty filter only) renders after it instead of between them. `promptText`,
@@ -171,6 +171,6 @@ export function ModelPicker({
       {remainingCount > 0 && (
         <text fg={theme.muted}>+{remainingCount} more — keep typing to narrow</text>
       )}
-    </box>
+    </PanelBox>
   );
 }

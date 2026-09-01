@@ -7,7 +7,7 @@ import { mcpLoginLine } from "../../../mcp/commands";
 import type { McpLoginResult } from "../../../mcp/login";
 import type { McpCatalog } from "../../../mcp/types";
 import { useListWindow } from "../../hooks/useListWindow";
-import { FRAME } from "../../theme/spacing";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { ListRow } from "../../ui/ListRow";
@@ -164,10 +164,7 @@ export function McpPanel({
   }
 
   return (
-    <box {...FRAME} flexDirection="column">
-      <text fg={theme.text} attributes={TextAttributes.BOLD}>
-        MCP servers
-      </text>
+    <PanelBox title="MCP servers">
       {serverRows.length === 0 ? (
         <text fg={theme.muted} truncate wrapMode="none">
           No MCP servers configured. Add one with /mcp add &lt;name&gt; &lt;url&gt;.
@@ -198,7 +195,7 @@ export function McpPanel({
             ? "Waiting for your browser… Esc cancels"
             : "↑/↓ move · Enter connect · a authenticate · r remove · Esc close"}
       </text>
-    </box>
+    </PanelBox>
   );
 }
 
@@ -248,7 +245,7 @@ function McpTrustPreview({
 
   const count = catalog.tools.length;
   return (
-    <box {...FRAME} flexDirection="column">
+    <PanelBox title="MCP servers">
       <text fg={theme.text} attributes={TextAttributes.BOLD}>
         {`Trust "${name}"? ${count} tool${count === 1 ? "" : "s"}`}
       </text>
@@ -275,6 +272,6 @@ function McpTrustPreview({
       <text fg={theme.muted} truncate wrapMode="none">
         {showDescriptions ? "[y]es · [n]o" : "[y]es · [n]o · d descriptions"}
       </text>
-    </box>
+    </PanelBox>
   );
 }

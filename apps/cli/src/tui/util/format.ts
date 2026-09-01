@@ -27,10 +27,11 @@ import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 // height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
 // sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
 // SetupPanel, it can render a "+N more" footer AND a selectedDescription line at once (one row
-// each), on top of the border/header/hint every panel already has.
+// each), on top of the border and hint every panel already has. The command title lives in the
+// top border, not an inner heading row.
 export const LIST_WINDOW_MAX = 10;
 export const MIN_LIST_WINDOW = 3;
-export const PANEL_CHROME_ROWS = 9;
+export const PANEL_CHROME_ROWS = 8;
 
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
 // unconditionally rather than threaded through as props: the unconditional mode-indicator row and

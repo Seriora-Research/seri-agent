@@ -9,7 +9,7 @@ import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
 import { type ConfigRow, configKeyInfo } from "../../state/commands";
 import type { ConfigPanelState } from "../../state/reducer";
-import { FRAME } from "../../theme/spacing";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
@@ -120,8 +120,7 @@ function ConfigList({
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
 
   return (
-    <box {...FRAME} flexDirection="column">
-      <text fg={theme.muted}>/config — settings</text>
+    <PanelBox title="/config — settings">
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
       ))}
@@ -139,7 +138,7 @@ function ConfigList({
       <text
         fg={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</text>
-    </box>
+    </PanelBox>
   );
 }
 
@@ -212,7 +211,7 @@ function ConfigEnterValue({
   useClipboardPaste(insertPastedText);
 
   return (
-    <box {...FRAME} flexDirection="column">
+    <PanelBox title="/config">
       <text fg={theme.muted}>{`Set ${label} (${key})`}</text>
       <text fg={theme.muted}>{description}</text>
       <text>{"*".repeat(value.length)}</text>
@@ -222,6 +221,6 @@ function ConfigEnterValue({
       ) : (
         <text fg={theme.muted}>Enter submit · Esc back · Ctrl-D close</text>
       )}
-    </box>
+    </PanelBox>
   );
 }

@@ -490,7 +490,7 @@ describe("App", () => {
       offersAlways: true,
     });
     await flush(setup);
-    expect(setup.captureCharFrame()).toContain("! Approve write_file");
+    expect(setup.captureCharFrame()).toContain("Write a.txt?");
 
     setup.mockInput.pressKey(PAGE_UP);
     await flush(setup);
@@ -500,14 +500,14 @@ describe("App", () => {
     // ApprovalBox ignores every non-printable key, so the scroll happens BEHIND the question rather
     // than answering or dismissing it — assert that, since a paging key silently denying a write is
     // the worst way this could go wrong.
-    expect(frame).toContain("! Approve write_file");
+    expect(frame).toContain("Write a.txt?");
 
     setup.mockInput.pressKey(END);
     await flush(setup);
     frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
-    expect(frame).toContain("! Approve write_file");
+    expect(frame).toContain("Write a.txt?");
   });
 
   // The state that catches a gate reading `state` instead of the screen: panel commands stay legal
@@ -541,7 +541,7 @@ describe("App", () => {
     });
     await flush(setup);
     let frame = setup.captureCharFrame();
-    expect(frame).toContain("! Approve write_file");
+    expect(frame).toContain("Write a.txt?");
     expect(frame).not.toContain('Type to filter — try "included", "free" or "paid"…');
 
     setup.mockInput.pressKey(PAGE_UP);
@@ -549,7 +549,7 @@ describe("App", () => {
     frame = setup.captureCharFrame();
     expect(frame).toContain("↑ scrolled — End to follow");
     expect(frame).not.toContain("line 299");
-    expect(frame).toContain("! Approve write_file");
+    expect(frame).toContain("Write a.txt?");
   });
 
   // The negative control the exception above needs: it is carved out by naming ten OTHER panel
@@ -1572,7 +1572,7 @@ describe("App", () => {
   // truncateArgsDisplay for the exact same reason (write_file's args carry a whole file body,
   // which can otherwise scroll the box itself out of view). pendingTool is set only for
   // write_file/edit, so those are the only tool-call names that populate it.
-  test("the pending-tool box truncates a long write_file body instead of rendering it in full", async () => {
+  test("the pending-tool box names the file, not a JSON dump of the body", async () => {
     const { setup, dispatch } = await connect();
 
     dispatch({
@@ -1585,12 +1585,10 @@ describe("App", () => {
     });
     await flush(setup);
 
-    // "…)" specifically, not a bare "…": the reducer's own status line ("Running write_file…")
-    // already contains an ellipsis unconditionally, on both the truncated and untruncated
-    // renders — that alone doesn't distinguish them. The truncated render's own trailing "…)" —
-    // the ellipsis immediately followed by the closing paren truncateArgsDisplay's own output sits
-    // inside — only exists once truncation actually ran.
-    expect(setup.captureCharFrame()).toContain("…)");
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Write a.txt");
+    expect(frame).not.toContain("x".repeat(40));
+    expect(frame).not.toContain("write_file(");
   });
 
   // The deliberate exception: a routine in-flight write_file/edit display is not an alert, so it
@@ -1606,7 +1604,8 @@ describe("App", () => {
     await flush(setup);
 
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("write_file(");
+    expect(frame).toContain("Write a.txt");
+    expect(frame).not.toContain("write_file(");
     expect(frame).not.toContain("! write_file");
   });
 
@@ -1862,7 +1861,7 @@ describe("App", () => {
   // signature... with zero change to loop.ts/gate.ts") that every earlier round of this branch
   // left unbuilt.
   describe("approval prompt", () => {
-    test("renders in place of the input box, matching makeApprovalPrompt's own prompt text", async () => {
+    test("renders in place of the input box as a prose question, not a JSON dump", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({
@@ -1874,15 +1873,12 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      // Split across two checks, not one long toContain: the box wraps this line across its own
-      // bordered rows, the same wrapping every other long-line assertion in this file already
-      // works around.
-      expect(frame).toContain(
-        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project)`,
-      );
-      expect(frame).toContain("/ [N]o");
-      // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
-      expect(frame).toContain("! Approve write_file");
+      expect(frame).toContain("Write a.txt?");
+      expect(frame).toContain("[y]es");
+      expect(frame).toContain("[a]lways");
+      expect(frame).toContain("[N]o");
+      expect(frame).not.toContain("write_file(");
+      expect(frame).not.toContain("! Approve");
     });
 
     test("y answers 'once', a answers 'always' when offered, and anything else (n, Enter, an unoffered a) answers 'no'", async () => {
@@ -2159,7 +2155,8 @@ describe("App", () => {
       const bannerIndex = lines.findIndex((l) => l.includes("seri v0.4.2"));
       const createdIndex = lines.findIndex((l) => l.includes("Session s1 created."));
       expect(bannerIndex).toBeGreaterThanOrEqual(0);
-      expect(lines[bannerIndex + 2]).toContain("~/code/seri");
+      expect(lines[bannerIndex]).toContain("~/code/seri");
+      expect(lines[bannerIndex]).toContain("openai/gpt-oss-120b · groq");
       expect(bannerIndex).toBeLessThan(createdIndex);
     });
 
@@ -2904,7 +2901,7 @@ describe("App", () => {
         },
       });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("! Remove OPENROUTER_API_KEY");
+      expect(setup.captureCharFrame()).toContain("Remove OPENROUTER_API_KEY");
       setup.mockInput.pressKey("n");
       await flush(setup);
 
@@ -3401,10 +3398,10 @@ describe("App", () => {
     });
   });
 
-  test("a live input sits under a full-width hairline", async () => {
+  test("a live input has no full-width hairline above the box", async () => {
     const { setup } = await connect();
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("─".repeat(DEFAULT_WIDTH));
+    expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
     expect(frame).toContain("describe a task");
   });
 
@@ -3423,8 +3420,8 @@ describe("App", () => {
     });
 
     test("a terminal in between returns rows minus the panel chrome budget", () => {
-      expect(listWindowSize(18)).toBe(9);
-      expect(listWindowSize(15)).toBe(6);
+      expect(listWindowSize(18)).toBe(10);
+      expect(listWindowSize(15)).toBe(7);
     });
   });
 
@@ -4535,7 +4532,7 @@ describe("App", () => {
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
       expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
-      expect(frame).toContain("! Unset");
+      expect(frame).toContain("Unset");
 
       setup.mockInput.pressKey("z"); // unrecognised key
       await flush(setup);
@@ -4839,7 +4836,7 @@ describe("App", () => {
       });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toContain("! Remove write_file");
+      expect(setup.captureCharFrame()).toContain("Remove write_file");
 
       setup.mockInput.pressKey("y");
       await flush(setup);

@@ -3,8 +3,8 @@ import { TextAttributes } from "@opentui/core";
 import { FRAME } from "../theme/spacing";
 import { theme, WARNING_MARK } from "../theme/theme";
 
-// Callers pass already-composed prompt text (approvalPromptText, a "Remove X? [y]es / [N]o"
-// confirm line) — unlike ErrorLine, nothing here calls `singleLine`, so an embedded newline in
+// Real warnings only (the Grok borrowed-client notice). Approval and confirm use PanelBox plus
+// prose, not this. Unlike ErrorLine, nothing here calls `singleLine`, so an embedded newline in
 // `message` is preserved, not collapsed.
 export function WarningBox({ message }: { message: string }) {
   return (

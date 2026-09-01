@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useKeyboard } from "@opentui/react";
 import type { AuthPanelState } from "../../state/reducer";
-import { FRAME } from "../../theme/spacing";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
@@ -38,23 +38,23 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
 
   if (state.step === "starting") {
     return (
-      <box {...FRAME} flexDirection="column">
+      <PanelBox title="login">
         <text fg={theme.muted}>{`Starting ${authModeLabel(state.mode)}…`}</text>
         <text fg={theme.muted}>Esc cancel</text>
-      </box>
+      </PanelBox>
     );
   }
   if (state.step === "device") {
     return (
-      <box {...FRAME} flexDirection="column">
+      <PanelBox title="login">
         <text fg={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</text>
         <text>{state.userCode}</text>
         <text fg={theme.muted}>Esc cancel</text>
-      </box>
+      </PanelBox>
     );
   }
   return (
-    <box {...FRAME} borderColor={state.error ? theme.error : theme.muted} flexDirection="column">
+    <PanelBox title="login" borderColor={state.error ? theme.error : theme.muted}>
       {/* `state.error` is a single boolean discriminant on this "result" variant, so the branch
       happens once here rather than as several independently-conditional props — one of the two
       resulting elements is ErrorLine's own constant-styled alert line, the other a plain
@@ -68,6 +68,6 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
         <text truncate>{singleLine(state.message)}</text>
       )}
       <text fg={theme.muted}>Enter/Esc continue</text>
-    </box>
+    </PanelBox>
   );
 }

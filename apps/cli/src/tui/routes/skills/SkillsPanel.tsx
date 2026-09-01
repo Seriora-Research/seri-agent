@@ -3,7 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import { useListWindow } from "../../hooks/useListWindow";
-import { FRAME } from "../../theme/spacing";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
 import {
@@ -70,10 +70,7 @@ export function SkillsPanel({
   const selectedRow = filtered[selectedIndex];
 
   return (
-    <box {...FRAME} flexDirection="column">
-      <text fg={theme.text} attributes={TextAttributes.BOLD}>
-        Skills
-      </text>
+    <PanelBox title="Skills">
       <text fg={theme.muted} truncate wrapMode="none">
         {`${rows.length} ${rows.length === 1 ? "skill" : "skills"} · ↑/↓ move · type to search · enter to run · esc to close`}
       </text>
@@ -122,6 +119,6 @@ export function SkillsPanel({
           )}
         </>
       )}
-    </box>
+    </PanelBox>
   );
 }

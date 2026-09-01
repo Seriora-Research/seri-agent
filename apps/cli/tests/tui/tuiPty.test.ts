@@ -3821,10 +3821,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      // The TUI's own ApprovalBox rendering the SAME prompt text makeApprovalPrompt uses — split
-      // across two checks, not one long toContain, since Ink wraps this line across the box's own
-      // bordered rows (measured, same as App.test.tsx's own version of this same assertion).
-      await sawLine(`Approve write_file({"path":"a.txt","content":"hi"})? [y]es / [a]lways`);
+      // TUI prose (approvalCopy), not the JSON readline the non-interactive path still uses.
+      await sawLine(`Write a.txt?`);
       await sawLine("[N]o");
 
       child.stdin?.write("y");

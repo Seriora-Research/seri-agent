@@ -2,21 +2,21 @@
 // Ported from panels/ApprovalBox.tsx: single-keypress y/a/n prompt, OpenTUI's element/hook names.
 
 import { useKeyboard } from "@opentui/react";
-import { approvalPromptText } from "../../cli/output";
 import type { ApprovalAnswer } from "../../loop/loop";
-import { WarningBox } from "../ui/WarningBox";
+import { theme } from "../theme/theme";
+import { OptionKeys } from "../ui/OptionKeys";
+import { PanelBox } from "../ui/PanelBox";
+import { approvalCopy, optionLabels } from "../util/approvalCopy";
 import { isEnter, isPrintableKey } from "../util/keys";
 
-// approvalPromptText (cli/output.ts), not a hand-copied template: same escaping, same
-// PERSISTABLE_TOOLS-gated "always" option, same [N]o-is-the-default framing as the non-interactive
-// path's own rl.question call (cli.ts), from one shared function, so switching between the two
-// can't drift apart. Captures a single keypress instead of readline's line-buffered question: y/a/n
-// answer directly, Enter defaults to "no" (the bracketed capital in "[N]o"), and — matching the
-// non-interactive path's own "anything unrecognised is 'no'" rule, applied per-keystroke here
-// instead of per-line — so does everything else, except Ctrl-D (quits, see onQuit below) and a
-// bare Ctrl/Meta chord otherwise (Ctrl-C included, which runtime/renderer.ts already routes to
-// signals.ts; answering "no" here too would just be a redundant second resolution of the
-// same promise, not incorrect, but not this component's concern either).
+// TUI prose (approvalCopy), not approvalPromptText: the non-interactive CLI path stays a single
+// JSON readline row. Captures a single keypress instead of readline's line-buffered question:
+// y/a/n answer directly, Enter defaults to "no" (the bracketed capital in "[N]o"), and —
+// matching the non-interactive path's own "anything unrecognised is 'no'" rule, applied
+// per-keystroke here instead of per-line — so does everything else, except Ctrl-D (quits, see
+// onQuit below) and a bare Ctrl/Meta chord otherwise (Ctrl-C included, which runtime/renderer.ts
+// already routes to signals.ts; answering "no" here too would just be a redundant second
+// resolution of the same promise, not incorrect, but not this component's concern either).
 export function ApprovalBox({
   pendingApproval,
   onAnswer,
@@ -27,6 +27,7 @@ export function ApprovalBox({
   onQuit?: () => void;
 }) {
   const { toolName, args, offersAlways } = pendingApproval;
+  const copy = approvalCopy(toolName, args);
 
   useKeyboard((key) => {
     // Ctrl-D used to do nothing while this component was mounted instead of InputBox — quit()
@@ -58,5 +59,11 @@ export function ApprovalBox({
     onAnswer?.("no");
   });
 
-  return <WarningBox message={approvalPromptText(toolName, args, offersAlways)} />;
+  return (
+    <PanelBox title="approve" right="">
+      <text fg={theme.text}>{copy.question}</text>
+      {copy.detail.length > 0 && <text fg={theme.muted}>{copy.detail}</text>}
+      <OptionKeys labels={optionLabels(offersAlways)} />
+    </PanelBox>
+  );
 }

@@ -8,8 +8,9 @@ import { theme } from "./theme";
 // rows per panel and shrink every list by that much.
 export const PAD_X = 1;
 
-// A full-width rule, not a box. Surfaces that are not framed use this mark so the floor
-// (status + input + mode) reads as one join without inventing a second border family.
+// Surfaces that are not framed used to share this full-width rule as a floor join above the
+// input box. The input FRAME already has a top rule, so App no longer paints this; the helper
+// stays for anything that still needs a ─ mark of a given width.
 export const HAIRLINE_CHAR = "─";
 
 export function hairlineRow(columns: number): string {

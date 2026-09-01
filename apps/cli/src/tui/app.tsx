@@ -55,7 +55,6 @@ import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/m
 import type { ModelMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isShiftTabModeCycle } from "../cli/commandCatalog";
-import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
@@ -85,7 +84,8 @@ import type { SetupProviderRow } from "./state/commands";
 import { type Dispatch, initialTuiState } from "./state/reducer";
 import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
-import { FRAME, gapBefore, hairlineRow } from "./theme/spacing";
+import { FRAME, gapBefore } from "./theme/spacing";
+import { approvalCopy } from "./util/approvalCopy";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import type { CompletionSource } from "./util/completion";
@@ -304,11 +304,13 @@ function resolveHeight(rows: number): number {
 // reasons, so precision here isn't worth chasing further.
 const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
 
-function FloorHairline({ columns }: { columns: number }) {
+function WritePreview({ name, args }: { name: string; args: unknown }) {
+  const copy = approvalCopy(name, args);
   return (
-    <text fg={theme.border} truncate wrapMode="none">
-      {hairlineRow(columns)}
-    </text>
+    <box {...FRAME} flexDirection="column">
+      <text fg={theme.text}>{copy.headline}</text>
+      {copy.detail.length > 0 && <text fg={theme.muted}>{copy.detail}</text>}
+    </box>
   );
 }
 
@@ -765,14 +767,7 @@ export function App({
       {state.pendingTool !== undefined &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
-          <box {...FRAME} borderColor={theme.warning}>
-            {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
-            args carry a whole file body — exactly the case the helper exists for, uncapped
-            here otherwise. */}
-            <text fg={theme.warning}>
-              {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
-            </text>
-          </box>
+          <WritePreview name={state.pendingTool.name} args={state.pendingTool.args} />
         ) : (
           <text fg={theme.muted}>
             {summarizeArgs(state.pendingTool.name, state.pendingTool.args)}
@@ -894,7 +889,6 @@ export function App({
         // input across it. The box is live and the note says where a submitted line goes.
         <>
           <text fg={theme.muted}>starting session… your message sends when it is ready</text>
-          {rows >= 6 && <FloorHairline columns={width} />}
           <InputBox
             onSubmit={(value) => {
               const task = value.trim();
@@ -925,9 +919,6 @@ export function App({
         </box>
       ) : (
         <>
-          {/* Input FRAME (3) + mode (1) + TurnStatus (1) is already five rows. A hairline
-        on a 5-row terminal would clip the status the short-terminal path exists to keep. */}
-          {rows >= 6 && <FloorHairline columns={width} />}
           <InputBox
             onSubmit={onSubmit}
             onQuit={onQuit}
