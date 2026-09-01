@@ -4004,7 +4004,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/setup", () => {
-    test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
+    test("lists every BYOK provider with correct source, masked values, and disabled removal for an env row", async () => {
       seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
