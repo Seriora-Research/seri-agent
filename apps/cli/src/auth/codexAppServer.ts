@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn as spawnReal } from "node:child_process";
+import { type ChildProcess, type SpawnOptions, spawn as spawnReal } from "node:child_process";
 import { createInterface } from "node:readline";
 import pkg from "../../package.json";
 import { killOnFatalSignal } from "../tools/spawnCollect";
@@ -10,8 +10,14 @@ export type CodexJsonRpc = {
   close(): void;
 };
 
+export type CodexSpawn = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
 export type ConnectCodexAppServerOpts = {
-  spawn?: typeof spawnReal;
+  spawn?: CodexSpawn;
   command?: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
@@ -38,7 +44,7 @@ export async function connectCodexAppServer(
   if (command === undefined) {
     throw new Error("Codex CLI is not installed.");
   }
-  const spawnFn = opts.spawn ?? spawnReal;
+  const spawnFn: CodexSpawn = opts.spawn ?? spawnReal;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const child = spawnFn(command, ["app-server", "--stdio"], {
     stdio: ["pipe", "pipe", "pipe"],
