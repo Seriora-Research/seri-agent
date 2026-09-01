@@ -2053,24 +2053,28 @@ async function startChild(
     // 100ms sleep after Escape is the same race under load: the next write lands on the splash
     // and is dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can
     // clear the overlay before InputBox is interactive, and leftover CUP cells can reintroduce
-    // the mark. Two identical current frames that show the input placeholder and not the splash
-    // hint are the signal that the next stdin write will reach InputBox.
+    // the mark. Two identical current frames that show a post-splash surface (the input
+    // placeholder, or /setup on a blank first run) and not the splash hint are the signal that
+    // the next stdin write will reach that surface. A child that already exited (driveLoop
+    // threw, uncaught) has nothing left to type into.
     const dismissed = Date.now() + 20_000;
     let previous: string | undefined;
     let sawHint = false;
     let hintGone = false;
-    while (spawnError === undefined && Date.now() < dismissed) {
+    const postSplashReady = (): boolean =>
+      gridContains("describe a task") || gridContains("/setup — provider API keys");
+    while (spawnError === undefined && child.exitCode === null && Date.now() < dismissed) {
       const frame = lastFrame();
       if (gridContains("Esc continue")) sawHint = true;
       if (sawHint && !gridContains("Esc continue")) hintGone = true;
-      const idle = hintGone && gridContains("describe a task");
+      const idle = hintGone && postSplashReady();
       if (idle && frame === previous) break;
       previous = idle ? frame : undefined;
       await new Promise((r) => setTimeout(r, 20));
     }
     if (spawnError !== undefined)
       throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
-    if (!(hintGone && gridContains("describe a task")))
+    if (child.exitCode === null && !(hintGone && postSplashReady()))
       throw new Error(`splash never dismissed\n--- lastFrame ---\n${lastFrame()}`);
   }
 
@@ -6558,6 +6562,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine } = await queueOneBehindTurn();
       try {
         child.stdin?.write("\x1b");
+        // Same 30ms Escape ambiguity window the /login abandon tests already use. Three
+        // back-to-back writes can arrive as one CSI-looking chunk instead of a cancel plus two
+        // inert extras, and the turn then never aborts.
+        await new Promise((resolve) => setTimeout(resolve, 30));
         child.stdin?.write("\x1b");
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_ABORTED 1");
