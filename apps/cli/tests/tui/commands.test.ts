@@ -712,7 +712,8 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 1,
     });
     // Written directly, bypassing the checkpointer's onAfterMutation — no ledger entry, so a
-    // restore back past this point cannot prove seri wrote it.
+    // restore back past this point cannot prove seri wrote it. The second write_file restages
+    // a.txt only (unchanged), so the two records share one tree and `/undo 1` is the step.
     writeFileSync(join(workTree, "b.txt"), "created outside write_file\n");
     snapshot({
       tool: "write_file",
@@ -721,7 +722,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 2,
     });
 
-    const { plan, message } = decideUndo(session(), ["2"], {
+    const { plan, message } = decideUndo(session(), ["1"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
       configDir: root,
@@ -731,7 +732,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     expect(plan.deleted).toEqual([]);
     expect(plan.preserved).toEqual(["b.txt"]);
     expect(message).toBe(
-      "Already at checkpoint 2; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
+      "Already at checkpoint 1; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
     );
   }, 30_000);
 
