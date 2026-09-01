@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
 import {
+  openRouterServedProvider,
   reportForOpenRouter,
   reportForSubscription,
   reportFromCatalogPricing,
@@ -97,6 +98,21 @@ describe("reportForOpenRouter", () => {
       status: "unknown",
       source: "none",
     });
+  });
+});
+
+describe("openRouterServedProvider", () => {
+  test("reads the upstream name from OpenRouter metadata", () => {
+    expect(
+      openRouterServedProvider({
+        openrouter: { provider: "Anthropic", usage: { cost: 0.01 } },
+      }),
+    ).toBe("Anthropic");
+  });
+
+  test("returns undefined when the field is missing", () => {
+    expect(openRouterServedProvider({ openrouter: { usage: { cost: 0.01 } } })).toBeUndefined();
+    expect(openRouterServedProvider(undefined)).toBeUndefined();
   });
 });
 

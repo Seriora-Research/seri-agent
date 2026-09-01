@@ -83,7 +83,7 @@ export function getModel(
       if (getOpenRouterModelFn === getOpenRouterModelReal && apiKey === undefined) {
         throw missingKeyError("openrouter");
       }
-      return getOpenRouterModelFn(id, sessionId, apiKey);
+      return getOpenRouterModelFn(id, sessionId, apiKey, configDir);
     }
     case "anthropic": {
       const apiKey = getApiKey(PROVIDER_API_KEY_NAMES.anthropic, configDir);

@@ -809,4 +809,97 @@ describe("runLoop", () => {
       expect(model.doStreamCalls[0]?.providerOptions).toBeUndefined();
     });
   });
+
+  test("temperature and seed reach doStream on a seed-capable provider", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "groq",
+        temperature: 0,
+        seed: 7,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.temperature).toBe(0);
+    expect(model.doStreamCalls[0]?.seed).toBe(7);
+  });
+
+  test("seed is not sent on Anthropic even when configured — negative control", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "anthropic",
+        temperature: 0,
+        seed: 7,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.temperature).toBe(0);
+    expect(model.doStreamCalls[0]?.seed).toBeUndefined();
+  });
+
+  test("Codex subscription sends neither temperature nor seed", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openai",
+        credential: "subscription",
+        temperature: 0,
+        seed: 7,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.temperature).toBeUndefined();
+    expect(model.doStreamCalls[0]?.seed).toBeUndefined();
+  });
+
+  test("OpenRouter usage carries servedProvider from response metadata", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () =>
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: "Hello" },
+          { type: "text-end", id: "1" },
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: undefined },
+            usage: usage(100, 50),
+            providerMetadata: {
+              openrouter: {
+                provider: "Anthropic",
+                usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150, cost: 0.01 },
+              },
+            },
+          },
+        ]),
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+      }),
+    );
+    const usageEvent = events.find(
+      (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
+    );
+    expect(usageEvent?.servedProvider).toBe("Anthropic");
+  });
 });

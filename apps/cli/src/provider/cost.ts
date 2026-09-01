@@ -23,7 +23,16 @@ export type CostReport = { amountUsd: number | undefined; status: CostStatus; so
 // nested shape below is asserted against the confirmed real shape, not inferred from `ai`'s types.
 // `providerMetadata` is a Promise on streamText results — the caller must await it after the stream
 // ends before calling this; it is a plain value on generateText.
-type OpenRouterProviderMetadata = { openrouter?: { usage?: { cost?: number } } };
+type OpenRouterProviderMetadata = {
+  openrouter?: { provider?: string; usage?: { cost?: number } };
+};
+
+export function openRouterServedProvider(
+  providerMetadata: ProviderMetadata | undefined,
+): string | undefined {
+  const name = (providerMetadata as OpenRouterProviderMetadata | undefined)?.openrouter?.provider;
+  return typeof name === "string" && name.length > 0 ? name : undefined;
+}
 
 export function reportForOpenRouter(
   _usage: LanguageModelUsage,

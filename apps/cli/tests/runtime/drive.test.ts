@@ -80,6 +80,7 @@ function preparedStub(): PreparedRun {
       recordArchivist: () => {},
       setEnabled: () => {},
       isEnabled: () => true,
+      setStepCeiling: () => {},
     },
     skills: new Map(),
     rules: new Map(),

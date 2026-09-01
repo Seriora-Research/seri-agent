@@ -13,12 +13,14 @@ import { checkPermission, type PermissionMode } from "../gate/gate";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
+  openRouterServedProvider,
   reportForOpenRouter,
   reportForSubscription,
   reportFromCatalogPricing,
 } from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
 import type { RouteCredential } from "../provider/routing";
+import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import {
   type CompactionSummary,
@@ -63,7 +65,7 @@ export type LoopEvent =
   // summariser's own round-trip, which is billed like any other and was invisible until now.
   // `cost` is only populated on the successful-call path (opts.provider/modelId/catalog supplied);
   // absent on the failed-mid-stream usage yield below and whenever the caller omits those opts.
-  | { type: "usage"; usage: LanguageModelUsage; cost?: CostReport }
+  | { type: "usage"; usage: LanguageModelUsage; cost?: CostReport; servedProvider?: string }
   // The SDK's retry, not one of ours — see MAX_RETRIES in compaction.ts. `attempt` counts retries of the current
   // model call, so the first re-issue is 1. There is no error and no delay here because nothing
   // ai@7.0.48 hands out per attempt carries either — streamText's onLanguageModelCallStart for the
@@ -296,6 +298,10 @@ export async function* runLoop(opts: {
   // resolution happens in driveLoop, this is just the winning
   // value). Requires opts.provider too, to know which provider-options shape to build.
   reasoningEffort?: string;
+  // Configured sampling. The loop applies the provider×credential matrix itself —
+  // a Codex subscription child must not inherit a Groq parent's seed.
+  temperature?: number;
+  seed?: number;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -315,6 +321,11 @@ export async function* runLoop(opts: {
   // was, or was not, applied to the turn that just succeeded — and a shared function is what keeps
   // the two from silently disagreeing.
   const legalReasoningEffort = appliedReasoningEffort(opts.reasoningEffort, catalogEntry);
+  const sampling = resolveSampling(opts.provider, opts.credential, {
+    temperature: opts.temperature,
+    seed: opts.seed,
+  });
+  const samplingFields = samplingCallFields(sampling);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
@@ -336,6 +347,7 @@ export async function* runLoop(opts: {
     try {
       const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
         stream: opts.credential === "subscription" && opts.provider === "openai",
+        ...samplingFields,
       });
       messages.splice(0, messages.length, ...compacted.messages);
       for (let attempt = 1; attempt <= compacted.retries; attempt++) {
@@ -422,6 +434,7 @@ export async function* runLoop(opts: {
           system: opts.system,
           abortSignal: opts.signal,
           maxRetries: MAX_RETRIES,
+          ...samplingFields,
           ...(providerOptions ? { providerOptions } : {}),
           onLanguageModelCallStart: () => {
             modelCallStarts++;
@@ -484,6 +497,7 @@ export async function* runLoop(opts: {
               // happened" — real billed tokens from a turn that streamed partway then failed would
               // silently vanish from the running total instead of degrading it to `unknown`.
               let failedCost: CostReport | undefined;
+              let failedServed: string | undefined;
               if (opts.credential === "subscription") {
                 failedCost = reportForSubscription();
               } else if (opts.provider === "openrouter") {
@@ -491,6 +505,7 @@ export async function* runLoop(opts: {
                   () => undefined,
                 );
                 failedCost = reportForOpenRouter(failedUsage, providerMetadata);
+                failedServed = openRouterServedProvider(providerMetadata);
               } else if (opts.provider && opts.modelId && opts.catalog) {
                 failedCost = reportFromCatalogPricing(
                   opts.modelId,
@@ -499,7 +514,12 @@ export async function* runLoop(opts: {
                   opts.catalog,
                 );
               }
-              yield { type: "usage", usage: failedUsage, cost: failedCost };
+              yield {
+                type: "usage",
+                usage: failedUsage,
+                cost: failedCost,
+                ...(failedServed !== undefined ? { servedProvider: failedServed } : {}),
+              };
             }
             return;
           }
@@ -511,6 +531,7 @@ export async function* runLoop(opts: {
         // on streamText results (per reportForOpenRouter's own comment) and is only awaited for the
         // provider that actually carries it.
         let cost: CostReport | undefined;
+        let servedProvider: string | undefined;
         if (opts.credential === "subscription") {
           cost = reportForSubscription();
         } else if (opts.provider === "openrouter") {
@@ -522,12 +543,18 @@ export async function* runLoop(opts: {
             () => undefined,
           );
           cost = reportForOpenRouter(resultUsage, providerMetadata);
+          servedProvider = openRouterServedProvider(providerMetadata);
         } else if (opts.provider && opts.modelId && opts.catalog) {
           cost = reportFromCatalogPricing(opts.modelId, opts.provider, resultUsage, opts.catalog);
         }
         // The whole of it, not the one field the compaction trigger above needs: what the call cost
         // is the consumer's question to answer, and narrowing it here is what made it unanswerable.
-        yield { type: "usage", usage: resultUsage, cost };
+        yield {
+          type: "usage",
+          usage: resultUsage,
+          cost,
+          ...(servedProvider !== undefined ? { servedProvider } : {}),
+        };
       } catch (err) {
         // This is the path a mid-stream cancel actually takes, measured against ai@7.0.48: the
         // fullStream yields an `abort` part and closes cleanly — the `for await` above does NOT
