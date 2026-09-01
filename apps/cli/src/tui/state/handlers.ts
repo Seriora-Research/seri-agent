@@ -7,6 +7,8 @@
 // ~670 of its lines) to live next to the functions it mirrors rather than across the module
 // boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
+import { codexSetupAction } from "../../auth/codexBin";
+import { disconnectCodex, reconnectCodex } from "../../auth/codexIgnore";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
 import {
@@ -23,7 +25,6 @@ import {
   providerKeyState,
 } from "../../provider/keys";
 import { validateProviderKey } from "../../provider/validate";
-import { codexSetupAction } from "../../auth/codexBin";
 import {
   configKeyInfo,
   decideAuthOffer,
@@ -108,7 +109,24 @@ export function createSetupHandlers(opts: {
       if (row.provider === "xai") {
         dispatch({
           type: "setup-step",
-          state: { step: row.connected ? "confirm-disconnect" : "confirm-connect" },
+          state: {
+            step: row.connected ? "confirm-disconnect" : "confirm-connect",
+            provider: "xai",
+          },
+        });
+        return;
+      }
+      if (row.status.status === "connected") {
+        dispatch({
+          type: "setup-step",
+          state: { step: "confirm-disconnect", provider: "openai" },
+        });
+        return;
+      }
+      if (row.status.status === "ignored") {
+        dispatch({
+          type: "setup-step",
+          state: { step: "confirm-connect", provider: "openai" },
         });
         return;
       }
@@ -208,17 +226,31 @@ export function createSetupHandlers(opts: {
     const pending = getPendingSetup();
     if (pending?.step === "confirm-disconnect") {
       try {
-        disconnectGrokReal(configDir, (message) => {
+        const onMessage = (message: string) => {
           dispatch({ type: "transcript-append", line: message });
-        });
+        };
+        if (pending.provider === "openai") disconnectCodex(configDir, onMessage);
+        else disconnectGrokReal(configDir, onMessage);
       } catch (err) {
         dispatch({ type: "command-error", message: messageOf(err) });
         return;
       }
-      dispatchSetupList("subscription:xai");
+      dispatchSetupList(`subscription:${pending.provider}`);
       return;
     }
     if (pending?.step === "confirm-connect") {
+      if (pending.provider === "openai") {
+        try {
+          reconnectCodex(configDir, (message) => {
+            dispatch({ type: "transcript-append", line: message });
+          });
+        } catch (err) {
+          dispatch({ type: "command-error", message: messageOf(err) });
+          return;
+        }
+        dispatchSetupList("subscription:openai");
+        return;
+      }
       dispatch({ type: "setup-resolved" });
       void onConnectGrok?.();
       return;
@@ -264,7 +296,7 @@ export function createSetupHandlers(opts: {
         : current?.step === "confirm-remove"
           ? `key:${current.provider}`
           : current?.step === "confirm-connect" || current?.step === "confirm-disconnect"
-            ? "subscription:xai"
+            ? `subscription:${current.provider}`
             : undefined;
     dispatchSetupList(selectedId);
   }

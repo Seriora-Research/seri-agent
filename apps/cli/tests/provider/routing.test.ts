@@ -3,11 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import { clearCodexSubscriptionIgnore, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { getModel } from "../../src/provider/model";
-import {
-  clearCodexSubscriptionIgnore,
-  ignoreCodexSubscription,
-} from "../../src/auth/codexIgnore";
 import {
   resolveLegalReasoningTiers,
   resolveRoute,
