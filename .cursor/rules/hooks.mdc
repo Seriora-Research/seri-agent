@@ -6,25 +6,12 @@ alwaysApply: false
 
 # Hook authoring rules
 
-`hooks.json` only wires `record-session` (sessionStart), `block-dangerous`
-(beforeShellExecution), and `block-env-read` (beforeReadFile). Do not re-add
-conductor hooks (`goal-audit-gate`, `log-trajectory`, `protect-loop-core`,
-`verify-gate`). See [0014](../../docs/decisions/0014-pstack-only-no-engineering-loop.md).
-
-## Removed, not wired
-
-`format-and-typecheck` scripts may still sit on disk; they are not in
-`hooks.json`. The Stop-hook `verify-gate` scripts are gone (the
-`.cursor/skills/verify-gate` skill remains for on-demand gate runs).
-
-**Why verify-gate was not a hook:** it ran `bun run lint && typecheck && test`
-across the whole monorepo on every turn — redundant with deliberate gate runs,
-and slow enough to false-fail. User confirmation: no marginal safety in an
-attended session.
-
-**Why format-and-typecheck stayed unwired:** it read an env var Claude Code never
-sets, so it was a silent no-op. Wiring stdin would have reintroduced that
-cost on every Write/Edit.
+`hooks.json` only wires `block-dangerous` (beforeShellExecution) and
+`block-env-read` (beforeReadFile). Those two are the product's hook-interop
+reference, not a conductor. Do not re-add engineering-loop hooks
+(`goal-audit-gate`, `log-trajectory`, `protect-loop-core`, `verify-gate`,
+`record-session`, `format-and-typecheck`). See
+[0014](../../docs/decisions/0014-pstack-only-no-engineering-loop.md).
 
 ## Hook input arrives as JSON on stdin
 

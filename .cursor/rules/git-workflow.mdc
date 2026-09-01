@@ -19,9 +19,9 @@ forward.
 
 **How to apply:** Feature/bugfix work is pstack (`/poteto-mode`), including Opening a
 PR. Gates still run. Default review is `/interrogate` + `/no-comments`, plus
-`/blast-radius` before the PR. `reviewer-verifier` and thermo-nuclear stay on-demand
-(user-triggered). Push the branch and open the PR; do not merge locally. Naming: a
-descriptive branch name derived from the work (e.g. `feat/<slug>`) is reasonable.
+`/blast-radius` before the PR. Thermo-nuclear stays on-demand (user-triggered).
+Push the branch and open the PR; do not merge locally. Naming: a descriptive
+branch name derived from the work (e.g. `feat/<slug>`) is reasonable.
 
 ## PR review: `/code-review` stays the default; `@claude` in PRs is now also set up
 Considered and explicitly rejected (user directive, 2026-08-02): the official Claude
@@ -41,7 +41,7 @@ workflow, not an auto-review-every-PR one.
 Default in-session review is pstack `/interrogate` (and `/no-comments` before the PR).
 `/code-review` remains available as a user-triggered pass. The `@claude` mention
 workflow is an ad hoc supplementary path (tagging `@claude` on a PR from GitHub's UI).
-`reviewer-verifier` and thermo-nuclear are user-triggered, not dispatched by default.
+Thermo-nuclear is user-triggered, not dispatched by default.
 
 **Open, not yet resolved:** whether the conductor merges a PR itself once gates +
 pstack review pass, or always leaves GitHub merge for the human. Default until told
