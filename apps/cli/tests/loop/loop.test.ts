@@ -491,7 +491,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -578,7 +578,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -631,7 +631,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 
@@ -672,7 +672,7 @@ describe("runLoop", () => {
         maxIterations: totalIterations,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentMessages: 6,
+        preserveRecentTokens: 80,
       }),
     );
 

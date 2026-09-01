@@ -4699,12 +4699,14 @@ describe("run (/compact)", () => {
   });
 
   function longMessages(count: number): ModelMessage[] {
+    // ~1000 tokens each so a 20-message tail is the 20_000-token keep.
+    const pad = "x".repeat(4000);
     const out: ModelMessage[] = [];
     for (let i = 0; i < count; i++) {
       out.push(
         i % 2 === 0
-          ? { role: "user", content: `message ${i}` }
-          : { role: "assistant", content: [{ type: "text", text: `reply ${i}` }] },
+          ? { role: "user", content: `message ${i} ${pad}` }
+          : { role: "assistant", content: [{ type: "text", text: `reply ${i} ${pad}` }] },
       );
     }
     return out;

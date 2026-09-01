@@ -87,7 +87,7 @@ import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
-  DEFAULT_PRESERVE_RECENT_MESSAGES,
+  DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
@@ -602,7 +602,7 @@ async function compactCommand(
 ): Promise<void> {
   const evictBoundary = findSafeEvictionBoundary(
     session.messages,
-    DEFAULT_PRESERVE_RECENT_MESSAGES,
+    DEFAULT_PRESERVE_RECENT_TOKENS,
   );
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");

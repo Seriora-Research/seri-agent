@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import {
   compactMessages,
   elideOversizedStrings,
+  estimateTokens,
   findSafeEvictionBoundary,
   SUMMARIZER_STRING_CAP_BYTES,
 } from "../../src/loop/compaction";
@@ -61,11 +62,16 @@ function buildAlternatingMessages(pairs: number): ModelMessage[] {
   return messages;
 }
 
+function keepTokensForLast(messages: ModelMessage[], count: number): number {
+  if (count <= 0) return 0;
+  return estimateTokens(messages.slice(-count));
+}
+
 describe("findSafeEvictionBoundary", () => {
-  test("never returns a boundary pointing at a tool message, across every preserveRecentMessages value", () => {
+  test("never returns a boundary pointing at a tool message, across every keep-token budget that lands on today's indexes", () => {
     const messages = buildAlternatingMessages(10);
     for (let preserve = 0; preserve <= messages.length; preserve++) {
-      const boundary = findSafeEvictionBoundary(messages, preserve);
+      const boundary = findSafeEvictionBoundary(messages, keepTokensForLast(messages, preserve));
       if (boundary === null) continue;
       expect(messages[boundary]?.role).not.toBe("tool");
     }
@@ -75,9 +81,9 @@ describe("findSafeEvictionBoundary", () => {
     const messages = buildAlternatingMessages(10);
     const candidateIndex = 6; // even index -> lands on a tool message
     expect(messages[candidateIndex]?.role).toBe("tool");
-    const preserve = messages.length - candidateIndex;
+    const keep = keepTokensForLast(messages, messages.length - candidateIndex);
 
-    const boundary = findSafeEvictionBoundary(messages, preserve);
+    const boundary = findSafeEvictionBoundary(messages, keep);
 
     expect(boundary).toBe(candidateIndex + 1);
     expect(messages[boundary as number]?.role).toBe("assistant");
@@ -85,7 +91,34 @@ describe("findSafeEvictionBoundary", () => {
 
   test("returns null when fewer than minEvictable messages would be evicted", () => {
     const messages = buildAlternatingMessages(10);
-    expect(findSafeEvictionBoundary(messages, messages.length)).toBeNull();
+    expect(findSafeEvictionBoundary(messages, keepTokensForLast(messages, messages.length))).toBeNull();
+  });
+
+  test("a huge 19-message tail is cut while a tiny 20-message tail is kept", () => {
+    // 20k tokens / 19 ≈ 4 KiB of text; each result is well over that so the
+    // suffix alone exceeds the keep budget and a count-20 rule cannot treat
+    // the whole tail as recent.
+    const hugeBody = "H".repeat(20_000);
+    const huge: ModelMessage[] = [];
+    for (let i = 0; i < 9; i++) {
+      huge.push(assistantToolCallMsg(`huge-${i}`), toolResultMsg(`huge-${i}`, hugeBody));
+    }
+    huge.push({ role: "user", content: hugeBody });
+    expect(huge).toHaveLength(19);
+    const hugeBoundary = findSafeEvictionBoundary(huge, 20_000);
+    expect(hugeBoundary).not.toBeNull();
+    expect(hugeBoundary).toBeGreaterThanOrEqual(4);
+    expect(huge[hugeBoundary as number]?.role).not.toBe("tool");
+
+    const tiny: ModelMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      tiny.push({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: i % 2 === 0 ? "ok" : [{ type: "text", text: "ok" }],
+      });
+    }
+    expect(estimateTokens(tiny)).toBeLessThan(2_000);
+    expect(findSafeEvictionBoundary(tiny, 20_000)).toBeNull();
   });
 });
 
@@ -168,6 +201,7 @@ describe("compactMessages", () => {
     const result = await compactMessages(messages, model, evictBoundary);
 
     expect(result.evictedCount).toBe(evictBoundary);
+    expect(result.tokensBefore).toBe(estimateTokens(messages));
     expect(result.messages).toHaveLength(2);
     expect(result.messages[1]).toEqual(messages[3]);
 

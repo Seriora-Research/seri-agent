@@ -13,6 +13,47 @@ export type CompactionSummary = z.infer<typeof CompactionSummarySchema>;
 
 const DEFAULT_MIN_EVICTABLE = 4;
 
+export const DEFAULT_PRESERVE_RECENT_TOKENS = 20_000;
+
+export function estimateTokens(message: ModelMessage): number;
+export function estimateTokens(messages: readonly ModelMessage[]): number;
+export function estimateTokens(input: ModelMessage | readonly ModelMessage[]): number {
+  if (Array.isArray(input)) {
+    let total = 0;
+    for (const message of input) total += estimateMessageTokens(message);
+    return total;
+  }
+  return estimateMessageTokens(input);
+}
+
+function estimateMessageTokens(message: ModelMessage): number {
+  const content = message.content;
+  if (typeof content === "string") return charsToTokens(content);
+  if (!Array.isArray(content)) return 0;
+  let total = 0;
+  for (const part of content) total += estimatePartTokens(part);
+  return total;
+}
+
+function charsToTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function estimatePartTokens(part: unknown): number {
+  if (typeof part === "string") return charsToTokens(part);
+  if (part === null || typeof part !== "object") return 0;
+  const record = part as Record<string, unknown>;
+  if (record.type === "tool-call") {
+    return charsToTokens(JSON.stringify(record.input ?? record.args ?? {}));
+  }
+  if (record.type === "tool-result") {
+    return charsToTokens(JSON.stringify(record.output ?? record.result ?? {}));
+  }
+  if (typeof record.text === "string") return charsToTokens(record.text);
+  if (typeof record.thinking === "string") return charsToTokens(record.thinking);
+  return 0;
+}
+
 // Deliberately the same 2 the SDK already applies when nothing passes it (ai@7.0.48
 // dist/index.js:2789), so this changes no behaviour: every streamText and generateText call in
 // this repo has been retrying a 429 or a 5xx twice, with a 2 s first backoff, before the failure
@@ -60,10 +101,15 @@ export function elideOversizedStrings(
 // 24c2aa1).
 export function findSafeEvictionBoundary(
   messages: ModelMessage[],
-  preserveRecentMessages: number,
+  keepRecentTokens: number,
   minEvictable = DEFAULT_MIN_EVICTABLE,
 ): number | null {
-  let boundary = messages.length - preserveRecentMessages;
+  let kept = 0;
+  let boundary = messages.length;
+  while (boundary > 0 && kept < keepRecentTokens) {
+    boundary--;
+    kept += estimateTokens(messages[boundary]!);
+  }
   while (boundary > 0 && messages[boundary]?.role === "tool") {
     boundary++;
   }
@@ -83,7 +129,9 @@ export async function compactMessages(
   evictedCount: number;
   usage: LanguageModelUsage;
   retries: number;
+  tokensBefore: number;
 }> {
+  const tokensBefore = estimateTokens(messages);
   const evicted = messages.slice(0, evictBoundary);
 
   // Counted through a middleware, not through onLanguageModelCallStart the way loop.ts counts the
@@ -171,5 +219,6 @@ export async function compactMessages(
     evictedCount: evictBoundary,
     usage,
     retries: Math.max(attempts - 1, 0),
+    tokensBefore,
   };
 }

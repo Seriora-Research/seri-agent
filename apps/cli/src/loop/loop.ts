@@ -23,9 +23,12 @@ import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import {
   type CompactionSummary,
   compactMessages,
+  DEFAULT_PRESERVE_RECENT_TOKENS,
   findSafeEvictionBoundary,
   MAX_RETRIES,
 } from "./compaction";
+
+export { DEFAULT_PRESERVE_RECENT_TOKENS } from "./compaction";
 
 export type LoopEvent =
   | { type: "text-delta"; text: string }
@@ -129,7 +132,6 @@ const MAX_CONSECUTIVE_DENIALS = 3;
 // Fully overridable via opts.contextWindowSize.
 export const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
-export const DEFAULT_PRESERVE_RECENT_MESSAGES = 20;
 
 const MAX_SERIALISED_ERROR_LENGTH = 500;
 
@@ -268,7 +270,7 @@ export async function* runLoop(opts: {
   system?: string;
   contextWindowSize?: number;
   compactionThreshold?: number;
-  preserveRecentMessages?: number;
+  preserveRecentTokens?: number;
   signal?: AbortSignal;
   // Which provider opts.model was constructed from, and the catalog to look it up in — both
   // optional so every existing caller (none of which pass these yet) keeps today's behaviour
@@ -308,7 +310,7 @@ export async function* runLoop(opts: {
   // the two from silently disagreeing.
   const legalReasoningEffort = appliedReasoningEffort(opts.reasoningEffort, catalogEntry);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
-  const preserveRecentMessages = opts.preserveRecentMessages ?? DEFAULT_PRESERVE_RECENT_MESSAGES;
+  const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
 
   // The AI SDK auto-runs a tool's `execute` while streaming. Strip it so every
@@ -340,7 +342,7 @@ export async function* runLoop(opts: {
     }
 
     if (lastInputTokens / contextWindowSize >= compactionThreshold) {
-      const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentMessages);
+      const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
       if (evictBoundary !== null) {
         try {
           const compacted = await compactMessages(
