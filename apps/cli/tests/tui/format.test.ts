@@ -256,6 +256,17 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(gatewayRoute, gatewaySuffix.length, undefined)).toBe(gatewaySuffix);
   });
 
+  test("a subscription-served route: 'plan' when the budget fits", () => {
+    const subscriptionRoute = route({
+      provider: "openai",
+      model: "gpt-5.6-terra",
+      credential: "subscription",
+    });
+    const suffix = "  gpt-5.6-terra · plan";
+    expect(formatModeDetail(subscriptionRoute, suffix.length, undefined)).toBe(suffix);
+    expect(formatModeDetail(subscriptionRoute, suffix.length, undefined)).not.toContain("your key");
+  });
+
   // Defensive: resolveRoute's own contract makes rerouted plus a "gateway" credential unreachable, but
   // formatModeDetail must not rely on that — a rerouted route always reads "→ provider", never
   // "provided", regardless of what the credential carries.

@@ -33,15 +33,26 @@ function sessionDbPaths(sessionsDir: string): string[] {
   );
 }
 
-function makeSessionStoreReadOnly(sessionsDir: string): void {
-  for (const path of sessionDbPaths(sessionsDir)) {
-    if (existsSync(path)) chmodSync(path, 0o400);
+function chmodIfPresent(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch (err) {
+    // SQLite can checkpoint and unlink WAL/SHM between a stat and chmod. The main db
+    // file is what must exist after the child's first save; a vanished sidecar is that
+    // race, not a missing store.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+}
+
+function makeSessionStoreReadOnly(sessionsDir: string): void {
+  const [db, ...sidecars] = sessionDbPaths(sessionsDir);
+  chmodSync(db!, 0o400);
+  for (const path of sidecars) chmodIfPresent(path, 0o400);
 }
 
 function restoreSessionStore(sessionsDir: string): void {
   for (const path of sessionDbPaths(sessionsDir)) {
-    if (existsSync(path)) chmodSync(path, 0o600);
+    chmodIfPresent(path, 0o600);
   }
 }
 
@@ -2092,6 +2103,32 @@ async function startChild(
     frameOccurrences,
     sawInFrameTimes,
   };
+}
+
+type PtyChild = Awaited<ReturnType<typeof startChild>>;
+
+// The picker's header can paint (and `sawLine("Route")` resolve) before the filter
+// input's useKeyboard subscription is live. A write in that window is dropped, the
+// placeholder stays, and waiting for the typed id times out. Wait for the empty-filter
+// chrome in lastFrame, then type; re-type only while that placeholder is still on
+// screen so a landed first write is not doubled into the query.
+async function typePickerFilter(pty: PtyChild, text: string): Promise<void> {
+  await pty.sawInFrameTimes("Type to filter", 1);
+  pty.child.stdin?.write(text);
+  const start = Date.now();
+  const deadline = start + 20_000;
+  let retried = false;
+  while (Date.now() < deadline) {
+    if (pty.lastFrame().includes(text) || pty.stdoutSoFar().includes(text)) return;
+    if (!retried && Date.now() - start > 400 && pty.lastFrame().includes("Type to filter")) {
+      pty.child.stdin?.write(text);
+      retried = true;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(
+    `child never printed ${JSON.stringify(text)}; got ${JSON.stringify(pty.stdoutSoFar())}`,
+  );
 }
 
 // The message queue's own fake, and it differs from childScriptCancel above in the two ways that
@@ -4618,7 +4655,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = pty;
       try {
         await sawLine("/setup — provider API keys");
         expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
@@ -4634,11 +4672,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved GROQ_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
         // The fall-through to the main view (prepareSession -> runTui), same sync point
@@ -4668,7 +4702,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine } = pty;
       try {
         // No "/setup" keystroke sent — this must appear on its own, unlike every other /setup test
         // in this file, which types the command first.
@@ -4695,16 +4730,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
         // same close path the existing "cancel" /setup test above already exercises. Unlike
         // pre-fix, this does NOT fall straight through: a key is now configured, so onSetupClose
-        // opens the mandatory model picker instead.
+        // opens the mandatory model picker instead. typePickerFilter waits for the filter chrome
+        // (not just the Route header) so the query is not dropped before useKeyboard is live.
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
         // Narrows to exactly one entry across the whole catalog (groq and openrouter both) —
         // verified directly against the bundled catalog-manifest.json (the /model multi-route
         // pty test's own comment, above, has the full story on why this exact string).
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
@@ -4966,7 +4998,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = pty;
       try {
         await sawLine("/setup — provider API keys");
 
@@ -4987,16 +5020,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
         // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (the /model
         // multi-route pty test's own comment, above, verified this directly against
         // catalog-manifest.json). byRoutePriority (D2) sorts native before aggregator within a
         // route group, so the native anthropic row is already the top/default-selected one for
         // this filtered query — no Down press needed.
-        child.stdin?.write("claude-sonnet-5");
-        await sawLine("claude-sonnet-5");
+        await typePickerFilter(pty, "claude-sonnet-5");
         child.stdin?.write("\r");
 
         await sawLine("> do a task");
@@ -5023,7 +5052,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine } = pty;
       try {
         await sawLine("/setup — provider API keys");
 
@@ -5038,8 +5068,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved GROQ_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
+        await pty.sawInFrameTimes("Type to filter", 1);
 
         // Escape at the picker: must re-prompt, not resolve.
         child.stdin?.write("\x1b");
@@ -5049,8 +5078,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The picker is still up: a subsequent filter keystroke still narrows it, and config.json
         // still has no SERI_MODEL — proof Escape neither closed the picker nor let the run
         // continue on a keys-but-no-model session.
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         const configDuringEscape = JSON.parse(
           readFileSync(join(dir, ".seri", "config.json"), "utf8"),
         );
