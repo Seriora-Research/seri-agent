@@ -43,7 +43,7 @@ import { DEFAULT_PROVIDER, resolveDefaultModel } from "../provider/defaults";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
-import { type ResolvedRoute, resolveRoute } from "../provider/routing";
+import { type ResolvedRoute, type RouteCredential, resolveRoute } from "../provider/routing";
 import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
 import { createRulesState, type RulesState } from "../rules/match";
@@ -58,6 +58,7 @@ import {
 import { listPendingSkills } from "../skills/pending";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
+import { buildRunManifest, collectContextFiles } from "../trajectory/manifest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";
 import { type CommandDirs, checkpointTarget } from "../tui/state/commands";
@@ -252,6 +253,11 @@ export function createSessionTrajectory(
   configDir: string,
   onWarning: (message: string) => void,
   database?: SessionDatabase,
+  extras?: {
+    contextFiles?: () => readonly string[];
+    provider?: ModelProvider;
+    credential?: RouteCredential;
+  },
 ): TrajectoryWriter {
   const cfg = loadTrajectoryConfig(configDir);
   const trajectoriesDir = getTrajectoriesDir(configDir);
@@ -273,6 +279,15 @@ export function createSessionTrajectory(
     retentionDays: cfg.retentionDays,
     onWarning,
     ...(held !== undefined ? { database: held } : {}),
+    manifest: () =>
+      buildRunManifest({
+        cwd: session.cwd,
+        configDir,
+        provider: extras?.provider,
+        credential: extras?.credential,
+        contextFiles: extras?.contextFiles?.(),
+        maxIterations: 500,
+      }),
   });
 }
 
@@ -630,7 +645,16 @@ export function bindSession(
   permissionsDir: string,
   onWarning: (message: string) => void,
 ): ArchivistState {
-  const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database);
+  const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database, {
+    contextFiles: () =>
+      collectContextFiles({
+        cwd: session.cwd,
+        rules: prepared.rules.values(),
+        skills: prepared.skills.values(),
+      }),
+    provider: prepared.route.provider,
+    credential: prepared.route.credential,
+  });
   const { checkpointer, tools } = buildCheckpointedTools({
     storeDir: prepared.storeDir,
     worktree: prepared.worktree,
@@ -946,6 +970,12 @@ export async function prepareSession(
       configDir,
       (msg) => printWarning(msg, warnSink),
       ctx.database,
+      {
+        contextFiles: () =>
+          collectContextFiles({ cwd: session.cwd, rules: rules.values(), skills: skills.values() }),
+        provider: route.provider,
+        credential: route.credential,
+      },
     );
     const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,

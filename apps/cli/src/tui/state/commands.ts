@@ -423,6 +423,33 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
     },
   ],
   [
+    "SERI_TEMPERATURE",
+    {
+      label: "Temperature",
+      description: "Sampling temperature. Unset keeps the provider default and records that.",
+      kind: "string",
+      takesEffectNextRun: false,
+    },
+  ],
+  [
+    "SERI_SEED",
+    {
+      label: "Seed",
+      description: "Integer seed where the provider accepts one. Unset is recorded, not assumed.",
+      kind: "string",
+      takesEffectNextRun: false,
+    },
+  ],
+  [
+    "SERI_OPENROUTER_PROVIDER",
+    {
+      label: "OpenRouter pin",
+      description: "Pin OpenRouter to this upstream (no fallback). Disables sticky cache routing.",
+      kind: "string",
+      takesEffectNextRun: true,
+    },
+  ],
+  [
     "SERI_TUI_BACKGROUND",
     {
       label: "Background color",

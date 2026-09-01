@@ -2,6 +2,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
 import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
+import { loadOpenRouterPin } from "./sampling";
 
 // No default for modelId, matching groq.ts: the caller (provider/model.ts) is the single
 // authority on what id to construct with.
@@ -26,22 +27,26 @@ import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 // (https://openrouter.ai/blog/tutorials/prompt-caching-sticky-routing/): requests sharing a
 // `session_id` land on the same upstream backend, which is what lets its prompt cache hit across
 // turns. The same doc warns the two routing mechanisms conflict — "if you set `provider.order`
-// yourself, your order wins over sticky routing" — so a future contributor adding `provider.order`
-// here must remove `session_id` first, or vice versa, not combine them. Dynamic multi-backend
-// provider pinning (deriving a `provider.order` pin per model via OpenRouter's
-// `/models/{author}/{slug}/endpoints` API) was researched and deliberately not built here:
-// correct pinning gets backend consistency but not a cache guarantee (2/2 tested backends showed
-// zero cache activity despite a verified-correct pin, 2026-08-10), and no comparable harness has
-// shipped the cache-hit-specific version of this.
+// yourself, your order wins over sticky routing" — so a pin (`SERI_OPENROUTER_PROVIDER`) and
+// `session_id` are alternatives, never combined. Pinning is opt-in because a verified-correct
+// pin has been seen with no prompt-cache activity (2/2 backends, 2026-08-10).
 // `apiKey` defaults to today's lookup but can be overridden — see anthropic.ts's own comment on
 // why (validate.ts's probe call, D5).
 export function getOpenRouterModel(
   modelId: string,
   sessionId: string,
   apiKey = getApiKey(PROVIDER_API_KEY_NAMES.openrouter),
+  configDir?: string,
 ): LanguageModel {
   if (!apiKey) throw missingKeyError("openrouter");
+  // Pin and sticky routing are mutually exclusive — OpenRouter's own docs, and
+  // this file's comment above. A set pin wins; `session_id` stays the default.
+  const pin = loadOpenRouterPin(configDir);
+  const extraBody =
+    pin === undefined
+      ? { session_id: sessionId }
+      : { provider: { order: pin, allow_fallbacks: false } };
   return createOpenRouter({ apiKey, compatibility: "strict" })(modelId, {
-    extraBody: { session_id: sessionId },
+    extraBody,
   });
 }

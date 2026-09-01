@@ -6,6 +6,7 @@ import type { CostReport } from "../provider/cost";
 import { configDirForStore, DATABASE_FILENAME, SessionDatabase } from "../session/database";
 import type { ChildEventPayload } from "../subagents/dispatch";
 import { writeFileVerification } from "../verify/outcome";
+import type { TrajectoryManifest } from "./manifest";
 import { pruneTrajectories } from "./prune";
 import {
   TRAJECTORY_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ export type TrajectoryWriter = {
   ) => void;
   setEnabled: (enabled: boolean) => void;
   isEnabled: () => boolean;
+  setStepCeiling: (maxIterations: number) => void;
 };
 
 type WriterOpts = {
@@ -41,6 +43,7 @@ type WriterOpts = {
   now?: () => Date;
   onWarning: (message: string) => void;
   database?: SessionDatabase;
+  manifest?: () => TrajectoryManifest;
 };
 
 function messageOf(err: unknown): string {
@@ -83,6 +86,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   let enabled = opts.enabled;
   let lastWritePath: string | undefined;
   let header: TrajectoryHeader | undefined;
+  let stepCeiling: number | undefined;
   const parent: TrajectoryActor = { type: "parent" };
 
   function prune(keepSessionId?: string): void {
@@ -110,6 +114,12 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         startedAt: now().toISOString(),
         model: opts.model,
         provider: opts.provider,
+        ...(opts.manifest === undefined
+          ? {}
+          : {
+              ...opts.manifest(),
+              ...(stepCeiling !== undefined ? { maxIterations: stepCeiling } : {}),
+            }),
       };
       const record = {
         v: TRAJECTORY_SCHEMA_VERSION,
@@ -194,7 +204,16 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       return;
     }
     if (event.type === "usage") {
-      writeRecord({ kind: "usage", usage: event.usage, cost: event.cost, source: "turn" }, actor);
+      writeRecord(
+        {
+          kind: "usage",
+          usage: event.usage,
+          cost: event.cost,
+          source: "turn",
+          ...(event.servedProvider !== undefined ? { servedProvider: event.servedProvider } : {}),
+        },
+        actor,
+      );
       return;
     }
     if (event.type === "compacted") {
@@ -272,5 +291,8 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       if (!next) prune(opts.sessionId);
     },
     isEnabled: () => enabled,
+    setStepCeiling: (maxIterations) => {
+      stepCeiling = maxIterations;
+    },
   };
 }

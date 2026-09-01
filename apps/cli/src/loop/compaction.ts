@@ -239,7 +239,7 @@ export async function compactMessages(
   model: LanguageModel,
   evictBoundary: number,
   signal?: AbortSignal,
-  opts?: { stream?: boolean; customInstructions?: string },
+  opts?: { stream?: boolean; customInstructions?: string; temperature?: number; seed?: number },
 ): Promise<{
   messages: ModelMessage[];
   summary: CompactionSummary;
@@ -296,6 +296,10 @@ export async function compactMessages(
   // the same keypress would do nothing at all if it landed here.
   let text: string;
   let usage: LanguageModelUsage;
+  const sampling = {
+    ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
+    ...(opts?.seed !== undefined ? { seed: opts.seed } : {}),
+  };
   if (opts?.stream) {
     const result = streamText({
       model: countedModel,
@@ -303,6 +307,7 @@ export async function compactMessages(
       maxRetries: MAX_RETRIES,
       system,
       prompt,
+      ...sampling,
     });
     text = await result.text;
     usage = await result.usage;
@@ -313,6 +318,7 @@ export async function compactMessages(
       maxRetries: MAX_RETRIES,
       system,
       prompt,
+      ...sampling,
     });
     text = generated.text;
     usage = generated.usage;

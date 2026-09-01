@@ -7,6 +7,7 @@ import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../chec
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
+import type { RouteCredential } from "../provider/routing";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import {
   type AgentRegistry,
@@ -85,6 +86,9 @@ export type SubagentRuntime = {
   // Same resolved string the parent turn already sent, not a getter: /effort cannot change
   // mid-driveLoop, so a live read would not see a different value than this one.
   reasoningEffort: string | undefined;
+  credential?: RouteCredential;
+  temperature?: number;
+  seed?: number;
   // A getter, not a resolved value, so a dispatch started after a live /mode change sees the
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
@@ -113,6 +117,7 @@ export type SubagentRuntime = {
     contextWindowSize?: number;
     reasoningEffort: string | undefined;
     inherited: boolean;
+    credential?: RouteCredential;
   };
   // Session worktree. Children must not fall back to process.cwd().
   cwd?: string;
@@ -249,6 +254,9 @@ export async function runSubagent(opts: {
     catalog: runtime.catalog,
     contextWindowSize: runtime.contextWindowSize,
     reasoningEffort: runtime.reasoningEffort,
+    credential: runtime.credential,
+    temperature: runtime.temperature,
+    seed: runtime.seed,
     onBeforeTool: runtime.onBeforeTool,
     onAfterTool: runtime.onAfterTool,
   })) {
@@ -420,6 +428,7 @@ async function runAgentChild(opts: {
             modelId: overlay.modelId,
             contextWindowSize: overlay.contextWindowSize,
             reasoningEffort: overlay.reasoningEffort,
+            credential: overlay.credential ?? runtime.credential,
           },
     signal: opts.signal,
     child: { id: childId, role: spec.name, goal, ...identity },

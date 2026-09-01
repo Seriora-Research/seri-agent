@@ -323,3 +323,58 @@ describe("createTrajectoryWriter retention", () => {
     }
   });
 });
+
+describe("run manifest header", () => {
+  test("first write includes the manifest and step ceiling", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-manifest-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      const writer = createTrajectoryWriter(
+        writerOpts(dir, {
+          manifest: () => ({
+            harness: { version: "0.0.1", commit: "abc" },
+            upstreamProvider: "Anthropic",
+            temperature: 0,
+            seed: 7,
+            reasoningEffort: "low",
+            maxIterations: 500,
+            context: [{ path: "AGENTS.md", sha256: "deadbeef" }],
+          }),
+        }),
+      );
+      writer.setStepCeiling(12);
+      writer.recordLoopEvent({
+        type: "usage",
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        },
+        servedProvider: "Anthropic",
+      });
+      const records = readTrajectory(join(dir, "sess-1.jsonl"));
+      expect(records[0]).toMatchObject({
+        kind: "header",
+        harness: { version: "0.0.1", commit: "abc" },
+        upstreamProvider: "Anthropic",
+        temperature: 0,
+        seed: 7,
+        reasoningEffort: "low",
+        maxIterations: 12,
+        context: [{ path: "AGENTS.md", sha256: "deadbeef" }],
+      });
+      expect(records[1]).toMatchObject({
+        kind: "usage",
+        servedProvider: "Anthropic",
+      });
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+});
