@@ -513,7 +513,9 @@ describe("tuiReducer: loop-event", () => {
     expect(state.toolActivity).toHaveLength(1);
     expect(state.pendingTool).toBeUndefined();
     expect(state.transcript).toEqual([]);
-    expect(renderLiveToolActivity(state.toolActivity)[0]).toContain(`${TOOL_INDENT}${TREE_BRANCH}boom`);
+    expect(renderLiveToolActivity(state.toolActivity)[0]).toContain(
+      `${TOOL_INDENT}${TREE_BRANCH}boom`,
+    );
 
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
@@ -532,8 +534,7 @@ describe("tuiReducer: loop-event", () => {
     });
     state = apply(state, {
       type: "error",
-      error:
-        `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+      error: `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
     });
 
     expect(state.transcript).toEqual([]);

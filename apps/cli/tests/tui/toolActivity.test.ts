@@ -296,7 +296,9 @@ describe("anomalyLineForThrow", () => {
 
   test("keeps a tool's own first-line message", () => {
     expect(
-      anomalyLineForThrow('Tool "write_file" threw during execution: Error: Cannot write to reserved device name: CON'),
+      anomalyLineForThrow(
+        'Tool "write_file" threw during execution: Error: Cannot write to reserved device name: CON',
+      ),
     ).toBe("Cannot write to reserved device name: CON");
   });
 

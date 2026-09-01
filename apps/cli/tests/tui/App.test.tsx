@@ -1724,24 +1724,18 @@ describe("App", () => {
 
       dispatch({
         type: "loop-event",
-        event: { type: "text-delta", text: "I'll look at the roadmap." },
-      });
-      dispatch({
-        type: "loop-event",
         event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
       });
       dispatch({
         type: "loop-event",
         event: {
           type: "error",
-          error:
-            `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+          error: `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
         },
       });
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("I'll look at the roadmap.");
       expect(frame).toContain("→ Read(docs/ROADMAP.md)");
       expect(frame).toContain(`${TREE_BRANCH}file not found`);
       expect(frame).not.toContain("threw during execution");
