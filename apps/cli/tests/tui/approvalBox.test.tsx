@@ -85,7 +85,7 @@ describe("ApprovalBox (OpenTUI)", () => {
   test("renders the approval prompt text", async () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, () => {});
-      expect(setup.captureCharFrame()).toContain("Write a.txt?");
+    expect(setup.captureCharFrame()).toContain("Write a.txt?");
   });
 
   test("'y' answers once", async () => {

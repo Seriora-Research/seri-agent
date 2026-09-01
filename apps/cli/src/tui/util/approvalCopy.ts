@@ -14,7 +14,10 @@ function str(value: unknown): string | undefined {
 // Parent of a file path, shortened the way the locked mocks paint a write: two trailing
 // segments under an ellipsis, always with a trailing slash so it reads as a directory.
 export function parentDirDisplay(filePath: string): string {
-  const parts = filePath.replaceAll("\\", "/").split("/").filter((p) => p !== "");
+  const parts = filePath
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((p) => p !== "");
   const parent = parts.slice(0, -1);
   if (parent.length === 0) return "";
   if (parent.length <= 2) return `${parent.join("/")}/`;
