@@ -20,10 +20,10 @@ export function estimateTokens(messages: readonly ModelMessage[]): number;
 export function estimateTokens(input: ModelMessage | readonly ModelMessage[]): number {
   if (Array.isArray(input)) {
     let total = 0;
-    for (const message of input) total += estimateMessageTokens(message);
+    for (const message of input as readonly ModelMessage[]) total += estimateMessageTokens(message);
     return total;
   }
-  return estimateMessageTokens(input);
+  return estimateMessageTokens(input as ModelMessage);
 }
 
 function estimateMessageTokens(message: ModelMessage): number {
