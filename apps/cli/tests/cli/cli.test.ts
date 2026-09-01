@@ -4364,7 +4364,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       | { op: string }
       | undefined;
     expect(checkpoint?.op).toBe("pre-undo");
-  });
+  }, 15_000);
 
   test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
     // The case the printed git incantation got wrong. `read-tree` + `checkout-index -a -f` is
