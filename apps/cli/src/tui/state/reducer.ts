@@ -179,9 +179,10 @@ export type TuiState = {
   // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
-  // The non-blocking login/signup offer (AuthBanner, App.tsx) — independent of `pendingAuth`
-  // below, not a fourth mutually exclusive render-ternary state. Set by the `auth-offer` action
-  // (decideAuthOffer, dispatched from cli.ts/handlers.ts at every point the auth panel closes).
+  // Whether the welcome splash should offer Log in / Sign up (true) or just Continue (false).
+  // Independent of `pendingAuth` — that flag is the blocking device-flow panel, this one only
+  // chooses the splash menu. Set by `auth-offer` (decideAuthOffer). The main TUI does not
+  // render a sign-in banner from this flag.
   authOffer: boolean;
   // /login and /signup's own blocking panel. Mirrors `pendingSetup`'s mutual-exclusion role in the
   // render ternary.
@@ -416,8 +417,8 @@ export type TuiAction =
   // also close mid-chunk on a real pty.
   | { type: "setup-resolved"; leftoverInput?: string }
   // `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions land on these ten.
-  // `auth-offer` toggles the independent, non-blocking banner — deliberately NOT `pendingAuth`,
-  // which is the blocking panel (see TuiState's own comment).
+  // `auth-offer` chooses the splash menu (unsigned-in vs already signed in) — deliberately NOT
+  // `pendingAuth`, which is the blocking device-flow panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
   | { type: "auth-requested"; mode: AuthMode }
   | { type: "auth-step"; state: AuthPanelState }

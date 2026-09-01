@@ -68,7 +68,7 @@ import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
-import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
+import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
@@ -589,18 +589,6 @@ export function App({
     // "console write scrolls the viewport out from under the redraw bookkeeping" failure mode to
     // guard against. Full terminal height is used directly.
     <box flexDirection="column" height={rows}>
-      {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
-      ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
-      `state.pendingAuth === undefined` (not just `state.authOffer`) avoids needing a matching
-      `auth-offer: false` dispatch at every point the auth panel opens — a call site that forgets
-      one is a real bug class this closes by construction. The reducer already owns `pendingAuth` —
-      "is the panel currently open" is exactly what should gate "hide the redundant banner," derived
-      here instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own
-      login/signup menu already offers the same thing, so the banner would otherwise render
-      underneath it. */}
-      <AuthBanner
-        show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
-      />
       {/* flexGrow/flexShrink/flexBasis={0}/minHeight={0} give this box whatever height is left over
       after every sibling below has laid out, independent of its own children's height (this file's
       own header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
@@ -728,7 +716,7 @@ export function App({
       {/* Directly above the input box and below TurnStatus, which is where the issue's own
       simulation puts it: a queued message has already left the user's hands as far as the box is
       concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
-      branch of it — like AuthBanner and SubagentPanel it accompanies whatever is mounted there
+      branch of it — like SubagentPanel it accompanies whatever is mounted there
       rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
       keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
       key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
