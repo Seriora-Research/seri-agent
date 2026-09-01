@@ -146,18 +146,16 @@ export const MODE_LABEL = {
 // help a user who has never pressed the key yet.
 export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 
-// The persistent mode-indicator row's own 3-tier width breakpoints. `MODE_HINT_COLS` gates
-// MODE_CYCLE_HINT's own visibility (app.tsx's own JSX); `MODE_MODEL_MIN_COLS`/`MODE_ROUTE_MIN_COLS`
-// gate how much of formatModeDetail's own return value shows (below). Sized against the longest
-// label, "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
-// (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
-// the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
-// threshold holds even in that worst case. This proof does not (and cannot) account for the mode
-// row's own right-hand content (the scroll banner / `state.status`) sharing the same row — see
-// app.tsx's own `showRightSide` for how that side of the row is kept from wrapping instead.
+// The persistent mode-indicator row still floors the cycle hint at `MODE_HINT_COLS` (app.tsx
+// via `modeRowHintVisible`). Model, route, and effort are leftover-packed by `formatModeDetail`
+// into whatever columns remain after the indicator — longest suffix that fits, then the next
+// shorter, then empty. Sized against the longest label, "⏵⏵ bypass permissions on" (26 cols,
+// worst case its glyph renders double-width) + the hint (21 cols) = 47, still under 52, so the
+// hint floor holds even in that worst case when detail is empty. This proof does not (and cannot)
+// account for the mode row's own right-hand content (the scroll banner / `state.status`) sharing
+// the same row — see app.tsx's own `showRightSide` for how that side of the row is kept from
+// wrapping instead.
 export const MODE_HINT_COLS = 52;
-export const MODE_MODEL_MIN_COLS = 76;
-export const MODE_ROUTE_MIN_COLS = 100;
 // formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
 // from models.dev, an external and unvalidated source, so this is a display budget, not a bound
 // on the data. The widest values referenced anywhere in this codebase's own provider tables today
@@ -172,8 +170,9 @@ export const INPUT_PLACEHOLDER = "describe a task · / for commands · @ for fil
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
 // or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards
 // against; `||`, not `??`, is what makes the zero case fall back too. It is NOT what makes
-// App.test.tsx's own component tests land in the full tier: `createTestRenderer`'s own default
-// width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does that, not this fallback.
+// App.test.tsx's own component tests leftover-pack the full model+route suffix:
+// `createTestRenderer`'s own default width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does
+// that, not this fallback.
 export const DEFAULT_COLUMNS = 80;
 
 // `resolveHeight`'s own fallback (App.tsx) — the same first-render `0` a pty can genuinely report
@@ -359,36 +358,55 @@ export function formatRouteLabel(input: {
 // exactly as it already does in the model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
 // App before any provider key exists, so there is genuinely no route to show yet. Falls back to no
-// suffix, same as the narrow-terminal branch below — showing a fabricated route would misreport
-// "your key"/"→ provider" during the exact flow where neither is true.
-// post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
-// truncates model names to) before it goes into the return — a real catalog id (a long OpenRouter
-// id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
-// terminal width MODE_MODEL_MIN_COLS/MODE_ROUTE_MIN_COLS assumed it fit in.
-// Carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
-// is nothing to show, so app.tsx's JSX never has to add spacing of its own — it renders this
-// directly next to the mode indicator, which app.tsx already has in hand and colors separately.
+// suffix — showing a fabricated route would misreport "your key"/"→ provider" during the exact
+// flow where neither is true.
+// `width` is the leftover budget for this suffix only: the caller has already subtracted the
+// indicator and any right-side banner/status. Hint visibility is applied by the caller
+// (`modeRowHintVisible`), not here, so the suffix claims space first. Greedy drop order:
+// model+route+effort, then model+route, then model, then empty. `route.model` is capped to
+// NAME_WIDTH (the same width the picker table already truncates model names to) before it goes
+// into the return — a real catalog id (a long OpenRouter id is well over 40 chars) was otherwise
+// unbounded here and could overflow the leftover. Carries its own leading two spaces (mirroring
+// the old inline `"  "` join) and is `""` when there is nothing to show, so app.tsx's JSX never
+// has to add spacing of its own — it renders this directly next to the mode indicator, which
+// app.tsx already has in hand and colors separately.
 // `effortTier` is the active `/effort` override (or `undefined` for none/auto/stale — see its
-// caller in app.tsx), appended only at the same width tier the route label already requires: 86
-// (this row's own proven worst case, see MODE_ROUTE_MIN_COLS's comment above) + 3 (" · ") + 8
-// (EFFORT_WIDTH) = 97 < 100, so the combined worst case still holds with room to spare. Truncated
-// with the same defensive shape as the model name below, since a tier value ultimately comes from
-// models.dev, an external and unvalidated source.
+// caller in app.tsx), packed with the route when leftover allows. Truncated with the same
+// defensive shape as the model name, since a tier value ultimately comes from models.dev, an
+// external and unvalidated source.
 export function formatModeDetail(
   route: ResolvedRoute | undefined,
   width: number,
   effortTier: string | undefined,
 ): string {
-  if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
-  const modelName = truncate(route.model, NAME_WIDTH);
-  if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
+  if (route === undefined) return "";
+  const model = `  ${truncate(route.model, NAME_WIDTH)}`;
   const routeLabel = formatRouteLabel({
     keyConfigured: !route.rerouted && route.credential !== "gateway",
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.credential === "gateway",
   });
-  if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
-  return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;
+  const withRoute = `${model} · ${routeLabel}`;
+  const withEffort =
+    effortTier === undefined ? withRoute : `${withRoute} · ${truncate(effortTier, EFFORT_WIDTH)}`;
+  if (withEffort.length <= width) return withEffort;
+  if (withRoute.length <= width) return withRoute;
+  if (model.length <= width) return model;
+  return "";
+}
+
+// Whether the persistent mode row still has room for MODE_CYCLE_HINT after leftover-packing the
+// detail suffix. Floors at MODE_HINT_COLS even when the hint itself would fit in a narrower row;
+// yields whenever indicator + hint + already-packed detail would overflow `remaining`.
+export function modeRowHintVisible(
+  remaining: number,
+  indicatorWidth: number,
+  detailLength: number,
+): boolean {
+  return (
+    remaining >= MODE_HINT_COLS &&
+    indicatorWidth + MODE_CYCLE_HINT.length + detailLength <= remaining
+  );
 }
 
 // Inside FRAME (single border 1+1, PAD_X 1+1) the ListRow marker ("> "/"  ", 2 cols) leaves this
