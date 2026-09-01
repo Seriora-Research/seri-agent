@@ -91,6 +91,41 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toMatch(/investigate before deleting or overwriting/i);
   });
 
+  test("the assembled system prompt says sibling read_file/grep/glob calls in one step run together, and that a write is a barrier", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/read_file[\s\S]*grep[\s\S]*glob/i);
+    expect(prompt).toMatch(/one step/i);
+    expect(prompt).toMatch(/together/i);
+    expect(prompt).toMatch(/barrier/i);
+    expect(prompt).toMatch(/one at a time/i);
+  });
+
+  test("the assembled system prompt says the harness does not translate bash and powershell into each other", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/does not translate|no translation/i);
+    expect(prompt).toMatch(/bash/i);
+    expect(prompt).toMatch(/powershell/i);
+  });
+
+  test("the assembled system prompt forbids writing AGENTS.md and the human-authored .seri contracts", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/AGENTS\.md/);
+    expect(prompt).toMatch(/\.seri\/rules/);
+    expect(prompt).toMatch(/\.seri\/agents/);
+    expect(prompt).toMatch(/\.seri\/hooks/);
+    expect(prompt).toMatch(/do not create or edit|never (create|write|edit)/i);
+  });
+
+  test("the stable prompt does not name skill or mcp, which are absent unless this session composed them", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).not.toMatch(/`skill`/);
+    expect(prompt).not.toMatch(/`mcp`/);
+  });
+
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
   // assembled output, and the join between them must match today's separator shape exactly — a
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
