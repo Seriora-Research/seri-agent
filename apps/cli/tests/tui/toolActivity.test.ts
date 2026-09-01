@@ -5,10 +5,12 @@ import type { ProcessResult } from "../../src/tools/spawnCollect";
 import {
   anomalyLineForDenial,
   anomalyLineForResult,
+  anomalyLineForThrow,
   detailLinesForResult,
   recordCall,
   recordDenial,
   recordResult,
+  recordThrow,
   renderLiveToolActivity,
   renderToolActivity,
   summarizeArgs,
@@ -271,6 +273,35 @@ describe("anomalyLineForDenial", () => {
 
   test("declined", () => {
     expect(anomalyLineForDenial("declined")).toBe("declined");
+  });
+});
+
+describe("anomalyLineForThrow", () => {
+  test("strips the loop wrapper and maps ENOENT", () => {
+    expect(
+      anomalyLineForThrow(
+        `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+      ),
+    ).toBe("file not found");
+  });
+
+  test("maps EACCES and EPERM to permission denied", () => {
+    expect(anomalyLineForThrow("Error: EACCES: permission denied, open '/etc/shadow'")).toBe(
+      "permission denied",
+    );
+    expect(anomalyLineForThrow("EPERM: operation not permitted, unlink 'a.lock'")).toBe(
+      "permission denied",
+    );
+  });
+
+  test("keeps a tool's own first-line message", () => {
+    expect(
+      anomalyLineForThrow('Tool "write_file" threw during execution: Error: Cannot write to reserved device name: CON'),
+    ).toBe("Cannot write to reserved device name: CON");
+  });
+
+  test("an empty remainder becomes failed", () => {
+    expect(anomalyLineForThrow('Tool "read_file" threw during execution: ')).toBe("failed");
   });
 });
 
@@ -538,6 +569,22 @@ describe("recordCall / recordResult / recordDenial", () => {
     const entries = recordDenial([], "write_file", "declined");
     expect(entries[0].anomalyLines).toEqual(["declined"]);
     expect(entries[0].count).toBe(1);
+  });
+
+  test("recordCall then recordThrow settles the open group with one anomaly", () => {
+    let entries = recordCall([], "read_file", { path: "docs/ROADMAP.md" });
+    entries = recordThrow(
+      entries,
+      "read_file",
+      { path: "docs/ROADMAP.md" },
+      `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'docs/ROADMAP.md'`,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0].count).toBe(1);
+    expect(entries[0].open).toBe(false);
+    expect(entries[0].anomalyLines).toEqual(["file not found"]);
+    expect(renderLiveToolActivity(entries)[0]).toContain(`${I}${TREE_BRANCH}file not found`);
+    expect(renderLiveToolActivity(entries)[0]).not.toContain("threw during execution");
   });
 
   test("recordCall then recordResult does not double-count", () => {

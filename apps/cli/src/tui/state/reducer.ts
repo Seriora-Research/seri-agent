@@ -10,6 +10,7 @@ import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import type { ChildEventPayload } from "../../subagents/dispatch";
+import { ERROR_MARK } from "../theme/theme";
 import {
   estimateTokens,
   formatDoneLine,
@@ -24,6 +25,7 @@ import {
   recordCall,
   recordDenial,
   recordResult,
+  recordThrow,
   renderToolActivity,
   type ToolActivityEntry,
 } from "./toolActivity";
@@ -126,14 +128,16 @@ export type TuiState = {
   // see TurnStatus's own comment for why.
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
   // The in-flight tool call, if any — set on every tool-call event, cleared on its
-  // tool-result/permission-denied. Single-slot: loop.ts runs tools strictly sequentially, so
-  // the next result's args are always this pending call's. A dedicated field rather than
-  // App.tsx string-matching `status`'s rendered text (`"Running write_file…"`) against the last
-  // transcript line, which only worked by coincidence and would silently stop working the moment
-  // either string changed.
+  // tool-result/permission-denied, or on an error that arrives while this slot is set (thrown
+  // execute: tool-call then error, no tool-result). Single-slot: loop.ts runs tools strictly
+  // sequentially, so the next result's args are always this pending call's. A dedicated field
+  // rather than App.tsx string-matching `status`'s rendered text (`"Running write_file…"`)
+  // against the last transcript line, which only worked by coincidence and would silently stop
+  // working the moment either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
-  // tool-call/tool-result/permission-denied. App live-paints the settled view of this
+  // tool-call/tool-result/permission-denied, and on an error that arrives while a call is in
+  // flight (recordThrow). App live-paints the settled view of this
   // accumulator during the turn (renderLiveToolActivity). Flushed into the transcript as muted
   // lines on done and on turn-ended (the latter covers loop.ts's error-then-return exits that
   // never yield done). An error LoopEvent is not turn-end (loop.ts continues), so this
@@ -573,8 +577,21 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
         ...child,
         toolActivity: recordDenial(child.toolActivity, event.name, event.reason),
       };
-    case "error":
+    case "error": {
+      // Thrown execute is tool-call then error, no tool-result — same as the parent reducer.
+      // Attach the failure to the open group and drop currentTool so the live "current" line
+      // does not keep painting a call that has already settled as an anomaly.
+      const pending = child.currentTool;
+      if (pending !== undefined) {
+        return {
+          ...child,
+          toolActivity: recordThrow(child.toolActivity, pending.name, pending.args, event.error),
+          currentTool: undefined,
+          status: "error",
+        };
+      }
       return { ...child, status: "error" };
+    }
     case "done":
       return {
         ...flushChildStreaming(child),
@@ -1016,7 +1033,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // compact lines on done (not error: loop.ts yields error and continues). pendingTool is set
     // for every tool name so the live status slot (app.tsx) can show the in-flight call.
     // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
-    // has a settled line to flush.
+    // has a group for recordThrow to settle.
     case "tool-call":
       return {
         ...flushStreaming(state),
@@ -1099,13 +1116,26 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
     // (TuiAction) for why only that action, not this event, ends a turn. toolActivity is
     // also left in place: an error is not turn-end, and flushing here would drop calls
-    // that arrive after the error and erase a thrown tool-call that never got a result.
-    case "error":
+    // that arrive after the error. A thrown execute (pendingTool set) settles that open
+    // group as an anomaly instead of dumping the loop's model-facing wrapper as a
+    // transcript peer of the assistant's prose. Other errors (compaction, unknown tool,
+    // a failed stream) still push a marked system line.
+    case "error": {
+      const pending = state.pendingTool;
+      if (pending !== undefined) {
+        return {
+          ...state,
+          toolActivity: recordThrow(state.toolActivity, pending.name, pending.args, event.error),
+          status: "",
+          pendingTool: undefined,
+        };
+      }
       return {
-        ...pushLine(state, event.error),
+        ...pushLine(state, `${ERROR_MARK}${event.error}`),
         status: "",
         pendingTool: undefined,
       };
+    }
     default: {
       const _unhandled: never = event;
       return state;

@@ -15,7 +15,7 @@ import type {
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
 import { TOOL_INDENT } from "../../src/tui/theme/spacing";
-import { TREE_BRANCH } from "../../src/tui/theme/theme";
+import { ERROR_MARK, TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -481,7 +481,7 @@ describe("tuiReducer: loop-event", () => {
 
     expect(state.toolActivity).toHaveLength(1);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
-    expect(state.transcript.at(-1)?.text).toBe("compaction failed");
+    expect(state.transcript.at(-1)?.text).toBe(`${ERROR_MARK}compaction failed`);
 
     state = apply(state, {
       type: "tool-call",
@@ -497,23 +497,53 @@ describe("tuiReducer: loop-event", () => {
   });
 
   // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
-  // live line vanishes and no settled line is ever committed.
+  // live line vanishes and no settled line is ever committed. The error itself must not
+  // become a transcript peer of the assistant's prose — it settles the open group.
   test("a tool-call followed by error (no tool-result) still flushes a settled line on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "bash",
       args: { command: "explode" },
     });
-    state = apply(state, { type: "error", error: "tool threw" });
+    state = apply(state, {
+      type: "error",
+      error: 'Tool "bash" threw during execution: Error: boom',
+    });
 
     expect(state.toolActivity).toHaveLength(1);
-    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+    expect(state.pendingTool).toBeUndefined();
+    expect(state.transcript).toEqual([]);
+    expect(renderLiveToolActivity(state.toolActivity)[0]).toContain(`${TOOL_INDENT}${TREE_BRANCH}boom`);
 
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
     const muted = state.transcript.filter((e) => e.muted);
     expect(muted.length).toBeGreaterThanOrEqual(1);
     expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
+    expect(muted.some((e) => e.text.includes(`${TREE_BRANCH}boom`))).toBe(true);
+    expect(state.transcript.every((e) => !e.text.includes("threw during execution"))).toBe(true);
+  });
+
+  test("a thrown read_file is a file-not-found anomaly, not a raw error line", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: "docs/ROADMAP.md" },
+    });
+    state = apply(state, {
+      type: "error",
+      error:
+        `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+    });
+
+    expect(state.transcript).toEqual([]);
+    expect(state.pendingTool).toBeUndefined();
+    const live = renderLiveToolActivity(state.toolActivity);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toContain("→ Read(docs/ROADMAP.md)");
+    expect(live[0]).toContain(`${TOOL_INDENT}${TREE_BRANCH}file not found`);
+    expect(live[0]).not.toContain("threw during execution");
+    expect(live[0]).not.toContain("ENOENT");
   });
 
   // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
@@ -1817,6 +1847,32 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toEqual([]);
     expect(state.pendingTool).toBeUndefined();
+  });
+
+  test("a child tool-call then error settles an anomaly and clears currentTool", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "error",
+        error: 'Tool "read_file" threw during execution: Error: ENOENT: no such file or directory',
+      }),
+    );
+
+    const child = panel(state).subagents[0];
+    expect(child?.currentTool).toBeUndefined();
+    expect(child?.status).toBe("error");
+    expect(child?.toolActivity[0]?.anomalyLines).toEqual(["file not found"]);
+    expect(state.transcript).toEqual([]);
   });
 
   test("child-started copies the actual model pair when the child did not inherit", () => {

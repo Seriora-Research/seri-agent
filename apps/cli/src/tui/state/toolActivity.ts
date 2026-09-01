@@ -284,6 +284,23 @@ export function anomalyLineForDenial(reason: "blocked" | "declined" | "hook"): s
   return reason === "hook" ? "blocked by hook" : reason;
 }
 
+const TOOL_THROW_PREFIX = /^Tool "[^"]+" threw during execution: /;
+const ERROR_CTOR_PREFIX = /^Error: /;
+
+// The loop wraps a thrown execute as `Tool "<name>" threw during execution: ${errorText(err)}`.
+// That sentence is for the model (it has to know the call failed). The transcript already named
+// the tool on the call line, so the anomaly is the reason, not the wrapper.
+export function anomalyLineForThrow(error: string): string {
+  const text = error.replace(TOOL_THROW_PREFIX, "").replace(ERROR_CTOR_PREFIX, "");
+  const first = (text.split(/\r?\n/, 1)[0] ?? "").trim();
+  if (first.startsWith("ENOENT")) return "file not found";
+  if (first.startsWith("EACCES") || first.startsWith("EPERM")) return "permission denied";
+  if (first.startsWith("EISDIR")) return "is a directory";
+  if (first.startsWith("ENOTDIR")) return "not a directory";
+  if (first.length === 0) return "failed";
+  return cap(display(first), STDERR_CAP);
+}
+
 function emptyEntry(name: string): ToolActivityEntry {
   return {
     name,
@@ -422,6 +439,30 @@ export function recordResult(
         anomalyLines: appendAnomaly(entry.anomalyLines, anomaly),
       };
     },
+    name === "dispatch_subagents",
+  );
+}
+
+export function recordThrow(
+  entries: ToolActivityEntry[],
+  name: string,
+  args: unknown,
+  error: string,
+): ToolActivityEntry[] {
+  // dispatch_subagents is never recordCall'd (the roster is its live surface). A throw never
+  // reaches the roster either, so this is the only settled line it can have — same alwaysAppend
+  // as recordDenial.
+  return mapEntry(
+    entries,
+    groupKey(name),
+    (entry) => ({
+      ...entry,
+      count: settleCount(entry),
+      open: false,
+      callLine: keepFirst(entry.callLine, toolCallLine(name, args)),
+      singleLine: keepFirst(entry.singleLine, summarizeArgs(name, args)),
+      anomalyLines: appendAnomaly(entry.anomalyLines, anomalyLineForThrow(error)),
+    }),
     name === "dispatch_subagents",
   );
 }
