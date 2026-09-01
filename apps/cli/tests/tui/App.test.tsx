@@ -778,6 +778,33 @@ describe("App", () => {
     expect(setup.captureCharFrame()).toContain(full);
   });
 
+  test("N text-deltas without flush do not re-invoke getCompletionSources; done still concatenates every chunk", async () => {
+    let n = 0;
+    const { setup, dispatch } = await connect({
+      getCompletionSources: () => {
+        n++;
+        return [];
+      },
+    });
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+    await flush(setup);
+    const afterTurn = n;
+    for (let i = 0; i < 30; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i} ` } });
+    }
+    // OpenTUI's reconciler commits on a macrotask (helpers.ts `flush`). helpers.flush also
+    // calls renderOnce, which can re-invoke App with no pending React update — identical
+    // before and after gating text-delta. One timer tick lets a scheduled reducer commit
+    // run without forcing that paint.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(n).toBe(afterTurn);
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("chunk 0") && frame.includes("chunk 29"));
+    expect(setup.captureCharFrame()).toContain("chunk 0");
+    expect(setup.captureCharFrame()).toContain("chunk 29");
+  });
+
   // Acceptance criterion: `TurnStatus` is mounted inside the transcript box (after the committed
   // rows), not in the status-bar row alongside the mode indicator.
   test("TurnStatus renders as the last line of the transcript box, not the status-bar row", async () => {
