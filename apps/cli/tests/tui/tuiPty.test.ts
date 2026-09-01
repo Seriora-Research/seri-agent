@@ -4328,8 +4328,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 
-        // Down to anthropic, openai — two Downs (groq=0, anthropic=1, openai=2). OpenRouter is
-        // omitted from BYOK /setup until a local key exists.
+        // groq=0, openrouter=1, anthropic=2, openai=3
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4374,8 +4375,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("config entry underneath — removable");
         expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
-        // Down to anthropic, openai — two Downs (groq=0, anthropic=1, openai=2).
-        // anthropic=2, openai=3).
+        // groq=0, openrouter=1, anthropic=2, openai=3
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4986,7 +4988,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
-        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
@@ -5098,7 +5102,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
-        // resolves.
+        // resolves. groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
@@ -5127,7 +5133,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
@@ -5299,7 +5307,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // BYOK /setup omits OpenRouter, so one Down from groq reaches anthropic.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
