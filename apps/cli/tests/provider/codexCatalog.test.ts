@@ -33,7 +33,11 @@ const catalog: ModelCatalog = {
 describe("overlayCodexModels", () => {
   test("replaces openai rows with the plan-scoped list and drops dollar pricing", () => {
     const overlaid = overlayCodexModels(catalog, [
-      { id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", supportedReasoningEfforts: ["low", "high"] },
+      {
+        id: "gpt-5.6-terra",
+        displayName: "GPT-5.6 Terra",
+        supportedReasoningEfforts: ["low", "high"],
+      },
     ]);
     const openai = overlaid.entries.filter((entry) => entry.provider === "openai");
     expect(openai.map((entry) => entry.id)).toEqual(["gpt-5.6-terra"]);

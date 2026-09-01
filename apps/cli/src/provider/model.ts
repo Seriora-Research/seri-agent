@@ -2,9 +2,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel } from "ai";
 import { getApiKey } from "../config/config";
 import { getAnthropicModel as getAnthropicModelReal } from "./anthropic";
-import {
-  getCodexSubscriptionModel as getCodexSubscriptionModelReal,
-} from "./codex";
+import { getCodexSubscriptionModel as getCodexSubscriptionModelReal } from "./codex";
 import { getGatewayModel as getGatewayModelReal } from "./gateway";
 import { getGoogleModel as getGoogleModelReal } from "./google";
 import { getGroqModel as getGroqModelReal } from "./groq";

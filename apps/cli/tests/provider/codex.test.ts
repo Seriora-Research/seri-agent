@@ -28,17 +28,16 @@ describe("codexAuthedFetch", () => {
 
   test("attaches originator seri, account id, session_id, and forces store false", async () => {
     const seen: Array<{ headers: Record<string, string>; body: string }> = [];
-    const wrapped = codexAuthedFetch(
-      home,
-      "session-turn-1",
-      (async (_url: string, init?: RequestInit) => {
-        seen.push({
-          headers: Object.fromEntries(new Headers(init?.headers)),
-          body: String(init?.body),
-        });
-        return new Response("{}", { status: 200 });
-      }) as unknown as typeof fetch,
-    );
+    const wrapped = codexAuthedFetch(home, "session-turn-1", (async (
+      _url: string,
+      init?: RequestInit,
+    ) => {
+      seen.push({
+        headers: Object.fromEntries(new Headers(init?.headers)),
+        body: String(init?.body),
+      });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch);
     await wrapped("https://chatgpt.com/backend-api/codex/responses", {
       method: "POST",
       body: JSON.stringify({ model: "gpt-5.6-terra", stream: true }),
@@ -57,7 +56,11 @@ describe("codexAuthedFetch", () => {
 
   test("throws when no chatgpt login is present", async () => {
     rmSync(join(home, "auth.json"));
-    const wrapped = codexAuthedFetch(home, "s", (async () => new Response("ok")) as unknown as typeof fetch);
+    const wrapped = codexAuthedFetch(
+      home,
+      "s",
+      (async () => new Response("ok")) as unknown as typeof fetch,
+    );
     await expect(wrapped("https://example.com")).rejects.toThrow(/No ChatGPT plan is connected/);
   });
 
@@ -93,14 +96,10 @@ describe("codexAuthedFetch", () => {
 
   test("a body without stream still carries stream true and store false", async () => {
     let body = "";
-    const wrapped = codexAuthedFetch(
-      home,
-      "s",
-      (async (_url: string, init?: RequestInit) => {
-        body = String(init?.body);
-        return new Response("{}", { status: 200 });
-      }) as unknown as typeof fetch,
-    );
+    const wrapped = codexAuthedFetch(home, "s", (async (_url: string, init?: RequestInit) => {
+      body = String(init?.body);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch);
     await wrapped("https://chatgpt.com/backend-api/codex/responses", {
       method: "POST",
       body: JSON.stringify({ model: "gpt-5.6-terra" }),
@@ -111,13 +110,17 @@ describe("codexAuthedFetch", () => {
 
 describe("withCodexStoreOption", () => {
   test("adds store false only for an openai subscription", () => {
-    expect(withCodexStoreOption("openai", "subscription", { openai: { reasoningEffort: "low" } })).toEqual({
+    expect(
+      withCodexStoreOption("openai", "subscription", { openai: { reasoningEffort: "low" } }),
+    ).toEqual({
       openai: { reasoningEffort: "low", store: false },
     });
     expect(withCodexStoreOption("openai", "key", { openai: { reasoningEffort: "low" } })).toEqual({
       openai: { reasoningEffort: "low" },
     });
-    expect(withCodexStoreOption("xai", "subscription", { openai: { reasoningEffort: "high" } })).toEqual({
+    expect(
+      withCodexStoreOption("xai", "subscription", { openai: { reasoningEffort: "high" } }),
+    ).toEqual({
       openai: { reasoningEffort: "high" },
     });
   });

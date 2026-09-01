@@ -85,7 +85,12 @@ describe("dispatchModel for a subscription route", () => {
   test("names the provider when a subscription route resolves to one with no subscription client", () => {
     expect(() =>
       dispatchModel(
-        { model: "claude-haiku-4-5", provider: "anthropic", rerouted: false, credential: "subscription" },
+        {
+          model: "claude-haiku-4-5",
+          provider: "anthropic",
+          rerouted: false,
+          credential: "subscription",
+        },
         "session-1",
         "/tmp/cfg",
         {},

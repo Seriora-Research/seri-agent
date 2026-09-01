@@ -338,9 +338,15 @@ export async function* runLoop(opts: {
       const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentMessages);
       if (evictBoundary !== null) {
         try {
-          const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
-            stream: opts.credential === "subscription" && opts.provider === "openai",
-          });
+          const compacted = await compactMessages(
+            messages,
+            opts.model,
+            evictBoundary,
+            opts.signal,
+            {
+              stream: opts.credential === "subscription" && opts.provider === "openai",
+            },
+          );
           messages.splice(0, messages.length, ...compacted.messages);
           // Drained here for the same reason the stream's retries are drained below: compaction is
           // a model call the user never asked for, and until now a 429'd summariser was ~6 s of

@@ -24,7 +24,13 @@ describe("parseModelList", () => {
   test("reads data[].id and displayName", () => {
     expect(
       parseModelList({
-        data: [{ id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", supportedReasoningEfforts: ["low", "high"] }],
+        data: [
+          {
+            id: "gpt-5.6-terra",
+            displayName: "GPT-5.6 Terra",
+            supportedReasoningEfforts: ["low", "high"],
+          },
+        ],
       }),
     ).toEqual([
       {

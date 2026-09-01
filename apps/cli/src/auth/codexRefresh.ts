@@ -1,9 +1,9 @@
-import { connectCodexAppServer, type CodexJsonRpc, type ConnectCodexAppServerOpts } from "./codexAppServer";
 import {
-  credentialFromCodexAuth,
-  hasCodexSubscription,
-  loadCodexAuth,
-} from "./codexAuthStore";
+  connectCodexAppServer,
+  type CodexJsonRpc,
+  type ConnectCodexAppServerOpts,
+} from "./codexAppServer";
+import { credentialFromCodexAuth, hasCodexSubscription, loadCodexAuth } from "./codexAuthStore";
 import type { SubscriptionCredential, RefreshSubscription } from "./subscription";
 
 export type CodexRefreshResult =
@@ -96,7 +96,8 @@ export function parseModelList(result: unknown): CodexListedModel[] {
   for (const entry of raw) {
     if (typeof entry !== "object" || entry === null) continue;
     const row = entry as Record<string, unknown>;
-    const id = typeof row.id === "string" ? row.id : typeof row.slug === "string" ? row.slug : undefined;
+    const id =
+      typeof row.id === "string" ? row.id : typeof row.slug === "string" ? row.slug : undefined;
     if (id === undefined || id.length === 0) continue;
     const displayName =
       typeof row.displayName === "string"

@@ -1,4 +1,9 @@
-import { loadCatalog, type ModelCatalog, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
+import {
+  loadCatalog,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  type ModelProvider,
+} from "@seri/model-catalog";
 import { hasCodexSubscription } from "../auth/codexAuthStore";
 import { type CodexListedModel, listCodexModels } from "../auth/codexRefresh";
 import { printWarning } from "../cli/output";
@@ -97,7 +102,9 @@ export function overlayCodexModels(
 ): ModelCatalog {
   if (models.length === 0) return catalog;
   const existingById = new Map(
-    catalog.entries.filter((entry) => entry.provider === "openai").map((entry) => [entry.id, entry]),
+    catalog.entries
+      .filter((entry) => entry.provider === "openai")
+      .map((entry) => [entry.id, entry]),
   );
   const openai: ModelCatalogEntry[] = models.map((model) => {
     const existing = existingById.get(model.id);

@@ -20,10 +20,7 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
-import {
-  findCodexBin,
-  type CodexSetupStatus,
-} from "../../auth/codexBin";
+import { findCodexBin, type CodexSetupStatus } from "../../auth/codexBin";
 import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
 import {
   appendBarrier,
