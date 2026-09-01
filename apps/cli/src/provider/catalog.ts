@@ -8,6 +8,7 @@ import { type CodexListedModel, listCodexModels } from "../auth/codexRefresh";
 import { hasXaiSubscription, loadXaiSubscription } from "../auth/xaiAuthStore";
 import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { printWarning } from "../cli/output";
+import { messageOf } from "../errors";
 import bundledManifest from "./catalog-manifest.json";
 import { codexSubscriptionActive } from "./subscriptions";
 import { grokCatalogHeaders, grokProxyBaseUrl } from "./xai";
@@ -47,6 +48,7 @@ export function catalogWithFallback(
 // same fetch" from "a different call".
 let warnedFallback = false;
 let codexPlanCatalogApplied = false;
+let warnedCodexOverlay = false;
 
 // Test-only reset, mirroring `resetCatalogCache`'s own contract (@seri/model-catalog): a test that
 // exercises the fetch-fails-and-falls-back path more than once in the same `bun test` process needs
@@ -61,6 +63,7 @@ export function isCodexPlanCatalogApplied(): boolean {
 
 export function resetCodexPlanCatalogApplied(): void {
   codexPlanCatalogApplied = false;
+  warnedCodexOverlay = false;
 }
 
 // Starts the models.dev fetch without waiting for it, so it overlaps whatever the user is doing on
@@ -162,19 +165,29 @@ export async function withCodexSubscriptionCatalog(
     const models = await listFn();
     if (models.length === 0) {
       codexPlanCatalogApplied = false;
+      warnCodexOverlay(
+        "ChatGPT plan model list was empty; showing the API catalog. Included models may be missing or mispriced until the next refresh.",
+        sink,
+      );
       return catalog;
     }
     const overlaid = overlayCodexModels(catalog, models);
     codexPlanCatalogApplied = true;
     return overlaid;
-  } catch {
+  } catch (err) {
     codexPlanCatalogApplied = false;
-    printWarning(
-      "could not load the ChatGPT plan model list; showing the API catalog. Included models may be missing or mispriced until the next refresh.",
+    warnCodexOverlay(
+      `could not load the ChatGPT plan model list (${messageOf(err)}); showing the API catalog. Included models may be missing or mispriced until the next refresh.`,
       sink,
     );
     return catalog;
   }
+}
+
+function warnCodexOverlay(message: string, sink?: (line: string) => void): void {
+  if (warnedCodexOverlay) return;
+  warnedCodexOverlay = true;
+  printWarning(message, sink);
 }
 
 function stubGrokEntry(id: string): ModelCatalogEntry {

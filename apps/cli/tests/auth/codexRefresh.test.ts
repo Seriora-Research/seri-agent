@@ -57,6 +57,26 @@ describe("parseModelList", () => {
     expect(parseModelList(null)).toEqual([]);
     expect(parseModelList("nope")).toEqual([]);
   });
+
+  test("reads supportedReasoningEfforts[].reasoningEffort", () => {
+    expect(
+      parseModelList({
+        data: [
+          {
+            id: "gpt-5.6-terra",
+            displayName: "GPT-5.6 Terra",
+            supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "gpt-5.6-terra",
+        displayName: "GPT-5.6 Terra",
+        supportedReasoningEfforts: ["low", "high"],
+      },
+    ]);
+  });
 });
 
 describe("refreshCodexSubscription", () => {
@@ -188,5 +208,48 @@ describe("listCodexModels", () => {
     expect(listed.map((m) => m.id)).toEqual(["gpt-5.6-terra"]);
     expect(methods).toEqual(["model/list", "account/read"]);
     expect(codexPlanType()).toBe("free");
+  });
+
+  test("follows nextCursor until the last page", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-list-"));
+    process.env.CODEX_HOME = home;
+    const calls: unknown[] = [];
+    const rpc: CodexJsonRpc = {
+      request: async (method, params) => {
+        if (method === "model/list") {
+          calls.push(params);
+          if (calls.length === 1) {
+            return { data: [{ id: "a", displayName: "A" }], nextCursor: "p2" };
+          }
+          return { data: [{ id: "b", displayName: "B" }] };
+        }
+        return {};
+      },
+      notify: () => {},
+      close: () => {},
+    };
+    const listed = await listCodexModels({ rpc, env: { CODEX_HOME: home } });
+    expect(listed.map((m) => m.id)).toEqual(["a", "b"]);
+    expect(calls).toEqual([{ limit: 100 }, { limit: 100, cursor: "p2" }]);
+  });
+
+  test("an empty model/list is not cached so the next call retries", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-list-"));
+    process.env.CODEX_HOME = home;
+    let n = 0;
+    const rpc: CodexJsonRpc = {
+      request: async (method) => {
+        if (method === "model/list") {
+          n++;
+          return { data: [] };
+        }
+        return {};
+      },
+      notify: () => {},
+      close: () => {},
+    };
+    expect(await listCodexModels({ rpc, env: { CODEX_HOME: home } })).toEqual([]);
+    expect(await listCodexModels({ rpc, env: { CODEX_HOME: home } })).toEqual([]);
+    expect(n).toBe(2);
   });
 });
