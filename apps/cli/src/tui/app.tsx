@@ -78,8 +78,8 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
-import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import type { SetupProviderRow } from "./state/commands";
+import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore, hairlineRow } from "./theme/spacing";
 import { theme } from "./theme/theme";
@@ -174,7 +174,7 @@ export type AppProps = {
   // the decision" split every other interactive command in this file already has.
   onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
-  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupRemove?: (row: SetupProviderRow) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
   // AuthPanel's own "result" step (a device-flow failure — a denied/expired code, a network error,

@@ -19,6 +19,7 @@ import {
   type TranscriptRole,
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import { firstSetupActionIndex } from "./commands";
 import {
   recordCall,
   recordDenial,
@@ -46,14 +47,16 @@ export type SetupState =
       error?: string;
       busy: boolean;
     }
-  | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
+  | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
+  | { step: "confirm-connect" }
+  | { step: "confirm-disconnect" };
 
-// /login and /signup's own live state — the device-flow OAuth panel. "starting" is the brief
-// moment before the provider returns a verification URL/code; "device" shows that URL+code for the
-// user to open in a browser; "result" is the terminal state (success or failure).
+export type AuthMode = "login" | "signup" | "grok";
+
+// /login, /signup, and Grok subscription connect's own live state — the device-flow OAuth panel.
 export type AuthPanelState =
-  | { step: "starting"; mode: "login" | "signup" }
-  | { step: "device"; mode: "login" | "signup"; verificationUri: string; userCode: string }
+  | { step: "starting"; mode: AuthMode }
+  | { step: "device"; mode: AuthMode; verificationUri: string; userCode: string }
   | { step: "result"; message: string; error: boolean };
 
 // /config's own live state — structurally identical to SetupState above (list -> enter-value ->
@@ -417,7 +420,7 @@ export type TuiAction =
   // `auth-offer` chooses the splash menu (unsigned-in vs already signed in) — deliberately NOT
   // `pendingAuth`, which is the blocking device-flow panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
-  | { type: "auth-requested"; mode: "login" | "signup" }
+  | { type: "auth-requested"; mode: AuthMode }
   | { type: "auth-step"; state: AuthPanelState }
   | { type: "auth-resolved"; leftoverInput?: string }
   | { type: "config-requested"; rows: ConfigRow[] }
@@ -711,7 +714,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
     case "setup-requested":
-      return { ...state, pendingSetup: { step: "list", rows: action.rows, selected: 0 } };
+      return {
+        ...state,
+        pendingSetup: {
+          step: "list",
+          rows: action.rows,
+          selected: firstSetupActionIndex(action.rows),
+        },
+      };
     case "setup-step":
       return { ...state, pendingSetup: action.state };
     case "setup-resolved":

@@ -89,7 +89,7 @@ export async function resolveModelRoute(
   const requestedProvider =
     requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
   const [catalog, plan] = await Promise.all([
-    getModelCatalog(undefined, warnSink),
+    getModelCatalog(undefined, warnSink, configDir),
     fetchAccountPlan(configDir),
   ]);
   const route = resolveRoute(

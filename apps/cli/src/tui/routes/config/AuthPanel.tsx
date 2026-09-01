@@ -22,6 +22,11 @@ import { isEnter } from "../../util/keys";
 // aborts the current attempt's AbortController, which pollForToken (deviceFlow.ts) actually
 // checks and stops on — not just a dispatch guard muting whatever that attempt eventually does
 // in the background.
+function authModeLabel(mode: string): string {
+  if (mode === "grok") return "Grok subscription";
+  return mode;
+}
+
 export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismiss?: () => void }) {
   useKeyboard((key) => {
     if (key.name === "escape") {
@@ -34,7 +39,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
   if (state.step === "starting") {
     return (
       <box {...FRAME} flexDirection="column">
-        <text fg={theme.muted}>{`Starting ${state.mode}…`}</text>
+        <text fg={theme.muted}>{`Starting ${authModeLabel(state.mode)}…`}</text>
         <text fg={theme.muted}>Esc cancel</text>
       </box>
     );

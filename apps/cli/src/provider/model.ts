@@ -147,7 +147,7 @@ export function dispatchModel(
   if (route.credential === "subscription") {
     if (route.provider === "xai") {
       const getXaiSubscriptionModelFn = deps.getXaiSubscriptionModel ?? getXaiSubscriptionModelReal;
-      return getXaiSubscriptionModelFn(route.model, configDir);
+      return getXaiSubscriptionModelFn(route.model, configDir, sessionId);
     }
     if (route.provider === "openai") {
       const getCodexSubscriptionModelFn =

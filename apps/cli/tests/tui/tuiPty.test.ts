@@ -6558,6 +6558,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // find it empty and take the fatal path — process death by signal, mid-unwind, with the queue
     // and the session going with it. The latch is what keeps Escape from inheriting a contract
     // that only ever belonged to Ctrl-C.
+    //
+    // The first press has to be observed before the extras are written. Three ESC bytes in one
+    // burst are not three Escape keypresses: the tty CSI parser holds the first byte to see
+    // whether a sequence follows, and the rest are consumed as that sequence. The turn then
+    // never cancels, which is a different bug than the latch this test names.
     test("a second Escape during the unwind is inert, not fatal", async () => {
       const { child, sawLine } = await queueOneBehindTurn();
       try {
@@ -6565,14 +6570,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // prefix and never reach InputBox as Escape, which is what a full-frame
         // repaint (paper ground + hairline) makes more likely.
         child.stdin?.write("\x1b");
-        // Same Escape-ambiguity window the /login abandon tests already use, but a full
-        // 100ms: a full-frame repaint (paper ground + hairline) makes three ESC bytes in
-        // one read more likely to become a CSI prefix and never reach InputBox as Escape.
-        await wait100ms();
-        child.stdin?.write("\x1b");
-        await wait100ms();
-        child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_ABORTED 1");
+        child.stdin?.write("\x1b");
+        child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_CALL 2");
       } finally {
         child.kill("SIGKILL");
