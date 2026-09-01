@@ -2689,7 +2689,9 @@ describe("tuiReducer: reasoning spans", () => {
     const toolIdx = kinds.findIndex((line) => line.includes("Read"));
     const thought2Idx = kinds.findIndex((line) => line === "thought:second");
     const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
-    const doneIdx = kinds.findIndex((line) => line === "system:done" || line.startsWith("system:done ·"));
+    const doneIdx = kinds.findIndex(
+      (line) => line === "system:done" || line.startsWith("system:done ·"),
+    );
     expect(thoughtIdx).toBeGreaterThanOrEqual(0);
     expect(toolIdx).toBeGreaterThan(thoughtIdx);
     expect(thought2Idx).toBeGreaterThan(toolIdx);
