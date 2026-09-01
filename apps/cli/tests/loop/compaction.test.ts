@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { JSONValue, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { compactMessages, findSafeEvictionBoundary } from "../../src/loop/compaction";
+import {
+  compactMessages,
+  elideOversizedStrings,
+  findSafeEvictionBoundary,
+  SUMMARIZER_STRING_CAP_BYTES,
+} from "../../src/loop/compaction";
 import { streamResult, textOnlyChunks } from "./fixtures";
 
 function usage(inputTotal: number, outputTotal: number) {
@@ -71,6 +76,57 @@ describe("findSafeEvictionBoundary", () => {
   test("returns null when fewer than minEvictable messages would be evicted", () => {
     const messages = buildAlternatingMessages(10);
     expect(findSafeEvictionBoundary(messages, messages.length)).toBeNull();
+  });
+});
+
+describe("elideOversizedStrings", () => {
+  test("passes strings at or under the cap and replaces oversized ones with originalBytes", () => {
+    expect(elideOversizedStrings("short")).toBe("short");
+    const atCap = "a".repeat(SUMMARIZER_STRING_CAP_BYTES);
+    expect(elideOversizedStrings(atCap)).toBe(atCap);
+    const over = "a".repeat(SUMMARIZER_STRING_CAP_BYTES + 1);
+    expect(elideOversizedStrings(over)).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(over, "utf8"),
+    });
+  });
+
+  test("walks nested objects and arrays without mutating the input", () => {
+    const input = {
+      keep: "ok",
+      nested: { body: "x".repeat(SUMMARIZER_STRING_CAP_BYTES + 1), path: "src/foo.ts" },
+      list: ["y".repeat(SUMMARIZER_STRING_CAP_BYTES + 1), 7, null],
+    };
+    const snapshot = structuredClone(input);
+    const out = elideOversizedStrings(input) as {
+      keep: string;
+      nested: { body: { elided: true; originalBytes: number }; path: string };
+      list: unknown[];
+    };
+    expect(input).toEqual(snapshot);
+    expect(out.keep).toBe("ok");
+    expect(out.nested.path).toBe("src/foo.ts");
+    expect(out.nested.body).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(input.nested.body, "utf8"),
+    });
+    expect(out.list[0]).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(input.list[0] as string, "utf8"),
+    });
+    expect(out.list[1]).toBe(7);
+    expect(out.list[2]).toBeNull();
+  });
+
+  test("caps by UTF-8 bytes, not string length", () => {
+    const twoByte = "é";
+    expect(Buffer.byteLength(twoByte, "utf8")).toBe(2);
+    const overByBytes = twoByte.repeat(SUMMARIZER_STRING_CAP_BYTES / 2 + 1);
+    expect(overByBytes.length).toBeLessThanOrEqual(SUMMARIZER_STRING_CAP_BYTES);
+    expect(elideOversizedStrings(overByBytes)).toEqual({
+      elided: true,
+      originalBytes: Buffer.byteLength(overByBytes, "utf8"),
+    });
   });
 });
 
