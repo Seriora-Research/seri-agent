@@ -1633,7 +1633,7 @@ describe("runLoop", () => {
         read_file: tool({
           description: "read",
           inputSchema: z.object({ path: z.string() }),
-          execute: ({ path }) => {
+          execute: ({ path }): string => {
             throw new Error(`ENOENT: no such file or directory, open '${path}'`);
           },
         }),
