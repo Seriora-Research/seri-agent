@@ -498,6 +498,47 @@ describe("run (task invocation)", () => {
     expect(listSessionIds(sessionsDir)).toHaveLength(2);
   });
 
+  // Non-interactive counterpart of tuiPty.test.ts's "--continue mount" pair: connectDispatch already
+  // skips a turn when the resumed session's last message is a finished assistant reply; the piped
+  // path used to call driveLoop anyway and burn a model turn the user did not ask for. The
+  // unanswered-user case just above is the positive control — this one is the skip.
+  test("non-interactive --continue does not start a turn when the resumed session already has an assistant reply", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const messages: ModelMessage[] = [
+      { role: "user", content: "already done" },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ];
+    saveSession(
+      {
+        id: "answered",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages,
+      },
+      sessionsDir,
+    );
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--continue"], {
+        isTTY: false,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()).toBeUndefined();
+    expect(loadSession("answered", sessionsDir).messages).toEqual(messages);
+  });
+
   // The negative control that splitting --resume into --resume <id> / --continue did not break the
   // surviving half: this passes on `main` too.
   test("`--resume <id>` resumes that session, not the most recent one", async () => {
