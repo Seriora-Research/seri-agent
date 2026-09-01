@@ -129,8 +129,9 @@ export type TuiState = {
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
   // The in-flight tool call, if any — set on every tool-call event, cleared on its
   // tool-result/permission-denied, or on an error that arrives while this slot is set (thrown
-  // execute: tool-call then error, no tool-result). Single-slot: loop.ts runs tools strictly
-  // sequentially, so the next result's args are always this pending call's. A dedicated field
+  // execute: tool-call then error, no tool-result). Single-slot: the loop still yields one
+  // call/result pair at a time even when consecutive read-only executes overlap, so the next
+  // result's args are always this pending call's. A dedicated field
   // rather than App.tsx string-matching `status`'s rendered text (`"Running write_file…"`)
   // against the last transcript line, which only worked by coincidence and would silently stop
   // working the moment either string changed.
