@@ -1,7 +1,7 @@
 // Pure TUI tool-call/result accumulation — no Ink/React import. Live rendering reads
 // `pendingTool` (app.tsx) for the in-flight call, and `renderLiveToolActivity` of this
-// accumulator for settled groups during the turn. `renderToolActivity` is also what the
-// reducer flushes into muted transcript lines on done/turn-ended. Aggregation is by exact
+// accumulator for settled groups during the turn. The reducer drops the tree on
+// done/turn-ended and keeps `formatToolSummary` as one muted count line. Aggregation is by exact
 // tool name (every TOOL_LABELS entry — not a Read special-case), except every `mcp_`-prefixed
 // name, which folds into one bucket (`groupKey` below): the model's tool array already
 // collapses every MCP call behind the single `mcp` dispatcher (mcp/tool.ts), so the transcript
@@ -166,10 +166,23 @@ export function toolCallLine(name: string, args: unknown): string {
   return arg === "" ? `→ ${label}` : `→ ${label}(${arg})`;
 }
 
+function uniqueKeepOrder(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of paths) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
 function grepPaths(result: GrepResult): string[] {
-  if (result.mode === "content") return (result.matches ?? []).map((m) => m.file);
-  if (result.mode === "count") return (result.counts ?? []).map((c) => c.file);
-  return result.files ?? [];
+  // Content/count modes emit one row per match, not per file. The detail
+  // list is a sample of which files hit, so the same path must not repeat.
+  if (result.mode === "content") return uniqueKeepOrder((result.matches ?? []).map((m) => m.file));
+  if (result.mode === "count") return uniqueKeepOrder((result.counts ?? []).map((c) => c.file));
+  return uniqueKeepOrder(result.files ?? []);
 }
 
 function asGrepResult(result: unknown): GrepResult | undefined {
@@ -491,6 +504,25 @@ export function recordDenial(
 // The line under the call line. It carries the count on every group, singular included, because
 // the call line above already carries the arguments. A `settles` tool is the exception: a single
 // call's settled text reports something about the result that no count can.
+function countPhrase(entry: ToolActivityEntry): string {
+  const labels = TOOL_LABELS[entry.name];
+  if (labels === undefined) return `${entry.name} ×${entry.count}`;
+  return `${labels.verb} ${entry.count} ${entry.count === 1 ? labels.one : labels.many}`;
+}
+
+// One muted line after the turn, in place of the live tree. Count language only —
+// no `→`, no paths, no anomalies. Later groups drop the initial capital so the
+// line reads as one sentence ("Read 1 file, ran 2 shell commands").
+export function formatToolSummary(entries: ToolActivityEntry[]): string | undefined {
+  const parts: string[] = [];
+  for (const entry of entries) {
+    if (entry.count <= 0) continue;
+    const phrase = countPhrase(entry);
+    parts.push(parts.length === 0 ? phrase : `${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}`);
+  }
+  return parts.length === 0 ? undefined : parts.join(", ");
+}
+
 function aggregateLine(entry: ToolActivityEntry): string {
   const labels = TOOL_LABELS[entry.name];
   // Two kinds of group keep their own settled text at one call rather than a count: a `settles`

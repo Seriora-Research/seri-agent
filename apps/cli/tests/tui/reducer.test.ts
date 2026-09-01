@@ -375,30 +375,29 @@ describe("tuiReducer: loop-event", () => {
     expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
   });
 
-  test("a single successful tool-result followed by done produces one muted entry with no raw JSON", () => {
+  test("a single successful tool-result followed by done drops the live tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0]).toEqual({ role: "system", text: READ_A, muted: true });
-    expect(toolLines[0].text).not.toContain("{");
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 1 file")).toHaveLength(1);
     expect(state.transcript.at(-1)).toEqual({ role: "system", text: "done", muted: true });
     expect(state.toolActivity).toEqual([]);
   });
 
-  test("two same-name successful results followed by done produce one aggregated-count entry", () => {
+  test("two same-name successful results followed by done drop the aggregated live tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_TWO]);
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toBe(READ_TWO);
-    expect(toolLines[0].muted).toBe(true);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 2 files")).toHaveLength(1);
+    expect(state.toolActivity).toEqual([]);
   });
 
   test("after two same-name results and before done, live render is one Read 2 files line", () => {
@@ -433,7 +432,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
-  test("a failing bash result followed by done produces a TREE_BRANCH-prefixed anomaly line", () => {
+  test("a failing bash result is live-only; done drops the anomaly with the tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "false" } });
     state = apply(state, {
       type: "tool-result",
@@ -449,13 +448,13 @@ describe("tuiReducer: loop-event", () => {
     });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toContain(TREE_BRANCH);
-    expect(toolLines[0].text).toContain("exit 1");
+    expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("exit 1"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
-  test("a declined permission-denied followed by done produces an anomaly line and does not throw", () => {
+  test("a declined permission-denied does not throw; done drops the anomaly with the tree", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "write_file",
@@ -465,16 +464,16 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "permission-denied", name: "write_file", reason: "declined" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toContain(TREE_BRANCH);
-    expect(toolLines[0].text).toContain("declined");
+    expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("declined"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Wrote 1 file")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
   // HIGH 1: loop.ts yields `error` and continues (compaction catch, unknown tool, thrown
   // execute). Flushing toolActivity on error would split one turn's calls across two muted
   // groups and drop anything that arrives after the error.
-  test("a mid-turn error does not flush toolActivity; later tools still aggregate on done", () => {
+  test("a mid-turn error does not flush toolActivity; later tools still aggregate live, then drop on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "read_file",
@@ -495,15 +494,15 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const muted = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe(READ_TWO);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 2 files")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
   // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
   // live line vanishes and no settled line is ever committed. The error itself must not
   // become a transcript peer of the assistant's prose — it settles the open group.
-  test("a tool-call followed by error (no tool-result) still flushes a settled line on done", () => {
+  test("a tool-call followed by error (no tool-result) still paints live, then drops the tree on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "bash",
@@ -523,11 +522,11 @@ describe("tuiReducer: loop-event", () => {
 
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const muted = state.transcript.filter((e) => e.muted);
-    expect(muted.length).toBeGreaterThanOrEqual(1);
-    expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
-    expect(muted.some((e) => e.text.includes(`${TREE_BRANCH}boom`))).toBe(true);
+    expect(state.transcript.some((e) => e.text.includes("explode"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes(`${TREE_BRANCH}boom`))).toBe(false);
     expect(state.transcript.every((e) => !e.text.includes("threw during execution"))).toBe(true);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
   test("a thrown read_file is a file-not-found anomaly, not a raw error line", () => {
@@ -554,7 +553,7 @@ describe("tuiReducer: loop-event", () => {
   // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
   // correct (error itself must not flush, because some errors continue), but turn-ended is the
   // actual end of that turn and must commit whatever was already recorded.
-  test("error then turn-ended without done flushes accumulated toolActivity", () => {
+  test("error then turn-ended without done drops the live tree", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "read_file",
@@ -568,9 +567,8 @@ describe("tuiReducer: loop-event", () => {
 
     state = tuiReducer(state, { type: "turn-ended" });
 
-    const muted = state.transcript.filter((e) => e.muted);
-    expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe(READ_A);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 1 file")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -2647,6 +2645,57 @@ describe("tuiReducer: reasoning spans", () => {
     expect(rows[0]?.body).toBe("first");
     expect(rows[1]?.body).toBe("second");
     expect(rows[1]?.text).toBe("▸ thought · 3s");
+  });
+
+  test("a second think after a tool keeps two carets; done drops the tree", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "052 shipped" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const kinds = state.transcript.map((entry) =>
+      entry.kind === "reasoning" ? `thought:${entry.body}` : `${entry.role}:${entry.text}`,
+    );
+    const thoughtIdx = kinds.findIndex((line) => line === "thought:first");
+    const thought2Idx = kinds.findIndex((line) => line === "thought:second");
+    const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
+    const doneIdx = kinds.findIndex(
+      (line) => line === "system:done" || line.startsWith("system:done ·"),
+    );
+    expect(thoughtIdx).toBeGreaterThanOrEqual(0);
+    expect(thought2Idx).toBeGreaterThan(thoughtIdx);
+    expect(answerIdx).toBeGreaterThan(thought2Idx);
+    expect(doneIdx).toBeGreaterThan(answerIdx);
+    expect(kinds.some((line) => line.includes("→ Read"))).toBe(false);
+    expect(kinds).toContain("system:Read 1 file");
+    expect(state.toolActivity).toEqual([]);
   });
 
   test("no reasoning-delta leaves today's transcript with no caret", () => {

@@ -23,11 +23,11 @@ import {
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import { firstSetupActionIndex } from "./commands";
 import {
+  formatToolSummary,
   recordCall,
   recordDenial,
   recordResult,
   recordThrow,
-  renderToolActivity,
   type ToolActivityEntry,
 } from "./toolActivity";
 
@@ -140,11 +140,11 @@ export type TuiState = {
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
   // tool-call/tool-result/permission-denied, and on an error that arrives while a call is in
   // flight (recordThrow). App live-paints the settled view of this
-  // accumulator during the turn (renderLiveToolActivity). Flushed into the transcript as muted
-  // lines on done and on turn-ended (the latter covers loop.ts's error-then-return exits that
-  // never yield done). An error LoopEvent is not turn-end (loop.ts continues), so this
-  // accumulator is left in place across it — live paint still shows it. After a real done,
-  // turn-ended's flush is a no-op on [].
+  // accumulator during the turn (renderLiveToolActivity). On done / turn-ended the tree
+  // is dropped and at most one muted count line is kept ("Read 1 file, ran 2 shell
+  // commands"). An error LoopEvent is not turn-end (loop.ts continues), so this
+  // accumulator is left in place across it — live paint still shows it. After a real
+  // done, turn-ended's clear is a no-op on [].
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
@@ -855,12 +855,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         },
       };
     case "turn-ended":
-      // Flush first: loop.ts's mid-stream / streamText catch yields error then return with no
-      // done, so this is the only commit point for tools already recorded. After a real done
-      // the accumulator is already [], so the flush is a no-op. A live thought that never
-      // saw text-delta / tool-call / done (error-then-return) settles here so the caret is
-      // not dropped with the pin.
-      return { ...flushToolActivity(settleReasoning(state, Date.now())), turn: undefined };
+      // Commit a leftover thought and any parked assistant text (loop.ts can error-then-return
+      // with no done). The tool tree is display-only: clear it so it does not become history.
+      return {
+        ...flushToolActivity(flushStreaming(settleReasoning(state, Date.now()))),
+        turn: undefined,
+      };
     case "reasoning-flushed":
       return openOrAppendReasoning(state, action.text, action.startedAt);
     case "reasoning-toggled":
@@ -988,9 +988,9 @@ function pushLine(
 }
 
 // Commits any pending streamed text as its own assistant transcript line without adding a
-// system line — tool-call/result/permission-denied no longer push their own transcript lines
-// (those flush at turn-end via toolActivity), but a mid-stream tool-call still has to park the
-// model's partial answer so later text-deltas don't concatenate onto it.
+// system line — tool-call/result/permission-denied never push transcript lines (the tree is
+// live-only), but a mid-stream tool-call still has to park the model's partial answer so
+// later text-deltas don't concatenate onto it.
 function flushStreaming(state: TuiState): TuiState {
   if (state.streaming.length === 0) return state;
   return {
@@ -1001,11 +1001,13 @@ function flushStreaming(state: TuiState): TuiState {
 }
 
 function flushToolActivity(state: TuiState): TuiState {
-  let next = state;
-  for (const line of renderToolActivity(state.toolActivity)) {
-    next = pushLine(next, line, "system", true, true);
-  }
-  return { ...next, toolActivity: [] };
+  const summary = formatToolSummary(state.toolActivity);
+  if (summary === undefined) return { ...state, toolActivity: [] };
+  return {
+    ...state,
+    transcript: [...state.transcript, { role: "system", text: summary, muted: true }],
+    toolActivity: [],
+  };
 }
 
 // Folds one completed model call's real usage onto `progress`'s running totals — shared by the
@@ -1136,8 +1138,8 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "reasoning-delta":
       return openOrAppendReasoning(state, event.text, Date.now());
     // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
-    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and flush as muted
-    // compact lines on done (not error: loop.ts yields error and continues). pendingTool is set
+    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and discarded on
+    // done (not error: loop.ts yields error and continues). pendingTool is set
     // for every tool name so the live status slot (app.tsx) can show the in-flight call.
     // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
     // has a group for recordThrow to settle.

@@ -734,8 +734,8 @@ export function App({
                 )}
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
-              flushToolActivity, toolActivity is [] and this region unmounts in the same
-              update that pushLine's the muted transcript entries — no double paint.
+              flushToolActivity, toolActivity is [] and this region unmounts — the tree is
+              not copied into the transcript.
               These rows sit outside TranscriptList, so its own per-row rhythm cannot reach them.
               The first row reads the last committed entry's role and takes its gap from the same
               table: usually the user message that opened the turn, but a retry or compaction

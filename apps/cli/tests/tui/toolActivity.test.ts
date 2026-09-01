@@ -11,6 +11,7 @@ import {
   recordDenial,
   recordResult,
   recordThrow,
+  formatToolSummary,
   renderLiveToolActivity,
   renderToolActivity,
   summarizeArgs,
@@ -134,6 +135,31 @@ describe("detailLinesForResult", () => {
         truncated: false,
       }),
     ).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("grep content mode lists each file once, not once per match line", () => {
+    // Basename only: `trimPath` on a slashed relative path is `docs\…` on win32
+    // (`path.relative` rewrites the separator). The files_with_matches test
+    // above already uses that shape (`one.ts`, not `docs/one.ts`).
+    const matches = Array.from({ length: 100 }, (_, i) => ({
+      file: "ARCHITECTURE.md",
+      line: i + 1,
+      text: "implemented",
+    }));
+    expect(detailLinesForResult("grep", { mode: "content", matches, truncated: false })).toEqual([
+      "ARCHITECTURE.md",
+    ]);
+  });
+
+  test("grep content mode overflow counts unique files, not match rows", () => {
+    const files = ["a.ts", "b.ts", "c.ts", "d.ts"];
+    const matches = files.flatMap((file) => [1, 2, 3].map((line) => ({ file, line, text: "x" })));
+    expect(detailLinesForResult("grep", { mode: "content", matches, truncated: false })).toEqual([
+      "a.ts",
+      "b.ts",
+      "c.ts",
+      "…1 more",
+    ]);
   });
 
   test("grep count mode reads count files", () => {
@@ -304,6 +330,35 @@ describe("anomalyLineForThrow", () => {
 
   test("an empty remainder becomes failed", () => {
     expect(anomalyLineForThrow('Tool "read_file" threw during execution: ')).toBe("failed");
+  });
+});
+
+describe("formatToolSummary", () => {
+  function entry(name: string, count: number): ToolActivityEntry {
+    return {
+      name,
+      count,
+      callLine: "",
+      singleLine: "",
+      detailLines: ["should not appear"],
+      anomalyLines: ["exit 1"],
+    };
+  }
+
+  test("one group is the count phrase, not the live tree", () => {
+    expect(formatToolSummary([entry("read_file", 1)])).toBe("Read 1 file");
+    expect(formatToolSummary([entry("read_file", 2)])).toBe("Read 2 files");
+  });
+
+  test("several groups join as one sentence", () => {
+    expect(formatToolSummary([entry("read_file", 1), entry("bash", 2), entry("grep", 1)])).toBe(
+      "Read 1 file, ran 2 shell commands, searched 1 file",
+    );
+  });
+
+  test("empty or zero-count groups produce nothing", () => {
+    expect(formatToolSummary([])).toBeUndefined();
+    expect(formatToolSummary([entry("read_file", 0)])).toBeUndefined();
   });
 });
 
