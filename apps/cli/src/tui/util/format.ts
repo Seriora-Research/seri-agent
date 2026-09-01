@@ -9,6 +9,7 @@ import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
+import { describeCodexSetupStatus } from "../../auth/codexBin";
 import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
@@ -21,7 +22,7 @@ import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 // screen) — see `slideWindow`/`useListWindow.ts` for how the visible window slides to keep it in
 // view.
 // `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
-// (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
+// (SetupPanel's provider list already fits under it) — enough rows that a floor-clamped panel
 // still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
 // height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
 // sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
@@ -475,14 +476,15 @@ export function envShadowReason(keyName: string): string {
 // impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
 // "the panel states why, for the env case," which was false for exactly this state until now.
 export function formatSetupRow(row: SetupProviderRow): string {
+  if (row.kind === "subscription") {
+    return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
+  }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
-  // `singleLine`, not `row.masked` raw: `maskValue` keeps a value's first/last 4
-  // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
-  // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
-  // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not
-  // a real case being papered over.
   const masked = singleLine(row.masked ?? "");
+  if (row.unusedBecause !== undefined) {
+    return `${name} ${masked} (${row.source}, ${row.unusedBecause})`;
+  }
   if (row.source === "env") {
     return row.removable
       ? `${name} ${masked} (env, config entry underneath — removable)`

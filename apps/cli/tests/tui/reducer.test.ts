@@ -866,6 +866,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
 describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
   const rows: SetupProviderRow[] = [
     {
+      kind: "key",
       provider: "groq",
       keyName: "GROQ_API_KEY",
       source: "unset",

@@ -352,10 +352,14 @@ const originalKeyEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, pro
 
 describe("decideSetupOpen", () => {
   let setupConfigDir: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCodexBin = process.env.SERI_CODEX_BIN;
 
   beforeEach(() => {
     for (const name of ALL_KEY_NAMES) delete process.env[name];
     setupConfigDir = mkdtempSync(join(tmpdir(), "seri-setup-commands-test-"));
+    process.env.CODEX_HOME = setupConfigDir;
+    delete process.env.SERI_CODEX_BIN;
   });
 
   afterEach(() => {
@@ -364,19 +368,28 @@ describe("decideSetupOpen", () => {
       if (original === undefined) delete process.env[name];
       else process.env[name] = original;
     }
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalCodexBin === undefined) delete process.env.SERI_CODEX_BIN;
+    else process.env.SERI_CODEX_BIN = originalCodexBin;
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns exactly 5 rows, in CATALOG_PROVIDERS order, all unset by default", () => {
+  test("returns key rows in CATALOG_PROVIDERS order plus a Codex subscription row", () => {
     const rows = decideSetupOpen(setupConfigDir);
-    expect(rows.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
-    expect(rows.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
-    expect(rows.every((row) => row.removable === false)).toBe(true);
+    const keys = rows.filter((row) => row.kind === "key");
+    const plans = rows.filter((row) => row.kind === "subscription");
+    expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
+    expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
+    expect(keys.every((row) => row.removable === false)).toBe(true);
+    expect(plans).toHaveLength(1);
+    expect(plans[0]?.status.status).toBe("not-installed");
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("config");
     expect(row?.masked).toBeDefined();
     expect(row?.removable).toBe(true);
@@ -385,7 +398,8 @@ describe("decideSetupOpen", () => {
   // D8: an env-sourced row cannot be removed from here — there is no config.json entry to unset.
   test("an env-shadowed row (no config entry) is source: env and NOT removable", () => {
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(false);
   });
@@ -398,9 +412,52 @@ describe("decideSetupOpen", () => {
   test("an env-shadowed row WITH a config entry underneath is source: env and IS removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(true);
+  });
+
+  test("a chatgpt login with Codex on PATH is a connected subscription row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const plan = rows.find((row) => row.kind === "subscription");
+    expect(plan?.status).toEqual({ status: "connected" });
+  });
+
+  test("an API-key Codex login is not-logged-in, even without an access token", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }),
+    );
+    const plan = decideSetupOpen(setupConfigDir).find((row) => row.kind === "subscription");
+    expect(plan?.status).toEqual({ status: "not-logged-in", reason: "api-key" });
+  });
+
+  test("an openai key is marked unused when a ChatGPT plan is connected", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBe(
+      "unused because a ChatGPT plan is connected",
+    );
   });
 });
 
