@@ -50,6 +50,73 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     expect(action?.type === "setup-step" && action.state.step).toBe("list");
   });
 
+  test("selecting a hosted OpenRouter row opens enter-key with the override note", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+    onSetupSelect({
+      kind: "key",
+      provider: "openrouter",
+      keyName: "OPENROUTER_API_KEY",
+      source: "hosted",
+      masked: undefined,
+      removable: false,
+    });
+    expect(actions).toEqual([
+      {
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          busy: false,
+          note: "Used instead of hosted OpenRouter coverage.",
+        },
+      },
+    ]);
+  });
+
+  test("saving an OpenRouter key while logged in lists it as a removable hosted override", async () => {
+    const originalSkip = process.env.SERI_SKIP_KEY_VALIDATION;
+    process.env.SERI_SKIP_KEY_VALIDATION = "1";
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      const { actions, dispatch } = actionsCollector();
+      const { onSetupKeyEntered } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => undefined,
+        configDir,
+      });
+      await onSetupKeyEntered("openrouter", "sk-or-own-override");
+      const step = actions.find((a) => a.type === "setup-step" && a.state.step === "list");
+      expect(step?.type === "setup-step" && step.state.step).toBe("list");
+      if (step?.type !== "setup-step" || step.state.step !== "list") return;
+      const row = step.state.rows.find(
+        (entry) => entry.kind === "key" && entry.provider === "openrouter",
+      );
+      expect(row).toMatchObject({
+        source: "config",
+        removable: true,
+        overridesHosted: true,
+      });
+    } finally {
+      if (originalSkip === undefined) delete process.env.SERI_SKIP_KEY_VALIDATION;
+      else process.env.SERI_SKIP_KEY_VALIDATION = originalSkip;
+    }
+  });
+
   test("a hosted OpenRouter row cannot be removed", () => {
     saveAuthSession(
       {

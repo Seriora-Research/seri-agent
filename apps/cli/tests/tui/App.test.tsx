@@ -2614,6 +2614,21 @@ describe("App", () => {
         expect(text).not.toContain("not set");
       });
 
+      test("a local OpenRouter key on a hosted login says it overrides hosted", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "openrouter",
+            source: "config",
+            masked: "sk-o...own1",
+            removable: true,
+            overridesHosted: true,
+          }),
+        );
+        expect(text).toContain("sk-o...own1");
+        expect(text).toContain("overrides hosted");
+        expect(text).not.toContain("provided");
+      });
+
       test("config: the masked value, labeled (config)", () => {
         const text = formatSetupRow(row({ source: "config", masked: "sk-a...wxyz" }));
         expect(text).toContain("anthropic");
@@ -2879,6 +2894,26 @@ describe("App", () => {
       await flush(setup);
 
       expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
+    });
+
+    test("the enter-key step shows a hosted-override note when one is on the step", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          busy: false,
+          note: "Used instead of hosted OpenRouter coverage.",
+        },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("OPENROUTER_API_KEY for openrouter");
+      expect(frame).toContain("Used instead of hosted OpenRouter coverage.");
     });
 
     test("while busy, the panel renders Validating… and ignores input", async () => {

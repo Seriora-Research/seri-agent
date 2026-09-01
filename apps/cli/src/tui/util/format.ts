@@ -567,6 +567,12 @@ export function formatSetupRow(row: SetupProviderRow): string {
   if (row.unusedBecause !== undefined) {
     return `${name} ${masked} (${row.source}, ${row.unusedBecause})`;
   }
+  if (row.overridesHosted) {
+    if (row.source === "env" && !row.removable) {
+      return `${name} ${envShadowReason(row.keyName)}`;
+    }
+    return `${name} ${masked} (${row.source}, overrides hosted)`;
+  }
   if (row.source === "env") {
     return row.removable
       ? `${name} ${masked} (env, config entry underneath — removable)`

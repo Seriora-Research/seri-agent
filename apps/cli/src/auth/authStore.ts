@@ -66,7 +66,11 @@ export function loadAuthSession(configDir: string): AuthSession | undefined {
 // that parsed".
 export function hasHostedAuth(configDir: string): boolean {
   const session = loadAuthSession(configDir);
-  return session !== undefined && typeof session.accessToken === "string" && session.accessToken.length > 0;
+  return (
+    session !== undefined &&
+    typeof session.accessToken === "string" &&
+    session.accessToken.length > 0
+  );
 }
 
 export function clearAuthSession(configDir: string): void {

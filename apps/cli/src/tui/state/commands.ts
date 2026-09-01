@@ -233,6 +233,9 @@ export type SetupKeyRow = {
   masked: string | undefined;
   removable: boolean;
   unusedBecause?: string;
+  // Set when a local OpenRouter key sits on top of a hosted login. The key is used
+  // (Rule 1), not unused — this is the inverse of unusedBecause.
+  overridesHosted?: boolean;
 };
 export type SetupGrokSubscriptionRow = {
   kind: "subscription";
@@ -353,6 +356,7 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
         masked: state.masked,
         removable: state.hasConfigEntry,
         unusedBecause,
+        ...(hosted && state.provider === GATEWAY_PROVIDER ? { overridesHosted: true } : {}),
       },
     ];
   });

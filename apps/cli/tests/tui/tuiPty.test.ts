@@ -4503,6 +4503,49 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.kill("SIGKILL");
       }
     }, 60_000);
+
+    test("a logged-in user can paste their own OpenRouter key; it overrides hosted and is removable", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-own-key.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("provided");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("Used instead of hosted OpenRouter coverage.");
+
+        const secret = "sk-or-hosted-own-override";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        await sawLine("overrides hosted");
+        expect(lastFrame()).not.toContain("provided");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 
   // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout end to end on a

@@ -140,6 +140,7 @@ export function createSetupHandlers(opts: {
         provider: row.provider,
         keyName: PROVIDER_API_KEY_NAMES[row.provider],
         busy: false,
+        note: row.source === "hosted" ? "Used instead of hosted OpenRouter coverage." : undefined,
       },
     });
   }

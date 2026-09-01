@@ -258,7 +258,7 @@ function SetupEnterKey({
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
 }) {
-  const { provider, keyName, error, busy } = pendingSetup;
+  const { provider, keyName, error, busy, note } = pendingSetup;
   // The real value lives here, never in anything rendered — the frame below only ever shows
   // `"*".repeat(value.length)`. This is the one piece of state in this whole file a leaked render
   // would turn into a credential disclosure, which is why it exists nowhere else: not in
@@ -309,6 +309,7 @@ function SetupEnterKey({
   return (
     <PanelBox title="/setup">
       <text fg={theme.muted}>{`${keyName} for ${provider}`}</text>
+      {note !== undefined && <text fg={theme.muted}>{note}</text>}
       <text>{"*".repeat(value.length)}</text>
       <ErrorLine message={error} />
       {busy ? (

@@ -51,6 +51,7 @@ export type SetupState =
       keyName: string;
       error?: string;
       busy: boolean;
+      note?: string;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
   | { step: "confirm-connect"; provider: "xai" | "openai" }

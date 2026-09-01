@@ -497,6 +497,7 @@ describe("decideSetupOpen", () => {
       source: "config",
       removable: true,
     });
+    expect(row && "overridesHosted" in row ? row.overridesHosted : undefined).toBeUndefined();
   });
 
   test("an env OpenRouter key is a BYOK row, not the hosted offer, even when logged in", () => {
@@ -518,6 +519,30 @@ describe("decideSetupOpen", () => {
       kind: "key",
       source: "env",
       removable: false,
+      overridesHosted: true,
+    });
+  });
+
+  test("a local OpenRouter key while logged in is removable and marked as overriding hosted", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      source: "config",
+      removable: true,
+      overridesHosted: true,
     });
   });
 

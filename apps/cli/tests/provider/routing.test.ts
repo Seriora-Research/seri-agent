@@ -300,6 +300,21 @@ describe("resolveRoute", () => {
       });
     });
 
+    test("a local OpenRouter key wins over gateway coverage for the same provider", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+
     // Regression: a configured sibling still wins over gateway coverage — when both a sibling key
     // AND planCoverage are available, the reroute-to-sibling outcome is returned, never
     // credential: "gateway".
