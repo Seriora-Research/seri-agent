@@ -1,15 +1,15 @@
 ---
-description: pstack/poteto-mode is the conductor for feature and bugfix work. Apply whenever /poteto-mode, War Room, or /engineering-loop is in play.
+description: pstack/poteto-mode is the conductor for feature and bugfix work. Apply whenever /poteto-mode is in play.
 alwaysApply: true
 ---
 
 # pstack is the conductor
 
-[`docs/decisions/0010-pstack-is-the-conductor.md`](../../docs/decisions/0010-pstack-is-the-conductor.md).
+[`docs/decisions/0010-pstack-is-the-conductor.md`](../../docs/decisions/0010-pstack-is-the-conductor.md),
+overlay removed by [`0014`](../../docs/decisions/0014-pstack-only-no-engineering-loop.md).
 The pstack plugin stays a plugin. This repo does not vendor `poteto-mode`.
 
-One conductor per slug. Do not run `/engineering-loop` and `/poteto-mode` as dual
-orchestrators on the same work.
+One conductor: `/poteto-mode`. Do not run a second orchestrator on the same work.
 
 ## Default path
 
@@ -33,17 +33,8 @@ orchestrators on the same work.
 Task dispatch: `subagent_type: "poteto-agent"`. If that type is missing, `implementer`
 with the same playbook match and the same skip list (`shipping`, Graphite, `orchestrate`).
 
-## Seri overlay (not a second loop)
-
-Before pstack EXECUTE, still do:
-
-- Goal Audit (`challenge-the-goal`) in the main context
-- Human-approved plan when the work needs a spec
-- Promote the approved plan to `docs/specs/<NNN>-<slug>/` (research/feature)
-
-`/engineering-loop` is that overlay plus a poteto-agent dispatch that **includes**
-opening-a-pr. After the PR is open, do not dispatch `reviewer-verifier` unless the user
-asked. Gates (lint, typecheck, tests) still run.
+After the PR is open, do not dispatch `reviewer-verifier` unless the user asked. Gates
+(lint, typecheck, tests) still run.
 
 ## Models
 

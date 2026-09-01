@@ -20,7 +20,7 @@ execution are hard requirements, not suggestions. Rules:
    - Run the relevant tests for the changed area.
    - Commit with a conventional-commit message (`feat:`, `fix:`, `test:`, `refactor:`).
 3. Do NOT expand scope beyond the plan. If the plan is wrong or ambiguous, STOP
-   and report back to the orchestrator rather than improvising.
+   and report rather than improvising.
 4. Read `environment.md` for the correct shell, package manager, and path
    conventions before running any command.
 5. You run in an isolated git worktree — your edits will not collide with

@@ -52,8 +52,7 @@ describe("runCheck", () => {
 
   // The signal is asserted on the value the RUNNER RECEIVED, not on runCheck accepting a
   // parameter: a signal that is declared and dropped one frame later type-checks, passes every
-  // gate, and leaves the check unkillable. Measured precedent for exactly that shape is recorded
-  // in .claude/rules/engineering-loop.md.
+  // gate, and leaves the check unkillable.
   test("threads the caller's AbortSignal through to the process runner", async () => {
     const controller = new AbortController();
     const runner = fakeSpawn({});

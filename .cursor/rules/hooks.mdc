@@ -1,193 +1,44 @@
 ---
-description: Hook authoring rules for the Cursor engineering loop.
+description: Hook authoring rules for remaining Cursor hooks.
 globs: .cursor/hooks/**,.cursor/hooks.json
 alwaysApply: false
 ---
 
 # Hook authoring rules
 
-## verify-gate and format-and-typecheck were removed (2026-08-21)
-Both `.cursor/hooks/verify-gate.sh`/`.ps1` (`stop`) and
-`.cursor/hooks/format-and-typecheck.sh`/`.ps1` (`afterFileEdit`) are not wired in
-`.cursor/hooks.json`. The script files are on disk — only the invocation is
-omitted, so a future session that wants either back can re-add its `hooks.json`
-entry without reconstructing the script.
+`hooks.json` only wires `record-session` (sessionStart), `block-dangerous`
+(beforeShellExecution), and `block-env-read` (beforeReadFile). Do not re-add
+conductor hooks (`goal-audit-gate`, `log-trajectory`, `protect-loop-core`,
+`verify-gate`). See [0014](../../docs/decisions/0014-pstack-only-no-engineering-loop.md).
 
-**Why verify-gate was removed:** it ran `bun run lint && typecheck && test` across the
-whole monorepo (10 workspaces) on every single turn while a loop was in EXECUTE/VERIFY —
-redundant with the orchestrator's own deliberate gate runs at real checkpoints (merges,
-before each review round), which the engineering-loop skill's VERIFY step already
-requires. Measured live in the `perf-review-fixes` loop (2026-08-21): ~7+ minutes of
-added latency per turn, and the 5-consecutive-failure `BLOCKED` ceiling (see the old
-"Iteration ceiling" section, now removed with the hook) fired falsely **twice** in that
-one loop for two different reasons — once because the approved plan hadn't defined a
-`lint` script (the original 2026-08-01 finding this section used to describe), and again
-because the root monorepo `test` script legitimately takes longer than the hook's own
-per-invocation timeout, so a slow-but-passing run scored as a failure on every idle turn.
-User confirmation, asked directly: the hook had no observed marginal safety value in an
-attended session. Removed by explicit user decision, not a code-quality judgment call.
+## Removed, not wired
 
-**Why format-and-typecheck was removed:** it read `$CLAUDE_TOOL_INPUT_FILE_PATH` as an
-environment variable, which Claude Code never sets (see "Hook input arrives as JSON on
-stdin" below) — so it was already a silent no-op on every Write/Edit, never actually
-auto-formatting or typechecking anything. Left alone, that bug looked cheap to "fix" by
-switching to stdin parsing, but doing so would have reintroduced verify-gate's exact
-problem in a **worse** shape: `tsc --noEmit` runs project-wide (line 19's own comment:
-"tsc doesn't support single-file check meaningfully"), and this hook fires once per
-Write/Edit rather than once per turn — strictly more often than verify-gate's Stop
-trigger. Removed pre-emptively rather than fixed, so the latent cost can't resurface the
-next time someone patches the stdin bug without re-deriving this tradeoff.
+`format-and-typecheck` scripts may still sit on disk; they are not in
+`hooks.json`. The Stop-hook `verify-gate` scripts are gone (the
+`.cursor/skills/verify-gate` skill remains for on-demand gate runs).
 
-## block-dangerous.sh is a seatbelt, not a security boundary
-It only intercepts Bash tool calls — Read, Write, and Edit bypass it entirely.
-Label it accordingly; do not rely on it to prevent `.env` leaks from non-Bash tools.
+**Why verify-gate was not a hook:** it ran `bun run lint && typecheck && test`
+across the whole monorepo on every turn — redundant with deliberate gate runs,
+and slow enough to false-fail. User confirmation: no marginal safety in an
+attended session.
 
-## .env protection via Read tool
-`.env` blocking for the Read tool is handled by `block-env-read.sh` / `block-env-read.ps1`,
-wired as a separate `matcher: "Read"` PreToolUse hook in `settings.json`.
-If you add new sensitive file patterns, update BOTH block-dangerous.sh AND block-env-read.sh.
+**Why format-and-typecheck stayed unwired:** it read an env var Claude Code never
+sets, so it was a silent no-op. Wiring stdin would have reintroduced that
+cost on every Write/Edit.
 
-## trajectory.md is an audit log
-trajectory.md records what happened — it is not a replay artifact.
-You cannot deterministically re-execute from it. Do not label it "replayable".
+## Hook input arrives as JSON on stdin
 
-## Hook input arrives as JSON on stdin, never as env vars
-Empirically verified (2026-07-20): Claude Code delivers PreToolUse/PostToolUse
-payloads as a JSON object on **stdin** — `{"tool_name":"...","tool_input":{...}}`
-— not as `CLAUDE_TOOL_INPUT_*` environment variables. `block-dangerous.sh`,
-`block-env-read.sh`/`.ps1`, and `format-and-typecheck.sh`/`.ps1` all currently
-read env vars that are never set, so their guard logic never actually runs
-against real input. Any hook that inspects tool input MUST read and parse
-stdin (see `goal-audit-gate.sh` / `protect-loop-core.sh` for the pattern —
-no `jq` dependency, since it isn't guaranteed present; PowerShell variants
-should use `[Console]::In.ReadToEnd() | ConvertFrom-Json`). Windows paths in
-that JSON are double-backslash-escaped (`\\`) — collapse with
-`sed -e 's/\\\\/\//g' -e 's/\\/\//g'` before pattern-matching; a plain
-`tr '\\' '/'` doubles every slash instead of collapsing it.
-
-**This lesson did not stick — recorded 2026-08-06.** `log-trajectory.sh`/`.ps1`
-had the identical defect (`$CLAUDE_SUBAGENT_NAME`, `$CLAUDE_SUBAGENT_STATUS`,
-neither of which exists, and it never read stdin) and was simply not on the list
-above, which is why 671 of its 674 rows said `unknown-agent`/`unknown`. It is
-fixed now; the real fields are `agent_type` and `agent_id`. The recurrence is
-the finding, not a duplicate bullet: **when adding a lesson that names specific
-files, the list is the weak part** — the next hook written won't be on it.
-Assume any hook not explicitly verified has this bug.
-
-**The 2026-08-06 fix's scope was narrower than it read — corrected 2026-08-13.**
-That fix repaired stdin-parsing for named top-level `Agent` tool dispatches only.
-Measured across four loops on 2026-08-12 (`TRAJECTORY-UNKNOWN-AGENT-LOGGING.md`),
-83-89% of all `subagent:` rows post-fix were still `unknown-agent`: a dispatched
-agent's own internal work (nested Task calls, or WebFetch/WebSearch-backed
-sub-steps it issues itself) fires its own `SubagentStop` event with `agent_type`
-genuinely absent from the payload, not mis-parsed — the earlier fix had no way to
-repair a field that isn't there. `log-trajectory.sh`/`.ps1` now skip appending an
-entry entirely when `agent_type` is empty, instead of writing a
-timestamp-and-opaque-id row with no other information. Empty `agent_type` rows
-carry no named-dispatch audit, so dropping them loses nothing that was read.
-
-**Still unfixed as of 2026-08-06:** `block-dangerous.sh` and `block-env-read.sh`
-continue to read env vars and never read stdin, so their guard logic still never runs
-against real input — both are currently no-ops, not seatbelts. Out of scope of the
-2026-08-06 hook repair, which covered only the four loop-aware hooks; fix them before
-relying on either one. (`format-and-typecheck.sh` had the identical bug but was removed
-from `settings.json` entirely on 2026-08-21 rather than fixed — see the top of this
-file — so its stdin/env-var status no longer matters; it isn't invoked.)
-
-## A loop-aware hook must resolve WHICH loop from `session_id`, never `find … | head -1`
-Every loop-aware hook used to pick its target with
-`find .cursor/loops -name STATE.md | head -1`. Nothing in that identifies the
-*active* loop: `find` returns every loop's file and `head -1` takes whatever
-`readdir` yields first. Verified 2026-08-06 with 14 loop dirs on disk, it was
-consistently a run that had finished two days earlier. Measured on that run's
-trajectory: 674 entries, 671 of them written by the hook into the wrong loop.
-
-The damage is worst where it is least visible. `goal-audit-gate` exists to block
-planning when a loop skipped its Goal Audit; reproduced with the *active* loop's
-`success_check` deliberately empty — exactly what it is built to catch — the old
-gate exited 0 and let the planner dispatch, because it graded a finished run's
-paperwork. **A gate reading the wrong file reports green identically to one that
-works.**
-
-The fix, and the pattern for any new loop-aware hook:
-
-1. The loop copies `.cursor/session-id` (from `sessionStart`) to `.cursor/loops/<slug>/SESSION`
-   at INIT (engineering-loop SKILL.md §0.2). That value must match the `session_id`
-   the hook receives on stdin, a common field on every hook event including
-   `preToolUse`, `stop` and `subagentStop`.
-2. The hook parses `session_id` from its own stdin payload and selects the loop
-   whose `SESSION` matches.
-
-Two concurrent loops are two sessions, so this scales; a single global
-`.cursor/loops/ACTIVE` pointer would not — the two loops would overwrite it.
-
-Keep a fallback for loops predating `SESSION`, but only when the answer is
-unambiguous: exactly one `STATE.md` at `-maxdepth 2` (which also stops archived
-loops under `.cursor/loops/_archive/` from counting). When it is ambiguous, each
-hook fails in **its own** safe direction — `goal-audit-gate` blocks,
-`log-trajectory` writes nothing, `verify-gate` exits 0 rather than forcing
-continuation against another run's state. "Safe" is per-hook, not global.
+Cursor delivers the payload on stdin, not as environment variables. Scripts must
+`ConvertFrom-Json` / parse stdin. A hook that only reads `$env:SOMETHING` is a
+no-op.
 
 ## `.cursor/hooks/*.ps1` must be ASCII-only
-Windows PowerShell 5.1 decodes a `.ps1` with no BOM as cp1252, so any non-ASCII
-character inside a **string literal** breaks the script — an em dash (`—`,
-UTF-8 `e2 80 94`) ends up as `â€"`, and that trailing `0x94` is a curly right
-quote, which PowerShell accepts as a string terminator. Verified 2026-08-06 by
-execution: a no-BOM file containing `"alpha — beta"` dies with "The string is
-missing the terminator", the BOM'd twin prints fine.
 
-Committed `goal-audit-gate.ps1` had three such lines, so it could never have run
-on this machine. It went unnoticed because of the `||` bug above: `pwsh` isn't
-installed here, so the PowerShell half of every hook had never executed at all.
-Fixing the `||` chains is what would have made these live.
+Windows PowerShell 5.1 decodes a `.ps1` with no BOM as cp1252, so a non-ASCII
+character inside a string literal breaks the script.
 
-Prefer ASCII over adding a BOM — a BOM is invisible and easily dropped by an
-editor, whereas ASCII-only survives any tool. Check with
-`grep -Pn '[^\x00-\x7F]' .cursor/hooks/*.ps1`, which must return nothing.
+## Do not chain `bash || pwsh`
 
-## Never chain the bash/pwsh fallback with `||`
-`bash script.sh || pwsh -File script.ps1` looks like "try bash, else pwsh,"
-but `||` also fires whenever bash's script legitimately `exit 2`s to block
-something — and if `pwsh` isn't on PATH (true on this dev machine, which only
-has Windows PowerShell, not PowerShell Core), the fallback fails with
-"command not found" (exit 127), silently swallowing the block. Verified live:
-this exact pattern let a Skill dispatch through a hook that was correctly
-exiting 2. Use `if command -v bash >/dev/null 2>&1; then bash script.sh; else
-pwsh -NonInteractive -File script.ps1; fi` instead — it picks one
-implementation based on availability, never masks a real exit code.
-
-**Migrated: `.cursor/hooks.json` calls each `.ps1` via `powershell -File` on this
-Windows runner** — no `bash || pwsh` chain. `grep -c '||' .cursor/hooks.json`
+A failing bash script with a missing `pwsh` would hide the real exit code.
+`hooks.json` calls each `.ps1` via `powershell -File`. `grep -c '||' .cursor/hooks.json`
 returns 0 and must stay 0.
-
-## goal-audit-gate scope
-goal-audit-gate is a `preToolUse` hook. Cursor has no Skill tool, so it also
-inspects writes of the mode plan files (`feature-plan.md`, `bugfix-report.md`,
-`research-spec.md`) under `.cursor/loops/`. Every other write, including
-`challenge-the-goal` itself, passes through untouched. It blocks (exit 2)
-unless the active STATE.md has a `## Goal Audit` block with a non-empty
-`success_check` line. This is what makes the orchestrator's Goal Audit step
-(§1 of the engineering-loop skill) a real gate instead of a step the model
-can silently skip.
-
-## protect-loop-core scope
-protect-loop-core is a `preToolUse` hook matched on `Write|StrReplace`. It only
-fires while a loop is live, and only blocks writes whose path contains
-`.cursor/hooks/`, `.cursor/hooks.json`, `.cursor/agents/`, `.cursor/skills/`,
-or `.cursor/templates/`. Everything else — `CLAUDE.md`, `.cursor/rules/*.mdc`,
-`.cursor/lessons/**`, loop artifacts, and ordinary project source — passes
-through untouched, including during EXECUTE.
-
-These files define how the loop grades and gates itself, so they must not be
-self-modifiable mid-run. To change them, do it in a session with no live loop.
-
-**What "live" means (corrected 2026-08-06):** a `STATE.md` directly inside
-`.cursor/loops/<slug>/` whose `Status` is neither `DONE` nor `BLOCKED`.
-Archived runs under `.cursor/loops/_archive/<slug>/` are excluded by depth, and
-a finished-but-unarchived run is excluded by its Status. Unreadable `Status`
-counts as live: this gate fails closed.
-
-**What it actually intercepts (corrected 2026-08-06):** the `Write` and `Edit`
-tools, which is what its `PreToolUse` matcher is wired to. It does **not**
-intercept the `Bash` tool. Treat the freeze as a guardrail against casual
-in-loop edits, not as a sandbox. Do not route around it via Bash.
