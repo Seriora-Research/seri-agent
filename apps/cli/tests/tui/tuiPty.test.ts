@@ -38,8 +38,26 @@ function lockSessionStore(sessionsDir: string): void {
   const path = join(configDirForStore(sessionsDir, "sessions"), DATABASE_FILENAME);
   const lock = new Database(path);
   lock.exec("PRAGMA busy_timeout = 0");
-  lock.exec("BEGIN EXCLUSIVE");
-  exclusiveLocks.set(sessionsDir, lock);
+  // RUNLOOP_READY can fire while the child's first save is still in a write
+  // transaction. busy_timeout=0 then fails this BEGIN, not the child's later /mode
+  // save. Retry until the first save commits, then hold the lock.
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      lock.exec("BEGIN EXCLUSIVE");
+      exclusiveLocks.set(sessionsDir, lock);
+      return;
+    } catch (err) {
+      const busy =
+        err instanceof Error &&
+        ((err as { code?: string }).code === "SQLITE_BUSY" || /locked/i.test(err.message));
+      if (!busy || Date.now() >= deadline) {
+        lock.close();
+        throw err;
+      }
+      Bun.sleepSync(20);
+    }
+  }
 }
 
 function restoreSessionStore(sessionsDir: string): void {
