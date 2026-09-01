@@ -52,6 +52,22 @@ describe("harnessId", () => {
   test("omits commit when neither env nor git is available", () => {
     expect(harnessId({}, () => undefined)).toEqual({ version: expect.any(String) });
   });
+
+  test("uses baked commit when env and git are absent", () => {
+    expect(harnessId({}, () => undefined, "cafebabecafebabecafebabecafebabecafebabe")).toEqual({
+      version: expect.any(String),
+      commit: "cafebabecafebabecafebabecafebabecafebabe",
+    });
+  });
+
+  test("SERI_BUILD_COMMIT overrides baked commit", () => {
+    expect(
+      harnessId({ SERI_BUILD_COMMIT: "abc123" }, () => "deadbeef".repeat(5), "bakedsha"),
+    ).toEqual({
+      version: expect.any(String),
+      commit: "abc123",
+    });
+  });
 });
 
 describe("context hashes", () => {

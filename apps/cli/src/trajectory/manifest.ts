@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { relative } from "node:path";
-import { execFileSync } from "node:child_process";
-import pkg from "../../package.json";
 import { findAgentsFile } from "../agents/loadAgentsFile";
 import { loadReasoningEffortConfig, loadConfig } from "../config/config";
 import { getConfigDir } from "../config/paths";
 import type { ModelProvider } from "@seri/model-catalog";
 import { loadSamplingConfig, resolveSampling, type SamplingRecord } from "../provider/sampling";
 import type { RouteCredential } from "../provider/routing";
+import { harnessId, readGitHead } from "./harnessId";
+
+export { harnessId } from "./harnessId";
 
 export type ContextFileHash = { path: string; sha256: string };
 
@@ -21,27 +22,6 @@ export type TrajectoryManifest = {
   maxIterations: number;
   context: ContextFileHash[];
 };
-
-export function harnessId(
-  env: NodeJS.ProcessEnv = process.env,
-  gitHead: () => string | undefined = readGitHead,
-): { version: string; commit?: string } {
-  const fromEnv = env.SERI_BUILD_COMMIT?.trim();
-  const commit = fromEnv && fromEnv.length > 0 ? fromEnv : gitHead();
-  return commit === undefined ? { version: pkg.version } : { version: pkg.version, commit };
-}
-
-function readGitHead(): string | undefined {
-  try {
-    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return /^[0-9a-f]{40}$/i.test(sha) ? sha : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export function hashContextFile(path: string, cwd: string): ContextFileHash | undefined {
   if (!existsSync(path)) return undefined;
