@@ -1,10 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { getTreeSitterClient } from "@opentui/core";
 import { memo } from "react";
-import {
-  useTranscriptWindow,
-  type TranscriptWindowMetrics,
-} from "../hooks/useTranscriptWindow";
+import { useTranscriptWindow, type TranscriptWindowMetrics } from "../hooks/useTranscriptWindow";
 import { gapBefore } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
@@ -33,7 +30,10 @@ export const TranscriptList = memo(function TranscriptList({
   columns?: number;
 }) {
   const metrics: TranscriptWindowMetrics | undefined =
-    viewportHeight === undefined || sticky === undefined || scrollTop === undefined || columns === undefined
+    viewportHeight === undefined ||
+    sticky === undefined ||
+    scrollTop === undefined ||
+    columns === undefined
       ? undefined
       : { scrollTop, viewportHeight, sticky, columns };
   const { start, end, topSpacer, bottomSpacer, onRowSizeChange } = useTranscriptWindow(
@@ -62,10 +62,7 @@ export const TranscriptList = memo(function TranscriptList({
         const index = start + offset;
         return (
           <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
-            <TranscriptRow
-              entry={entry}
-              gap={gapBefore(transcript[index - 1]?.role, entry.role)}
-            />
+            <TranscriptRow entry={entry} gap={gapBefore(transcript[index - 1]?.role, entry.role)} />
           </box>
         );
       })}

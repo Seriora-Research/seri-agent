@@ -30,13 +30,15 @@ describe("quantizeScrollTop", () => {
 describe("visibleTranscriptWindow", () => {
   test("empty list is zeros", () => {
     const offsets = offsetsFromHeights([], 0);
-    expect(visibleTranscriptWindow({
-      length: 0,
-      offsets,
-      scrollTop: 0,
-      viewportHeight: 10,
-      sticky: true,
-    })).toEqual({ start: 0, end: 0, topSpacer: 0, bottomSpacer: 0 });
+    expect(
+      visibleTranscriptWindow({
+        length: 0,
+        offsets,
+        scrollTop: 0,
+        viewportHeight: 10,
+        sticky: true,
+      }),
+    ).toEqual({ start: 0, end: 0, topSpacer: 0, bottomSpacer: 0 });
   });
 
   test("sticky tail-walks so the last rows stay mounted and bottomSpacer is 0", () => {

@@ -57,6 +57,7 @@ describe("InputBox (OpenTUI)", () => {
     await setup.mockInput.typeText("hello");
     await settle(setup);
     await sleep(THROTTLE_MS + 20); // only the leading-edge character flushes immediately
+    await settle(setup); // paint the trailing-edge flush; captureCharFrame reads the last render
 
     expect(setup.captureCharFrame()).toContain("> hello");
   });
