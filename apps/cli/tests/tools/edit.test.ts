@@ -53,28 +53,32 @@ describe("edit", () => {
   });
 
   test("whitespace-normalized fallback on a large unique file stays well below the per-code-unit baseline", () => {
-    const lines: string[] = [];
-    let size = 0;
+    // One long line so exact and line-trim misses stay cheap; the bound is the
+    // whitespace-normalized scan. Many short lines would spend the budget in tier 1.
+    let body = "";
     let i = 0;
-    while (size < 400_000) {
-      const line = `function id${i}() { return ${i}; }`;
-      lines.push(line);
-      size += line.length + 1;
+    while (body.length < 150_000) {
+      body += `t${i}=${i};`;
       i++;
     }
-    lines.push(`const  UNIQUE_MARKER  =  ${i};`);
-    const content = lines.join("\n");
+    const content = `${body}const  UNIQUE_MARKER  =  ${i};`;
     const oldString = `const UNIQUE_MARKER = ${i};`;
 
-    const started = performance.now();
-    const result = edit(content, oldString, "REPLACED;");
-    const elapsed = performance.now() - started;
+    edit(content, oldString, "REPLACED;");
+    const samples: number[] = [];
+    let result = "";
+    for (let k = 0; k < 5; k++) {
+      const started = performance.now();
+      result = edit(content, oldString, "REPLACED;");
+      samples.push(performance.now() - started);
+    }
+    samples.sort((a, b) => a - b);
 
     expect(result.endsWith("REPLACED;")).toBe(true);
     expect(result).not.toContain("UNIQUE_MARKER");
-    // Negative control (this fixture, Bun 1.4.0, Linux): the three-array per-code-unit
-    // path timed 28.3 ms here. Bound is 10 ms so that path fails and a compact-run
-    // rewrite that lands well under 10 ms passes.
-    expect(elapsed).toBeLessThan(10);
+    // Negative control (this fixture, Bun 1.4.0, Linux): per-code-unit `/\s/.test`
+    // plus three growable arrays timed 4.2 ms median. Bound is 3 ms so that path
+    // fails and the compact-run scan's warmed median (~0.1 ms here) passes.
+    expect(samples[2]).toBeLessThan(3);
   });
 });
