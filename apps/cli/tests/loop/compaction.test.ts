@@ -303,4 +303,176 @@ describe("compactMessages", () => {
     expect(JSON.stringify(messages)).toContain(largeBody);
     expect(result.evictedCount).toBe(5);
   });
+
+  test("a later compact uses an update prompt that carries the previous four fields", async () => {
+    const previous = {
+      goal: "ship auth",
+      progress: "found the login bug",
+      blockers: "missing token refresh",
+      nextSteps: "patch the refresh path",
+    };
+    const messages: ModelMessage[] = [
+      {
+        role: "user",
+        content:
+          `[Compacted history — 8 earlier messages condensed]\n` +
+          `Goal: ${previous.goal}\n` +
+          `Progress: ${previous.progress}\n` +
+          `Blockers: ${previous.blockers}\n` +
+          `Next steps: ${previous.nextSteps}`,
+      },
+      assistantToolCallMsg("call-later"),
+      toolResultMsg("call-later", "ok"),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              goal: previous.goal,
+              progress: "login bug is done",
+              blockers: "none",
+              nextSteps: "write the test",
+            }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    await compactMessages(messages, model, 3);
+
+    const sent = summarizerUserText(model);
+    expect(sent).toContain(previous.goal);
+    expect(sent).toContain(previous.progress);
+    expect(sent).toContain(previous.blockers);
+    expect(sent).toContain(previous.nextSteps);
+    expect(sent).toMatch(/PRESERVE/);
+    expect(sent).toMatch(/promote/i);
+    expect(sent).toMatch(/drop stale blockers/i);
+  });
+
+  test("appends deterministic Read/Modified paths from evicted tool-calls after parse", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "r1",
+            toolName: "read_file",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "r1",
+            toolName: "read_file",
+            output: { type: "json", value: "old foo" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "e1",
+            toolName: "edit",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "e1",
+            toolName: "edit",
+            output: { type: "json", value: "new foo" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "r2",
+            toolName: "read_file",
+            input: { path: "src/bar.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "r2",
+            toolName: "read_file",
+            output: { type: "json", value: "bar" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "mcp1",
+            toolName: "mcp",
+            input: { path: "src/ignored.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "mcp1",
+            toolName: "mcp",
+            output: { type: "json", value: "nope" },
+          },
+        ],
+      },
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: "edited foo",
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const result = await compactMessages(messages, model, 9);
+    const sent = summarizerUserText(model);
+    expect(sent).not.toContain("Read:");
+    expect(sent).not.toContain("Modified:");
+
+    const summaryText = result.messages[0]?.content as string;
+    expect(summaryText).toContain("Read: src/bar.ts");
+    expect(summaryText).toContain("Modified: src/foo.ts");
+    expect(summaryText).not.toMatch(/Read:.*src\/foo\.ts/);
+    expect(summaryText).not.toContain("src/ignored.ts");
+  });
 });

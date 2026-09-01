@@ -163,12 +163,87 @@ export function findSafeEvictionBoundary(
   return boundary;
 }
 
+const COMPACT_HISTORY_PREFIX = "[Compacted history —";
+
+function messageText(message: ModelMessage): string {
+  if (typeof message.content === "string") return message.content;
+  return "";
+}
+
+function isCompactSummaryMessage(message: ModelMessage | undefined): boolean {
+  return message?.role === "user" && messageText(message).startsWith(COMPACT_HISTORY_PREFIX);
+}
+
+function toolCallPath(input: unknown): string | undefined {
+  if (input === null || typeof input !== "object") return undefined;
+  const path = (input as { path?: unknown }).path;
+  return typeof path === "string" && path.length > 0 ? path : undefined;
+}
+
+export function extractFileLists(evicted: readonly ModelMessage[]): {
+  read: string[];
+  modified: string[];
+} {
+  const read = new Set<string>();
+  const modified = new Set<string>();
+  for (const message of evicted) {
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (!part || typeof part !== "object" || (part as { type?: string }).type !== "tool-call") {
+        continue;
+      }
+      const call = part as { toolName?: string; input?: unknown };
+      const path = toolCallPath(call.input);
+      if (path === undefined) continue;
+      if (call.toolName === "read_file") read.add(path);
+      else if (call.toolName === "write_file" || call.toolName === "edit") modified.add(path);
+    }
+  }
+  for (const path of modified) read.delete(path);
+  return { read: [...read], modified: [...modified] };
+}
+
+function formatFileListLines(lists: { read: string[]; modified: string[] }): string {
+  const lines: string[] = [];
+  if (lists.read.length > 0) lines.push(`Read: ${lists.read.join(", ")}`);
+  if (lists.modified.length > 0) lines.push(`Modified: ${lists.modified.join(", ")}`);
+  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
+}
+
+function buildSummarizerPrompt(
+  evicted: ModelMessage[],
+  customInstructions?: string,
+): { system: string; prompt: string } {
+  const previous = isCompactSummaryMessage(evicted[0]) ? evicted[0] : undefined;
+  const transcript = JSON.stringify(elideOversizedStrings(evicted));
+  const focus =
+    customInstructions && customInstructions.length > 0
+      ? `\n\nAdditional focus: ${customInstructions}`
+      : "";
+
+  if (previous) {
+    return {
+      system:
+        'You are updating a compact recap of an in-progress coding agent session. PRESERVE specific concrete literals (filenames, paths, numbers, identifiers, secrets, URLs) verbatim. Promote completed work from nextSteps into progress. Drop stale blockers that the new turns resolved. Oversized strings are replaced with {"elided":true,"originalBytes":N}; do not invent contents of elided payloads. Losing a remaining literal is a real failure; a slightly longer summary is not.',
+      prompt:
+        `Update this previous recap with the newly evicted turns. PRESERVE literals from the previous four fields. Promote finished work into progress. Drop stale blockers.\n\nPrevious recap:\n${messageText(previous)}\n\nNewly evicted turns:\n${transcript}\n\nRespond with ONLY a JSON object with exactly the four string fields goal, progress, blockers, nextSteps — no markdown code fences, no explanation before or after.${focus}`,
+    };
+  }
+
+  return {
+    system:
+      'You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript still contains specific concrete data — filenames, paths, numbers, identifiers, secrets, URLs, or other short literals — quote them verbatim in the relevant field rather than paraphrasing. Oversized strings are replaced with {"elided":true,"originalBytes":N}; those were raw tool payloads and must not be reconstructed. Losing a remaining literal is a real failure; a slightly longer summary is not.',
+    prompt:
+      `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. a path written to, a short value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken. Do not invent contents of elided payloads.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${transcript}${focus}`,
+  };
+}
+
 export async function compactMessages(
   messages: ModelMessage[],
   model: LanguageModel,
   evictBoundary: number,
   signal?: AbortSignal,
-  opts?: { stream?: boolean },
+  opts?: { stream?: boolean; customInstructions?: string },
 ): Promise<{
   messages: ModelMessage[];
   summary: CompactionSummary;
@@ -218,9 +293,7 @@ export async function compactMessages(
               },
         });
 
-  const system =
-    'You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript still contains specific concrete data — filenames, paths, numbers, identifiers, secrets, URLs, or other short literals — quote them verbatim in the relevant field rather than paraphrasing. Oversized strings are replaced with {"elided":true,"originalBytes":N}; those were raw tool payloads and must not be reconstructed. Losing a remaining literal is a real failure; a slightly longer summary is not.';
-  const prompt = `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. a path written to, a short value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken. Do not invent contents of elided payloads.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(elideOversizedStrings(evicted))}`;
+  const { system, prompt } = buildSummarizerPrompt(evicted, opts?.customInstructions);
 
   // Summarizing is a full model round-trip that can run for seconds. Leaving it un-abortable
   // would make "Ctrl-C cancels the turn" conditionally false in a way the user cannot predict:
@@ -254,9 +327,16 @@ export async function compactMessages(
     .replace(/\s*```$/, "");
   const summary = CompactionSummarySchema.parse(JSON.parse(stripped));
 
+  const fileLists = extractFileLists(evicted);
   const summaryMessage: ModelMessage = {
     role: "user",
-    content: `[Compacted history — ${evictBoundary} earlier messages condensed]\nGoal: ${summary.goal}\nProgress: ${summary.progress}\nBlockers: ${summary.blockers}\nNext steps: ${summary.nextSteps}`,
+    content:
+      `[Compacted history — ${evictBoundary} earlier messages condensed]\n` +
+      `Goal: ${summary.goal}\n` +
+      `Progress: ${summary.progress}\n` +
+      `Blockers: ${summary.blockers}\n` +
+      `Next steps: ${summary.nextSteps}` +
+      formatFileListLines(fileLists),
   };
 
   return {
