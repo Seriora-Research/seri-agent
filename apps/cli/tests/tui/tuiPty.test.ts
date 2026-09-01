@@ -2078,6 +2078,13 @@ async function startChild(
 // phase (loop.ts's own onToolPhaseEnd push). Without it, an aborted turn persists nothing at all
 // (drive.ts writes only on that event), and the adjacent-user-message assertion below would pass
 // over a session with one message in it no matter what cli.ts did — a green light wired to nothing.
+//
+// The assistant row in front of it is not padding. loop.ts pushes the rules message only after the
+// assistant message and the tool-result row for that phase are already in the array, so `user`
+// directly after `user` is a shape runLoop cannot produce. Appending the rules row straight onto
+// `opts.messages` — which always ends with the turn's own user message — manufactured that pair
+// inside the loop's own array, where cli.ts never gets a say, and left the adjacent-user assertion
+// below unsatisfiable no matter what the queue did.
 function childScriptQueue(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -2086,7 +2093,11 @@ function childScriptQueue(dir: string): string {
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
     `  const n = calls;`,
-    `  const messages = [...opts.messages, { role: "user", content: [{ type: "text", text: "rules for turn " + n }] }];`,
+    `  const messages = [`,
+    `    ...opts.messages,`,
+    `    { role: "assistant", content: [{ type: "text", text: "working on turn " + n }] },`,
+    `    { role: "user", content: [{ type: "text", text: "rules for turn " + n }] },`,
+    `  ];`,
     `  yield { type: "messages-updated", messages };`,
     `  console.log("\\nRUNLOOP_CALL " + n);`,
     `  await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
@@ -6475,16 +6486,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         let messages: { role: string }[] = [];
         do {
           messages = loadSession(sessionId, sessionsDir).messages as { role: string }[];
-        } while (messages.length < 3 && Date.now() < deadline);
+        } while (messages.length < 5 && Date.now() < deadline);
 
         const adjacent = messages.filter(
           (message, index) =>
             index > 0 && message.role === "user" && messages[index - 1].role === "user",
         );
         expect(adjacent).toEqual([]);
-        // Not a vacuous pass: the fake's own trailing user message has to actually be on disk, or
-        // there would be no pair for the assertion above to have ruled out.
-        expect(messages.length).toBeGreaterThanOrEqual(3);
+        // Not a vacuous pass, and 5 rather than 3 is what makes that true. Turn 1 alone reaches
+        // disk as three rows ending on the fake's own trailing user message, and a run that stopped
+        // there would satisfy the assertion above without the promoted head ever being appended —
+        // the pair it exists to rule out would not have had a chance to form. Five is turn 1's three
+        // plus the separator and the head.
+        expect(messages.length).toBeGreaterThanOrEqual(5);
       } finally {
         child.kill("SIGKILL");
       }
