@@ -24,6 +24,7 @@ export type ConnectCodexAppServerOpts = {
 };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const STDERR_TAIL_CHARS = 400;
 
 type Pending = {
   resolve: (value: unknown) => void;
@@ -35,6 +36,17 @@ function writeLine(child: ChildProcess, payload: unknown): void {
     throw new Error("codex app-server stdin is closed");
   }
   child.stdin.write(`${JSON.stringify(payload)}\n`);
+}
+
+function rpcIdKey(id: unknown): string | undefined {
+  if (typeof id === "number" && Number.isFinite(id)) return String(id);
+  if (typeof id === "string" && id.length > 0) return id;
+  return undefined;
+}
+
+function withStderrTail(base: string, tail: string): string {
+  const extra = tail.trim().replace(/\s+/g, " ");
+  return extra.length === 0 ? base : `${base}: ${extra.slice(-STDERR_TAIL_CHARS)}`;
 }
 
 export async function connectCodexAppServer(
@@ -56,7 +68,16 @@ export async function connectCodexAppServer(
   }
   child.stdin.on("error", () => {});
 
-  const pending = new Map<number, Pending>();
+  // Blocking writes to stderr stall when the OS pipe fills (~64KiB) if nobody
+  // is reading. JSON-RPC is stdout; these bytes are logs. Drain them and keep a
+  // tail so a timeout/exit error can name what the child printed.
+  let stderrTail = "";
+  child.stderr?.on("data", (chunk: Buffer | string) => {
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    stderrTail = (stderrTail + text).slice(-STDERR_TAIL_CHARS);
+  });
+
+  const pending = new Map<string, Pending>();
   let nextId = 1;
   let closed = false;
   const untrack = killOnFatalSignal(() => {
@@ -78,11 +99,13 @@ export async function connectCodexAppServer(
       return;
     }
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return;
-    const msg = parsed as { id?: unknown; result?: unknown; error?: unknown };
-    if (typeof msg.id !== "number") return;
-    const waiter = pending.get(msg.id);
+    const msg = parsed as Record<string, unknown>;
+    if (!("result" in msg || "error" in msg)) return;
+    const key = rpcIdKey(msg.id);
+    if (key === undefined) return;
+    const waiter = pending.get(key);
     if (waiter === undefined) return;
-    pending.delete(msg.id);
+    pending.delete(key);
     if (msg.error !== undefined) {
       waiter.reject(new Error(formatRpcError(msg.error)));
       return;
@@ -101,9 +124,12 @@ export async function connectCodexAppServer(
     rl.close();
     failAll(
       new Error(
-        signal !== null
-          ? `codex app-server exited from ${signal}`
-          : `codex app-server exited with code ${code ?? "null"}`,
+        withStderrTail(
+          signal !== null
+            ? `codex app-server exited from ${signal}`
+            : `codex app-server exited with code ${code ?? "null"}`,
+          stderrTail,
+        ),
       ),
     );
   });
@@ -112,12 +138,13 @@ export async function connectCodexAppServer(
     request(method, params) {
       if (closed) return Promise.reject(new Error("codex app-server is closed"));
       const id = nextId++;
+      const key = String(id);
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`codex app-server timed out on ${method}`));
+          pending.delete(key);
+          reject(new Error(withStderrTail(`codex app-server timed out on ${method}`, stderrTail)));
         }, timeoutMs);
-        pending.set(id, {
+        pending.set(key, {
           resolve: (value) => {
             clearTimeout(timer);
             resolve(value);
@@ -130,7 +157,7 @@ export async function connectCodexAppServer(
         try {
           writeLine(child, params === undefined ? { id, method } : { id, method, params });
         } catch (err) {
-          pending.delete(id);
+          pending.delete(key);
           clearTimeout(timer);
           reject(err);
         }

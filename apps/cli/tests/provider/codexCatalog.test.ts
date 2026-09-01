@@ -127,6 +127,28 @@ describe("withCodexSubscriptionCatalog", () => {
     expect(result).toBe(catalog);
     expect(isCodexPlanCatalogApplied()).toBe(false);
     expect(warnings.some((line) => line.includes("plan model list"))).toBe(true);
+    expect(warnings.some((line) => line.includes("app-server down"))).toBe(true);
+  });
+
+  test("an empty list warns and does not mark the API catalog as plan-applied", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-catalog-"));
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const warnings: string[] = [];
+    const result = await withCodexSubscriptionCatalog(
+      catalog,
+      (line) => warnings.push(line),
+      async () => [],
+    );
+    expect(result).toBe(catalog);
+    expect(isCodexPlanCatalogApplied()).toBe(false);
+    expect(warnings.some((line) => line.includes("plan model list was empty"))).toBe(true);
   });
 
   test("a profile ignore skips overlay even when a chatgpt login is on disk", async () => {
