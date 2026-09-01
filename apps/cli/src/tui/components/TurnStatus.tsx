@@ -15,6 +15,8 @@ export function TurnStatus({
 }: {
   startedAt: number;
   tokenProgress: TokenProgress;
+  pendingLiveOutputEstimate?: () => number;
+  subscribePendingLive?: (listener: () => void) => () => void;
 }) {
   const [now, setNow] = useState(() => Date.now());
 

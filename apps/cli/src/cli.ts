@@ -1287,8 +1287,8 @@ async function runTui(
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
-  // action — the identical computation React's own `useReducer` (App.tsx) will ALSO run against
-  // its OWN copy, moments later. Every read in this file that used to go through `liveSession` (a
+  // action — the identical computation App.tsx will ALSO run against its OWN copy
+  // (stream-coalesced for text-delta), moments later. Every read in this file that used to go through `liveSession` (a
   // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
   // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
   // runs asynchronously after a render commits, never synchronously with the dispatch that
@@ -1371,9 +1371,9 @@ async function runTui(
   // "high". Reading config.json fresh at the comparison site below removes the staleness entirely
   // — there is no cached value left to go stale, whether it's this /config bypass or a process
   // killed between a session-only /effort merge and the first turn that would have persisted it.
-  // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
-  // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
-  // what every other function in this closure actually calls now.
+  // The `connectDispatch` dispatch App.tsx hands back — stream-coalesced for text-delta —
+  // renamed from this file's old, single `dispatch` variable so that name is free for the wrapper
+  // below, which is what every other function in this closure actually calls now.
   let reactDispatch: Dispatch | undefined;
   // The single dispatch funnel every dispatch in this closure now goes through — driveLoop's own
   // onEvent mapping (runTurn, below), onSubmit, quit(), tuiPresenter, tuiApprovalPrompt. Updates

@@ -3442,7 +3442,7 @@ describe("App", () => {
     });
 
     // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
-    // for the bug it left uncovered: App's OWN `useReducer(tuiReducer, initialTuiState(session, {
+    // for the bug it left uncovered: App's OWN `useState(() => initialTuiState(session, {
     // route, config }))` call (app.tsx) must seed `state.config` from the `config` PROP at mount,
     // not only ever receive it via a later `config-updated` dispatch — every other case in this
     // describe block dispatches that action first, so none of them can tell a real mount-time seed
