@@ -210,22 +210,24 @@ describe("ModelPicker (OpenTUI)", () => {
   }
 
   test("at 80 columns a row with +1 route still shows intact Context and Cost", async () => {
-    const rows: ModelPickerEntry[] = [{
-      entry: {
-        id: "openai/gpt-oss-120b",
-        displayName: "GPT OSS 120B",
-        provider: "groq",
-        family: "gpt-oss",
-        contextWindow: 131_072,
-        maxOutputTokens: 32_768,
-        toolCall: true,
-        reasoning: false,
-        pricing: { inputPerMTok: 0.15, outputPerMTok: 0.60 },
+    const rows: ModelPickerEntry[] = [
+      {
+        entry: {
+          id: "openai/gpt-oss-120b",
+          displayName: "GPT OSS 120B",
+          provider: "groq",
+          family: "gpt-oss",
+          contextWindow: 131_072,
+          maxOutputTokens: 32_768,
+          toolCall: true,
+          reasoning: false,
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+        },
+        keyConfigured: true,
+        alternatives: 1,
+        gatewayReachable: false,
       },
-      keyConfigured: true,
-      alternatives: 1,
-      gatewayReachable: false,
-    }];
+    ];
     const setup = await createTestRenderer({ width: 80, height: 10 });
     await mountPicker(setup, () => {}, undefined, rows);
     const frame = setup.captureCharFrame();

@@ -27,6 +27,7 @@ import {
   DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
+  formatModelPickerHeader,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
@@ -35,6 +36,7 @@ import {
   MODE_HINT_COLS,
   MODE_LABEL,
   matchesFilter,
+  pickerLabelWidth,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
@@ -3010,12 +3012,66 @@ describe("App", () => {
       const row = formatModelRow(
         pickerRow({
           alternatives: 1,
-          entry: entry({ pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 }, contextWindow: 131_072 }),
+          entry: entry({
+            pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+            contextWindow: 131_072,
+          }),
         }),
       );
       expect(row.length).toBeGreaterThan(74);
       expect(row).toContain("+1 route");
       expect(row).toContain("$0.15/$0.60");
+    });
+
+    test("pickerLabelWidth at 80 is 74, and 0 falls back the same as 80", () => {
+      expect(pickerLabelWidth(80)).toBe(74);
+      expect(pickerLabelWidth(0)).toBe(pickerLabelWidth(80));
+    });
+
+    test("formatModelRow at pickerLabelWidth(80) drops the suffix but keeps Context and Cost", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(80));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("+1 route");
+      expect(row.length).toBeLessThanOrEqual(74);
+    });
+
+    test("formatModelRow at pickerLabelWidth(100) keeps the +1 route suffix", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      expect(formatModelRow(priced, pickerLabelWidth(100))).toContain("+1 route");
+      expect(formatModelRow(priced)).toContain("+1 route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(80) still contains Route", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(80))).toContain("Route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(70) drops Route; the row keeps Context and Cost", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(70))).not.toContain("Route");
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(70));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("your key");
     });
 
     // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming
