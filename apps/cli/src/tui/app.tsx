@@ -369,7 +369,10 @@ export function App({
   const stream = useMemo(() => createStreamDispatch(setState), []);
   const dispatch = stream.dispatch;
   const [pendingReasoning, setPendingReasoning] = useState("");
-  useEffect(() => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())), [stream]);
+  useEffect(
+    () => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())),
+    [stream],
+  );
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
@@ -775,9 +778,7 @@ export function App({
             tokenProgress={turn.tokens}
             pendingLiveOutputEstimate={stream.getPendingLiveOutputEstimate}
             subscribePendingLive={stream.subscribe}
-            thinking={
-              (state.reasoning.live?.text.length ?? 0) > 0 || pendingReasoning.length > 0
-            }
+            thinking={(state.reasoning.live?.text.length ?? 0) > 0 || pendingReasoning.length > 0}
             thinkingExpanded={state.reasoning.expanded}
             toolInFlight={state.pendingTool !== undefined}
           />

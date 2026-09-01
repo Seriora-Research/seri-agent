@@ -644,7 +644,11 @@ describe("buildArchivistGoal", () => {
       ctx,
       "2026-08-11",
     );
-    const goal = buildArchivistGoal([{ role: "user", content: "hi" }], loadMemory(ctx), "tool-count");
+    const goal = buildArchivistGoal(
+      [{ role: "user", content: "hi" }],
+      loadMemory(ctx),
+      "tool-count",
+    );
     expect(goal).toContain("prefers tabs");
     expect(goal).toMatch(/\d+% — \d+\/1375 chars/);
     expect(goal).not.toContain("You cannot edit these directly");

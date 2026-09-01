@@ -290,15 +290,15 @@ const EMPTY_REASONING: ReasoningState = Object.freeze({ expanded: false });
 const EMPTY_TRANSCRIPT: Readonly<
   Pick<TuiState, "transcript" | "streaming" | "toolActivity" | "reasoning">
 > = Object.freeze({
-    // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
-    // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
-    // genuinely different types — frozen at runtime regardless of this cast, which only restores the
-    // static type this field is spread into everywhere else.
-    transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
-    streaming: "",
-    toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
-    reasoning: EMPTY_REASONING,
-  });
+  // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
+  // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
+  // genuinely different types — frozen at runtime regardless of this cast, which only restores the
+  // static type this field is spread into everywhere else.
+  transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
+  streaming: "",
+  toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
+  reasoning: EMPTY_REASONING,
+});
 
 const EMPTY_ROSTER: Readonly<
   Pick<
