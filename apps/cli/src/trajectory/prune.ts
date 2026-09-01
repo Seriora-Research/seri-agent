@@ -6,7 +6,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function pruneTrajectories(
   dir: string,
-  opts: { now: Date; retentionDays: number; keepSessionId?: string },
+  opts: {
+    now: Date;
+    retentionDays: number;
+    keepSessionId?: string;
+    database?: SessionDatabase;
+  },
 ): { files: string[]; sessions: string[] } {
   const cutoff = opts.now.getTime() - opts.retentionDays * DAY_MS;
   const files: string[] = [];
@@ -23,16 +28,19 @@ export function pruneTrajectories(
     }
   }
   const configDir = configDirForStore(dir, "trajectories");
-  if (!existsSync(join(configDir, DATABASE_FILENAME))) return { files, sessions: [] };
+  if (opts.database === undefined && !existsSync(join(configDir, DATABASE_FILENAME))) {
+    return { files, sessions: [] };
+  }
+  const pruneOpts = {
+    cutoff: new Date(cutoff).toISOString(),
+    ...(opts.keepSessionId !== undefined ? { keepSessionId: opts.keepSessionId } : {}),
+  };
+  if (opts.database !== undefined) {
+    return { files, sessions: opts.database.pruneTrajectories(pruneOpts) };
+  }
   const database = new SessionDatabase(configDir);
   try {
-    return {
-      files,
-      sessions: database.pruneTrajectories({
-        cutoff: new Date(cutoff).toISOString(),
-        ...(opts.keepSessionId !== undefined ? { keepSessionId: opts.keepSessionId } : {}),
-      }),
-    };
+    return { files, sessions: database.pruneTrajectories(pruneOpts) };
   } finally {
     database.close();
   }

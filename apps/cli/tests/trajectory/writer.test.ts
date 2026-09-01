@@ -73,6 +73,39 @@ describe("createTrajectoryWriter SQLite persistence", () => {
     }
   });
 
+  test("a held database is not closed per record; an unheld writer still closes", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-held-"));
+    const dir = join(configDir, "trajectories");
+    const database = new SessionDatabase(configDir);
+    const originalClose = SessionDatabase.prototype.close;
+    let closes = 0;
+    SessionDatabase.prototype.close = function (this: SessionDatabase) {
+      closes++;
+      return originalClose.call(this);
+    };
+    try {
+      const writer = createTrajectoryWriter(writerOpts(dir, { database }));
+      writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      writer.recordLoopEvent({ type: "retry", attempt: 1 });
+      expect(closes).toBe(0);
+      expect(database.readTrajectory("sess-1").slice(1)).toMatchObject([
+        { seq: 1, kind: "done" },
+        { seq: 2, kind: "retry" },
+      ]);
+
+      const beforeUnheld = closes;
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "other" })).recordLoopEvent({
+        type: "done",
+        reason: "no-tool-call",
+      });
+      expect(closes).toBeGreaterThan(beforeUnheld);
+    } finally {
+      SessionDatabase.prototype.close = originalClose;
+      database.close();
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
   test("ignored loop events do not create storage or consume sequence", () => {
     const configDir = mkdtempSync(join(tmpdir(), "seri-traj-delta-"));
     const dir = join(configDir, "trajectories");
