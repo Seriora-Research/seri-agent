@@ -303,6 +303,45 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// childScriptMultiTurn's own shape with one turn cancelled. Role initials rather than a bare
+// length, so a count that happens to match cannot pass for the right shape. The cancelled turn
+// yields no `messages-updated`, matching loop.ts's own stream catch — a fake that answered where
+// the real loop stays silent would prove nothing.
+function childScriptCancelledTurnContext(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  const roles = opts.messages.map((m) => m.role[0]).join("");`,
+    `  const kept = opts.messages.some((m) => JSON.stringify(m.content).includes("task two"));`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " roles=" + roles + " kept=" + kept);`,
+    `  if (calls === 2) {`,
+    `    console.log("\\nRUNLOOP_PARKED");`,
+    `    await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `    console.log("\\nRUNLOOP_ABORTED");`,
+    `    yield { type: "done", reason: "aborted" };`,
+    `    return opts.messages;`,
+    `  }`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // A logged-in session's account-status fetch (prepareSession's own fetchAccountPlan call, feeding
 // resolveRoute/decideModelPickerOpen's plan-coverage predicate) must happen once at session start,
 // not once per turn — the same "reused across turns" guarantee childScriptMultiTurn's own sibling
@@ -2498,6 +2537,49 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // actually finishes.
       await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  // A cancelled turn used to take its own prompt down with it, so a follow-up like "the last two"
+  // reached the model with nothing to resolve against — runTurn's own commit-before-the-call
+  // dispatch (cli.ts) carries the mechanism.
+  //
+  // Turn 3's own line is the assertion, not the transcript: what broke was what the model is
+  // handed, and the transcript kept showing the typed line throughout.
+  test("a cancelled turn leaves its own prompt in the session the next turn is built from", async () => {
+    const scriptPath = join(dir, "child-cancelled-turn-context.mjs");
+    writeFileSync(scriptPath, childScriptCancelledTurnContext(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      // The argv task, prepareSession's own single starting message.
+      await sawLine("RUNLOOP_CALL 1 roles=u kept=false");
+      await sawLine("RUNLOOP_DONE 1");
+
+      // Waited on before the Enter for the reason the sibling multi-turn test documents.
+      child.stdin?.write("task two");
+      await sawLine("task two");
+      child.stdin?.write("\r");
+      // The argv task, turn 1's assistant reply, and this turn's own prompt.
+      await sawLine("RUNLOOP_CALL 2 roles=uau kept=true");
+      await sawLine("RUNLOOP_PARKED");
+
+      child.stdin?.write("\x03");
+      // The rendered line, not just the child's own RUNLOOP_ABORTED marker: that marker fires
+      // before the `done` yield, and the sibling multi-turn test's own comment records why the
+      // rendered line is what actually proves turnInFlight has cleared — without it the next
+      // submission below can land inside the still-in-flight window and be rejected by the gate.
+      await sawLine("RUNLOOP_ABORTED");
+      await sawLine("done: aborted");
+
+      child.stdin?.write("task three");
+      await sawLine("task three");
+      child.stdin?.write("\r");
+      // The regression: `roles=uau kept=false` before the fix, because "task two" died with its
+      // turn. The extra `a` is the `[interrupted]` row withUserTurn inserts.
+      await sawLine("RUNLOOP_CALL 3 roles=uauau kept=true");
     } finally {
       child.kill("SIGKILL");
     }

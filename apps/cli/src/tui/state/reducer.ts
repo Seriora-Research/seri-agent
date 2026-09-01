@@ -344,6 +344,12 @@ export function initialTuiState(
 
 export type TuiAction =
   | { type: "session-updated"; session: SessionState<ModelMessage> }
+  // The user row a turn is about to be run against, dispatched by runTurn (cli.ts) before the model
+  // is called. Merges exactly as `messages-updated` does, and is a separate action rather than a
+  // synthetic one of those because that event means "the provider answered this turn" to its other
+  // consumers — runTurn's own `onEvent` persists the default model pair and reasoning tier on it,
+  // which for an unanswered turn would pin a model that never worked.
+  | { type: "user-turn-committed"; messages: ModelMessage[] }
   // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
@@ -619,6 +625,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
       return { ...state, session: action.session };
+    case "user-turn-committed":
+      return { ...state, session: { ...state.session, messages: action.messages } };
     // pushLine, not a bare append: this used to be harmless when transcript-append had no real
     // callers, but tuiPresenter.message, undoPlanLines/recoveryLines and quit()'s own "quitting -
     // cancelling..." line all go through this case now, and the last of those fires specifically

@@ -56,6 +56,35 @@ describe("tuiReducer: session-updated", () => {
   });
 });
 
+describe("tuiReducer: user-turn-committed", () => {
+  test("merges the messages into the current session, leaving the rest of it alone", () => {
+    const state = initialTuiState(session({ permissionMode: "read-only" }));
+    const next = tuiReducer(state, {
+      type: "user-turn-committed",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(next.session.messages).toEqual([{ role: "user", content: "hi" }]);
+    expect(next.session.permissionMode).toBe("read-only");
+  });
+
+  // The reason this is not a synthetic `messages-updated`: that event is also the transcript's own
+  // signal, and a committed user row must not disturb an answer already streaming into it.
+  test("leaves the transcript and the streaming buffer untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "loop-event",
+      event: { type: "text-delta", text: "partial" },
+    });
+    state = tuiReducer(state, {
+      type: "user-turn-committed",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(state.transcript).toEqual([]);
+    expect(state.streaming).toBe("partial");
+  });
+});
+
 describe("tuiReducer: transcript-append", () => {
   test("appends a line without touching the session", () => {
     const state = initialTuiState(session());
