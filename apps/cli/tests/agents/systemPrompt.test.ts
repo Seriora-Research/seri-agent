@@ -109,14 +109,16 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toMatch(/powershell/i);
   });
 
-  test("the assembled system prompt forbids writing AGENTS.md and the human-authored .seri contracts", () => {
+  test("the assembled system prompt allows AGENTS.md and .seri contracts when the user asks, and forbids using them as memory", () => {
     const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
 
     expect(prompt).toMatch(/AGENTS\.md/);
     expect(prompt).toMatch(/\.seri\/rules/);
     expect(prompt).toMatch(/\.seri\/agents/);
     expect(prompt).toMatch(/\.seri\/hooks/);
-    expect(prompt).toMatch(/do not create or edit|never (create|write|edit)/i);
+    expect(prompt).toMatch(/when the user asks/i);
+    expect(prompt).toMatch(/remember|govern/i);
+    expect(prompt).not.toMatch(/Do not create or edit `AGENTS\.md`/);
   });
 
   test("the stable prompt does not name skill or mcp, which are absent unless this session composed them", () => {
