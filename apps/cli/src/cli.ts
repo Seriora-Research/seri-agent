@@ -600,10 +600,7 @@ async function compactCommand(
   presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
-  const evictBoundary = findSafeEvictionBoundary(
-    session.messages,
-    DEFAULT_PRESERVE_RECENT_TOKENS,
-  );
+  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_TOKENS);
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");
     return;

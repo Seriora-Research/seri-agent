@@ -99,12 +99,7 @@ export function elideOversizedStrings(
 // {assistant tool-call, tool result} pair pushed by loop.ts, and evicting one half while
 // keeping the other reproduces the AI_MissingToolResultsError class of bug (fixed in
 // 24c2aa1).
-const OVERFLOW_MARKERS = [
-  "too many tokens",
-  "maximum context",
-  "context_length",
-  "token limit",
-];
+const OVERFLOW_MARKERS = ["too many tokens", "maximum context", "context_length", "token limit"];
 
 function errorSearchText(err: unknown): string {
   const parts: string[] = [];
@@ -139,7 +134,10 @@ function statusCodeOf(err: unknown): number | undefined {
 export function isContextOverflowError(err: unknown): boolean {
   const text = errorSearchText(err);
   if (OVERFLOW_MARKERS.some((marker) => text.includes(marker))) return true;
-  if (/\bcontext\b/.test(text) && /window|length|exceed|limit|too (?:long|large)|overflow/.test(text)) {
+  if (
+    /\bcontext\b/.test(text) &&
+    /window|length|exceed|limit|too (?:long|large)|overflow/.test(text)
+  ) {
     return true;
   }
   return statusCodeOf(err) === 400 && /\bcontext\b/.test(text);
@@ -225,16 +223,14 @@ function buildSummarizerPrompt(
     return {
       system:
         'You are updating a compact recap of an in-progress coding agent session. PRESERVE specific concrete literals (filenames, paths, numbers, identifiers, secrets, URLs) verbatim. Promote completed work from nextSteps into progress. Drop stale blockers that the new turns resolved. Oversized strings are replaced with {"elided":true,"originalBytes":N}; do not invent contents of elided payloads. Losing a remaining literal is a real failure; a slightly longer summary is not.',
-      prompt:
-        `Update this previous recap with the newly evicted turns. PRESERVE literals from the previous four fields. Promote finished work into progress. Drop stale blockers.\n\nPrevious recap:\n${messageText(previous)}\n\nNewly evicted turns:\n${transcript}\n\nRespond with ONLY a JSON object with exactly the four string fields goal, progress, blockers, nextSteps — no markdown code fences, no explanation before or after.${focus}`,
+      prompt: `Update this previous recap with the newly evicted turns. PRESERVE literals from the previous four fields. Promote finished work into progress. Drop stale blockers.\n\nPrevious recap:\n${messageText(previous)}\n\nNewly evicted turns:\n${transcript}\n\nRespond with ONLY a JSON object with exactly the four string fields goal, progress, blockers, nextSteps — no markdown code fences, no explanation before or after.${focus}`,
     };
   }
 
   return {
     system:
       'You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript still contains specific concrete data — filenames, paths, numbers, identifiers, secrets, URLs, or other short literals — quote them verbatim in the relevant field rather than paraphrasing. Oversized strings are replaced with {"elided":true,"originalBytes":N}; those were raw tool payloads and must not be reconstructed. Losing a remaining literal is a real failure; a slightly longer summary is not.',
-    prompt:
-      `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. a path written to, a short value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken. Do not invent contents of elided payloads.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${transcript}${focus}`,
+    prompt: `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. a path written to, a short value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken. Do not invent contents of elided payloads.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${transcript}${focus}`,
   };
 }
 

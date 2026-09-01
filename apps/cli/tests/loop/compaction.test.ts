@@ -91,7 +91,9 @@ describe("findSafeEvictionBoundary", () => {
 
   test("returns null when fewer than minEvictable messages would be evicted", () => {
     const messages = buildAlternatingMessages(10);
-    expect(findSafeEvictionBoundary(messages, keepTokensForLast(messages, messages.length))).toBeNull();
+    expect(
+      findSafeEvictionBoundary(messages, keepTokensForLast(messages, messages.length)),
+    ).toBeNull();
   });
 
   test("a huge 19-message tail is cut while a tiny 20-message tail is kept", () => {

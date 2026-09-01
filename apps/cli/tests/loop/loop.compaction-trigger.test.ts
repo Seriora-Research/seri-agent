@@ -45,9 +45,9 @@ describe("isContextOverflowError", () => {
     expect(isContextOverflowError(new Error("maximum context length reached"))).toBe(true);
     expect(isContextOverflowError(new Error("context_length_exceeded"))).toBe(true);
     expect(isContextOverflowError(new Error("token limit exceeded"))).toBe(true);
-    expect(isContextOverflowError(new Error("wrapper", { cause: new Error("context_length") }))).toBe(
-      true,
-    );
+    expect(
+      isContextOverflowError(new Error("wrapper", { cause: new Error("context_length") })),
+    ).toBe(true);
   });
 
   test("matches a 400 whose text is overflow language", () => {
@@ -202,7 +202,10 @@ describe("runLoop compaction trigger", () => {
     expect(events.find((e) => e.type === "compacted")).toBeUndefined();
     expect(model.doGenerateCalls).toHaveLength(0);
     expect(events.find((e) => e.type === "error")?.error).toContain("socket hang up");
-    expect(events.at(-1)).toEqual({ type: "error", error: expect.stringContaining("socket hang up") });
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      error: expect.stringContaining("socket hang up"),
+    });
   });
 
   test("a second overflow after the retry fails as today", async () => {
@@ -229,7 +232,9 @@ describe("runLoop compaction trigger", () => {
 
     expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
     expect(model.doStreamCalls.length).toBe(2);
-    const errors = events.filter((e): e is Extract<LoopEvent, { type: "error" }> => e.type === "error");
+    const errors = events.filter(
+      (e): e is Extract<LoopEvent, { type: "error" }> => e.type === "error",
+    );
     expect(errors.length).toBeGreaterThanOrEqual(1);
     expect(errors.at(-1)?.error).toContain("context_length");
   });
