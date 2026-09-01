@@ -27,6 +27,32 @@ const DEFAULT_MIN_EVICTABLE = 4;
 // copies of that can drift into disagreeing about a shared claim.
 export const MAX_RETRIES = 2;
 
+// Per-string cap for the summarizer prompt only. Identifiers, paths, and short command
+// output fit; file bodies and write_file content do not. The session still evicts the raw
+// messages; this stops the extra model call from ingesting them. Clone-on-walk, never
+// mutate the caller's transcript.
+export const SUMMARIZER_STRING_CAP_BYTES = 2048;
+
+export function elideOversizedStrings(
+  value: unknown,
+  capBytes = SUMMARIZER_STRING_CAP_BYTES,
+): unknown {
+  if (typeof value === "string") {
+    const originalBytes = Buffer.byteLength(value, "utf8");
+    if (originalBytes <= capBytes) return value;
+    return { elided: true, originalBytes };
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    return value.map((item) => elideOversizedStrings(item, capBytes));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = elideOversizedStrings(child, capBytes);
+  }
+  return out;
+}
+
 // A cut is only safe immediately before a "user"/"assistant" message, never before a
 // "tool" message — a `role:"tool"` message is always the second half of an adjacent
 // {assistant tool-call, tool result} pair pushed by loop.ts, and evicting one half while
@@ -99,8 +125,8 @@ export async function compactMessages(
         });
 
   const system =
-    "You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript contains specific concrete data — exact file contents, literal strings, filenames, paths, numbers, identifiers, secrets, URLs, or any other specific values — quote them verbatim in the relevant field rather than paraphrasing or describing them generically. Losing a literal value is a real failure; a slightly longer summary is not.";
-  const prompt = `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. text written to a file, a value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(evicted)}`;
+    'You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript still contains specific concrete data — filenames, paths, numbers, identifiers, secrets, URLs, or other short literals — quote them verbatim in the relevant field rather than paraphrasing. Oversized strings are replaced with {"elided":true,"originalBytes":N}; those were raw tool payloads and must not be reconstructed. Losing a remaining literal is a real failure; a slightly longer summary is not.';
+  const prompt = `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. a path written to, a short value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken. Do not invent contents of elided payloads.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(elideOversizedStrings(evicted))}`;
 
   // Summarizing is a full model round-trip that can run for seconds. Leaving it un-abortable
   // would make "Ctrl-C cancels the turn" conditionally false in a way the user cannot predict:
