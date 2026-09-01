@@ -2,10 +2,12 @@
 // Root TUI component, rendered inside the one `CliRenderer` shared by `routes/setup/
 // welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `cli.ts`'s `runTui` (`runtime/renderer.ts`,
 // `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
-// instance rather than mounting its own. The transcript is a native `<scrollbox>` fed the FULL,
-// unwindowed `state.transcript` — `stickyScroll`/`stickyStart="bottom"` (below) follow newly
-// appended content while at the bottom, and hold position when scrolled away from it, natively
-// (OpenTUI's own Yoga layout + scroll-anchor logic, not a reducer-computed slice). No mid-generation
+// instance rather than mounting its own. The transcript is a native `<scrollbox>` whose
+// `stickyScroll`/`stickyStart="bottom"` (below) follow newly appended content while at the
+// bottom, and hold position when scrolled away from it, natively (OpenTUI's own Yoga layout +
+// scroll-anchor logic, not a reducer-computed slice). `state.transcript` stays the complete
+// append-only array; `TranscriptList` mounts only the viewport plus overscan and holds the
+// unmounted prefix/suffix as spacer boxes so `scrollHeight` still matches the full history. No mid-generation
 // text is ever rendered in it: `state.streaming` accumulates every `text-delta` for `pushLine`'s
 // next flush (state/reducer.ts), but is never itself displayed live, character by character — while
 // a turn is active, `TurnStatus` (below) stays mounted for the whole turn as a fixed row OUTSIDE
@@ -94,6 +96,7 @@ import {
   MODE_LABEL,
   modeRowHintVisible,
 } from "./util/format";
+import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -428,6 +431,7 @@ export function App({
   // `state.transcript.length === 0` directly; removing it and re-running the `/clear`-while-
   // scrolled-up regression below showed the plain `layout-changed` listener already covers it).
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
   const renderer = useRenderer();
   useEffect(() => {
     const el = transcriptRef.current;
@@ -449,6 +453,12 @@ export function App({
     const sync = () => {
       const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
       setScrolledUp(el.scrollTop < maxScrollTop);
+      // Quantized so TranscriptList does not rebuild its mount range on every
+      // wheel tick; overscan covers the distance between quanta. Home is 0 and
+      // stays 0 (`quantizeScrollTop`), which is what the not-sticky start-at-0
+      // path needs.
+      const nextTop = quantizeScrollTop(el.scrollTop);
+      setScrollTop((prev) => (prev === nextTop ? prev : nextTop));
     };
     el.verticalScrollBar.on("change", sync);
     el.viewport.on("resize", sync);
@@ -633,10 +643,12 @@ export function App({
       own header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
       `transcriptHeight` (above) reads that back via `onSizeChange`; `scrollboxHeight` (above) hands
       the scrollbox its own share as a definite number, one row short of `transcriptHeight` whenever
-      TurnStatus (below) needs that row for itself. Fed the FULL `state.transcript` — no windowed
-      slice — with `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset
-      used to: follow newly appended content while at the bottom, hold position when scrolled away
-      from it. No mid-generation text is ever rendered here: `state.streaming` still accumulates
+      TurnStatus (below) needs that row for itself. `state.transcript` is still the complete array
+      — the mount window lives in `TranscriptList`, as spacers plus a slice, so this scrollbox's
+      own `scrollHeight` stays the height of the full history. `stickyScroll`/`stickyStart="bottom"`
+      still do what the old reducer-computed offset used to: follow newly appended content while at
+      the bottom, hold position when scrolled away from it. No mid-generation text is ever rendered
+      here: `state.streaming` still accumulates
       every `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of
       the answer only appears once `pushLine` commits it as a normal transcript entry. The scrollbox
       itself is not given keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own
@@ -691,7 +703,13 @@ export function App({
               it. Static after mount — a later `/model` switch moves `state.route` and the mode
               indicator, not this, which reports what the session opened on. */}
               {splashBanner !== undefined && <SplashBanner info={splashBanner} />}
-              <TranscriptList transcript={state.transcript} />
+              <TranscriptList
+                transcript={state.transcript}
+                scrollTop={scrollTop}
+                viewportHeight={scrollboxHeight}
+                sticky={!scrolledUp}
+                columns={width}
+              />
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
               flushToolActivity, toolActivity is [] and this region unmounts in the same
