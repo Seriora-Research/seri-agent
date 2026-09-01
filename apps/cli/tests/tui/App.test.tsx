@@ -21,6 +21,7 @@ import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
+  APP_CHROME_ROWS,
   DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
@@ -41,7 +42,7 @@ import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from ".
 // 100 cols), is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
-// APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
+// APP_CHROME_ROWS math: listWindowSize(height - APP_CHROME_ROWS), which reaches 10 at height >= 22). Deliberately
 // fixed rather than inherited from the real host terminal — a test's expected geometry should not
 // depend on the terminal it happens to run in.
 const DEFAULT_WIDTH = 100;
@@ -1017,7 +1018,10 @@ describe("App", () => {
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
+      const frame = setup.captureCharFrame();
+      expect(frame).toMatch(/\d+s .*↑, .*↓/);
+      // Negative control: the floor hairline is the row that would have stolen this.
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
     });
   });
 
@@ -2992,7 +2996,18 @@ describe("App", () => {
     });
   });
 
+  test("a live input sits under a full-width hairline", async () => {
+    const { setup } = await connect();
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("─".repeat(DEFAULT_WIDTH));
+    expect(frame).toContain("describe a task");
+  });
+
   describe("listWindowSize", () => {
+    test("APP_CHROME_ROWS is one row each for mode, commandError, and the auth offer", () => {
+      expect(APP_CHROME_ROWS).toBe(3);
+    });
+
     // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
@@ -3596,8 +3611,9 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("/login");
+      expect(frame).toContain("! Sign in with /login, or create an account with /signup");
       expect(frame).toContain("/signup");
+      expect(frame).not.toMatch(/┌[^\n]*Sign in/);
       // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
       // onSubmit, exactly as it would with the banner absent.
       await setup.mockInput.typeText("still typing");
@@ -4308,6 +4324,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
       // Content that doesn't fit the fixed-height root box doesn't grow the frame taller — an
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
       // header line; both must render intact once the reservation accounts for AuthBanner and

@@ -34,12 +34,12 @@ export const PANEL_CHROME_ROWS = 9;
 
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
 // unconditionally rather than threaded through as props: the unconditional mode-indicator row, a
-// `commandError` line (one row, shown above the panel), and AuthBanner's three-row bordered Box
-// (shown above everything when signed out) — 1 + 1 + 3 = 5. Unconditional because
+// `commandError` line (one row, shown above the panel), and AuthBanner's one-row offer
+// (shown above everything when signed out) — 1 + 1 + 1 = 3. Unconditional because
 // `commandError`/`authOffer` live on reducer state inside App, out of scope for the four panel
 // components that call `useListWindow(rows, selected)` with nothing else in scope — threading both
 // flags into every one of them (plus App itself) costs far more than the alternative:
-// over-reserving these five rows when neither is actually showing costs at most one list row on a
+// over-reserving these three rows when neither is actually showing costs at most one list row on a
 // 24-row terminal and nothing at all on a 25+ row one, while under-reserving pushes a panel row off
 // the alt screen with no scrollback to recover it.
 //
@@ -52,7 +52,7 @@ export const PANEL_CHROME_ROWS = 9;
 // regression than the pendingTool overflow it was meant to close. Left as a known gap rather than
 // re-fixed here; a real fix needs either a shorter LIST_WINDOW_MAX floor or measuring pendingTool's
 // own height live instead of reserving for it unconditionally.
-export const APP_CHROME_ROWS = 5;
+export const APP_CHROME_ROWS = 3;
 
 // Rows reserved from the terminal height for everything OTHER than the transcript scrollbox
 // (app.tsx: `rows - FALLBACK_CHROME_ROWS`), for the one frame before `onSizeChange` has ever

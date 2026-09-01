@@ -31,7 +31,7 @@ export function useListWindow<T>(
   // `terminalRows - APP_CHROME_ROWS`, not raw `terminalRows`: a panel replaces InputBox in
   // App.tsx's own render ternary, but everything else App.tsx can render alongside a panel — the
   // root Box's own spare row, the unconditional mode-indicator row, a `commandError` line,
-  // AuthBanner's three-row bordered Box — still needs its own share of `terminalRows`. See
+  // AuthBanner's one-row offer — still needs its own share of `terminalRows`. See
   // APP_CHROME_ROWS' own comment (format.ts) for why that reservation is unconditional rather than
   // threaded through as props.
   const windowSize = listWindowSize(terminalRows - APP_CHROME_ROWS);

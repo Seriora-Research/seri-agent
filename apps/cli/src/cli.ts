@@ -3003,8 +3003,12 @@ async function runTui(
         // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
         // lands in the transcript either way, regardless of which console stream it would have
         // gone to on a non-TTY run.
-        for (const { text } of prepared.preMountMessages) {
-          dispatch({ type: "transcript-append", line: text });
+        for (const { text, stream } of prepared.preMountMessages) {
+          dispatch({
+            type: "transcript-append",
+            line: text,
+            muted: stream === "stdout",
+          });
         }
         // The non-blocking login/signup offer (AuthBanner) — true iff no auth session is
         // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are

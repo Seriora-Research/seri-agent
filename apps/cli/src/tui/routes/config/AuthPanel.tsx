@@ -2,7 +2,7 @@
 import { useKeyboard } from "@opentui/react";
 import type { AuthPanelState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
-import { theme } from "../../theme/theme";
+import { theme, WARNING_MARK } from "../../theme/theme";
 import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
 import { isEnter } from "../../util/keys";
@@ -15,13 +15,11 @@ import { isEnter } from "../../util/keys";
 export function AuthBanner({ show }: { show: boolean }) {
   if (!show) return null;
   return (
-    <box {...FRAME}>
-      {/* `truncate`: APP_CHROME_ROWS (util/format.ts) counts this box as exactly 3 rows — 2
-      border + 1 text. Below ~58 columns this fixed string would otherwise soft-wrap to a second
-      text row, making the box 4 rows and pushing an open panel's own bottom row past the
-      alt-screen viewport. */}
-      <text truncate>Sign in with /login, or create an account with /signup</text>
-    </box>
+    // One row, no frame: the offer is a notice, not a card. `truncate` keeps it one row
+    // below ~58 columns so APP_CHROME_ROWS can count it as 1.
+    <text fg={theme.muted} truncate>
+      {`${WARNING_MARK}Sign in with /login, or create an account with /signup`}
+    </text>
   );
 }
 

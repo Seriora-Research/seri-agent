@@ -128,7 +128,16 @@ describe("applyTuiBackground", () => {
     expect(ground(renderer)).toEqual(RGBA.fromHex("#141413").toInts());
   });
 
-  test("leaves the terminal's own ground alone when nothing is configured", async () => {
+  test("paints paper when nothing is configured", async () => {
+    const renderer = await freshRenderer();
+
+    applyTuiBackground(renderer, configDir);
+
+    expect(ground(renderer)).toEqual(RGBA.fromHex("#141413").toInts());
+  });
+
+  test("leaves the terminal's own ground alone when SERI_TUI_BACKGROUND is terminal", async () => {
+    setConfigValue("SERI_TUI_BACKGROUND", "terminal", configDir);
     const renderer = await freshRenderer();
 
     applyTuiBackground(renderer, configDir);

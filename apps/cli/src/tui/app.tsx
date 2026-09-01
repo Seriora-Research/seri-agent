@@ -81,7 +81,7 @@ import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
 import type { SetupProviderRow } from "./state/commands";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
-import { FRAME, gapBefore } from "./theme/spacing";
+import { FRAME, gapBefore, hairlineRow } from "./theme/spacing";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import type { CompletionSource } from "./util/completion";
@@ -291,6 +291,14 @@ function resolveHeight(rows: number): number {
 // breakpoint, not a tuned value — any real terminal this narrow is already unusable for other
 // reasons, so precision here isn't worth chasing further.
 const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
+
+function FloorHairline({ columns }: { columns: number }) {
+  return (
+    <text fg={theme.border} truncate wrapMode="none">
+      {hairlineRow(columns)}
+    </text>
+  );
+}
 
 export function App({
   session,
@@ -840,6 +848,7 @@ export function App({
         // input across it. The box is live and the note says where a submitted line goes.
         <>
           <text fg={theme.muted}>starting session… your message sends when it is ready</text>
+          {rows >= 6 && <FloorHairline columns={width} />}
           <InputBox
             onSubmit={(value) => {
               const task = value.trim();
@@ -869,6 +878,10 @@ export function App({
           <text fg={theme.muted}>starting session…</text>
         </box>
       ) : (
+        <>
+        {/* Input FRAME (3) + mode (1) + TurnStatus (1) is already five rows. A hairline
+        on a 5-row terminal would clip the status the short-terminal path exists to keep. */}
+        {rows >= 6 && <FloorHairline columns={width} />}
         <InputBox
           onSubmit={onSubmit}
           onQuit={onQuit}
@@ -899,6 +912,7 @@ export function App({
           }
           completionSources={getCompletionSources?.()}
         />
+        </>
       )}
       {state.subagents.length > 0 && (
         <SubagentPanel

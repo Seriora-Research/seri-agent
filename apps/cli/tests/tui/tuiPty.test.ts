@@ -6539,8 +6539,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     test("a second Escape during the unwind is inert, not fatal", async () => {
       const { child, sawLine } = await queueOneBehindTurn();
       try {
+        // One Escape per tick, not a burst: three ESC bytes in one read become a CSI
+        // prefix and never reach InputBox as Escape, which is what a full-frame
+        // repaint (paper ground + hairline) makes more likely.
         child.stdin?.write("\x1b");
+        await wait100ms();
         child.stdin?.write("\x1b");
+        await wait100ms();
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_ABORTED 1");
         await sawLine("RUNLOOP_CALL 2");

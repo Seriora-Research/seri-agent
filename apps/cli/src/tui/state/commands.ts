@@ -366,7 +366,7 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       label: "Background color",
       // Same length budget as the two descriptions above (ConfigPanel's own single-row
       // `selectedDescription`, measured at 75 chars).
-      description: "Hex ground the TUI paints, e.g. #141413. Unset keeps the terminal's own.",
+      description: "Hex ground, default #141413. Set to terminal to keep the terminal's own.",
       kind: "string",
       // The renderer is built once, at launch (tui/runtime/renderer.ts), and its background is
       // applied there — a /config write lands in config.json but paints nothing until next run.
