@@ -341,9 +341,9 @@ export type PreparedRun = {
   catalog: ModelCatalog;
   // The catalog's own entry for `model`/`provider`, above — undefined when the catalog has no
   // entry for this exact id/provider pair (an id typed straight into SERI_MODEL, say). driveLoop
-  // reads two fields off it: `.contextWindow` (falls back to runLoop's own
-  // DEFAULT_CONTEXT_WINDOW_SIZE when undefined, matching what every run did before this field
-  // existed) and `.displayName` (falls back to the raw id, buildVolatileTier's own job). Carrying
+  // reads `.contextWindow` (falls back to runLoop's own DEFAULT_CONTEXT_WINDOW_SIZE when
+  // undefined), `.displayName` (falls back to the raw id, buildVolatileTier's own job), and
+  // `.family` (the llama narration overlay; missing/unknown family means no overlay). Carrying
   // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
   // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
   catalogEntry: ModelCatalogEntry | undefined;
