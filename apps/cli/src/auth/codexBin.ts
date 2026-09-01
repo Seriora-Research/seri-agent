@@ -29,9 +29,7 @@ export function describeCodexSetupStatus(status: CodexSetupStatus): string {
     case "not-installed":
       return "not installed";
     case "not-logged-in":
-      return status.reason === "api-key"
-        ? "API-key login. Run `codex login`"
-        : "run `codex login`";
+      return status.reason === "api-key" ? "API-key login. Run `codex login`" : "run `codex login`";
     case "connected":
       return "ChatGPT plan connected";
   }
