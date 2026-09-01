@@ -599,18 +599,24 @@ export async function* runLoop(opts: {
 
     type ToolExecute = NonNullable<NonNullable<(typeof opts.tools)[string]>["execute"]>;
     const startReadExecute = (call: ToolCall, execute: ToolExecute): Promise<ReadOutcome> =>
-      Promise.resolve(
-        execute(call.input, {
-          toolCallId: call.toolCallId,
-          messages,
-          context: {},
-          abortSignal: opts.signal,
-        }),
-      ).then(
-        (value): ReadOutcome => ({ kind: "ok", value }),
-        (error): ReadOutcome =>
-          opts.signal?.aborted ? { kind: "aborted" } : { kind: "error", error },
-      );
+      // `then`, not `Promise.resolve(execute(...))`: read_file's execute is sync
+      // (readFileSync) and throws. Evaluating that call as the argument throws
+      // before a promise exists, so the rejection handler below never runs and
+      // the raw ENOENT escapes the generator — TUI death, not a tool-error event.
+      Promise.resolve()
+        .then(() =>
+          execute(call.input, {
+            toolCallId: call.toolCallId,
+            messages,
+            context: {},
+            abortSignal: opts.signal,
+          }),
+        )
+        .then(
+          (value): ReadOutcome => ({ kind: "ok", value }),
+          (error): ReadOutcome =>
+            opts.signal?.aborted ? { kind: "aborted" } : { kind: "error", error },
+        );
 
     async function* flushReadBatch(): AsyncGenerator<LoopEvent, "aborted" | "ok"> {
       if (readBatch.length === 0) return "ok";
