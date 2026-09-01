@@ -84,7 +84,9 @@ function childAction(event: ChildEventPayload["event"]) {
 }
 
 function forwarded(event: LoopEvent): boolean {
-  return event.type !== "messages-updated" && event.type !== "retry" && event.type !== "tool-allowed";
+  return (
+    event.type !== "messages-updated" && event.type !== "retry" && event.type !== "tool-allowed"
+  );
 }
 
 describe("parallel read-only blast radius", () => {
