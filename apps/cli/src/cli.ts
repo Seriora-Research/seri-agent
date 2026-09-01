@@ -150,7 +150,7 @@ import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
-import type { AgentSpec } from "./subagents/registry";
+import type { AgentSpec, AgentRegistry } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
@@ -1827,39 +1827,53 @@ async function runTui(
   // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
   // catalog commands, then agents, then skills.
   //
-  // Recomputed on demand rather than captured once. The registries are frozen for a session, but
-  // `/clear` mints a conceptually new one and bindSession (runtime/prepare.ts) reassigns
-  // `prepared.agents`/`prepared.skills` to freshly-loaded registries in the same process — that
-  // reload is the whole point of doing it there, so a skill approved or deleted since startup is
-  // live afterwards. A captured array would keep offering the pre-clear list while `onSubmit`
-  // resolved against the new one, so the popup could hand back a name that then failed with
-  // "Unrecognized command", and a genuinely new skill would not complete until the process
-  // restarted.
-  const buildCompletionSources = (): readonly CompletionSource[] => [
-    {
-      id: "commands",
-      trigger: "/",
-      // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
-      // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
-      lineStartOnly: true,
-      items: [
-        ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
-        ...[...prepared.agents.values()].map((agent) => ({
-          name: `/${agent.name}`,
-          description: describeCompletion("subagent", agent.description),
-        })),
-        // Skills last so an agent of the same name wins the list the way it wins the lookup —
-        // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
-        ...[...prepared.skills.values()].map((skill) => ({
-          name: `/${skill.name}`,
-          description: describeCompletion("skill", skill.description),
-        })),
-      ]
-        .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((item) => ({ value: item.name, description: item.description })),
-    },
-  ];
+  // Recomputed when `prepared.agents` / `prepared.skills` identity changes, not on every App
+  // render. Those registries are frozen for a session, but `/clear` mints a conceptually new one
+  // and bindSession (runtime/prepare.ts) reassigns them to freshly-loaded registries in the same
+  // process — that reload is the whole point of doing it there, so a skill approved or deleted
+  // since startup is live afterwards. A captured array would keep offering the pre-clear list
+  // while `onSubmit` resolved against the new one, so the popup could hand back a name that then
+  // failed with "Unrecognized command", and a genuinely new skill would not complete until the
+  // process restarted.
+  let completionSourceCache:
+    | { agents: AgentRegistry; skills: SkillRegistry; sources: readonly CompletionSource[] }
+    | undefined;
+  const buildCompletionSources = (): readonly CompletionSource[] => {
+    if (
+      completionSourceCache !== undefined &&
+      completionSourceCache.agents === prepared.agents &&
+      completionSourceCache.skills === prepared.skills
+    ) {
+      return completionSourceCache.sources;
+    }
+    const sources: readonly CompletionSource[] = [
+      {
+        id: "commands",
+        trigger: "/",
+        // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
+        // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
+        lineStartOnly: true,
+        items: [
+          ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+          ...[...prepared.agents.values()].map((agent) => ({
+            name: `/${agent.name}`,
+            description: describeCompletion("subagent", agent.description),
+          })),
+          // Skills last so an agent of the same name wins the list the way it wins the lookup —
+          // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
+          ...[...prepared.skills.values()].map((skill) => ({
+            name: `/${skill.name}`,
+            description: describeCompletion("skill", skill.description),
+          })),
+        ]
+          .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((item) => ({ value: item.name, description: item.description })),
+      },
+    ];
+    completionSourceCache = { agents: prepared.agents, skills: prepared.skills, sources };
+    return sources;
+  };
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
