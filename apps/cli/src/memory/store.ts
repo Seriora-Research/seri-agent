@@ -230,20 +230,33 @@ const MEMORY_TIER_INTRO =
   "Your own notes from earlier sessions, loaded once at session start and frozen for this session: a\n" +
   "write made now takes effect in the next session, not this one. You cannot edit these directly.";
 
-// "" when all three files are empty/whitespace-only — this IS the B2 guarantee: buildVolatileTier
-// (agents/systemPrompt.ts) composes this through joinTiers, whose filter(Boolean) drops an empty
-// string, so a session with no memory yet renders byte-identically to today's prompt.
-export function renderMemoryTier(memory: LoadedMemory): string {
+function memoryFilesEmpty(memory: LoadedMemory): boolean {
   const isEmpty = (file: MemoryFile): boolean => file.text.trim().length === 0;
-  if (isEmpty(memory.user) && isEmpty(memory.global) && isEmpty(memory.project)) return "";
+  return isEmpty(memory.user) && isEmpty(memory.global) && isEmpty(memory.project);
+}
+
+function memorySections(memory: LoadedMemory): string {
   return [
-    "# Memory",
-    MEMORY_TIER_INTRO,
-    "",
     section("About the user", memory.user),
     "",
     section("Global notes", memory.global),
     "",
     section("This project", memory.project),
   ].join("\n");
+}
+
+// "" when all three files are empty/whitespace-only — this IS the B2 guarantee: buildVolatileTier
+// (agents/systemPrompt.ts) composes this through joinTiers, whose filter(Boolean) drops an empty
+// string, so a session with no memory yet renders byte-identically to today's prompt.
+export function renderMemoryTier(memory: LoadedMemory): string {
+  if (memoryFilesEmpty(memory)) return "";
+  return ["# Memory", MEMORY_TIER_INTRO, "", memorySections(memory)].join("\n");
+}
+
+// Same three sections and budgets as renderMemoryTier, without that function's coding-agent intro
+// ("frozen for this session", "You cannot edit these directly"). The archivist reloads these files
+// live and writes them; that intro is a direct contradiction of its job.
+export function renderArchivistMemory(memory: LoadedMemory): string {
+  if (memoryFilesEmpty(memory)) return "";
+  return memorySections(memory);
 }

@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import {
   compactMessages,
   elideOversizedStrings,
+  estimateTokens,
   findSafeEvictionBoundary,
   SUMMARIZER_STRING_CAP_BYTES,
 } from "../../src/loop/compaction";
@@ -61,11 +62,16 @@ function buildAlternatingMessages(pairs: number): ModelMessage[] {
   return messages;
 }
 
+function keepTokensForLast(messages: ModelMessage[], count: number): number {
+  if (count <= 0) return 0;
+  return estimateTokens(messages.slice(-count));
+}
+
 describe("findSafeEvictionBoundary", () => {
-  test("never returns a boundary pointing at a tool message, across every preserveRecentMessages value", () => {
+  test("never returns a boundary pointing at a tool message, across every keep-token budget that lands on today's indexes", () => {
     const messages = buildAlternatingMessages(10);
     for (let preserve = 0; preserve <= messages.length; preserve++) {
-      const boundary = findSafeEvictionBoundary(messages, preserve);
+      const boundary = findSafeEvictionBoundary(messages, keepTokensForLast(messages, preserve));
       if (boundary === null) continue;
       expect(messages[boundary]?.role).not.toBe("tool");
     }
@@ -75,9 +81,9 @@ describe("findSafeEvictionBoundary", () => {
     const messages = buildAlternatingMessages(10);
     const candidateIndex = 6; // even index -> lands on a tool message
     expect(messages[candidateIndex]?.role).toBe("tool");
-    const preserve = messages.length - candidateIndex;
+    const keep = keepTokensForLast(messages, messages.length - candidateIndex);
 
-    const boundary = findSafeEvictionBoundary(messages, preserve);
+    const boundary = findSafeEvictionBoundary(messages, keep);
 
     expect(boundary).toBe(candidateIndex + 1);
     expect(messages[boundary as number]?.role).toBe("assistant");
@@ -85,7 +91,36 @@ describe("findSafeEvictionBoundary", () => {
 
   test("returns null when fewer than minEvictable messages would be evicted", () => {
     const messages = buildAlternatingMessages(10);
-    expect(findSafeEvictionBoundary(messages, messages.length)).toBeNull();
+    expect(
+      findSafeEvictionBoundary(messages, keepTokensForLast(messages, messages.length)),
+    ).toBeNull();
+  });
+
+  test("a huge 19-message tail is cut while a tiny 20-message tail is kept", () => {
+    // 20k tokens / 19 ≈ 4 KiB of text; each result is well over that so the
+    // suffix alone exceeds the keep budget and a count-20 rule cannot treat
+    // the whole tail as recent.
+    const hugeBody = "H".repeat(20_000);
+    const huge: ModelMessage[] = [];
+    for (let i = 0; i < 9; i++) {
+      huge.push(assistantToolCallMsg(`huge-${i}`), toolResultMsg(`huge-${i}`, hugeBody));
+    }
+    huge.push({ role: "user", content: hugeBody });
+    expect(huge).toHaveLength(19);
+    const hugeBoundary = findSafeEvictionBoundary(huge, 20_000);
+    expect(hugeBoundary).not.toBeNull();
+    expect(hugeBoundary).toBeGreaterThanOrEqual(4);
+    expect(huge[hugeBoundary as number]?.role).not.toBe("tool");
+
+    const tiny: ModelMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      tiny.push({
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: i % 2 === 0 ? "ok" : [{ type: "text", text: "ok" }],
+      });
+    }
+    expect(estimateTokens(tiny)).toBeLessThan(2_000);
+    expect(findSafeEvictionBoundary(tiny, 20_000)).toBeNull();
   });
 });
 
@@ -168,6 +203,7 @@ describe("compactMessages", () => {
     const result = await compactMessages(messages, model, evictBoundary);
 
     expect(result.evictedCount).toBe(evictBoundary);
+    expect(result.tokensBefore).toBe(estimateTokens(messages));
     expect(result.messages).toHaveLength(2);
     expect(result.messages[1]).toEqual(messages[3]);
 
@@ -268,5 +304,177 @@ describe("compactMessages", () => {
     expect(sent).toContain(`"originalBytes":${Buffer.byteLength(largeBody)}`);
     expect(JSON.stringify(messages)).toContain(largeBody);
     expect(result.evictedCount).toBe(5);
+  });
+
+  test("a later compact uses an update prompt that carries the previous four fields", async () => {
+    const previous = {
+      goal: "ship auth",
+      progress: "found the login bug",
+      blockers: "missing token refresh",
+      nextSteps: "patch the refresh path",
+    };
+    const messages: ModelMessage[] = [
+      {
+        role: "user",
+        content:
+          `[Compacted history — 8 earlier messages condensed]\n` +
+          `Goal: ${previous.goal}\n` +
+          `Progress: ${previous.progress}\n` +
+          `Blockers: ${previous.blockers}\n` +
+          `Next steps: ${previous.nextSteps}`,
+      },
+      assistantToolCallMsg("call-later"),
+      toolResultMsg("call-later", "ok"),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              goal: previous.goal,
+              progress: "login bug is done",
+              blockers: "none",
+              nextSteps: "write the test",
+            }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    await compactMessages(messages, model, 3);
+
+    const sent = summarizerUserText(model);
+    expect(sent).toContain(previous.goal);
+    expect(sent).toContain(previous.progress);
+    expect(sent).toContain(previous.blockers);
+    expect(sent).toContain(previous.nextSteps);
+    expect(sent).toMatch(/PRESERVE/);
+    expect(sent).toMatch(/promote/i);
+    expect(sent).toMatch(/drop stale blockers/i);
+  });
+
+  test("appends deterministic Read/Modified paths from evicted tool-calls after parse", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "r1",
+            toolName: "read_file",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "r1",
+            toolName: "read_file",
+            output: { type: "json", value: "old foo" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "e1",
+            toolName: "edit",
+            input: { path: "src/foo.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "e1",
+            toolName: "edit",
+            output: { type: "json", value: "new foo" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "r2",
+            toolName: "read_file",
+            input: { path: "src/bar.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "r2",
+            toolName: "read_file",
+            output: { type: "json", value: "bar" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "mcp1",
+            toolName: "mcp",
+            input: { path: "src/ignored.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "mcp1",
+            toolName: "mcp",
+            output: { type: "json", value: "nope" },
+          },
+        ],
+      },
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: "edited foo",
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const result = await compactMessages(messages, model, 9);
+    const sent = summarizerUserText(model);
+    expect(sent).not.toContain("Read:");
+    expect(sent).not.toContain("Modified:");
+
+    const summaryText = result.messages[0]?.content as string;
+    expect(summaryText).toContain("Read: src/bar.ts");
+    expect(summaryText).toContain("Modified: src/foo.ts");
+    expect(summaryText).not.toMatch(/Read:.*src\/foo\.ts/);
+    expect(summaryText).not.toContain("src/ignored.ts");
   });
 });
