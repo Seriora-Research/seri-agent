@@ -151,11 +151,10 @@ for (const step of steps) {
 
 await sleep(400);
 
-// `s` and `r` (XTSAVE/XTRESTORE) take the same form as DECSET/DECRST's own `h`/`l`, and the TUI
-// writes `?1007s` on the way in and `?1007r` on the way out (apps/cli/src/tui/runtime/renderer.ts).
-// Parsing only `h`/`l` left the half of the alternate-scroll suppression that PUTS THE WHEEL BACK
-// invisible in report.json, confirmable only by grepping raw.bin. Same array and same `mode` field,
-// two more `action` values, so an `h`/`l` consumer reads it unchanged.
+// `s` and `r` (XTSAVE/XTRESTORE) take the same form as DECSET/DECRST's own `h`/`l`. The TUI no
+// longer writes `?1007` itself (a wheel notch is Up/Down, and app.tsx routes those to the
+// transcript). The parser still records save/restore if something else emits them, so an `h`/`l`
+// consumer reads the report unchanged.
 const PRIVATE_MODE = new RegExp(`${ESC}\\[\\?([\\d;]+)([hlsr])`, "g");
 const MODE_ACTION = { h: "enable", l: "disable", s: "save", r: "restore" };
 const OSC_52 = new RegExp(`${ESC}\\]52;([^;]*);([^${BEL}${ESC}]*)(?:${BEL}|${ESC}\\\\)`, "g");

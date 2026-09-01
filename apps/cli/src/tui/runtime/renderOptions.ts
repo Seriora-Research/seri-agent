@@ -43,8 +43,9 @@ import { configValue, loadConfig, tuiBackgroundColor } from "../../config/config
 // `renderer.useMouse` setter re-emits the enable/disable sequences on the same tick, so a future
 // surface that genuinely needs the mouse turns reporting on for its own lifetime and off again
 // after. docs/specs/044-tui-selection-copy/research.md measures the trade and prices what it costs
-// the transcript — `runtime/renderer.ts`'s own `?1007` suppression and app.tsx's approval-paging
-// gate and hidden scrollbar are the rest of that price, not separate concerns.
+// the transcript — app.tsx's Up/Down routing (what a wheel notch becomes once reporting is off),
+// its approval-paging gate, and the hidden scrollbar are the rest of that price, not separate
+// concerns.
 export const MAIN_TUI_RENDERER_CONFIG: CliRendererConfig = {
   exitOnCtrlC: false,
   exitSignals: [],
