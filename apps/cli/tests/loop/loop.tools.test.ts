@@ -1624,6 +1624,45 @@ describe("runLoop", () => {
       expect(toolMessageOutputs(events)).toHaveLength(3);
     });
 
+    // read_file's execute is sync and throws (readFileSync). Promise.resolve(execute())
+    // does not catch a throw that happens while evaluating the argument — it never
+    // builds the promise. The serial write path already has try/catch; this batch
+    // must too, or a missing file kills the TUI with the raw ENOENT.
+    test("a sync throw from read_file is an error event, not a crash of the generator", async () => {
+      const tools: ToolSet = {
+        read_file: tool({
+          description: "read",
+          inputSchema: z.object({ path: z.string() }),
+          execute: ({ path }) => {
+            throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "read_file", { path: "docs/ROADMAP.md" })),
+          streamResult(textOnlyChunks("missing")),
+        ],
+      });
+
+      let events: LoopEvent[] = [];
+      let threw: unknown;
+      try {
+        events = await collect(
+          runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+        );
+      } catch (err) {
+        threw = err;
+      }
+
+      expect(threw).toBeUndefined();
+      expect(events.find((e) => e.type === "error")?.error).toContain(
+        'Tool "read_file" threw during execution',
+      );
+      expect(events.find((e) => e.type === "error")?.error).toContain("ENOENT");
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    });
+
     test("tool-call events stay paired: no second tool-call before the first result", async () => {
       const tools = delayedReadTools(() => {});
       const model = new MockLanguageModelV4({
