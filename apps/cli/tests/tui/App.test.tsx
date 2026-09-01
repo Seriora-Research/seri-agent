@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseColor, RGBA } from "@opentui/core";
+import { parseColor, RGBA, type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -41,6 +41,7 @@ import {
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
+import { OVERSCAN_ROWS } from "../../src/tui/util/visibleTranscriptWindow";
 import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from "./helpers";
 
 // Wide enough that leftover packing of the mode-row detail (model + route + effort) always fits,
@@ -114,6 +115,21 @@ async function connect(
   await setup.waitFor(() => dispatch !== undefined);
   if (dispatch === undefined) throw new Error("connectDispatch never fired");
   return { setup, dispatch };
+}
+
+function findScrollBox(node: Renderable): ScrollBoxRenderable | undefined {
+  if (node instanceof ScrollBoxRenderable) return node;
+  for (const child of node.getChildren()) {
+    const found = findScrollBox(child);
+    if (found) return found;
+  }
+}
+
+// Row wrappers have children; spacer boxes do not. SplashBanner is not mounted in `connect()`.
+function mountedTranscriptRowCount(setup: TestRendererSetup): number {
+  const scrollBox = findScrollBox(setup.renderer.root);
+  if (scrollBox === undefined) throw new Error("no scrollbox");
+  return scrollBox.content.getChildren().filter((child) => child.getChildren().length > 0).length;
 }
 
 // Named-key sequences this file drives directly (not covered by mockInput's own named helpers) —
@@ -306,6 +322,24 @@ describe("App", () => {
     // InputBox's own top/bottom border rule — proves the viewport left room for the live region
     // below it rather than consuming the whole frame.
     expect(frame).toContain("─");
+  });
+
+  // Caps the Yoga/React tree: 200 one-line entries is more than any 30-row test viewport, so a
+  // full `.map()` would mount 200 row wrappers. Spacers have no children; row wrappers do.
+  // Negative control: forcing TranscriptList to map the full array (no spacers) makes this
+  // count 200 and fails the bound — verified once before landing, not per-run.
+  test("a long transcript mounts O(viewport+overscan) rows, not every historical entry", async () => {
+    const { setup, dispatch } = await connect();
+    const n = 200;
+    for (let i = 0; i < n; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+
+    const mounted = mountedTranscriptRowCount(setup);
+    expect(mounted).toBeLessThan(n);
+    expect(mounted).toBeLessThanOrEqual(OVERSCAN_ROWS * 2 + DEFAULT_HEIGHT + 16);
+    expect(setup.captureCharFrame()).toContain("line 199");
   });
 
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {

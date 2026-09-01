@@ -108,9 +108,9 @@ export type MessageQueue = {
 export type TuiState = {
   session: SessionState<ModelMessage>;
   // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
-  // re-split or re-joined here. Rendered by App.tsx inside a native `<scrollbox>`, fed this array in
-  // full — OpenTUI's own Yoga layout handles wrapping/scrolling, so there is no wrapped-row cache to
-  // keep in sync with it here.
+  // re-split or re-joined here. The array stays complete; a mount window (spacers + slice) is a
+  // render concern in TranscriptList, not a field here. OpenTUI's own Yoga layout handles
+  // wrapping/scrolling, so there is no wrapped-row cache to keep in sync with it here.
   // Each entry carries a `role` ("user"/"assistant"/"system") alongside its logical text — used at
   // render time to band a user turn's rows with a background color and render an assistant answer
   // as markdown (App.tsx), without changing what gets stored.

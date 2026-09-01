@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/react */
 import { getTreeSitterClient } from "@opentui/core";
 import { memo } from "react";
-import { gapBefore, PAD_X } from "../theme/spacing";
+import { useTranscriptWindow, type TranscriptWindowMetrics } from "../hooks/useTranscriptWindow";
+import { gapBefore } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
 import type { TranscriptEntry } from "../util/format";
@@ -11,20 +12,61 @@ import type { TranscriptEntry } from "../util/format";
 // rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
 // streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
 // markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
+//
+// When App passes window metrics, only viewport+overscan rows mount; spacer boxes stand in for
+// the unmounted prefix/suffix so the scrollbox's `scrollHeight` stays the height of the full
+// array. Isolated mounts (tests, ChildTranscript) omit metrics and still map every entry.
 export const TranscriptList = memo(function TranscriptList({
   transcript,
+  scrollTop,
+  viewportHeight,
+  sticky,
+  columns,
 }: {
   transcript: TranscriptEntry[];
+  scrollTop?: number;
+  viewportHeight?: number;
+  sticky?: boolean;
+  columns?: number;
 }) {
+  const metrics: TranscriptWindowMetrics | undefined =
+    viewportHeight === undefined ||
+    sticky === undefined ||
+    scrollTop === undefined ||
+    columns === undefined
+      ? undefined
+      : { scrollTop, viewportHeight, sticky, columns };
+  const { start, end, topSpacer, bottomSpacer, onRowSizeChange } = useTranscriptWindow(
+    transcript.length,
+    metrics,
+  );
+
+  if (metrics === undefined) {
+    return (
+      <>
+        {transcript.map((entry, index) => (
+          <TranscriptRow
+            key={index}
+            entry={entry}
+            gap={gapBefore(transcript[index - 1]?.role, entry.role)}
+          />
+        ))}
+      </>
+    );
+  }
+
   return (
     <>
-      {transcript.map((entry, index) => (
-        <TranscriptRow
-          key={index}
-          entry={entry}
-          gap={gapBefore(transcript[index - 1]?.role, entry.role)}
-        />
-      ))}
+      {topSpacer > 0 && <box height={topSpacer} flexShrink={0} />}
+      {transcript.slice(start, end).map((entry, offset) => {
+        const index = start + offset;
+        return (
+          <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
+            <TranscriptRow entry={entry} gap={gapBefore(transcript[index - 1]?.role, entry.role)} />
+          </box>
+        );
+      })}
+      {bottomSpacer > 0 && <box height={bottomSpacer} flexShrink={0} />}
     </>
   );
 });
