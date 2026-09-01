@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
-import { describeCodexSetupStatus, findCodexBin } from "../../src/auth/codexBin";
+import { describeCodexSetupStatus, findCodexBin, resolveCodexSpawn } from "../../src/auth/codexBin";
 import {
   codexPlanType,
   listCodexModels,
@@ -20,6 +20,46 @@ describe("findCodexBin", () => {
 
   test("an empty override falls through to PATH", () => {
     expect(findCodexBin({ SERI_CODEX_BIN: "", PATH: "" })).toBeUndefined();
+  });
+});
+
+describe("resolveCodexSpawn", () => {
+  test("a Windows .cmd path is launched through cmd.exe /d /s /c", () => {
+    const resolved = resolveCodexSpawn(
+      String.raw`C:\Users\lioar\AppData\Local\pnpm\bin\codex.cmd`,
+      ["app-server", "--stdio"],
+      "win32",
+    );
+    expect(resolved.command).toBe("cmd.exe");
+    expect(resolved.args).toEqual([
+      "/d",
+      "/s",
+      "/c",
+      String.raw`"C:\Users\lioar\AppData\Local\pnpm\bin\codex.cmd" app-server --stdio`,
+    ]);
+    expect(resolved.windowsVerbatimArguments).toBe(true);
+  });
+
+  test("a .bat path is rewritten the same way, and a quoted space in the path stays one argument", () => {
+    const resolved = resolveCodexSpawn(
+      String.raw`C:\Program Files\codex.bat`,
+      ["app-server", "--stdio"],
+      "win32",
+    );
+    expect(resolved.command).toBe("cmd.exe");
+    expect(resolved.args[3]).toBe(String.raw`"C:\Program Files\codex.bat" app-server --stdio`);
+  });
+
+  test("a POSIX codex path is left as-is", () => {
+    expect(resolveCodexSpawn("/usr/bin/codex", ["app-server", "--stdio"], "linux")).toEqual({
+      command: "/usr/bin/codex",
+      args: ["app-server", "--stdio"],
+    });
+  });
+
+  test("a Windows .exe is spawned directly", () => {
+    const resolved = resolveCodexSpawn(String.raw`C:\codex.exe`, ["app-server"], "win32");
+    expect(resolved).toEqual({ command: String.raw`C:\codex.exe`, args: ["app-server"] });
   });
 });
 
