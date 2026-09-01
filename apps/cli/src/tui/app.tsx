@@ -361,7 +361,7 @@ export function App({
   const [state, setState] = useState(() =>
     initialTuiState(session, { route, config, showSplash, authOffer }),
   );
-  const stream = useMemo(() => createStreamDispatch(setState), [setState]);
+  const stream = useMemo(() => createStreamDispatch(setState), []);
   const dispatch = stream.dispatch;
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);

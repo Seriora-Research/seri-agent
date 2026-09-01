@@ -150,7 +150,7 @@ import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
-import type { AgentSpec, AgentRegistry } from "./subagents/registry";
+import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
@@ -1287,8 +1287,9 @@ async function runTui(
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
-  // action — the identical computation App.tsx will ALSO run against its OWN copy
-  // (stream-coalesced for text-delta), moments later. Every read in this file that used to go through `liveSession` (a
+  // action. App.tsx coalesces text-delta off the React path (streamDispatch.ts) and still
+  // runs tuiReducer for every other action; this funnel applies every action immediately,
+  // including text-delta. Every read in this file that used to go through `liveSession` (a)
   // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
   // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
   // runs asynchronously after a render commits, never synchronously with the dispatch that

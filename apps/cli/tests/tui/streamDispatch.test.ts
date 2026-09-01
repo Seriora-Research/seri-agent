@@ -126,7 +126,10 @@ describe("createStreamDispatch", () => {
     expect(state.transcript).toEqual([{ role: "system", text: "line 0" }]);
     expect(state.streaming).toBe("");
 
-    stream.dispatch({ type: "loop-event", event: { type: "tool-call", name: "read_file", args: {} } });
+    stream.dispatch({
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
     for (const updater of queued.slice(1)) state = updater(state);
 
     expect(state.streaming).toBe("");

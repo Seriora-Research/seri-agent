@@ -1,14 +1,12 @@
 import type { ChildEventPayload } from "../../subagents/dispatch";
 import { estimateTokens } from "../util/format";
-import { tuiReducer, type Dispatch, type TuiAction, type TuiState } from "./reducer";
+import { type Dispatch, type TuiAction, type TuiState, tuiReducer } from "./reducer";
 
 export const STREAM_TOKEN_PAINT_MS = 150;
 
 type ChildMeta = Omit<ChildEventPayload, "event">;
 
-export function createStreamDispatch(
-  setState: (updater: (state: TuiState) => TuiState) => void,
-): {
+export function createStreamDispatch(setState: (updater: (state: TuiState) => TuiState) => void): {
   dispatch: Dispatch;
   getPendingLiveOutputEstimate: () => number;
   subscribe: (listener: () => void) => () => void;
