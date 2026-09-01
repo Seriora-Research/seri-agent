@@ -1,11 +1,6 @@
 {
   "version": 1,
   "hooks": {
-    "sessionStart": [
-      {
-        "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/record-session.ps1"
-      }
-    ],
     "beforeShellExecution": [
       {
         "command": "powershell -NoProfile -NonInteractive -File .cursor/hooks/block-dangerous.ps1"
