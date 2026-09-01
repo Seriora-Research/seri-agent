@@ -64,6 +64,16 @@ describe("SessionDatabase", () => {
     // Windows CI: first SessionDatabase open + pragma round-trip was 3373ms on the same job.
   }, 20_000);
 
+  test("a second connection opening the same file waits rather than failing busy on WAL", () => {
+    const held = new SessionDatabase(configDir);
+    try {
+      const second = new SessionDatabase(configDir);
+      second.close();
+    } finally {
+      held.close();
+    }
+  });
+
   test("append and header updates retain message row ids while shrink removes only the tail", () => {
     withDatabase((database) => database.saveSession(state("changes", [{ n: 1 }])));
     const first = new Database(join(configDir, DATABASE_FILENAME));
