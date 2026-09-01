@@ -81,6 +81,15 @@ export type CodexListedModel = {
   supportedReasoningEfforts: string[];
 };
 
+function reasoningEffortName(effort: unknown): string | undefined {
+  if (typeof effort === "string") return effort;
+  if (typeof effort !== "object" || effort === null) return undefined;
+  const row = effort as Record<string, unknown>;
+  if (typeof row.reasoningEffort === "string") return row.reasoningEffort;
+  if (typeof row.effort === "string") return row.effort;
+  return undefined;
+}
+
 export function parseModelList(result: unknown): CodexListedModel[] {
   if (typeof result !== "object" || result === null) return [];
   const obj = result as Record<string, unknown>;
@@ -112,12 +121,8 @@ export function parseModelList(result: unknown): CodexListedModel[] {
         ? row.reasoningEfforts
         : [];
     const supportedReasoningEfforts = effortsRaw.flatMap((effort) => {
-      if (typeof effort === "string") return [effort];
-      if (typeof effort === "object" && effort !== null && "effort" in effort) {
-        const named = (effort as { effort?: unknown }).effort;
-        return typeof named === "string" ? [named] : [];
-      }
-      return [];
+      const named = reasoningEffortName(effort);
+      return named === undefined ? [] : [named];
     });
     models.push({ id, displayName, supportedReasoningEfforts });
   }
@@ -150,23 +155,67 @@ function rememberPlanType(result: unknown): void {
   if (planType !== undefined) cachedPlanType = planType;
 }
 
+const MODEL_LIST_PAGE = 100;
+const MODEL_LIST_MAX_PAGES = 20;
+
+function nextCursorOf(result: unknown): string | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const cursor = (result as { nextCursor?: unknown }).nextCursor;
+  return typeof cursor === "string" && cursor.length > 0 ? cursor : undefined;
+}
+
+async function listAllCodexModelPages(rpc: CodexJsonRpc): Promise<CodexListedModel[]> {
+  const models: CodexListedModel[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MODEL_LIST_MAX_PAGES; page++) {
+    const params: { limit: number; cursor?: string } = { limit: MODEL_LIST_PAGE };
+    if (cursor !== undefined) params.cursor = cursor;
+    const result = await rpc.request("model/list", params);
+    models.push(...parseModelList(result));
+    const next = nextCursorOf(result);
+    if (next === undefined) break;
+    cursor = next;
+  }
+  return models;
+}
+
+let inFlightList: Promise<CodexListedModel[]> | undefined;
+
 export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<CodexListedModel[]> {
   const now = Date.now();
   if (cachedModels !== undefined && now - cachedModelsAt < MODEL_LIST_CACHE_MS) {
     return cachedModels;
   }
+  // A caller-supplied rpc is owned by that caller. Only the spawn path is shared
+  // across overlapping getModelCatalog fetches (prepareSession and run both call it).
+  if (opts.rpc !== undefined) {
+    return listCodexModelsOnce(opts);
+  }
+  if (inFlightList !== undefined) return inFlightList;
+  const promise = listCodexModelsOnce(opts);
+  inFlightList = promise;
+  void promise.finally(() => {
+    if (inFlightList === promise) inFlightList = undefined;
+  });
+  return promise;
+}
+
+async function listCodexModelsOnce(opts: RefreshCodexOpts): Promise<CodexListedModel[]> {
+  const now = Date.now();
   let rpc = opts.rpc;
   const closeOwned = rpc === undefined;
   try {
     rpc ??= await connectCodexAppServer(opts);
-    const listed = parseModelList(await rpc.request("model/list"));
+    const listed = await listAllCodexModelPages(rpc);
     try {
       rememberPlanType(await rpc.request("account/read"));
     } catch {
       // planType is chrome; a failed account/read must not drop the model list
     }
-    cachedModels = listed;
-    cachedModelsAt = now;
+    if (listed.length > 0) {
+      cachedModels = listed;
+      cachedModelsAt = now;
+    }
     return listed;
   } finally {
     if (closeOwned) rpc?.close();
