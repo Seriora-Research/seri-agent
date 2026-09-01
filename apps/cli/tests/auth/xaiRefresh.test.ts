@@ -9,6 +9,7 @@ import {
   saveXaiSubscription,
   XAI_AUTH_FILENAME,
 } from "../../src/auth/xaiAuthStore";
+import { XAI_CLIENT_ID_DEFAULT } from "../../src/auth/xaiOAuth";
 import { refreshXaiSubscription, xaiAuthedFetch } from "../../src/auth/xaiRefresh";
 import { setConfigValue } from "../../src/config/config";
 
@@ -19,6 +20,7 @@ function jsonResponse(ok: boolean, status: number, body: unknown): Response {
 const DISCOVERY = {
   device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
   token_endpoint: "https://auth.x.ai/oauth2/token",
+  userinfo_endpoint: "https://auth.x.ai/oauth2/userinfo",
 };
 
 let dir: string;
@@ -78,17 +80,18 @@ describe("the store", () => {
 });
 
 describe("refreshXaiSubscription", () => {
-  // The policy gate. With no client id there is nothing legitimate to send, so the correct
-  // behaviour is a typed result and zero network traffic.
-  test("with no client id configured it makes no request at all", async () => {
+  test("with no SERI_GROK_CLIENT_ID it still refreshes using the borrowed default", async () => {
     connect();
-    let called = false;
-    const result = await refreshXaiSubscription(dir, (async () => {
-      called = true;
-      return jsonResponse(true, 200, {});
-    }) as unknown as typeof fetch);
-    expect(result).toEqual({ status: "not-configured" });
-    expect(called).toBe(false);
+    const sent: string[] = [];
+    const result = await refreshXaiSubscription(
+      dir,
+      fakeIssuer((body) => {
+        sent.push(body);
+        return jsonResponse(true, 200, { access_token: "access-2", refresh_token: "refresh-2" });
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(sent[0]).toContain(`client_id=${XAI_CLIENT_ID_DEFAULT}`);
   });
 
   test("with no stored subscription it reports not-connected", async () => {
@@ -165,6 +168,27 @@ describe("refreshXaiSubscription", () => {
     expect(tokenCalls).toBe(1);
     expect(results.every((r) => r.status === "ok")).toBe(true);
     expect(loadXaiSubscription(dir)?.refreshToken).toBe("refresh-2");
+  });
+
+  test("refresh keeps the stored accountId", async () => {
+    setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
+    saveXaiSubscription(
+      {
+        accessToken: "access-1",
+        refreshToken: "refresh-1",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-keep",
+      },
+      dir,
+    );
+    const result = await refreshXaiSubscription(
+      dir,
+      fakeIssuer(() =>
+        jsonResponse(true, 200, { access_token: "access-2", refresh_token: "refresh-2" }),
+      ),
+    );
+    expect(result.status).toBe("ok");
+    expect(loadXaiSubscription(dir)?.accountId).toBe("acct-keep");
   });
 });
 

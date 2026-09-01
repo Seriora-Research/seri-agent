@@ -15,6 +15,9 @@ export type XaiSubscription = {
   // The granted scope, verbatim. The only local evidence for telling a later 403 apart from a
   // scope that was never granted at consent time.
   scope?: string;
+  // `sub` from userinfo, used as x-grok-user-id / x-userid. Optional so a file written before
+  // this field existed still loads; inference omits the header until the next connect fills it.
+  accountId?: string;
 };
 
 // A separate file from auth.json, not a field inside it. `clearAuthSession` unlinks that file
@@ -65,7 +68,13 @@ export function clearXaiSubscription(configDir: string): void {
 }
 
 export function subscriptionFromTokens(
-  tokens: { accessToken: string; refreshToken: string; expiresIn?: number; scope?: string },
+  tokens: {
+    accessToken: string;
+    refreshToken: string;
+    expiresIn?: number;
+    scope?: string;
+    accountId?: string;
+  },
   now: () => number = Date.now,
 ): XaiSubscription {
   return {
@@ -74,5 +83,6 @@ export function subscriptionFromTokens(
     obtainedAt: new Date(now()).toISOString(),
     expiresAt: expiresAtFrom(tokens.expiresIn),
     scope: tokens.scope,
+    accountId: tokens.accountId,
   };
 }

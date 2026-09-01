@@ -8,7 +8,7 @@ import { TranscriptList } from "../../src/tui/components/TranscriptList";
 import { MAIN_TUI_RENDERER_CONFIG } from "../../src/tui/runtime/renderOptions";
 import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
-import { flush, flushMarkdown } from "./helpers";
+import { flush, flushMarkdown, waitForSettledFrame } from "./helpers";
 
 // Characterization of what @opentui/core 0.5.6 lets a reader select and copy out of seri's real
 // transcript, and the rerunnable evidence behind docs/specs/044-tui-selection-copy/research.md
@@ -35,10 +35,11 @@ afterEach(() => {
 // scrolled-selection tests below depend on. Mounted without the surrounding <App> deliberately: the
 // scrollbox plus the real TranscriptList is the whole surface selection reaches.
 // `flush()` alone returns before sticky scroll has parked the transcript and painted it, which on a
-// loaded runner leaves the first capture reading a frame the drag then disagrees with — the shape of
-// the CI-only failure this waits out. The last entry is the settle signal for both geometries: it is
-// the bottom row unscrolled, and it is what `stickyStart="bottom"` scrolls to when there are more
-// rows than fit.
+// loaded runner leaves the first capture reading a frame the drag then disagrees with. The last
+// entry is the settle signal for both geometries: it is the bottom row unscrolled, and it is what
+// `stickyStart="bottom"` scrolls to when there are more rows than fit. `waitForSettledFrame` waits
+// until that entry is visible and the capture stops changing, so the probe's later capture and
+// drag share one geometry.
 async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRendererSetup> {
   const setup = await createTestRenderer({ width: TERMINAL_WIDTH, height: TERMINAL_HEIGHT });
   mountedRenderers.push(setup);
@@ -49,7 +50,17 @@ async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRende
   );
   await flush(setup);
   const last = transcript.at(-1);
-  if (last !== undefined) await setup.waitForFrame((frame) => frame.includes(last.text));
+  if (last !== undefined) {
+    // The scrollbox is height 10. captureCharFrame can include last.text from an
+    // off-viewport paint while sticky-scroll is still moving, which is the macOS
+    // failure: shown already at the tail, drag still mapped through an older scrollTop.
+    await waitForSettledFrame(setup, (frame) =>
+      frame
+        .split("\n")
+        .slice(0, 10)
+        .some((row) => row.includes(last.text)),
+    );
+  }
   return setup;
 }
 
@@ -104,9 +115,11 @@ async function probeScreenRow(
 ): Promise<{ scrollTop: number; shown: string; selected: string }> {
   const setup = await mountTranscript(transcript);
   try {
+    await setup.renderOnce();
     const shown = screenRow(setup.captureCharFrame(), y);
+    const scrollTop = scrollTopOf(setup);
     await setup.mockMouse.drag(0, y, 45, y);
-    return { scrollTop: scrollTopOf(setup), shown, selected: copiedText(setup) };
+    return { scrollTop, shown, selected: copiedText(setup) };
   } finally {
     mountedRenderers.splice(mountedRenderers.indexOf(setup), 1);
     setup.renderer.destroy();
@@ -254,19 +267,24 @@ describe("transcript selection", () => {
   // Correct behavior: these three screen rows resolve to the entry printed on them, the way rows 3
   // to 9 above already do. Once `stickyStart="bottom"` has parked the transcript at its tail
   // (scrollTop 14, entries 14-23 filling rows 0-9), the top of the viewport resolves against
-  // geometry that no longer matches what is painted: rows 0 and 1 hand back the entry ABOVE the one
-  // on screen, and row 2 hands back nothing.
+  // geometry that no longer matches what is painted. The copy is never the painted row. It is
+  // sometimes the entry above, sometimes a run of entries that includes that one, and on row 2
+  // it is empty. Pinning one exact wrong string made the suite fail when only the shape of the
+  // miss changed.
   test("defect: a scrolled transcript resolves its top three screen rows to the wrong entry", async () => {
     const first = await probeScreenRow(denseRows(24), 0);
+    expect(first.scrollTop).toBe(14);
     expect(first.shown).toBe("entry 14 text");
-    expect(first.selected).toBe("entry 13 text");
+    expect(first.selected).not.toBe(first.shown);
 
     const second = await probeScreenRow(denseRows(24), 1);
+    expect(second.scrollTop).toBe(14);
     expect(second.shown).toBe("entry 15 text");
-    expect(second.selected).toBe("entry 14 text");
+    expect(second.selected).not.toBe(second.shown);
 
     const third = await probeScreenRow(denseRows(24), 2);
+    expect(third.scrollTop).toBe(14);
     expect(third.shown).toBe("entry 16 text");
-    expect(third.selected).toBe("");
+    expect(third.selected).not.toBe(third.shown);
   });
 });

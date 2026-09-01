@@ -11,14 +11,11 @@ import { messageOf } from "../../../errors";
 import { catalogWithFallback } from "../../../provider/catalog";
 import { persistDefaultModel } from "../../../provider/defaults";
 import { configuredProviders } from "../../../provider/keys";
+import { subscribedProviders } from "../../../provider/subscriptions";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
-import {
-  decideAuthOffer,
-  decideGuidedModelPickerOpen,
-  decideSetupOpen,
-} from "../../state/commands";
-import { createSetupHandlers } from "../../state/handlers";
+import { decideGuidedModelPickerOpen, decideSetupOpen } from "../../state/commands";
+import { createAuthHandlers, createSetupHandlers } from "../../state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
 // `runGuidedSetup`'s own mandatory-picker copy — named constants rather than inlined literals, so
@@ -84,11 +81,17 @@ export async function runGuidedSetup(
   // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
   // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
   // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
+  const { onConnectGrok } = createAuthHandlers({
+    dispatch,
+    deps: {},
+    configDir,
+  });
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
     onPanelClosed: () => resolveClosed(),
+    onConnectGrok,
   });
 
   const closed = new Promise<void>((resolve) => {
@@ -161,7 +164,7 @@ export async function runGuidedSetup(
     }
     let configured: ReadonlySet<ModelProvider>;
     try {
-      configured = configuredProviders(configDir);
+      configured = new Set([...configuredProviders(configDir), ...subscribedProviders(configDir)]);
     } catch {
       // Same degrade as connectDispatch's own catch, below: a corrupted config.json resolves out
       // and falls through to prepareSession's own configuredProviders read, which prints the one
@@ -202,7 +205,10 @@ export async function runGuidedSetup(
           // above checks — without ever tripping it. Reusing the stale snapshot here could offer
           // (and persist) a default model for a provider whose key was removed in the meantime,
           // reproducing the exact missing-key bug this feature exists to prevent.
-          const freshConfigured = configuredProviders(configDir);
+          const freshConfigured = new Set([
+            ...configuredProviders(configDir),
+            ...subscribedProviders(configDir),
+          ]);
           if (freshConfigured.size === 0) {
             // Every key was removed during the wait — the same decline path as this function's
             // own initial `configured.size === 0` check, above.
@@ -300,10 +306,6 @@ export async function runGuidedSetup(
         // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
-          // The passive AuthBanner only — this phase's own `pendingAuth` is unreachable
-          // regardless (no createAuthHandlers here, by design; see this function's own header
-          // comment), but the banner is independent of that (TuiState.authOffer's own comment).
-          dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         } catch {
           resolveClosed();
         }

@@ -6,6 +6,8 @@ import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@s
 import {
   catalogWithFallback,
   getModelCatalog,
+  idsFromGrokModelsPayload,
+  mergeGrokSubscriptionCatalog,
   resetFallbackWarning,
 } from "../../src/provider/catalog";
 
@@ -171,5 +173,50 @@ describe("getModelCatalog", () => {
     expect(errors[0]).toContain("SERI_DISABLE_MODELS_FETCH");
     expect(errors[0]).not.toContain("could not reach");
     expect(catalog.entries.length).toBeGreaterThan(0);
+  });
+});
+
+describe("idsFromGrokModelsPayload", () => {
+  test("reads ids from { data: [{ id }] } and from a string list", () => {
+    expect(idsFromGrokModelsPayload({ data: [{ id: "grok-4" }, { id: "grok-3" }] })).toEqual([
+      "grok-4",
+      "grok-3",
+    ]);
+    expect(idsFromGrokModelsPayload(["grok-4", ""])).toEqual(["grok-4"]);
+  });
+
+  test("returns [] for an unusable payload", () => {
+    expect(idsFromGrokModelsPayload(null)).toEqual([]);
+    expect(idsFromGrokModelsPayload({})).toEqual([]);
+  });
+});
+
+describe("mergeGrokSubscriptionCatalog", () => {
+  test("an empty id list leaves the catalog untouched", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "grok-4", provider: "xai" })],
+    };
+    expect(mergeGrokSubscriptionCatalog(catalog, [])).toBe(catalog);
+  });
+
+  test("keeps models.dev metadata for known ids and stubs unknown ones", () => {
+    const known = catalogEntry({
+      id: "grok-4",
+      provider: "xai",
+      displayName: "Grok 4",
+      contextWindow: 256_000,
+    });
+    const other = catalogEntry({ id: "llama", provider: "groq" });
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [known, other],
+    };
+    const merged = mergeGrokSubscriptionCatalog(catalog, ["grok-4", "grok-new"]);
+    const xai = merged.entries.filter((entry) => entry.provider === "xai");
+    expect(xai.map((entry) => entry.id)).toEqual(["grok-4", "grok-new"]);
+    expect(xai[0]).toBe(known);
+    expect(xai[1]?.displayName).toBe("grok-new");
+    expect(merged.entries.some((entry) => entry.provider === "groq")).toBe(true);
   });
 });

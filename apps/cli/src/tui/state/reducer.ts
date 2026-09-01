@@ -19,6 +19,7 @@ import {
   type TranscriptRole,
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import { firstSetupActionIndex } from "./commands";
 import {
   recordCall,
   recordDenial,
@@ -46,14 +47,16 @@ export type SetupState =
       error?: string;
       busy: boolean;
     }
-  | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
+  | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
+  | { step: "confirm-connect" }
+  | { step: "confirm-disconnect" };
 
-// /login and /signup's own live state — the device-flow OAuth panel. "starting" is the brief
-// moment before the provider returns a verification URL/code; "device" shows that URL+code for the
-// user to open in a browser; "result" is the terminal state (success or failure).
+export type AuthMode = "login" | "signup" | "grok";
+
+// /login, /signup, and Grok subscription connect's own live state — the device-flow OAuth panel.
 export type AuthPanelState =
-  | { step: "starting"; mode: "login" | "signup" }
-  | { step: "device"; mode: "login" | "signup"; verificationUri: string; userCode: string }
+  | { step: "starting"; mode: AuthMode }
+  | { step: "device"; mode: AuthMode; verificationUri: string; userCode: string }
   | { step: "result"; message: string; error: boolean };
 
 // /config's own live state — structurally identical to SetupState above (list -> enter-value ->
@@ -176,9 +179,10 @@ export type TuiState = {
   // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
-  // The non-blocking login/signup offer (AuthBanner, App.tsx) — independent of `pendingAuth`
-  // below, not a fourth mutually exclusive render-ternary state. Set by the `auth-offer` action
-  // (decideAuthOffer, dispatched from cli.ts/handlers.ts at every point the auth panel closes).
+  // Whether the welcome splash should offer Log in / Sign up (true) or just Continue (false).
+  // Independent of `pendingAuth` — that flag is the blocking device-flow panel, this one only
+  // chooses the splash menu. Set by `auth-offer` (decideAuthOffer). The main TUI does not
+  // render a sign-in banner from this flag.
   authOffer: boolean;
   // /login and /signup's own blocking panel. Mirrors `pendingSetup`'s mutual-exclusion role in the
   // render ternary.
@@ -413,10 +417,10 @@ export type TuiAction =
   // also close mid-chunk on a real pty.
   | { type: "setup-resolved"; leftoverInput?: string }
   // `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions land on these ten.
-  // `auth-offer` toggles the independent, non-blocking banner — deliberately NOT `pendingAuth`,
-  // which is the blocking panel (see TuiState's own comment).
+  // `auth-offer` chooses the splash menu (unsigned-in vs already signed in) — deliberately NOT
+  // `pendingAuth`, which is the blocking device-flow panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
-  | { type: "auth-requested"; mode: "login" | "signup" }
+  | { type: "auth-requested"; mode: AuthMode }
   | { type: "auth-step"; state: AuthPanelState }
   | { type: "auth-resolved"; leftoverInput?: string }
   | { type: "config-requested"; rows: ConfigRow[] }
@@ -710,7 +714,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
     case "setup-requested":
-      return { ...state, pendingSetup: { step: "list", rows: action.rows, selected: 0 } };
+      return {
+        ...state,
+        pendingSetup: {
+          step: "list",
+          rows: action.rows,
+          selected: firstSetupActionIndex(action.rows),
+        },
+      };
     case "setup-step":
       return { ...state, pendingSetup: action.state };
     case "setup-resolved":

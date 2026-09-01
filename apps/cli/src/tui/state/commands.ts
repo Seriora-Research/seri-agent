@@ -20,8 +20,9 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
-import { findCodexBin, type CodexSetupStatus } from "../../auth/codexBin";
 import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
+import { findCodexBin, type CodexSetupStatus } from "../../auth/codexBin";
+import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
   checkpointStoreDir,
@@ -196,12 +197,15 @@ export function decideGuidedModelPickerOpen(
   return keyed.map((row) => ({ ...row, alternatives: shownAlternatives.get(row.entry) ?? 0 }));
 }
 
-// One row per provider — /setup's own table. `removable` is false only when config.json
-// genuinely has nothing to unset for this provider — an env-sourced
-// row IS removable when a config.json entry also sits underneath it (providerKeyState's own
-// `hasConfigEntry`, independent of which source wins for display); only a row with no config
-// entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
-// (the panel states why, for the env case — App.tsx's own SetupPanel).
+// One /setup list row. A heading is not selectable for a side-effect; a key row is a BYOK
+// provider; a subscription row is either Grok connect/disconnect or the Codex plan status.
+// The union is what lets one list carry both sections without keying selection on provider
+// alone (xAI and OpenAI each have a key row AND a subscription row).
+//
+// `removable` on a key row is false only when config.json genuinely has nothing to unset —
+// an env-sourced row IS removable when a config.json entry also sits underneath it
+// (providerKeyState's own `hasConfigEntry`).
+export type SetupHeadingRow = { kind: "heading"; label: string };
 export type SetupKeyRow = {
   kind: "key";
   provider: ModelProvider;
@@ -211,15 +215,34 @@ export type SetupKeyRow = {
   removable: boolean;
   unusedBecause?: string;
 };
-
-export type SetupSubscriptionRow = {
+export type SetupGrokSubscriptionRow = {
+  kind: "subscription";
+  provider: "xai";
+  connected: boolean;
+};
+export type SetupCodexSubscriptionRow = {
   kind: "subscription";
   provider: "openai";
   status: CodexSetupStatus;
   removable: false;
 };
+export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
+export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
 
-export type SetupProviderRow = SetupKeyRow | SetupSubscriptionRow;
+export function setupRowId(row: SetupProviderRow): string {
+  if (row.kind === "heading") return `heading:${row.label}`;
+  if (row.kind === "subscription") return `subscription:${row.provider}`;
+  return `key:${row.provider}`;
+}
+
+export function isSetupActionRow(row: SetupProviderRow): row is SetupKeyRow | SetupSubscriptionRow {
+  return row.kind !== "heading";
+}
+
+export function firstSetupActionIndex(rows: readonly SetupProviderRow[]): number {
+  const index = rows.findIndex(isSetupActionRow);
+  return index < 0 ? 0 : index;
+}
 
 export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubscriptionRow {
   return row.kind === "subscription";
@@ -261,28 +284,40 @@ function codexSetupRow(): SetupSubscriptionRow {
 }
 
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
+  const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
   const openaiSubscribed = hasCodexSubscription();
-  const keys: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => ({
-    kind: "key",
-    provider: state.provider,
-    keyName: state.keyName,
-    source: state.source,
-    masked: state.masked,
-    removable: state.hasConfigEntry,
-    unusedBecause:
-      openaiSubscribed && state.provider === "openai" && state.source !== "unset"
-        ? "unused because a ChatGPT plan is connected"
-        : undefined,
-  }));
-  return [...keys, codexSetupRow()];
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
+    let unusedBecause: string | undefined;
+    if (grokConnected && state.provider === "xai" && state.source !== "unset") {
+      unusedBecause = "unused because a Grok subscription is connected";
+    } else if (openaiSubscribed && state.provider === "openai" && state.source !== "unset") {
+      unusedBecause = "unused because a ChatGPT plan is connected";
+    }
+    return {
+      kind: "key",
+      provider: state.provider,
+      keyName: state.keyName,
+      source: state.source,
+      masked: state.masked,
+      removable: state.hasConfigEntry,
+      unusedBecause,
+    };
+  });
+  return [
+    { kind: "heading", label: "API keys" },
+    ...keyRows,
+    { kind: "heading", label: "Subscriptions" },
+    { kind: "subscription", provider: "xai", connected: grokConnected },
+    codexSetupRow(),
+  ];
 }
 
 // The decide* functions below share the same contract as every decide* function above: recompute
 // fresh from disk on every call, plain functions, no Ink import, no saveSession/console.log/print*,
 // let a bad input throw for the caller's try/catch to turn into a command-error.
 
-// /login and /signup's own non-blocking offer (AuthBanner, App.tsx): true iff no auth session is
-// saved yet, so a first-run user sees the offer without it blocking anything they're already doing.
+// Welcome splash's unsigned-in menu (Log in / Sign up / Continue without logging in): true iff
+// no auth session is saved yet. The main TUI does not re-offer login as a persistent banner.
 export function decideAuthOffer(configDir: string): boolean {
   return loadAuthSession(configDir) === undefined;
 }
@@ -391,13 +426,13 @@ export function configKeyInfo(key: string): ConfigKeyInfo {
   );
 }
 
-// Never listed by /config, even if present in config.json: the OAuth client id /login's device
-// flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
+// Never listed by /config, even if present in config.json: OAuth client ids (/login's WorkOS
+// device flow, /setup's Grok connect) are internal/advanced settings, not ones a common
 // /config user should see or change. (process.env never adds a row on its own — it only affects
 // the source/value of a key already in the list below — so no separate env guard is needed
 // here.) This is a display policy, not a lock: `seri config set SERI_WORKOS_CLIENT_ID <value>`
 // (config/commands.ts) still writes it deliberately, for whoever needs the escape hatch.
-const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
+const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_GROK_CLIENT_ID"];
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
 // keys" tail below must not emit: the two known keys (already shown, in their own fixed order),

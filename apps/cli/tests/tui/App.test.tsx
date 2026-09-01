@@ -6,6 +6,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
+import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
@@ -41,7 +42,7 @@ import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from ".
 // 100 cols), is exercised by default,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
-// APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
+// APP_CHROME_ROWS math: listWindowSize(height - 11), which reaches 10 at height >= 21). Deliberately
 // fixed rather than inherited from the real host terminal — a test's expected geometry should not
 // depend on the terminal it happens to run in.
 const DEFAULT_WIDTH = 100;
@@ -2497,6 +2498,29 @@ describe("App", () => {
         expect(text).toContain("sk-a...wxyz");
       });
 
+      test("subscription: grok connected / not connected", () => {
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: false }),
+        ).toContain("not connected");
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: true }),
+        ).toContain("connected");
+      });
+
+      test("xai key unused because a subscription is connected", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "xai",
+            keyName: "XAI_API_KEY",
+            source: "config",
+            masked: "xai-...key1",
+            unusedBecause: "unused because a Grok subscription is connected",
+          }),
+        );
+        expect(text).toContain("unused");
+        expect(text).toContain("Grok subscription is connected");
+      });
+
       test("a Codex subscription row names the plan status, not an API key", () => {
         const text = formatSetupRow({
           kind: "subscription",
@@ -2545,9 +2569,9 @@ describe("App", () => {
     // `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
     // ("Enter/a add or replace") promising both work.
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
-      const selected: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (row) => selected.push(row.provider),
+        onSetupSelect: (row) => selected.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2559,15 +2583,16 @@ describe("App", () => {
       setup.mockInput.pressEnter();
       await flush(setup);
 
-      expect(selected).toEqual(["openrouter"]);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // Same bug, the Delete branch: OpenTUI's Delete key (`\x1b[3~`) is a DIFFERENT sequence from
     // backspace's — distinct enough that fixing Enter alone would not have proven this branch too.
     test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
-      const removeRequested: ModelProvider[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2579,18 +2604,19 @@ describe("App", () => {
       setup.mockInput.pressKey(DELETE_KEY);
       await flush(setup);
 
-      expect(removeRequested).toEqual(["openrouter"]);
+      expect(removeRequested).toHaveLength(1);
+      expect(removeRequested[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // The negative control this pair rests on: a non-removable row's Delete must still be a no-op,
     // the same guard the 'r' shortcut already had — proving the fix didn't drop that check while
     // moving the branch earlier.
     test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
-      const selected: ModelProvider[] = [];
-      const removeRequested: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (row) => selected.push(row.provider),
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupSelect: (row) => selected.push(row),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       // groq (index 0, the default selection) is source: "unset", removable: false.
@@ -2707,10 +2733,10 @@ describe("App", () => {
     });
 
     test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2742,7 +2768,8 @@ describe("App", () => {
       setup.mockInput.pressKey("y");
       await flush(setup);
 
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // ConfirmPrompt's own guards (ui/ConfirmPrompt.tsx): `key.ctrl || key.meta` and
@@ -2751,10 +2778,10 @@ describe("App", () => {
     // destructive prompt — the same class of bug ApprovalBox's own arrow/backspace test above
     // exists for.
     test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2776,7 +2803,54 @@ describe("App", () => {
       // Still live, not silently cancelled: an actual "y" still confirms.
       setup.mockInput.pressKey("y");
       await flush(setup);
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
+    });
+
+    test("confirm-connect shows the borrowed-client warning before any connect action", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Grok Build's OAuth client id");
+      expect(frame).toContain("Shown before the browser opens");
+      expect(GROK_BORROWED_CLIENT_WARNING).toContain("Grok Build's OAuth client id");
+      expect(confirmed).toEqual([]);
+
+      setup.mockInput.pressKey("n");
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+    });
+
+    test("confirm-connect: 'y' confirms via onSetupRemove, Enter cancels", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect" } });
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed).toHaveLength(1);
+      expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "xai" });
     });
 
     // Render precedence (app.tsx's own render ternary): pendingApproval beats pendingModelPicker
@@ -3614,7 +3688,10 @@ describe("App", () => {
   // state directly (auth-offer/auth-step/config-step/permissions-step) to prove the render wiring
   // itself is correct ahead of Stages C-D's dispatchers.
   describe("auth banner", () => {
-    test("show: true renders the offer alongside InputBox, not in place of it", async () => {
+    // Login / signup live on the welcome splash. authOffer still drives that menu's
+    // authenticated vs unsigned-in items; it must not also paint a persistent banner
+    // above the main TUI once the user has continued (or logged in).
+    test("auth-offer: true does not render the sign-in banner above InputBox", async () => {
       const submitted: string[] = [];
       const { setup, dispatch } = await connect({ onSubmit: (v) => submitted.push(v) });
 
@@ -3622,10 +3699,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("/login");
-      expect(frame).toContain("/signup");
-      // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
-      // onSubmit, exactly as it would with the banner absent.
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
       await setup.mockInput.typeText("still typing");
       setup.mockInput.pressEnter();
       await flush(setup);
@@ -3642,11 +3716,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toBe(before);
     });
 
-    // The banner sits ABOVE the render ternary (app.tsx's own comment) rather than as one
-    // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
-    // with no provider key opens /setup's own panel, and the banner must still render alongside it
-    // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
-    test("renders alongside a pendingSetup panel, not replaced by it", async () => {
+    test("a pendingSetup panel does not bring the sign-in banner back", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
@@ -3654,24 +3724,18 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("/login");
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
       expect(frame).toContain("/setup — provider API keys");
     });
 
-    // Bug fix (thermo-nuclear + code-review, round 4 — the root-cause fix): three earlier rounds
-    // all patched a new place that forgot to dispatch `auth-offer: false` the moment a login
-    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (app.tsx's own
-    // `state.authOffer && state.pendingAuth === undefined`) instead of commanding it. This test
-    // dispatches ONLY `auth-requested` — no manual `auth-offer` dispatch at all, unlike the old
-    // version of this test — and the banner still hides, because `authOffer` itself is
-    // deliberately left `true` here: the derivation is what's doing the work, not a stale flag
-    // that happens to already be false.
-    test("hides while AuthPanel is showing, purely from pendingAuth being set — authOffer itself stays true", async () => {
+    test("hides while AuthPanel is showing, even if authOffer stays true", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("/login");
+      expect(setup.captureCharFrame()).not.toContain(
+        "Sign in with /login, or create an account with /signup",
+      );
 
       dispatch({ type: "auth-requested", mode: "login" });
       await flush(setup);
@@ -3681,13 +3745,6 @@ describe("App", () => {
       expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
     });
 
-    // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
-    // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
-    // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
-    // just got saved. createAuthHandlers.onLogin's own success path (tui/state/handlers.ts)
-    // recomputes it fresh right after, exactly like onLogout's `show: true` and the mount/
-    // onAuthResolved recomputes already do for their own real state changes — this reproduces that
-    // exact three-dispatch sequence and checks the banner does NOT flash back on.
     test("stays hidden after a successful login, not just while the panel is open", async () => {
       const { setup, dispatch } = await connect();
 
@@ -4308,14 +4365,13 @@ describe("App", () => {
 
     // Regression guard: useListWindow's row budget used to reserve only the root box's own spare
     // row and the unconditional mode-indicator row (APP_CHROME_ROWS, util/format.ts) — not
-    // commandError or AuthBanner, both of which can be showing at the same time as a panel. On a
-    // 20-row terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed
-    // or the terminal resized (no scrollback on the alt screen).
-    test("a panel opened under an auth banner and a command error still fits the viewport", async () => {
+    // commandError, which can be showing at the same time as a panel. On a 20-row terminal that
+    // overflowed the alt-screen viewport, unrecoverable until the panel closed or the terminal
+    // resized (no scrollback on the alt screen).
+    test("a panel opened under a command error still fits the viewport", async () => {
       const { setup, dispatch } = await connect();
       await resize(setup, DEFAULT_WIDTH, 20);
 
-      dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "command-error", message: "boom" });
       // Row 0 is a known key (configKeyInfo has a description for it) so the selected row's
       // description line renders too, matching ConfigPanel's own tallest real case — a bare
@@ -4336,8 +4392,7 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       // Content that doesn't fit the fixed-height root box doesn't grow the frame taller — an
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
-      // header line; both must render intact once the reservation accounts for AuthBanner and
-      // commandError.
+      // header line; both must render intact once the reservation accounts for commandError.
       expect(frame).toContain("⏸ approve-each mode on");
       expect(frame).toContain("/config — settings");
       expect(frame).toContain("Esc/Ctrl-D close");

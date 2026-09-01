@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   discoverXaiEndpoints,
+  fetchXaiAccountId,
   pollForXaiToken,
   readXaiTokens,
   requestXaiDeviceCode,
+  validXaiAccountId,
+  XAI_CLIENT_ID_DEFAULT,
   XAI_ISSUER_DEFAULT,
   xaiClientId,
   xaiIssuer,
@@ -25,11 +28,13 @@ function asFetch(fn: (url: any, init?: any) => Promise<Response>): typeof fetch 
 const DISCOVERY = {
   device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
   token_endpoint: "https://auth.x.ai/oauth2/token",
+  userinfo_endpoint: "https://auth.x.ai/oauth2/userinfo",
 };
 
 const ENDPOINTS = {
   deviceAuthorizationEndpoint: DISCOVERY.device_authorization_endpoint,
   tokenEndpoint: DISCOVERY.token_endpoint,
+  userinfoEndpoint: DISCOVERY.userinfo_endpoint,
 };
 
 const DEVICE = {
@@ -51,12 +56,23 @@ function withTempConfig<T>(fn: (dir: string) => T): T {
 }
 
 describe("client id configuration", () => {
-  // The policy this asserts is the whole reason the feature ships switched off: xAI allowlists
-  // OAuth client ids and has not issued one to seri, so baking in someone else's would be client
-  // impersonation. A default appearing here is a policy regression, not a convenience.
-  test("there is no default client id", () => {
+  // Deleting the old "there is no default client id" test is the record of the decision in
+  // issue #275: the default is Grok Build's id, borrowed, and named as such.
+  test("the default is Grok Build's borrowed client id", () => {
     withTempConfig((dir) => {
-      expect(xaiClientId(dir)).toBeUndefined();
+      expect(xaiClientId(dir)).toBe(XAI_CLIENT_ID_DEFAULT);
+      expect(XAI_CLIENT_ID_DEFAULT).toBe("b1a00492-073a-47ea-816f-4c329264a828");
+    });
+  });
+
+  test("SERI_GROK_CLIENT_ID overrides the default", () => {
+    withTempConfig((dir) => {
+      process.env.SERI_GROK_CLIENT_ID = "custom-id";
+      try {
+        expect(xaiClientId(dir)).toBe("custom-id");
+      } finally {
+        delete process.env.SERI_GROK_CLIENT_ID;
+      }
     });
   });
 
@@ -287,6 +303,41 @@ describe("pollForXaiToken", () => {
   });
 });
 
+describe("validXaiAccountId", () => {
+  test("accepts printable ASCII between 1 and 1024 chars", () => {
+    expect(validXaiAccountId("acct-1")).toBe(true);
+    expect(validXaiAccountId("A")).toBe(true);
+  });
+
+  test("rejects empty, overlong, and non-printable values", () => {
+    expect(validXaiAccountId("")).toBe(false);
+    expect(validXaiAccountId("a".repeat(1025))).toBe(false);
+    expect(validXaiAccountId("acct\n1")).toBe(false);
+    expect(validXaiAccountId("acct 1")).toBe(false);
+  });
+});
+
+describe("fetchXaiAccountId", () => {
+  test("reads sub from userinfo", async () => {
+    const id = await fetchXaiAccountId(
+      "tok",
+      ENDPOINTS.userinfoEndpoint,
+      asFetch(async () => jsonResponse(true, 200, { sub: "acct-42" })),
+    );
+    expect(id).toBe("acct-42");
+  });
+
+  test("rejects a missing or unusable sub", async () => {
+    await expect(
+      fetchXaiAccountId(
+        "tok",
+        ENDPOINTS.userinfoEndpoint,
+        asFetch(async () => jsonResponse(true, 200, { sub: "acct\nid" })),
+      ),
+    ).rejects.toThrow(/no usable account id/);
+  });
+});
+
 describe("discovery scheme pinning", () => {
   // Host equality alone would accept this: an http endpoint on the right host downgrades the
   // channel that carries a rotating refresh token.
@@ -302,5 +353,18 @@ describe("discovery scheme pinning", () => {
         ),
       ),
     ).rejects.toThrow(/different origin/);
+  });
+
+  test("falls back to issuer/oauth2/userinfo when userinfo_endpoint is omitted", async () => {
+    const endpoints = await discoverXaiEndpoints(
+      "https://auth.x.ai",
+      asFetch(async () =>
+        jsonResponse(true, 200, {
+          device_authorization_endpoint: DISCOVERY.device_authorization_endpoint,
+          token_endpoint: DISCOVERY.token_endpoint,
+        }),
+      ),
+    );
+    expect(endpoints.userinfoEndpoint).toBe("https://auth.x.ai/oauth2/userinfo");
   });
 });

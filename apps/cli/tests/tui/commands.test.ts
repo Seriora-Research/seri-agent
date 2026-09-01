@@ -12,6 +12,7 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
+import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
   checkpointStoreDir,
@@ -375,15 +376,21 @@ describe("decideSetupOpen", () => {
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns key rows in CATALOG_PROVIDERS order plus a Codex subscription row", () => {
+  test("returns API-keys heading, five key rows, Subscriptions heading, and both plan rows", () => {
     const rows = decideSetupOpen(setupConfigDir);
+    expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
     const keys = rows.filter((row) => row.kind === "key");
     const plans = rows.filter((row) => row.kind === "subscription");
     expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
     expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
     expect(keys.every((row) => row.removable === false)).toBe(true);
-    expect(plans).toHaveLength(1);
-    expect(plans[0]?.status.status).toBe("not-installed");
+    expect(rows[keys.length + 1]).toEqual({ kind: "heading", label: "Subscriptions" });
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toEqual({ kind: "subscription", provider: "xai", connected: false });
+    expect(plans[1]?.provider).toBe("openai");
+    expect(plans[1] && "status" in plans[1] ? plans[1].status.status : undefined).toBe(
+      "not-installed",
+    );
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {
@@ -418,6 +425,26 @@ describe("decideSetupOpen", () => {
     expect(row?.removable).toBe(true);
   });
 
+  test("a connected Grok subscription marks the grok row connected and the xai key unused", () => {
+    saveXaiSubscription(
+      {
+        accessToken: "a",
+        refreshToken: "r",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-1",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("XAI_API_KEY", "xai-key", setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    const grok = rows.find((r) => r.kind === "subscription" && r.provider === "xai");
+    expect(grok).toEqual({ kind: "subscription", provider: "xai", connected: true });
+    const xaiKey = rows.find((r) => r.kind === "key" && r.provider === "xai");
+    expect(xaiKey?.kind).toBe("key");
+    if (xaiKey?.kind !== "key") return;
+    expect(xaiKey.unusedBecause).toBe("unused because a Grok subscription is connected");
+  });
+
   test("a chatgpt login with Codex on PATH is a connected subscription row", () => {
     process.env.SERI_CODEX_BIN = "/opt/codex";
     writeFileSync(
@@ -428,8 +455,8 @@ describe("decideSetupOpen", () => {
       }),
     );
     const rows = decideSetupOpen(setupConfigDir);
-    const plan = rows.find((row) => row.kind === "subscription");
-    expect(plan?.status).toEqual({ status: "connected" });
+    const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
   });
 
   test("an API-key Codex login is not-logged-in, even without an access token", () => {
@@ -438,8 +465,13 @@ describe("decideSetupOpen", () => {
       join(setupConfigDir, "auth.json"),
       JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }),
     );
-    const plan = decideSetupOpen(setupConfigDir).find((row) => row.kind === "subscription");
-    expect(plan?.status).toEqual({ status: "not-logged-in", reason: "api-key" });
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({
+      status: "not-logged-in",
+      reason: "api-key",
+    });
   });
 
   test("an openai key is marked unused when a ChatGPT plan is connected", () => {

@@ -926,6 +926,22 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
     expect(state.pendingSetup).toEqual({ step: "list", rows, selected: 0 });
     expect(state.pendingModelPicker).toEqual({ entries: [] });
   });
+
+  test("setup-requested skips heading rows when choosing the initial selection", () => {
+    const mixed: SetupProviderRow[] = [
+      { kind: "heading", label: "API keys" },
+      {
+        kind: "key",
+        provider: "groq",
+        keyName: "GROQ_API_KEY",
+        source: "unset",
+        masked: undefined,
+        removable: false,
+      },
+    ];
+    const state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows: mixed });
+    expect(state.pendingSetup).toEqual({ step: "list", rows: mixed, selected: 1 });
+  });
 });
 
 // Stage A scaffolding (cli-commands-to-tui feature-plan.md): these ten actions have no dispatcher
