@@ -236,7 +236,7 @@ describe("formatModeDetail", () => {
   const withRoute = "  claude-sonnet-5 · your key";
   const withEffort = "  claude-sonnet-5 · your key · high";
   const reroutedSuffix = "  claude-sonnet-5 · → openrouter";
-  const gatewaySuffix = "  claude-sonnet-5 · provided";
+  const gatewaySuffix = "  claude-sonnet-5 · seri";
 
   test("budget shorter than the model name: no detail", () => {
     expect(formatModeDetail(nonRerouted, modelOnly.length - 1, undefined)).toBe("");
@@ -270,25 +270,25 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(rerouted, reroutedSuffix.length, undefined)).toBe(reroutedSuffix);
   });
 
-  test("a gateway-served route: 'provided' when the budget fits", () => {
+  test("a gateway-served route: 'seri' when the budget fits", () => {
     const gatewayRoute = route({ credential: "gateway" });
     expect(formatModeDetail(gatewayRoute, gatewaySuffix.length, undefined)).toBe(gatewaySuffix);
   });
 
-  test("a subscription-served route: 'plan' when the budget fits", () => {
+  test("a subscription-served route: 'codex' when the budget fits", () => {
     const subscriptionRoute = route({
       provider: "openai",
       model: "gpt-5.6-terra",
       credential: "subscription",
     });
-    const suffix = "  gpt-5.6-terra · plan";
+    const suffix = "  gpt-5.6-terra · codex";
     expect(formatModeDetail(subscriptionRoute, suffix.length, undefined)).toBe(suffix);
     expect(formatModeDetail(subscriptionRoute, suffix.length, undefined)).not.toContain("your key");
   });
 
   // Defensive: resolveRoute's own contract makes rerouted plus a "gateway" credential unreachable, but
   // formatModeDetail must not rely on that — a rerouted route always reads "→ provider", never
-  // "provided", regardless of what the credential carries.
+  // "seri", regardless of what the credential carries.
   test("a rerouted route still reads '→ <provider>' even with a gateway credential", () => {
     const reroutedAndGateway = route({
       provider: "openrouter",

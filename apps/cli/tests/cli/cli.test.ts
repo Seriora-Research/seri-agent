@@ -10,6 +10,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { AUTH_FILENAME, saveAuthSession } from "../../src/auth/authStore";
+import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
@@ -3168,6 +3169,29 @@ describe("guided setup gate", () => {
   test("one key configured via env var: configuredProviders(dir).size === 0 is false", () => {
     process.env.OPENROUTER_API_KEY = "fake-test-key";
     expect(configuredProviders(configDir).size === 0).toBe(false);
+  });
+
+  test("an ignored seri plan with zero keys still needs guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      expect(needsGuidedSetup(configDir)).toBe(false);
+      ignoreSeriPlan(configDir);
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
   });
 
   test("a hosted login with zero keys does not need guided setup", () => {

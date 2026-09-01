@@ -14,6 +14,7 @@ import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
 import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
 import { refreshCodexSubscription, resetCodexModelCache } from "../../src/auth/codexRefresh";
 import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
@@ -432,26 +433,29 @@ describe("decideSetupOpen", () => {
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns API-keys heading, BYOK key rows without the hosted OpenRouter offer, Subscriptions heading, and both plan rows", () => {
+  test("returns API-keys heading, every BYOK key row, Subscriptions heading, and all three plan rows", () => {
     const rows = decideSetupOpen(setupConfigDir);
     expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
     const keys = rows.filter((row) => row.kind === "key");
     const plans = rows.filter((row) => row.kind === "subscription");
-    expect(keys.map((row) => row.provider)).toEqual(
-      CATALOG_PROVIDERS.filter((provider) => provider !== "openrouter"),
-    );
+    expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
     expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
     expect(keys.every((row) => row.removable === false)).toBe(true);
     expect(rows[keys.length + 1]).toEqual({ kind: "heading", label: "Subscriptions" });
-    expect(plans).toHaveLength(2);
-    expect(plans[0]).toEqual({ kind: "subscription", provider: "xai", connected: false });
-    expect(plans[1]?.provider).toBe("openai");
-    expect(plans[1] && "status" in plans[1] ? plans[1].status.status : undefined).toBe(
+    expect(plans).toHaveLength(3);
+    expect(plans[0]).toEqual({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "not-logged-in" },
+    });
+    expect(plans[1]).toEqual({ kind: "subscription", provider: "xai", connected: false });
+    expect(plans[2]?.provider).toBe("openai");
+    expect(plans[2] && "status" in plans[2] ? plans[2].status.status : undefined).toBe(
       "not-installed",
     );
   });
 
-  test("a hosted login with no local OpenRouter key shows that row as provided, not removable", () => {
+  test("a hosted login with no local OpenRouter key is a seri subscription, and OpenRouter stays unset", () => {
     saveAuthSession(
       {
         accessToken: "at-1",
@@ -462,19 +466,45 @@ describe("decideSetupOpen", () => {
       },
       setupConfigDir,
     );
-    const row = decideSetupOpen(setupConfigDir).find(
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
       (entry) => entry.kind === "key" && entry.provider === "openrouter",
     );
-    expect(row).toMatchObject({
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({
       kind: "key",
       provider: "openrouter",
-      source: "hosted",
+      source: "unset",
       removable: false,
-      masked: undefined,
+    });
+    expect(seri).toMatchObject({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "connected" },
     });
   });
 
-  test("a Codex-shaped auth.json in the same directory is not a hosted OpenRouter offer", () => {
+  test("a cached account plan is named on the seri subscription row", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    writeFileSync(join(setupConfigDir, "account-plan"), "ultra\n");
+    const seri = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "subscription" && entry.provider === "seri",
+    );
+    expect(seri).toMatchObject({
+      status: { status: "connected", planType: "ultra" },
+    });
+  });
+
+  test("a Codex-shaped auth.json is not a seri subscription", () => {
     writeFileSync(
       join(setupConfigDir, "auth.json"),
       JSON.stringify({
@@ -482,8 +512,10 @@ describe("decideSetupOpen", () => {
         tokens: { access_token: "tok", account_id: "acct" },
       }),
     );
-    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
-    expect(keys.some((row) => row.provider === "openrouter")).toBe(false);
+    const seri = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "subscription" && entry.provider === "seri",
+    );
+    expect(seri).toMatchObject({ status: { status: "not-logged-in" } });
   });
 
   test("a local OpenRouter key still appears when the user is not logged in", () => {
@@ -497,10 +529,10 @@ describe("decideSetupOpen", () => {
       source: "config",
       removable: true,
     });
-    expect(row && "overridesHosted" in row ? row.overridesHosted : undefined).toBeUndefined();
+    expect(row && "unusedBecause" in row ? row.unusedBecause : undefined).toBeUndefined();
   });
 
-  test("an env OpenRouter key is a BYOK row, not the hosted offer, even when logged in", () => {
+  test("an env OpenRouter key is unused while a seri plan is connected", () => {
     process.env.OPENROUTER_API_KEY = "sk-or-env";
     saveAuthSession(
       {
@@ -519,11 +551,11 @@ describe("decideSetupOpen", () => {
       kind: "key",
       source: "env",
       removable: false,
-      overridesHosted: true,
+      unusedBecause: "unused because a seri plan is connected",
     });
   });
 
-  test("a local OpenRouter key while logged in is removable and marked as overriding hosted", () => {
+  test("a local OpenRouter key while logged in is unused, not an override", () => {
     saveAuthSession(
       {
         accessToken: "at-1",
@@ -542,11 +574,11 @@ describe("decideSetupOpen", () => {
       kind: "key",
       source: "config",
       removable: true,
-      overridesHosted: true,
+      unusedBecause: "unused because a seri plan is connected",
     });
   });
 
-  test("removing a local OpenRouter key while logged in returns the row to provided, not unset", () => {
+  test("removing a local OpenRouter key while logged in leaves the key unset and the seri plan connected", () => {
     saveAuthSession(
       {
         accessToken: "at-1",
@@ -559,10 +591,38 @@ describe("decideSetupOpen", () => {
     );
     setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
     unsetConfigValue("OPENROUTER_API_KEY", setupConfigDir);
-    const row = decideSetupOpen(setupConfigDir).find(
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
       (entry) => entry.kind === "key" && entry.provider === "openrouter",
     );
-    expect(row).toMatchObject({ source: "hosted", removable: false });
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({ source: "unset", removable: false });
+    expect(seri).toMatchObject({ status: { status: "connected" } });
+  });
+
+  test("ignoring the seri plan marks it unused and frees a leftover OpenRouter key", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    ignoreSeriPlan(setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({ source: "config", removable: true });
+    expect(openrouter && "unusedBecause" in openrouter ? openrouter.unusedBecause : undefined).toBe(
+      undefined,
+    );
+    expect(seri).toMatchObject({ status: { status: "ignored" } });
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {

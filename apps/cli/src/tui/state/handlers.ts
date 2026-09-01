@@ -9,6 +9,7 @@
 import type { ModelProvider } from "@seri/model-catalog";
 import { codexSetupAction } from "../../auth/codexBin";
 import { disconnectCodex, reconnectCodex } from "../../auth/codexIgnore";
+import { disconnectSeri, reconnectSeri } from "../../auth/seriIgnore";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
 import {
@@ -55,13 +56,15 @@ export function createSetupHandlers(opts: {
   configDir: string;
   onPanelClosed?: () => void;
   onConnectGrok?: () => Promise<void>;
+  onConnectSeri?: () => Promise<void>;
 }): {
   onSetupSelect: (row: SetupProviderRow) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
   onSetupRemove: (row: SetupProviderRow) => void;
   onSetupBack: () => void;
 } {
-  const { dispatch, getPendingSetup, configDir, onPanelClosed, onConnectGrok } = opts;
+  const { dispatch, getPendingSetup, configDir, onPanelClosed, onConnectGrok, onConnectSeri } =
+    opts;
 
   function setupListState(selectedId?: string): SetupState {
     const rows = decideSetupOpen(configDir);
@@ -116,6 +119,25 @@ export function createSetupHandlers(opts: {
         });
         return;
       }
+      if (row.provider === "seri") {
+        if (row.status.status === "connected") {
+          dispatch({
+            type: "setup-step",
+            state: { step: "confirm-disconnect", provider: "seri" },
+          });
+          return;
+        }
+        if (row.status.status === "ignored") {
+          dispatch({
+            type: "setup-step",
+            state: { step: "confirm-connect", provider: "seri" },
+          });
+          return;
+        }
+        dispatch({ type: "setup-resolved" });
+        void onConnectSeri?.();
+        return;
+      }
       if (row.status.status === "connected") {
         dispatch({
           type: "setup-step",
@@ -140,7 +162,6 @@ export function createSetupHandlers(opts: {
         provider: row.provider,
         keyName: PROVIDER_API_KEY_NAMES[row.provider],
         busy: false,
-        note: row.source === "hosted" ? "Used instead of hosted OpenRouter coverage." : undefined,
       },
     });
   }
@@ -231,6 +252,7 @@ export function createSetupHandlers(opts: {
           dispatch({ type: "transcript-append", line: message });
         };
         if (pending.provider === "openai") disconnectCodex(configDir, onMessage);
+        else if (pending.provider === "seri") disconnectSeri(configDir, onMessage);
         else disconnectGrokReal(configDir, onMessage);
       } catch (err) {
         dispatch({ type: "command-error", message: messageOf(err) });
@@ -250,6 +272,18 @@ export function createSetupHandlers(opts: {
           return;
         }
         dispatchSetupList("subscription:openai");
+        return;
+      }
+      if (pending.provider === "seri") {
+        try {
+          reconnectSeri(configDir, (message) => {
+            dispatch({ type: "transcript-append", line: message });
+          });
+        } catch (err) {
+          dispatch({ type: "command-error", message: messageOf(err) });
+          return;
+        }
+        dispatchSetupList("subscription:seri");
         return;
       }
       dispatch({ type: "setup-resolved" });
@@ -272,10 +306,6 @@ export function createSetupHandlers(opts: {
       return;
     }
     if (row.kind !== "key") return;
-    // The hosted OpenRouter row is not a config.json entry. 'r' is already gated on
-    // `removable` in the panel; this is the handler-side half so a stale row object
-    // cannot unset a key that does not exist and leave the session looking keyless.
-    if (row.source === "hosted") return;
     let state: ProviderKeyState;
     try {
       state = providerKeyState(row.provider, configDir);

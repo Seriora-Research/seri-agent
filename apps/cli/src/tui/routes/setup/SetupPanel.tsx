@@ -13,7 +13,7 @@ import type {
   SetupProviderRow,
   SetupSubscriptionRow,
 } from "../../state/commands";
-import { isHostedSetupKey, isSetupActionRow, setupRowId } from "../../state/commands";
+import { isSetupActionRow, setupRowId } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
@@ -31,7 +31,8 @@ const SUBSCRIPTION_ROW: SetupGrokSubscriptionRow = {
 };
 
 function subscriptionDisconnectable(row: SetupSubscriptionRow): boolean {
-  return row.provider === "xai" ? row.connected : row.status.status === "connected";
+  if (row.provider === "xai") return row.connected;
+  return row.status.status === "connected";
 }
 
 export function SetupPanel({
@@ -95,6 +96,21 @@ export function SetupPanel({
         />
       );
     }
+    if (pendingSetup.provider === "seri") {
+      return (
+        <ConfirmPrompt
+          subject="Re-enable seri plan (login is already present; this only clears the local ignore)"
+          onConfirm={() =>
+            onSetupRemove?.({
+              kind: "subscription",
+              provider: "seri",
+              status: { status: "ignored" },
+            })
+          }
+          onCancel={() => onSetupBack?.()}
+        />
+      );
+    }
     return (
       <SetupConnectWarning
         onConfirm={() => onSetupRemove?.(SUBSCRIPTION_ROW)}
@@ -103,24 +119,27 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-disconnect") {
-    const openai = pendingSetup.provider === "openai";
+    const subject =
+      pendingSetup.provider === "openai"
+        ? "Disconnect ChatGPT plan (local ignore only; Codex CLI login is not revoked)"
+        : pendingSetup.provider === "seri"
+          ? "Disconnect seri plan (this profile will use your API keys; you stay logged in)"
+          : "Disconnect Grok subscription (local credential only; xAI access is not revoked)";
     return (
       <ConfirmPrompt
-        subject={
-          openai
-            ? "Disconnect ChatGPT plan (local ignore only; Codex CLI login is not revoked)"
-            : "Disconnect Grok subscription (local credential only; xAI access is not revoked)"
-        }
+        subject={subject}
         onConfirm={() =>
           onSetupRemove?.(
-            openai
+            pendingSetup.provider === "openai"
               ? {
                   kind: "subscription",
                   provider: "openai",
                   status: { status: "connected" },
                   removable: true,
                 }
-              : { ...SUBSCRIPTION_ROW, connected: true },
+              : pendingSetup.provider === "seri"
+                ? { kind: "subscription", provider: "seri", status: { status: "connected" } }
+                : { ...SUBSCRIPTION_ROW, connected: true },
           )
         }
         onCancel={() => onSetupBack?.()}
@@ -225,10 +244,10 @@ function SetupList({
           ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
           : selectedRow.status.status === "ignored"
             ? "↑/↓ move · Enter re-enable · Esc/Ctrl-D close"
-            : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
-      : selectedRow !== undefined && isHostedSetupKey(selectedRow)
-        ? "↑/↓ move · Enter/a add your own key · Esc/Ctrl-D close"
-        : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
+            : selectedRow.provider === "seri"
+              ? "↑/↓ move · Enter sign in · Esc/Ctrl-D close"
+              : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
+      : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (
     <PanelBox title="/setup — provider API keys">

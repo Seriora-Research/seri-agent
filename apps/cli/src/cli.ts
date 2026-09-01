@@ -20,7 +20,7 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
-import { hasHostedAuth } from "./auth/authStore";
+import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
@@ -1240,16 +1240,15 @@ export function tuiPresenter(
 }
 
 // The mandatory first-run /setup panel exists only when the session has no way to reach a
-// model: no BYOK key, no vendor subscription, and no hosted login. A hosted login is not an
-// API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it is
-// the third credential resolveRoute already accepts — `credential: "gateway"`, paid by the
-// seri plan and forwarded to OpenRouter server-side. Treating it as "blank" here dumps a
-// logged-in user into /setup asking them to paste a key they do not need.
+// model: no BYOK key, no vendor subscription, and no usable seri plan. A hosted login is not
+// an API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it
+// is the third credential resolveRoute already accepts — `credential: "gateway"`. An ignored
+// seri plan does not count: the user asked to use their keys instead.
 export function needsGuidedSetup(configDir: string): boolean {
   return (
     configuredProviders(configDir).size === 0 &&
     subscribedProviders(configDir).size === 0 &&
-    !hasHostedAuth(configDir)
+    !hostedPlanUsable(configDir)
   );
 }
 
@@ -1676,6 +1675,7 @@ async function runTui(
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
     onConnectGrok,
+    onConnectSeri: () => onLogin("login"),
   });
 
   function onSetupClose(leftoverInput?: string): void {
@@ -2404,7 +2404,9 @@ async function runTui(
             // The group variant, not gatewayCoverage itself: decideModelPickerOpen already grouped
             // the whole catalog once and hands back each entry's own group here, so this avoids
             // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
-            (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
+            (entry, group) =>
+              gatewayCoverageInGroup(group, effectiveHostedPlan(configDir, prepared.plan)) !==
+              undefined,
             // Overlay-applied openai only: hasCodexSubscription without a successful model/list
             // overlay still leaves the API catalog on screen, and those rows are not plan-included.
             isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
@@ -2483,7 +2485,7 @@ async function runTui(
       // Cleared directly rather than re-fetched: fetchAccountPlan would return null here anyway
       // (its login guard sees no session once logout succeeds), and if logout itself somehow
       // failed, null is still the fail-closed answer PreparedRun.plan already commits to — never
-      // let a stale paid plan keep resolveRoute / /model showing "provided" after the user asked
+      // let a stale paid plan keep resolveRoute / /model showing "seri" after the user asked
       // to log out.
       prepared.plan = null;
     },

@@ -433,7 +433,7 @@ function childScriptAccountStatusOnce(dir: string): string {
 // /logout left the previous (possibly paid) plan in place, so
 // resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
 // logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
-// key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
+// key, shows "seri"), then logs out and re-opens /model to prove that same entry's row drops
 // back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
 // leaving it stale.
 function childScriptPlanClearedOnLogout(dir: string): string {
@@ -2764,7 +2764,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
-      expect(lastFrame()).toContain("provided");
+      expect(lastFrame()).toContain("seri");
 
       child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -2786,8 +2786,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
-      // still read "provided" here, from the plan a session that no longer exists once had.
-      expect(lastFrame()).not.toContain("provided");
+      // still read as a seri-plan route here, from the plan a session that no longer exists once had.
       expect(lastFrame()).toContain("no key");
     } finally {
       child.kill("SIGKILL");
@@ -4029,8 +4028,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("sk-a...efgh");
         await sawLine("set by $GROQ_API_KEY in your environment");
-        // BYOK /setup (GROQ env, no login) must not list the hosted OpenRouter offer.
-        expect(rawOccurrences("openrouter")).toBe(0);
+        await sawLine("openrouter");
+        await sawLine("not set");
       } finally {
         child.kill("SIGKILL");
       }
@@ -4083,7 +4082,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        // BYOK /setup omits the hosted OpenRouter offer, so one Down from groq reaches anthropic.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
@@ -4487,12 +4488,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    test("a logged-in /setup lists OpenRouter as provided, and r does not remove coverage", async () => {
+    test("a logged-in /setup lists seri as a subscription and OpenRouter as a key", async () => {
       seedAuth(dir);
-      const scriptPath = join(dir, "child-setup-hosted-provided.mjs");
+      const scriptPath = join(dir, "child-setup-hosted-seri.mjs");
       writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
 
-      const { child, sawLine, rawOccurrences, lastFrame } = await startChild(scriptPath, dir, {
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
         terminalSize: { cols: 100, rows: 30 },
       });
       try {
@@ -4504,25 +4505,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        await sawLine("provided");
-
-        // groq is first; one Down highlights the hosted OpenRouter row.
-        child.stdin?.write("\x1b[B");
-        await wait100ms();
-        expect(lastFrame()).toContain("provided");
-        expect(lastFrame()).toContain("add your own key");
-        expect(lastFrame()).not.toContain("r remove");
-
-        child.stdin?.write("r");
-        await wait100ms();
-        expect(rawOccurrences("Remove OPENROUTER_API_KEY")).toBe(0);
-        expect(lastFrame()).toContain("provided");
+        await sawLine("Subscriptions");
+        await sawLine("seri");
+        await sawLine("connected");
+        await sawLine("openrouter");
+        expect(lastFrame()).toContain("not set");
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    test("a logged-in user can paste their own OpenRouter key; it overrides hosted and is removable", async () => {
+    test("a logged-in user can paste an OpenRouter key; it is unused while the seri plan is connected", async () => {
       seedAuth(dir);
       const scriptPath = join(dir, "child-setup-hosted-own-key.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -4538,14 +4531,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        await sawLine("provided");
+        await sawLine("seri");
 
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("OPENROUTER_API_KEY for openrouter");
-        await sawLine("Used instead of hosted OpenRouter coverage.");
 
         const secret = "sk-or-hosted-own-override";
         child.stdin?.write(secret);
@@ -4558,8 +4550,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
           (c) => c.OPENROUTER_API_KEY === secret,
         );
         expect(config.OPENROUTER_API_KEY).toBe(secret);
-        await sawLine("overrides hosted");
-        expect(lastFrame()).not.toContain("provided");
+        await sawLine("unused because a seri plan is connected");
+        expect(lastFrame()).toContain("seri");
       } finally {
         child.kill("SIGKILL");
       }
@@ -5973,9 +5965,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
-        // rather than bypassing it. That panel is BYOK-only — OpenRouter is the hosted offer.
+        // rather than bypassing it. OpenRouter is a normal BYOK row here, unset.
         await sawLine("/setup — provider API keys");
-        expect(rawOccurrences("openrouter")).toBe(0);
+        await sawLine("openrouter");
+        await sawLine("not set");
       } finally {
         child.kill("SIGKILL");
       }

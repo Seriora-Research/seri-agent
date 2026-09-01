@@ -300,12 +300,27 @@ describe("resolveRoute", () => {
       });
     });
 
-    test("a local OpenRouter key wins over gateway coverage for the same provider", () => {
+    test("a leftover OpenRouter key is unused when a seri plan covers the same provider", () => {
       const route = resolveRoute(
         catalog,
         { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
         new Set(["openrouter"]),
         "pro",
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+    });
+
+    test("a leftover OpenRouter key is used when no seri plan is active", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        null,
       );
       expect(route).toEqual({
         model: "anthropic/claude-sonnet-5",

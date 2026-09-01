@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
 import type { refreshSession as refreshSessionReal } from "../../src/auth/refresh";
-import { fetchAccountPlan } from "../../src/provider/accountStatus";
+import { fetchAccountPlan, loadCachedAccountPlan } from "../../src/provider/accountStatus";
 
 let tmpRoot: string;
 
@@ -77,6 +77,7 @@ describe("fetchAccountPlan — success", () => {
     const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: refreshNeverCalled });
 
     expect(plan).toBe("pro");
+    expect(loadCachedAccountPlan(tmpRoot)).toBe("pro");
   });
 });
 

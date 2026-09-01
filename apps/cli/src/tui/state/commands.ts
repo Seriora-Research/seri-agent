@@ -24,6 +24,7 @@ import { loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
 import { type CodexSetupStatus, findCodexBin } from "../../auth/codexBin";
 import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
 import { codexPlanType } from "../../auth/codexRefresh";
+import { type SeriSetupStatus, hostedPlanUsable, isSeriIgnored } from "../../auth/seriIgnore";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
@@ -46,6 +47,7 @@ import {
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
 } from "../../provider/keys";
+import { loadCachedAccountPlan } from "../../provider/accountStatus";
 import { GATEWAY_PROVIDER } from "../../provider/planCoverage";
 import { resolveReasoningEffort } from "../../provider/reasoning";
 import {
@@ -229,13 +231,10 @@ export type SetupKeyRow = {
   kind: "key";
   provider: ModelProvider;
   keyName: string;
-  source: "env" | "config" | "unset" | "hosted";
+  source: "env" | "config" | "unset";
   masked: string | undefined;
   removable: boolean;
   unusedBecause?: string;
-  // Set when a local OpenRouter key sits on top of a hosted login. The key is used
-  // (Rule 1), not unused — this is the inverse of unusedBecause.
-  overridesHosted?: boolean;
 };
 export type SetupGrokSubscriptionRow = {
   kind: "subscription";
@@ -248,7 +247,15 @@ export type SetupCodexSubscriptionRow = {
   status: CodexSetupStatus;
   removable: boolean;
 };
-export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
+export type SetupSeriSubscriptionRow = {
+  kind: "subscription";
+  provider: "seri";
+  status: SeriSetupStatus;
+};
+export type SetupSubscriptionRow =
+  | SetupGrokSubscriptionRow
+  | SetupCodexSubscriptionRow
+  | SetupSeriSubscriptionRow;
 export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
 
 export function setupRowId(row: SetupProviderRow): string {
@@ -270,8 +277,15 @@ export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubsc
   return row.kind === "subscription";
 }
 
-export function isHostedSetupKey(row: SetupProviderRow): row is SetupKeyRow {
-  return row.kind === "key" && row.source === "hosted";
+function seriSetupRow(configDir?: string): SetupSeriSubscriptionRow {
+  if (configDir === undefined || !hasHostedAuth(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "not-logged-in" } };
+  }
+  const planType = loadCachedAccountPlan(configDir) ?? undefined;
+  if (isSeriIgnored(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "ignored", planType } };
+  }
+  return { kind: "subscription", provider: "seri", status: { status: "connected", planType } };
 }
 
 function codexSetupRow(configDir?: string): SetupSubscriptionRow {
@@ -321,49 +335,31 @@ function codexSetupRow(configDir?: string): SetupSubscriptionRow {
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
   const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
-  const hosted = configDir !== undefined && hasHostedAuth(configDir);
-  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).flatMap((state): SetupKeyRow[] => {
-    // OpenRouter is GATEWAY_PROVIDER — the key seri's hosted account already pays. A BYOK-only
-    // session (no login) must not see that offer as a paste slot: they skipped login because they
-    // brought their own key for another provider. A local OpenRouter key still appears so it can
-    // be replaced or removed. A hosted session with no local key shows the row as provided and
-    // not removable — 'r' cannot take away gateway access.
-    if (state.provider === GATEWAY_PROVIDER && state.source === "unset") {
-      if (!hosted) return [];
-      return [
-        {
-          kind: "key",
-          provider: state.provider,
-          keyName: state.keyName,
-          source: "hosted",
-          masked: undefined,
-          removable: false,
-        },
-      ];
-    }
+  const seriActive = configDir !== undefined && hostedPlanUsable(configDir);
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
     let unusedBecause: string | undefined;
     if (grokConnected && state.provider === "xai" && state.source !== "unset") {
       unusedBecause = "unused because a Grok subscription is connected";
     } else if (openaiSubscribed && state.provider === "openai" && state.source !== "unset") {
       unusedBecause = "unused because a ChatGPT plan is connected";
+    } else if (seriActive && state.provider === GATEWAY_PROVIDER && state.source !== "unset") {
+      unusedBecause = "unused because a seri plan is connected";
     }
-    return [
-      {
-        kind: "key",
-        provider: state.provider,
-        keyName: state.keyName,
-        source: state.source,
-        masked: state.masked,
-        removable: state.hasConfigEntry,
-        unusedBecause,
-        ...(hosted && state.provider === GATEWAY_PROVIDER ? { overridesHosted: true } : {}),
-      },
-    ];
+    return {
+      kind: "key",
+      provider: state.provider,
+      keyName: state.keyName,
+      source: state.source,
+      masked: state.masked,
+      removable: state.hasConfigEntry,
+      unusedBecause,
+    };
   });
   return [
     { kind: "heading", label: "API keys" },
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
+    seriSetupRow(configDir),
     { kind: "subscription", provider: "xai", connected: grokConnected },
     codexSetupRow(configDir),
   ];

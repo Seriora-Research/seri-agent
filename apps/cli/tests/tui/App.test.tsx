@@ -2607,26 +2607,35 @@ describe("App", () => {
         expect(formatSetupRow(row())).toContain("not set");
       });
 
-      test("hosted: the provider name and 'provided', never 'not set'", () => {
-        const text = formatSetupRow(row({ provider: "openrouter", source: "hosted" }));
-        expect(text).toContain("openrouter");
-        expect(text).toContain("provided");
-        expect(text).not.toContain("not set");
+      test("seri subscription names the plan type", () => {
+        expect(
+          formatSetupRow({
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "connected", planType: "pro" },
+          }),
+        ).toContain("connected — pro");
+        expect(
+          formatSetupRow({
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "ignored" },
+          }),
+        ).toContain("ignored — using your keys");
       });
 
-      test("a local OpenRouter key on a hosted login says it overrides hosted", () => {
+      test("a leftover OpenRouter key under a seri plan is marked unused", () => {
         const text = formatSetupRow(
           row({
             provider: "openrouter",
             source: "config",
             masked: "sk-o...own1",
             removable: true,
-            overridesHosted: true,
+            unusedBecause: "unused because a seri plan is connected",
           }),
         );
         expect(text).toContain("sk-o...own1");
-        expect(text).toContain("overrides hosted");
-        expect(text).not.toContain("provided");
+        expect(text).toContain("unused because a seri plan is connected");
       });
 
       test("config: the masked value, labeled (config)", () => {
@@ -2805,9 +2814,11 @@ describe("App", () => {
       expect(removeRequested).toEqual([]);
     });
 
-    test("a hosted OpenRouter row says provided, offers add-your-own, and ignores r/Delete", async () => {
+    test("a connected seri row offers disconnect and ignores r on a non-removable key", async () => {
+      const selected: SetupProviderRow[] = [];
       const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
+        onSetupSelect: (row) => selected.push(row),
         onSetupRemove: (row) => removeRequested.push(row),
       });
 
@@ -2815,27 +2826,22 @@ describe("App", () => {
         type: "setup-requested",
         rows: [
           {
-            kind: "key",
-            provider: "openrouter",
-            keyName: "OPENROUTER_API_KEY",
-            source: "hosted",
-            masked: undefined,
-            removable: false,
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "connected", planType: "max" },
           },
         ],
       });
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("provided");
-      expect(frame).not.toContain("not set");
-      expect(frame).toContain("add your own key");
-      expect(frame).not.toContain("r remove");
+      expect(frame).toContain("connected — max");
+      expect(frame).toContain("Enter/r disconnect");
 
       setup.mockInput.pressKey("r");
       await flush(setup);
-      setup.mockInput.pressKey(DELETE_KEY);
-      await flush(setup);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject({ kind: "subscription", provider: "seri" });
       expect(removeRequested).toEqual([]);
     });
 
@@ -2896,7 +2902,7 @@ describe("App", () => {
       expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
     });
 
-    test("the enter-key step shows a hosted-override note when one is on the step", async () => {
+    test("the enter-key step shows a note when one is on the step", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({
@@ -2906,14 +2912,14 @@ describe("App", () => {
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
           busy: false,
-          note: "Used instead of hosted OpenRouter coverage.",
+          note: "Unused while a seri plan is connected.",
         },
       });
       await flush(setup);
 
       const frame = setup.captureCharFrame();
       expect(frame).toContain("OPENROUTER_API_KEY for openrouter");
-      expect(frame).toContain("Used instead of hosted OpenRouter coverage.");
+      expect(frame).toContain("Unused while a seri plan is connected.");
     });
 
     test("while busy, the panel renders Validating… and ignores input", async () => {
@@ -3354,7 +3360,7 @@ describe("App", () => {
       expect(matchesFilter(unknownPrice, "free")).toBe(false);
     });
 
-    test("a subscription-covered row costs 'included' and routes as 'plan'", () => {
+    test("a subscription-covered row costs 'included' and names the plan source", () => {
       const row = pickerRow({
         keyConfigured: false,
         subscriptionCovered: true,
@@ -3362,14 +3368,26 @@ describe("App", () => {
       });
       const rendered = formatModelRow(row);
       expect(rendered).toContain("included");
-      expect(rendered).toContain("plan");
+      expect(rendered).toContain("codex");
       expect(rendered).not.toContain("no key");
       expect(rendered).not.toContain("$");
-      expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
+      expect(
+        formatRouteLabel({
+          keyConfigured: false,
+          subscriptionCovered: true,
+          provider: "openai",
+        }),
+      ).toBe("codex");
     });
 
     test("subscriptionCovered beats keyConfigured in the Route column", () => {
-      expect(formatRouteLabel({ keyConfigured: true, subscriptionCovered: true })).toBe("plan");
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          subscriptionCovered: true,
+          provider: "xai",
+        }),
+      ).toBe("grok");
     });
 
     test("matchesFilter matches a subscription-covered row with 'included' and 'plan', not 'free'", () => {
@@ -3431,13 +3449,29 @@ describe("App", () => {
 
     // D7: unreachable in production today (decideModelPickerOpen's own `planCoverage` default is
     // always-false) — exercised here only as a direct unit test of the vocabulary function itself.
-    test("a keyless, no-reroute row with gatewayReachable: 'provided'", () => {
-      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("provided");
+    test("a keyless, no-reroute row with gatewayReachable: 'seri'", () => {
+      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("seri");
     });
 
-    test("subscriptionCovered: 'plan', even when a key is also present", () => {
-      expect(formatRouteLabel({ keyConfigured: true, subscriptionCovered: true })).toBe("plan");
+    test("subscriptionCovered names the vendor; omitted provider stays 'plan'", () => {
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          subscriptionCovered: true,
+          provider: "openai",
+        }),
+      ).toBe("codex");
       expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
+    });
+
+    test("a leftover OpenRouter key under gateway coverage still reads 'seri'", () => {
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          gatewayReachable: true,
+          provider: "openrouter",
+        }),
+      ).toBe("seri");
     });
 
     test("the true dead end — no key, no reroute, no gateway: 'no key'", () => {
