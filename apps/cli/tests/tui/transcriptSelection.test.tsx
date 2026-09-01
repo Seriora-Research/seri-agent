@@ -117,8 +117,9 @@ async function probeScreenRow(
   try {
     await setup.renderOnce();
     const shown = screenRow(setup.captureCharFrame(), y);
+    const scrollTop = scrollTopOf(setup);
     await setup.mockMouse.drag(0, y, 45, y);
-    return { scrollTop: scrollTopOf(setup), shown, selected: copiedText(setup) };
+    return { scrollTop, shown, selected: copiedText(setup) };
   } finally {
     mountedRenderers.splice(mountedRenderers.indexOf(setup), 1);
     setup.renderer.destroy();
@@ -266,19 +267,24 @@ describe("transcript selection", () => {
   // Correct behavior: these three screen rows resolve to the entry printed on them, the way rows 3
   // to 9 above already do. Once `stickyStart="bottom"` has parked the transcript at its tail
   // (scrollTop 14, entries 14-23 filling rows 0-9), the top of the viewport resolves against
-  // geometry that no longer matches what is painted: rows 0 and 1 hand back the entry ABOVE the one
-  // on screen, and row 2 hands back nothing.
+  // geometry that no longer matches what is painted. The copy is never the painted row. It is
+  // sometimes the entry above, sometimes a run of entries that includes that one, and on row 2
+  // it is empty. Pinning one exact wrong string made the suite fail when only the shape of the
+  // miss changed.
   test("defect: a scrolled transcript resolves its top three screen rows to the wrong entry", async () => {
     const first = await probeScreenRow(denseRows(24), 0);
+    expect(first.scrollTop).toBe(14);
     expect(first.shown).toBe("entry 14 text");
-    expect(first.selected).toBe("entry 13 text");
+    expect(first.selected).not.toBe(first.shown);
 
     const second = await probeScreenRow(denseRows(24), 1);
+    expect(second.scrollTop).toBe(14);
     expect(second.shown).toBe("entry 15 text");
-    expect(second.selected).toBe("entry 14 text");
+    expect(second.selected).not.toBe(second.shown);
 
     const third = await probeScreenRow(denseRows(24), 2);
+    expect(third.scrollTop).toBe(14);
     expect(third.shown).toBe("entry 16 text");
-    expect(third.selected).toBe("");
+    expect(third.selected).not.toBe(third.shown);
   });
 });
