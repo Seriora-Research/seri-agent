@@ -21,6 +21,7 @@ import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFi
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
   appendBarrier,
   type Checkpointer,
@@ -134,6 +135,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
+import { subscribedProviders } from "./provider/subscriptions";
 import { toolDefinitions } from "./provider/tools";
 import type { RuleRegistry } from "./rules/registry";
 import {
@@ -247,6 +249,7 @@ export type CliDeps = {
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
+  connectGrok?: typeof connectGrokReal;
   usageCommand?: typeof runUsageCommandReal;
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
@@ -512,7 +515,10 @@ async function effortCommand(
   // independent, the same reasoning prepareSession's own identical pair already applies.
   // fetchAccountPlan's own login guard skips the network call entirely for a BYOK-only/logged-out
   // session, so the common case pays nothing extra for this.
-  const [catalog, plan] = await Promise.all([getModelCatalog(), fetchAccountPlan(dirs.configDir)]);
+  const [catalog, plan] = await Promise.all([
+    getModelCatalog(undefined, undefined, dirs.configDir),
+    fetchAccountPlan(dirs.configDir),
+  ]);
   await applyEffortCommand(session, args, catalog, plan, dirs.configDir, presenter);
 }
 
@@ -1226,7 +1232,7 @@ export function tuiPresenter(
 
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
-    return configuredProviders(configDir).size === 0;
+    return configuredProviders(configDir).size === 0 && subscribedProviders(configDir).size === 0;
   } catch (err) {
     // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
     // message is terminal for the run — nothing re-enters it after this catch returns. No
@@ -1635,17 +1641,22 @@ async function runTui(
       .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
 
+  const { onLogin, onLogout, onAbandon, onConnectGrok } = createAuthHandlers({
+    dispatch,
+    deps,
+    configDir,
+  });
+
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
+    onConnectGrok,
   });
 
   function onSetupClose(leftoverInput?: string): void {
     dispatch({ type: "setup-resolved", leftoverInput });
   }
-
-  const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
 
   const { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack } =
     createConfigHandlers({
@@ -3165,7 +3176,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // `MAIN_TUI_RENDERER_CONFIG` (there is none today, runtime/renderOptions.ts) would reintroduce
       // that hazard.
       if (zeroKeysConfigured) {
-        await runGuidedSetup(ctx.configDir, getModelCatalog());
+        await runGuidedSetup(ctx.configDir, getModelCatalog(undefined, undefined, ctx.configDir));
       }
     } catch (err) {
       return fatalDuringTui(err);

@@ -475,7 +475,12 @@ export function envShadowReason(keyName: string): string {
 // impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
 // "the panel states why, for the env case," which was false for exactly this state until now.
 export function formatSetupRow(row: SetupProviderRow): string {
+  if (row.kind === "heading") return row.label;
   if (row.kind === "subscription") {
+    if (row.provider === "xai") {
+      const name = truncatePad("grok", PROVIDER_WIDTH);
+      return row.connected ? `${name} connected` : `${name} not connected`;
+    }
     return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
   }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
