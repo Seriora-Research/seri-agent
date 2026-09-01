@@ -124,6 +124,39 @@ export async function flushMarkdown(
   throw new Error("flushMarkdown: content never settled within 3000ms");
 }
 
+// `waitForFrame` returns on the first capture that matches, and it also stops when the renderer
+// scheduler reports idle — both of which fire while sticky-scroll is still painting. A later
+// capture then disagrees with the drag, which is the rotating failure in transcriptSelection.
+// Two identical captures are not enough: macOS CI painted the parked tail while hit-testing
+// still used an earlier scrollTop, so a one-row drag copied four entries. Frame plus scrollTop
+// must hold for three polls, the same real-time interval flushMarkdown uses.
+export async function waitForSettledFrame(
+  setup: TestRendererSetup,
+  isSettled: (frame: string) => boolean,
+): Promise<string> {
+  const deadline = Date.now() + 3000;
+  let previous: string | undefined;
+  let previousScroll: number | undefined;
+  let held = 0;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await setup.renderOnce();
+    const frame = setup.captureCharFrame();
+    const [child] = setup.renderer.root.getChildren();
+    const scrollTop =
+      child !== undefined && "scrollTop" in child ? (child as { scrollTop: number }).scrollTop : 0;
+    if (isSettled(frame) && frame === previous && scrollTop === previousScroll) {
+      held++;
+      if (held >= 2) return frame;
+    } else {
+      held = 0;
+    }
+    previous = frame;
+    previousScroll = scrollTop;
+  }
+  throw new Error("waitForSettledFrame: content never settled within 3000ms");
+}
+
 // Shared between tuiPty.test.ts (real pty, POSIX) and tuiPtyWindows.test.ts (real ConPTY,
 // Windows) — a runLoop that never settles, so the TUI stays mounted and interactive for as long
 // as a test needs to type into it. Both suites need byte-identical child-process behavior for

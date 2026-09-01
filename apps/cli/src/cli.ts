@@ -180,7 +180,6 @@ export type { PreMountMessage, PreparedRun, RunSession };
 import {
   type CommandDirs,
   checkpointTarget,
-  decideAuthOffer,
   decideClear,
   decideConfigOpen,
   decideEffortOpen,
@@ -3010,10 +3009,6 @@ async function runTui(
             muted: stream === "stdout",
           });
         }
-        // The non-blocking login/signup offer (AuthBanner) — true iff no auth session is
-        // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
-        // computed fresh on their own open, not cached from prepareSession.
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session

@@ -281,8 +281,8 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
 // fresh from disk on every call, plain functions, no Ink import, no saveSession/console.log/print*,
 // let a bad input throw for the caller's try/catch to turn into a command-error.
 
-// /login and /signup's own non-blocking offer (AuthBanner, App.tsx): true iff no auth session is
-// saved yet, so a first-run user sees the offer without it blocking anything they're already doing.
+// Welcome splash's unsigned-in menu (Log in / Sign up / Continue without logging in): true iff
+// no auth session is saved yet. The main TUI does not re-offer login as a persistent banner.
 export function decideAuthOffer(configDir: string): boolean {
   return loadAuthSession(configDir) === undefined;
 }

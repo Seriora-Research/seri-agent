@@ -1969,22 +1969,25 @@ async function startChild(
   // that fails, since it re-walks the full capture from scratch on every call.
   //
   // The adjacent-row-pair check (not just single rows) exists because a long transcript line
-  // word-wraps at Ink's column width, and where it wraps depends on how long the content BEFORE
+  // word-wraps at the column width, and where it wraps depends on how long the content BEFORE
   // the checked fragment is (a profile/tmp-dir path, e.g.) — not something a test can pin down
   // in advance. Measured live on macOS CI: a fragment picked to sit safely inside one wrapped
   // half still landed exactly on a longer path's wrap point. Trimming each row's trailing padding
-  // and rejoining pairs with a single space reconstructs the original word-wrapped sentence
-  // (OpenTUI wraps on word boundaries, never mid-word), so a fragment straddling any one wrap
-  // point still matches regardless of where that point falls.
-  const seenLine = (line: string): boolean => {
-    if (stdout.includes(line)) return true;
+  // and rejoining pairs, both with a space and without, reconstructs a wrap on a word boundary
+  // and a CUP split that landed mid-token, so a fragment straddling any one wrap point still
+  // matches regardless of where that point falls.
+  const gridContains = (line: string): boolean => {
     const rows = reconstructRows(stdout);
     if (rows.some((row) => row.includes(line))) return true;
-    return rows.some(
-      (row, i) =>
-        i + 1 < rows.length && `${row.trimEnd()} ${rows[i + 1].trimStart()}`.includes(line),
-    );
+    return rows.some((row, i) => {
+      if (i + 1 >= rows.length) return false;
+      const spaced = `${row.trimEnd()} ${rows[i + 1].trimStart()}`;
+      const glued = `${row.trimEnd()}${rows[i + 1].trimStart()}`;
+      return spaced.includes(line) || glued.includes(line);
+    });
   };
+
+  const seenLine = (line: string): boolean => stdout.includes(line) || gridContains(line);
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
@@ -2033,24 +2036,49 @@ async function startChild(
   // waiting for it before writing Escape is the same "raw mode is set by the time the readiness
   // marker prints" reasoning childScriptCancel's own comment (below) already relies on for
   // RUNLOOP_READY. Awaited here, before this function returns, rather than fired in the background:
-  // several callers below wait on the mode indicator line (present on the splash's own first frame
-  // too, unlike RUNLOOP_READY) as their own first sync point, and writing their own input before
-  // Escape has actually been queued would deliver it to the splash instead of the panel they meant
-  // to reach. Not swallowed: a wait on text the splash no longer prints leaves it undismissed for
-  // every later assertion, which reads as every test in this file timing out rather than as one
-  // wrong handle here.
+  // several callers below wait on the mode indicator line as their own first sync point, and
+  // writing their own input before Escape has actually been queued would deliver it to the splash
+  // instead of the panel they meant to reach. Not swallowed: a wait on text the splash no longer
+  // prints leaves it undismissed for every later assertion, which reads as every test in this file
+  // timing out rather than as one wrong handle here.
   if (opts.dismissSplash ?? true) {
     await sawLine(SPLASH_MARK);
+    // The banner can paint before the menu that owns Escape. Waiting for the hint means the
+    // splash's keyboard handler is mounted, so the write below is the dismiss and not a no-op.
+    await sawLine("Esc continue");
     child.stdin?.write("\x1b");
-    // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
-    // InputBox for a different mounted component already requires," defined below): without it, a
-    // caller that writes its own first input immediately after this function returns can combine
-    // with Escape in the same still-canonical-mode line buffer — the terminal only flushes a line
-    // on a newline/mode-switch boundary, so two writes issued back to back can arrive as ONE read
-    // chunk on the child's side. Measured live, this misdelivered "\x1b/max-turns 1" as one
-    // swallowed chunk instead of Escape-then-text, leaving the splash undismissed for the rest of
-    // the test.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // `pendingSplash` starts false, so the first painted frame is session chrome (the mode line
+    // included). `splash-requested` then covers it. `sawLine` is cumulative, so a later wait on
+    // "approve-each mode on" is already true while the splash still owns the keyboard. A flat
+    // 100ms sleep after Escape is the same race under load: the next write lands on the splash
+    // and is dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can
+    // clear the overlay (a blank grid) before the next surface is interactive. Two consecutive
+    // non-blank polls with the splash hint gone are the signal that whatever replaced it (idle
+    // input, /setup, an approval prompt) will see the next stdin write. Frames are not compared
+    // for equality: a live elapsed-time row changes every second. A child that already exited
+    // has nothing left to type into.
+    const dismissed = Date.now() + 20_000;
+    let sawHint = false;
+    let hintGone = false;
+    let idlePolls = 0;
+    const frameIsBlank = (frame: string): boolean =>
+      !frame.split("\n").some((row) => row.trim().length > 0);
+    while (spawnError === undefined && child.exitCode === null && Date.now() < dismissed) {
+      const frame = lastFrame();
+      if (gridContains("Esc continue")) sawHint = true;
+      if (sawHint && !gridContains("Esc continue")) hintGone = true;
+      if (hintGone && !frameIsBlank(frame)) {
+        idlePolls++;
+        if (idlePolls >= 2) break;
+      } else {
+        idlePolls = 0;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    if (spawnError !== undefined)
+      throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
+    if (child.exitCode === null && idlePolls < 2)
+      throw new Error(`splash never dismissed\n--- lastFrame ---\n${lastFrame()}`);
   }
 
   return {
@@ -4388,33 +4416,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/login, /signup, /logout", () => {
-    test("the banner appears at mount when no auth.json exists, alongside the ordinary input box", async () => {
+    test("the sign-in banner does not appear at mount when no auth.json exists", async () => {
       const scriptPath = join(dir, "child-auth-banner.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
-        // Non-blocking proof: the ordinary input box still accepts a task, exactly as it would
-        // with the banner absent — the pty counterpart of App.test.tsx's own "still typing" test.
+        // Non-blocking proof: the ordinary input box still accepts a task — the pty counterpart
+        // of App.test.tsx's own "still typing" test.
         child.stdin?.write("still typing");
         await sawLine("still typing");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // "The banner is gone from the newest frame" (App.test.tsx's own "clears the panel entirely,
-    // restoring InputBox" test) is asserted there, at the component level, via lastFrame() — this
-    // harness's own `lastFrame()`/`frameOccurrences` could check the same thing, but `sawLine`/
-    // `rawOccurrences` are what every other "X disappeared" case in this file already uses, and
-    // they see the WHOLE accumulated pty stdout, which still contains the banner's original bytes
-    // from mount even after Ink redraws without it (every other such case — /setup's own cancel
-    // test — checks a FILE, not stdout, for the same reason). This test's own job is end to end:
-    // the real login()/logout() deps seam, the real reducer dispatches, and auth.json actually
-    // landing on disk.
+    // This test's own job is end to end: the real login()/logout() deps seam, the real reducer
+    // dispatches, and auth.json actually landing on disk. The sign-in chrome lives on the splash
+    // (and on `/login` itself), not as a persistent main-TUI banner.
     test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
@@ -4422,13 +4445,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         await sawLine("Logged in as fake@example.com");
@@ -4466,10 +4487,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         await sawLine("Authorization was denied.");
@@ -4499,10 +4519,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         child.stdin?.write("\x1b"); // Escape
@@ -4536,10 +4555,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         child.stdin?.write("\x1b"); // Escape — well before the fake's own 1000ms delay resolves
@@ -4569,16 +4587,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the banner returns", async () => {
+    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the sign-in banner does not return", async () => {
       seedAuth(dir);
       const scriptPath = join(dir, "child-auth-logout.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        // seedAuth already wrote auth.json before spawn — decideAuthOffer is false at mount, so no
-        // banner line is expected yet here.
 
         child.stdin?.write("/logout");
         await sawLine("/logout");
@@ -4587,7 +4603,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Logged out.");
 
         expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4597,14 +4613,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // reuses childScriptGuidedSetup (no key, no auth.json — the same script the "genuinely blank
     // first run" describe block below already uses) rather than a new script, since the scenario
     // is identical; only the assertions differ.
-    test("gate composition: zero keys and no auth.json show both /setup and the auth banner; adding a key falls through to the main view with the banner still showing", async () => {
+    test("gate composition: zero keys and no auth.json show /setup without the sign-in banner; adding a key falls through to the main view still without it", async () => {
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("/setup — provider API keys");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
         child.stdin?.write("a");
         await wait100ms();
@@ -4625,10 +4641,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The fall-through to the main view (prepareSession -> runTui), same sync point
-        // childScriptGuidedSetup's own describe block below uses — and the banner is still
-        // showing there too, since no /login has happened in this run.
+        // childScriptGuidedSetup's own describe block below uses — login stays on the splash
+        // and on /login, not as a persistent banner after Continue.
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -5708,7 +5724,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-existing-key.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
@@ -5724,6 +5742,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // Falls through into the ordinary flow rather than replacing it.
         await sawLine("RUNLOOP_READY");
+        // Continue without logging in is the login choice. The splash already offered
+        // Log in / Sign up; the main TUI must not re-offer them as a persistent banner.
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -5759,13 +5780,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
-        // Deliberately no `wait100ms()` between the keypress and these two checks (unlike its
-        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve (this file's own comment,
-        // below) already races the device-code panel's own on-screen lifetime — a fixed 100ms
-        // sleep here reliably lost that race, letting login succeed and the main TUI mount and
-        // redraw this exact row (`> do a task`) before either check ever ran. `sawLine`'s own poll
-        // loop already waits for the render with no help needed from a fixed delay.
-        await sawLine("https://example.com/device");
+        // Deliberately no `wait100ms()` between the keypress and this check (unlike its
+        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve already races the
+        // device-code panel's on-screen lifetime — a fixed 100ms sleep here reliably lost that
+        // race, letting login succeed and the main TUI mount and redraw this exact row
+        // (`> do a task`) before the check ever ran. `sawLine`'s own poll loop already waits
+        // for the render with no help needed from a fixed delay. The user code is the wait,
+        // not the verification URI: OpenTUI cell-diff splits that URL across two CUP writes,
+        // so a contiguous `https://example.com/device` substring is not a reliable sync point.
         await sawLine("ABCD-1234");
 
         // childScriptAuth's own loginFake resolves on its own ~50ms later — no further keypress.
@@ -6543,6 +6565,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // prefix and never reach InputBox as Escape, which is what a full-frame
         // repaint (paper ground + hairline) makes more likely.
         child.stdin?.write("\x1b");
+        // Same Escape-ambiguity window the /login abandon tests already use, but a full
+        // 100ms: a full-frame repaint (paper ground + hairline) makes three ESC bytes in
+        // one read more likely to become a CSI prefix and never reach InputBox as Escape.
         await wait100ms();
         child.stdin?.write("\x1b");
         await wait100ms();
