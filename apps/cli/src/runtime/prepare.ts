@@ -48,6 +48,7 @@ import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
 import { createRulesState, type RulesState } from "../rules/match";
 import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
+import { configDirForStore, type SessionDatabase } from "../session/database";
 import {
   findMostRecentSession,
   loadSession,
@@ -132,6 +133,7 @@ export function loadOrCreateSession(
   // of the session JSON.
   loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry; hooks: HooksLoad },
   onTruncated: () => void = () => {},
+  database?: SessionDatabase,
 ): {
   session: RunSession;
   modelRecorded: boolean;
@@ -140,9 +142,9 @@ export function loadOrCreateSession(
   hooks: HooksLoad;
 } {
   if (resuming) {
-    const id = resumeId ?? findMostRecentSession(sessionsDir);
+    const id = resumeId ?? findMostRecentSession(sessionsDir, database);
     if (!id) throw new Error("No session to resume.");
-    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated);
+    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated, database);
     // The two stored fields are treated differently on purpose.
     //
     // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
@@ -249,10 +251,20 @@ export function createSessionTrajectory(
   session: { id: string; cwd: string; model?: string; provider?: string },
   configDir: string,
   onWarning: (message: string) => void,
+  database?: SessionDatabase,
 ): TrajectoryWriter {
   const cfg = loadTrajectoryConfig(configDir);
+  const trajectoriesDir = getTrajectoriesDir(configDir);
+  // Tests often inject a throwaway sessionsDir whose store is not the profile root.
+  // Reuse the held handle only when it is that root; otherwise the writer opens the
+  // trajectory store itself, which is where readTrajectory looks.
+  const held =
+    database !== undefined &&
+    database.configDir === configDirForStore(trajectoriesDir, "trajectories")
+      ? database
+      : undefined;
   return createTrajectoryWriter({
-    dir: getTrajectoriesDir(configDir),
+    dir: trajectoriesDir,
     sessionId: session.id,
     cwd: session.cwd,
     model: session.model,
@@ -260,6 +272,7 @@ export function createSessionTrajectory(
     enabled: cfg.enabled,
     retentionDays: cfg.retentionDays,
     onWarning,
+    ...(held !== undefined ? { database: held } : {}),
   });
 }
 
@@ -417,6 +430,9 @@ export type PreparedRun = {
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
   trajectory: TrajectoryWriter;
+  // Borrowed from RunContext.database — the caller opens and closes it. /clear reuses this
+  // instance rather than constructing a second connection for the new session id.
+  database?: SessionDatabase;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
   // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
@@ -614,7 +630,7 @@ export function bindSession(
   permissionsDir: string,
   onWarning: (message: string) => void,
 ): ArchivistState {
-  const trajectory = createSessionTrajectory(session, configDir, onWarning);
+  const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database);
   const { checkpointer, tools } = buildCheckpointedTools({
     storeDir: prepared.storeDir,
     worktree: prepared.worktree,
@@ -754,6 +770,7 @@ export async function prepareSession(
           "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
           warnSink,
         ),
+      ctx.database,
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);
@@ -854,7 +871,11 @@ export async function prepareSession(
     // seri still pins only a model that answered: a typo in SERI_MODEL must not land in
     // config.json just because the catalog listed similar ids. A model the session already
     // recorded is untouched. It earned its place the same way.
-    saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
+    saveSession(
+      modelRecorded ? session : { ...session, model: undefined },
+      ctx.sessionsDir,
+      ctx.database,
+    );
 
     // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
     // one-line revert: `runLoop`, the session store, the gate and every tool are unmodified, and
@@ -920,8 +941,11 @@ export async function prepareSession(
     // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
     // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
     const verifyConfig = loadVerifyConfig(configDir);
-    const trajectory = createSessionTrajectory(session, configDir, (msg) =>
-      printWarning(msg, warnSink),
+    const trajectory = createSessionTrajectory(
+      session,
+      configDir,
+      (msg) => printWarning(msg, warnSink),
+      ctx.database,
     );
     const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
@@ -973,6 +997,7 @@ export async function prepareSession(
       mcp,
       mcpClients,
       trajectory,
+      database: ctx.database,
       preMountMessages,
     };
   } catch (err) {

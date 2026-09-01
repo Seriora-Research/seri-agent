@@ -151,6 +151,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
         configDir: opts.configDir,
         sessionsDir,
         deps,
+        database,
       });
     const onIdleFlush =
       opts.onIdleFlush ??

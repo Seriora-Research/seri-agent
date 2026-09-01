@@ -20,10 +20,12 @@ import { permissionsPath } from "../../src/permissions/store";
 import {
   bindSession,
   buildCheckpointedTools,
+  createSessionTrajectory,
   loadOrCreateSession,
   type PreparedRun,
   prepareSession,
 } from "../../src/runtime/prepare";
+import { SessionDatabase } from "../../src/session/database";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",
@@ -439,5 +441,56 @@ describe("bindSession + mcp", () => {
     ).toEqual([
       "⚠ project hooks in /p/.seri/hooks changed since you trusted them (guard.sh, guard.ps1), so none of them ran — /hooks to review what moved",
     ]);
+  });
+});
+
+describe("createSessionTrajectory held database", () => {
+  test("reuses a database whose configDir is the trajectory store", () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const originalClose = SessionDatabase.prototype.close;
+    let closes = 0;
+    SessionDatabase.prototype.close = function (this: SessionDatabase) {
+      closes++;
+      return originalClose.call(this);
+    };
+    try {
+      const writer = createSessionTrajectory(
+        { id: "sess", cwd: "/repo" },
+        configDir,
+        () => {},
+        database,
+      );
+      writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      expect(closes).toBe(0);
+    } finally {
+      SessionDatabase.prototype.close = originalClose;
+      database.close();
+    }
+  });
+
+  test("does not reuse a database whose configDir is a different store", () => {
+    const sessionStore = makeDir();
+    const configDir = makeDir();
+    const database = new SessionDatabase(sessionStore);
+    const originalClose = SessionDatabase.prototype.close;
+    let closes = 0;
+    SessionDatabase.prototype.close = function (this: SessionDatabase) {
+      closes++;
+      return originalClose.call(this);
+    };
+    try {
+      const writer = createSessionTrajectory(
+        { id: "sess", cwd: "/repo" },
+        configDir,
+        () => {},
+        database,
+      );
+      writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      expect(closes).toBeGreaterThan(0);
+    } finally {
+      SessionDatabase.prototype.close = originalClose;
+      database.close();
+    }
   });
 });
