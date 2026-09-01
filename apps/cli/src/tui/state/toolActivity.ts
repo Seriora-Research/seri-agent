@@ -1,7 +1,7 @@
 // Pure TUI tool-call/result accumulation — no Ink/React import. Live rendering reads
 // `pendingTool` (app.tsx) for the in-flight call, and `renderLiveToolActivity` of this
-// accumulator for settled groups during the turn. `renderToolActivity` is also what the
-// reducer flushes into muted transcript lines on done/turn-ended. Aggregation is by exact
+// accumulator for settled groups during the turn. The reducer clears the accumulator on
+// done/turn-ended instead of copying these lines into the transcript. Aggregation is by exact
 // tool name (every TOOL_LABELS entry — not a Read special-case), except every `mcp_`-prefixed
 // name, which folds into one bucket (`groupKey` below): the model's tool array already
 // collapses every MCP call behind the single `mcp` dispatcher (mcp/tool.ts), so the transcript
