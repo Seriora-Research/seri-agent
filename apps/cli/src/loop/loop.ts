@@ -18,6 +18,7 @@ import {
 } from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
 import type { RouteCredential } from "../provider/routing";
+import { withCodexStoreOption } from "../provider/codex";
 import {
   type CompactionSummary,
   compactMessages,
@@ -337,7 +338,9 @@ export async function* runLoop(opts: {
       const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentMessages);
       if (evictBoundary !== null) {
         try {
-          const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal);
+          const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
+            stream: opts.credential === "subscription" && opts.provider === "openai",
+          });
           messages.splice(0, messages.length, ...compacted.messages);
           // Drained here for the same reason the stream's retries are drained below: compaction is
           // a model call the user never asked for, and until now a 429'd summariser was ~6 s of
@@ -383,6 +386,12 @@ export async function* runLoop(opts: {
     let modelCallStarts = 0;
     let reportedRetries = 0;
 
+    const reasoningOptions =
+      legalReasoningEffort && opts.provider
+        ? buildReasoningProviderOptions(opts.provider, legalReasoningEffort)
+        : undefined;
+    const providerOptions = withCodexStoreOption(opts.provider, opts.credential, reasoningOptions);
+
     try {
       const result = streamText({
         model: opts.model,
@@ -391,9 +400,7 @@ export async function* runLoop(opts: {
         system: opts.system,
         abortSignal: opts.signal,
         maxRetries: MAX_RETRIES,
-        ...(legalReasoningEffort && opts.provider
-          ? { providerOptions: buildReasoningProviderOptions(opts.provider, legalReasoningEffort) }
-          : {}),
+        ...(providerOptions ? { providerOptions } : {}),
         onLanguageModelCallStart: () => {
           modelCallStarts++;
         },

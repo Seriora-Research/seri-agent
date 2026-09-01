@@ -134,8 +134,8 @@ export function resolveRoute(
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null = null,
   // Providers reachable by a connected vendor subscription. Appended optional, mirroring how
-  // `plan` itself arrived, so every existing call site stays valid; today it is only ever empty
-  // or {"xai"}. A separate set rather than a member of `configured` because the two answer
+  // `plan` itself arrived, so every existing call site stays valid; today it is empty, {"xai"},
+  // {"openai"}, or both. A separate set rather than a member of `configured` because the two answer
   // different questions — `configured` means "has an API key", which a subscription does not.
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
 ): ResolvedRoute {

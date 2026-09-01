@@ -1,4 +1,6 @@
-import { loadCatalog, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
+import { loadCatalog, type ModelCatalog, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
+import { hasCodexSubscription } from "../auth/codexAuthStore";
+import { type CodexListedModel, listCodexModels } from "../auth/codexRefresh";
 import { printWarning } from "../cli/output";
 import bundledManifest from "./catalog-manifest.json";
 
@@ -83,5 +85,50 @@ export async function getModelCatalog(
       sink,
     );
   }
-  return catalog;
+  return withCodexSubscriptionCatalog(catalog);
+}
+
+const CODEX_DEFAULT_CONTEXT = 272_000;
+const CODEX_DEFAULT_OUTPUT = 16_384;
+
+export function overlayCodexModels(
+  catalog: ModelCatalog,
+  models: readonly CodexListedModel[],
+): ModelCatalog {
+  if (models.length === 0) return catalog;
+  const existingById = new Map(
+    catalog.entries.filter((entry) => entry.provider === "openai").map((entry) => [entry.id, entry]),
+  );
+  const openai: ModelCatalogEntry[] = models.map((model) => {
+    const existing = existingById.get(model.id);
+    const reasoningValues = model.supportedReasoningEfforts;
+    return {
+      id: model.id,
+      provider: "openai",
+      displayName: model.displayName,
+      family: existing?.family ?? null,
+      contextWindow: existing?.contextWindow ?? CODEX_DEFAULT_CONTEXT,
+      maxOutputTokens: existing?.maxOutputTokens ?? CODEX_DEFAULT_OUTPUT,
+      toolCall: existing?.toolCall ?? true,
+      reasoning: reasoningValues.length > 0 || (existing?.reasoning ?? false),
+      reasoningOptions:
+        reasoningValues.length > 0
+          ? [{ type: "effort", values: reasoningValues }]
+          : existing?.reasoningOptions,
+      pricing: undefined,
+    };
+  });
+  return {
+    ...catalog,
+    entries: [...catalog.entries.filter((entry) => entry.provider !== "openai"), ...openai],
+  };
+}
+
+export async function withCodexSubscriptionCatalog(catalog: ModelCatalog): Promise<ModelCatalog> {
+  if (!hasCodexSubscription()) return catalog;
+  try {
+    return overlayCodexModels(catalog, await listCodexModels());
+  } catch {
+    return catalog;
+  }
 }

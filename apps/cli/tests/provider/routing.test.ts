@@ -495,6 +495,23 @@ describe("a connected subscription as a credential", () => {
     expect(viaSubscription.credential).toBe("subscription");
   });
 
+  test("an openai ChatGPT-plan subscription satisfies rule 1 with no API key", () => {
+    const openaiCatalog: ModelCatalog = {
+      fetchedAt: "",
+      entries: [entry({ id: "gpt-5.6-terra", provider: "openai" })],
+    };
+    const route = resolveRoute(
+      openaiCatalog,
+      { model: "gpt-5.6-terra", provider: "openai" },
+      new Set(),
+      null,
+      new Set(["openai"]),
+    );
+    expect(route.rerouted).toBe(false);
+    expect(route.provider).toBe("openai");
+    expect(route.credential).toBe("subscription");
+  });
+
   test("an empty subscription set leaves every existing route unchanged", () => {
     const route = resolveRoute(
       grokCatalog,

@@ -85,11 +85,37 @@ describe("dispatchModel for a subscription route", () => {
   test("names the provider when a subscription route resolves to one with no subscription client", () => {
     expect(() =>
       dispatchModel(
-        { model: "gpt-4.1", provider: "openai", rerouted: false, credential: "subscription" },
+        { model: "claude-haiku-4-5", provider: "anthropic", rerouted: false, credential: "subscription" },
         "session-1",
         "/tmp/cfg",
         {},
       ),
     ).toThrow(/No subscription client for provider/);
+  });
+
+  test("an openai subscription route dispatches to the Codex client, never getOpenAIModel", () => {
+    const calls: string[] = [];
+    const fake = {} as ReturnType<typeof dispatchModel>;
+    const model = dispatchModel(
+      {
+        model: "gpt-5.6-terra",
+        provider: "openai",
+        rerouted: false,
+        credential: "subscription",
+      },
+      "session-1",
+      "/tmp/cfg",
+      {
+        getCodexSubscriptionModel: (id) => {
+          calls.push(id);
+          return fake;
+        },
+        getOpenAIModel: () => {
+          throw new Error("the key path must not be used for a Codex subscription route");
+        },
+      },
+    );
+    expect(model).toBe(fake);
+    expect(calls).toEqual(["gpt-5.6-terra"]);
   });
 });

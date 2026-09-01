@@ -11,7 +11,12 @@ import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
 import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
-import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  SetupKeyRow,
+  SetupProviderRow,
+} from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
 import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
@@ -2380,6 +2385,7 @@ describe("App", () => {
     function setupRows(): SetupProviderRow[] {
       return [
         {
+          kind: "key",
           provider: "groq",
           keyName: "GROQ_API_KEY",
           source: "unset",
@@ -2387,6 +2393,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
           source: "config",
@@ -2394,6 +2401,7 @@ describe("App", () => {
           removable: true,
         },
         {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "env",
@@ -2401,6 +2409,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openai",
           keyName: "OPENAI_API_KEY",
           source: "unset",
@@ -2408,6 +2417,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "google",
           keyName: "GOOGLE_GENERATIVE_AI_API_KEY",
           source: "unset",
@@ -2422,8 +2432,9 @@ describe("App", () => {
     // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
     // entry underneath that removal was impossible when it was not.
     describe("formatSetupRow", () => {
-      function row(overrides: Partial<SetupProviderRow> = {}): SetupProviderRow {
+      function row(overrides: Partial<SetupKeyRow> = {}): SetupKeyRow {
         return {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "unset",
@@ -2459,6 +2470,31 @@ describe("App", () => {
         expect(text).toContain("removable");
         expect(text).toContain("sk-a...wxyz");
       });
+
+      test("a Codex subscription row names the plan status, not an API key", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "connected" },
+          removable: false,
+        });
+        expect(text).toContain("codex");
+        expect(text).toContain("ChatGPT plan connected");
+        expect(text).not.toContain("openai");
+      });
+
+      test("an unused openai key names the ChatGPT plan as the reason", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "openai",
+            keyName: "OPENAI_API_KEY",
+            source: "config",
+            masked: "sk-o...abcd",
+            unusedBecause: "unused because a ChatGPT plan is connected",
+          }),
+        );
+        expect(text).toContain("unused because a ChatGPT plan is connected");
+      });
     });
 
     test("the list step shows all five provider rows, masked values included", async () => {
@@ -2485,7 +2521,7 @@ describe("App", () => {
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
       const selected: ModelProvider[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
+        onSetupSelect: (row) => selected.push(row.provider),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2527,7 +2563,7 @@ describe("App", () => {
       const selected: ModelProvider[] = [];
       const removeRequested: ModelProvider[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
+        onSetupSelect: (row) => selected.push(row.provider),
         onSetupRemove: (provider) => removeRequested.push(provider),
       });
 

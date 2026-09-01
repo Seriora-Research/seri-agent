@@ -21,6 +21,11 @@ import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { loadAuthSession } from "../../auth/authStore";
 import {
+  findCodexBin,
+  type CodexSetupStatus,
+} from "../../auth/codexBin";
+import { hasCodexSubscription, loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
+import {
   appendBarrier,
   checkpointStoreDir,
   type RestorePlan,
@@ -200,36 +205,79 @@ export function decideGuidedModelPickerOpen(
 // `hasConfigEntry`, independent of which source wins for display); only a row with no config
 // entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
 // (the panel states why, for the env case — App.tsx's own SetupPanel).
-export type SetupProviderRow = {
+export type SetupKeyRow = {
+  kind: "key";
   provider: ModelProvider;
   keyName: string;
   source: "env" | "config" | "unset";
   masked: string | undefined;
   removable: boolean;
+  unusedBecause?: string;
 };
 
-// The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
-// to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
-// config.json) — the same contract decideUndo/decideRestore already have (this file's own header
-// comment: no saveSession, no console.log/print*, but a read is not a write).
-//
-// `allProviderKeyStates`, not five `providerKeyState` calls — the same anti-pattern already fixed
-// in `configuredProviders` (keys.ts): one `providerKeyState` call per CATALOG_PROVIDERS member
-// meant five redundant `loadConfig` reads
-// of the identical file to open /setup, or to refresh it after any add/remove — was never applied
-// here. `allProviderKeyStates` loads config.json exactly once for all five.
+export type SetupSubscriptionRow = {
+  kind: "subscription";
+  provider: "openai";
+  status: CodexSetupStatus;
+  removable: false;
+};
+
+export type SetupProviderRow = SetupKeyRow | SetupSubscriptionRow;
+
+export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubscriptionRow {
+  return row.kind === "subscription";
+}
+
+function codexSetupRow(): SetupSubscriptionRow {
+  if (findCodexBin() === undefined) {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-installed" },
+      removable: false,
+    };
+  }
+  const auth = loadCodexAuth();
+  if (auth !== undefined && auth.authMode === "chatgpt") {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "connected" },
+      removable: false,
+    };
+  }
+  const mode = readCodexAuthMode();
+  if (mode !== undefined && mode !== "chatgpt") {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-logged-in", reason: "api-key" },
+      removable: false,
+    };
+  }
+  return {
+    kind: "subscription",
+    provider: "openai",
+    status: { status: "not-logged-in", reason: "no-auth" },
+    removable: false,
+  };
+}
+
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
-  return allProviderKeyStates(configDir).map((state) => ({
+  const openaiSubscribed = hasCodexSubscription();
+  const keys: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => ({
+    kind: "key",
     provider: state.provider,
     keyName: state.keyName,
     source: state.source,
     masked: state.masked,
-    // NOT `state.source === "config"` — that would always be false whenever an env var shadowed a
-    // config.json entry, making a previously-saved secret
-    // permanently unremovable from /setup the moment the same-named env var got exported.
-    // `hasConfigEntry` is independent of which source wins for display.
     removable: state.hasConfigEntry,
+    unusedBecause:
+      openaiSubscribed && state.provider === "openai" && state.source !== "unset"
+        ? "unused because a ChatGPT plan is connected"
+        : undefined,
   }));
+  return [...keys, codexSetupRow()];
 }
 
 // The decide* functions below share the same contract as every decide* function above: recompute

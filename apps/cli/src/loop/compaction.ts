@@ -1,4 +1,4 @@
-import { generateText, wrapLanguageModel } from "ai";
+import { generateText, streamText, wrapLanguageModel } from "ai";
 import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
 import { z } from "zod";
 
@@ -50,6 +50,7 @@ export async function compactMessages(
   model: LanguageModel,
   evictBoundary: number,
   signal?: AbortSignal,
+  opts?: { stream?: boolean },
 ): Promise<{
   messages: ModelMessage[];
   summary: CompactionSummary;
@@ -73,32 +74,60 @@ export async function compactMessages(
   // A string `model` is a model id the SDK resolves through its own registry and there is nothing
   // to wrap; nothing in this repo passes one (cli.ts hands over getGroqModel's instance), so it
   // reports no retries rather than growing a resolver for a caller that does not exist.
+  //
+  // `opts.stream` is required on the ChatGPT-plan Responses host, which rejects generateText with
+  // "Stream must be set to true". Other providers keep generateText so existing mocks keep working.
   let attempts = 0;
   const countedModel =
     typeof model === "string"
       ? model
       : wrapLanguageModel({
           model,
-          middleware: {
-            wrapGenerate: async ({ doGenerate }) => {
-              attempts++;
-              return await doGenerate();
-            },
-          },
+          middleware: opts?.stream
+            ? {
+                wrapStream: async ({ doStream }) => {
+                  attempts++;
+                  return await doStream();
+                },
+              }
+            : {
+                wrapGenerate: async ({ doGenerate }) => {
+                  attempts++;
+                  return await doGenerate();
+                },
+              },
         });
+
+  const system =
+    "You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript contains specific concrete data — exact file contents, literal strings, filenames, paths, numbers, identifiers, secrets, URLs, or any other specific values — quote them verbatim in the relevant field rather than paraphrasing or describing them generically. Losing a literal value is a real failure; a slightly longer summary is not.";
+  const prompt = `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. text written to a file, a value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(evicted)}`;
 
   // Summarizing is a full model round-trip that can run for seconds. Leaving it un-abortable
   // would make "Ctrl-C cancels the turn" conditionally false in a way the user cannot predict:
   // the same keypress would do nothing at all if it landed here.
-  const { text, usage } = await generateText({
-    model: countedModel,
-    abortSignal: signal,
-    // Stated rather than defaulted: this round-trip can cost three model calls, and nothing said so.
-    maxRetries: MAX_RETRIES,
-    system:
-      "You are summarizing the older portion of an in-progress coding agent session so it can be replaced with a compact recap. Where the transcript contains specific concrete data — exact file contents, literal strings, filenames, paths, numbers, identifiers, secrets, URLs, or any other specific values — quote them verbatim in the relevant field rather than paraphrasing or describing them generically. Losing a literal value is a real failure; a slightly longer summary is not.",
-    prompt: `Summarize this JSON-encoded transcript of earlier conversation turns into a structured recap with four fields: goal, progress, blockers, nextSteps.\n\nFor the progress field in particular: if any concrete artifacts or discoveries appear in the transcript (e.g. text written to a file, a value returned by a command, a specific name or number), quote them verbatim rather than just describing the action taken.\n\nRespond with ONLY a JSON object with exactly those four string fields — no markdown code fences, no explanation before or after.\n\nTranscript:\n${JSON.stringify(evicted)}`,
-  });
+  let text: string;
+  let usage: LanguageModelUsage;
+  if (opts?.stream) {
+    const result = streamText({
+      model: countedModel,
+      abortSignal: signal,
+      maxRetries: MAX_RETRIES,
+      system,
+      prompt,
+    });
+    text = await result.text;
+    usage = await result.usage;
+  } else {
+    const generated = await generateText({
+      model: countedModel,
+      abortSignal: signal,
+      maxRetries: MAX_RETRIES,
+      system,
+      prompt,
+    });
+    text = generated.text;
+    usage = generated.usage;
+  }
   const stripped = text
     .trim()
     .replace(/^```(?:json)?\s*/, "")

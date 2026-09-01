@@ -1,4 +1,5 @@
 import { parseResponseBody } from "./deviceGrant";
+import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 import {
   loadXaiSubscription,
   saveXaiSubscription,
@@ -122,3 +123,28 @@ export function xaiAuthedFetch(configDir: string, fetchFn: typeof fetch = fetch)
     return attempt(refreshed.subscription.accessToken);
   }) as typeof fetch;
 }
+
+function credentialFromXai(subscription: XaiSubscription): SubscriptionCredential {
+  const expiresAt =
+    subscription.expiresAt !== undefined ? Date.parse(subscription.expiresAt) : Number.NaN;
+  return {
+    provider: "xai",
+    accessToken: subscription.accessToken,
+    accountId: "",
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : 0,
+  };
+}
+
+export const refreshXaiCredential: RefreshSubscription = async (configDir) => {
+  const result = await refreshXaiSubscription(configDir);
+  if (result.status !== "ok") {
+    const message =
+      result.status === "error" ||
+      result.status === "tier-denied" ||
+      result.status === "reconnect-required"
+        ? result.message
+        : result.status;
+    throw new Error(message);
+  }
+  return credentialFromXai(result.subscription);
+};

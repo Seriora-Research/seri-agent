@@ -19,12 +19,15 @@ import {
   providerKeyState,
 } from "../../provider/keys";
 import { validateProviderKey } from "../../provider/validate";
+import { codexSetupAction } from "../../auth/codexBin";
 import {
   configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
   decidePermissionsOpen,
   decideSetupOpen,
+  isSetupSubscriptionRow,
+  type SetupProviderRow,
 } from "./commands";
 import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } from "./reducer";
 
@@ -49,7 +52,7 @@ export function createSetupHandlers(opts: {
   // passes that promise's resolve here; without it, closing the panel there hangs the process.
   onPanelClosed?: () => void;
 }): {
-  onSetupSelect: (provider: ModelProvider) => void;
+  onSetupSelect: (row: SetupProviderRow) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
   onSetupRemove: (provider: ModelProvider) => void;
   onSetupBack: () => void;
@@ -96,13 +99,17 @@ export function createSetupHandlers(opts: {
   // (PROVIDER_API_KEY_NAMES), so `decideSetupOpen(configDir).find(...)` — the full 5-provider
   // scan, just to pull one static field back out of it — would be both slower and a needless
   // crash surface for a value that never needs I/O to produce.
-  function onSetupSelect(provider: ModelProvider): void {
+  function onSetupSelect(row: SetupProviderRow): void {
+    if (isSetupSubscriptionRow(row)) {
+      dispatch({ type: "transcript-append", line: codexSetupAction(row.status) });
+      return;
+    }
     dispatch({
       type: "setup-step",
       state: {
         step: "enter-key",
-        provider,
-        keyName: PROVIDER_API_KEY_NAMES[provider],
+        provider: row.provider,
+        keyName: PROVIDER_API_KEY_NAMES[row.provider],
         busy: false,
       },
     });

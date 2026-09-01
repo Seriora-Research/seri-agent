@@ -7,6 +7,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
 import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
+import { isSetupSubscriptionRow, type SetupProviderRow } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
@@ -30,7 +31,7 @@ export function SetupPanel({
   onSetupClose,
 }: {
   pendingSetup: SetupState;
-  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupBack?: () => void;
@@ -73,7 +74,7 @@ function SetupList({
   onSetupClose,
 }: {
   pendingSetup: Extract<SetupState, { step: "list" }>;
-  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupRemove?: (provider: ModelProvider) => void;
   onSetupClose?: (leftoverInput?: string) => void;
 }) {
@@ -96,7 +97,7 @@ function SetupList({
     if (handleArrowKey(key)) return;
     const row = rows[selected];
     if (isEnter(key)) {
-      if (row !== undefined) onSetupSelect?.(row.provider);
+      if (row !== undefined) onSetupSelect?.(row);
       return;
     }
     if (key.name === "delete") {
@@ -107,7 +108,7 @@ function SetupList({
     if (row === undefined) return;
     const typed = key.sequence.toLowerCase();
     if (typed === "a") {
-      onSetupSelect?.(row.provider);
+      onSetupSelect?.(row);
       return;
     }
     if (typed === "r" && row.removable) {
@@ -119,7 +120,11 @@ function SetupList({
     <box {...FRAME} flexDirection="column">
       <text fg={theme.muted}>/setup — provider API keys</text>
       {visible.map(({ row, isSelected }) => (
-        <ListRow key={row.provider} selected={isSelected} label={formatSetupRow(row)} />
+        <ListRow
+          key={isSetupSubscriptionRow(row) ? "subscription:codex" : row.provider}
+          selected={isSelected}
+          label={formatSetupRow(row)}
+        />
       ))}
       {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
       <text fg={theme.muted}>↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close</text>
