@@ -2,7 +2,7 @@ import { type ChildProcess, type SpawnOptions, spawn as spawnReal } from "node:c
 import { createInterface } from "node:readline";
 import pkg from "../../package.json";
 import { killOnFatalSignal } from "../tools/spawnCollect";
-import { findCodexBin } from "./codexBin";
+import { findCodexBin, resolveCodexSpawn } from "./codexBin";
 
 export type CodexJsonRpc = {
   request(method: string, params?: unknown): Promise<unknown>;
@@ -58,10 +58,34 @@ export async function connectCodexAppServer(
   }
   const spawnFn: CodexSpawn = opts.spawn ?? spawnReal;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const child = spawnFn(command, ["app-server", "--stdio"], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: opts.env ?? process.env,
+  const launched = resolveCodexSpawn(command, ["app-server", "--stdio"]);
+  let child: ChildProcess;
+  try {
+    child = spawnFn(launched.command, launched.args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: opts.env ?? process.env,
+      windowsHide: true,
+      ...(launched.windowsVerbatimArguments === true ? { windowsVerbatimArguments: true } : {}),
+    });
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+  const pending = new Map<string, Pending>();
+  let nextId = 1;
+  let closed = false;
+  let untrack = (): void => {};
+
+  const failAll = (error: Error) => {
+    for (const waiter of pending.values()) waiter.reject(error);
+    pending.clear();
+  };
+
+  child.once("error", (err) => {
+    closed = true;
+    untrack();
+    failAll(err instanceof Error ? err : new Error(String(err)));
   });
+
   if (child.stdin === null || child.stdout === null) {
     child.kill();
     throw new Error("codex app-server did not expose stdio");
@@ -77,17 +101,9 @@ export async function connectCodexAppServer(
     stderrTail = (stderrTail + text).slice(-STDERR_TAIL_CHARS);
   });
 
-  const pending = new Map<string, Pending>();
-  let nextId = 1;
-  let closed = false;
-  const untrack = killOnFatalSignal(() => {
+  untrack = killOnFatalSignal(() => {
     if (child.pid !== undefined) child.kill("SIGKILL");
   });
-
-  const failAll = (error: Error) => {
-    for (const waiter of pending.values()) waiter.reject(error);
-    pending.clear();
-  };
 
   const rl = createInterface({ input: child.stdout });
   rl.on("line", (line) => {
@@ -113,11 +129,6 @@ export async function connectCodexAppServer(
     waiter.resolve(msg.result);
   });
 
-  child.once("error", (err) => {
-    closed = true;
-    untrack();
-    failAll(err instanceof Error ? err : new Error(String(err)));
-  });
   child.once("exit", (code, signal) => {
     closed = true;
     untrack();

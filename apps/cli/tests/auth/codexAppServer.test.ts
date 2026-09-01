@@ -92,4 +92,21 @@ rl.on("line", (line) => {
       rpc.close();
     }
   });
+
+  test("a spawn throw becomes a rejected connect, not an uncaught crash", async () => {
+    await expect(
+      connectCodexAppServer({
+        command: String.raw`C:\Users\lioar\AppData\Local\pnpm\bin\codex.cmd`,
+        spawn: () => {
+          throw Object.assign(
+            new Error("spawn C:\\Users\\lioar\\AppData\\Local\\pnpm\\bin\\codex.cmd EINVAL"),
+            {
+              code: "EINVAL",
+            },
+          );
+        },
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow(/EINVAL/);
+  });
 });
