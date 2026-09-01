@@ -248,7 +248,9 @@ export async function driveLoop(
   // not the one that was asked for and silently rerouted away from.
   const system = joinTiers(
     session.systemPrompt,
-    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
+    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory, {
+      family: catalogEntry?.family ?? null,
+    }),
   );
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
   // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,

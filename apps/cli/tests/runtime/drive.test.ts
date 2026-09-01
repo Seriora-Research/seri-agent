@@ -629,4 +629,63 @@ describe("driveLoop mcp composition", () => {
     expect(mcpEntry).toBeDefined();
     expect(mcpGrantMatches(mcpEntry as string, toolFingerprint(searchTool))).toBe(true);
   });
+
+  test("a llama catalog family injects the tool-use overlay into the assembled system; gpt-oss does not", async () => {
+    const llama = preparedStub();
+    llama.catalogEntry = {
+      id: "llama-3.3-70b-versatile",
+      provider: "groq",
+      displayName: "Llama 3.3 70B Versatile",
+      family: "llama",
+      contextWindow: 131072,
+      maxOutputTokens: 32768,
+      toolCall: true,
+      reasoning: false,
+      pricing: undefined,
+    };
+    llama.route = { ...llama.route, model: "llama-3.3-70b-versatile" };
+    const llamaCapture = fakeRunLoop();
+    await driveLoop(
+      llama,
+      unusedCtx(llama.session.cwd),
+      { runLoop: llamaCapture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(llama.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(llamaCapture.capture()?.system).toMatch(/text that looks like a call is not a call/i);
+
+    const oss = preparedStub();
+    oss.catalogEntry = {
+      id: "openai/gpt-oss-120b",
+      provider: "groq",
+      displayName: "GPT OSS 120B",
+      family: "gpt-oss",
+      contextWindow: 131072,
+      maxOutputTokens: 32768,
+      toolCall: true,
+      reasoning: false,
+      pricing: undefined,
+    };
+    const ossCapture = fakeRunLoop();
+    await driveLoop(
+      oss,
+      unusedCtx(oss.session.cwd),
+      { runLoop: ossCapture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(oss.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
+  });
 });

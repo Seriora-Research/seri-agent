@@ -49,9 +49,11 @@ function childScriptQuitAndExit(dir: string): string {
 // `cli.run` itself awaits (a bare `setTimeout`), so it becomes a genuine process-level
 // `uncaughtException`, unrelated to any of seri's own try/catch paths.
 function childScriptUncaughtException(dir: string): string {
+  const trigger = join(dir, "throw-now");
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `console.log("\\nCHILD_PID " + process.pid);`,
+    `const { existsSync } = await import("node:fs");`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  yield { type: "done", reason: "no-tool-call" };`,
@@ -66,7 +68,13 @@ function childScriptUncaughtException(dir: string): string {
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `}).then((code) => process.exit(code));`,
-    `setTimeout(() => { throw new Error("INJECTED_UNCAUGHT_TEST_ERROR"); }, 1000);`,
+    // Timer outside cli.run so the throw is a real process-level uncaughtException. The parent
+    // creates the trigger after "done ·" has rendered — after createCliRenderer and this file's
+    // own crash handlers are installed. A fixed delay from process start can fire while
+    // createCliRenderer is still awaiting, when OpenTUI's log-only handler is the only listener
+    // and the process stays up.
+    `const trigger = ${JSON.stringify(trigger)};`,
+    `setInterval(() => { if (existsSync(trigger)) throw new Error("INJECTED_UNCAUGHT_TEST_ERROR"); }, 50);`,
   ].join("\n");
 }
 
@@ -248,8 +256,9 @@ describe.skipIf(process.platform === "win32")(
         childPid = Number.parseInt(match[1], 10);
 
         await sawLine("done ·");
+        writeFileSync(join(dir, "throw-now"), "");
 
-        // No keypress here — the injected throw (scheduled 1s after mount, above) is what ends this
+        // No keypress here — the injected throw (armed above, after "done ·") is what ends this
         // run, not a user action. `exited` (the python3 pty wrapper's own exit) is a timing gate
         // only, not a source of the REAL process's exit code — `pty.spawn`'s child execs into the
         // real bun process, but python3 never propagates ITS exit status back to its own, so
