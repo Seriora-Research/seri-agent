@@ -6,8 +6,9 @@
 // unwindowed `state.transcript` — `stickyScroll`/`stickyStart="bottom"` (below) follow newly
 // appended content while at the bottom, and hold position when scrolled away from it, natively
 // (OpenTUI's own Yoga layout + scroll-anchor logic, not a reducer-computed slice). No mid-generation
-// text is ever rendered in it: `state.streaming` accumulates every `text-delta` for `pushLine`'s
-// next flush (state/reducer.ts), but is never itself displayed live, character by character — while
+// text is ever rendered in it: `text-delta` chunks buffer off the React path until a non-delta
+// action drains them into `tuiReducer` as one `state.streaming` append for `pushLine`'s next flush
+// (state/reducer.ts, state/streamDispatch.ts), and that buffer is never itself displayed live — while
 // a turn is active, `TurnStatus` (below) stays mounted for the whole turn as a fixed row OUTSIDE
 // the scrollbox, directly beneath it — it never unmounts mid-turn, and it stays visible regardless
 // of scroll position, since a child scrolled out of view is exactly what a native scrollbox would
@@ -50,7 +51,7 @@ import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
@@ -79,7 +80,8 @@ import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
 import type { SetupProviderRow } from "./state/commands";
-import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import { type Dispatch, initialTuiState } from "./state/reducer";
+import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore, hairlineRow } from "./theme/spacing";
 import { theme } from "./theme/theme";
@@ -123,9 +125,9 @@ export type AppProps = {
   // as `undefined`) has a real record to pass — `loadConfig` itself never fails to produce one,
   // returning `{}` rather than throwing when config.json doesn't exist.
   config: Record<string, string>;
-  // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
-  // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
-  // the reducer via `connectDispatch` directly, with no live loop behind it.
+  // The seam driveLoop's dispatch is wired through: called once on mount with App's own
+  // dispatch (stream-coalesced for text-delta). Optional because some tests exercise
+  // the tree via `connectDispatch` directly, with no live loop behind it.
   connectDispatch?: (dispatch: Dispatch) => void;
   // Submitted line from the input box, wired to the task/slash-command dispatch.
   onSubmit?: (value: string) => void;
@@ -233,7 +235,7 @@ export type AppProps = {
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
   // rather than captured, and a skill approved since startup completes after a /clear.
   getCompletionSources?: () => readonly CompletionSource[];
-  // Seeds `pendingSplash` at `useReducer` init. `connectDispatch`'s `splash-requested` cannot win
+  // Seeds `pendingSplash` at `useState` init. `connectDispatch`'s `splash-requested` cannot win
   // the first paint: that effect runs after the first commit. `runWelcomeSplash` is the only
   // production caller that passes true; `runTui` / `runGuidedSetup` omit it.
   showSplash?: boolean;
@@ -356,10 +358,11 @@ export function App({
   showSplash,
   authOffer,
 }: AppProps) {
-  const [state, dispatch] = useReducer(
-    tuiReducer,
+  const [state, setState] = useState(() =>
     initialTuiState(session, { route, config, showSplash, authOffer }),
   );
+  const stream = useMemo(() => createStreamDispatch(setState), []);
+  const dispatch = stream.dispatch;
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
@@ -464,7 +467,7 @@ export function App({
 
   useEffect(() => {
     connectDispatch?.(dispatch);
-  }, [connectDispatch]);
+  }, [connectDispatch, dispatch]);
 
   useEffect(() => {
     onSessionChange?.(state.session);
@@ -636,9 +639,10 @@ export function App({
       TurnStatus (below) needs that row for itself. Fed the FULL `state.transcript` — no windowed
       slice — with `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset
       used to: follow newly appended content while at the bottom, hold position when scrolled away
-      from it. No mid-generation text is ever rendered here: `state.streaming` still accumulates
-      every `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of
-      the answer only appears once `pushLine` commits it as a normal transcript entry. The scrollbox
+      from it. No mid-generation text is ever rendered here: pending `text-delta` text drains into
+      `state.streaming` on the next non-delta action for `pushLine`'s flush (state/reducer.ts), and
+      each finished segment of the answer only appears once `pushLine` commits it as a normal
+      transcript entry. The scrollbox
       itself is not given keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own
       comment above for why. */}
       <box
@@ -732,7 +736,13 @@ export function App({
         first turn's stale `now`. The key forces a fresh element identity — and so a fresh mount —
         regardless. */}
         {turn !== undefined && (
-          <TurnStatus key={turn.startedAt} startedAt={turn.startedAt} tokenProgress={turn.tokens} />
+          <TurnStatus
+            key={turn.startedAt}
+            startedAt={turn.startedAt}
+            tokenProgress={turn.tokens}
+            pendingLiveOutputEstimate={stream.getPendingLiveOutputEstimate}
+            subscribePendingLive={stream.subscribe}
+          />
         )}
       </box>
       {state.pendingTool !== undefined &&

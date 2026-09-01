@@ -517,7 +517,7 @@ export type TuiAction =
   | { type: "subagent-overlay-close" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
-// prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
+// prop (the stream-coalesced dispatch handed back to cli.ts's runTui), runTui's own
 // `dispatch` handle built from it, and tuiPresenter (cli.ts), which dispatches into it rather
 // than printing. driveLoop itself takes a plain `onEvent: (event: LoopEvent) => void` now, not
 // this — it only ever dispatched one action shape, so it no longer needs to know TuiAction
