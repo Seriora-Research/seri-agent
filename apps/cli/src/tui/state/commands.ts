@@ -319,7 +319,7 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
   const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
   const hosted = configDir !== undefined && hasHostedAuth(configDir);
-  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).flatMap((state) => {
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).flatMap((state): SetupKeyRow[] => {
     // OpenRouter is GATEWAY_PROVIDER — the key seri's hosted account already pays. A BYOK-only
     // session (no login) must not see that offer as a paste slot: they skipped login because they
     // brought their own key for another provider. A local OpenRouter key still appears so it can
