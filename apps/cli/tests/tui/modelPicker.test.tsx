@@ -11,8 +11,8 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactNode } from "react";
-import type { ModelPickerEntry } from "../../src/tui/state/commands";
 import { ModelPicker } from "../../src/tui/components/ModelPicker";
+import type { ModelPickerEntry } from "../../src/tui/state/commands";
 
 // Each `createTestRenderer()` call registers its own listener on the process-wide
 // `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
@@ -58,6 +58,7 @@ function entry(
     keyConfigured: true,
     alternatives: 0,
     gatewayReachable: false,
+    subscriptionCovered: false,
   };
 }
 
@@ -226,6 +227,7 @@ describe("ModelPicker (OpenTUI)", () => {
         keyConfigured: true,
         alternatives: 1,
         gatewayReachable: false,
+        subscriptionCovered: false,
       },
     ];
     const setup = await createTestRenderer({ width: 80, height: 10 });

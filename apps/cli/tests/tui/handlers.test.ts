@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CODEX_IGNORE_FILENAME, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import {
   createConfigHandlers,
   createEffortHandlers,
@@ -118,6 +119,88 @@ describe("onSetupSelect for a Codex subscription row", () => {
       type: "transcript-append",
       line: expect.stringContaining("Codex CLI is not installed"),
     });
+  });
+
+  test("a connected row opens confirm-disconnect instead of the transcript", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+
+    onSetupSelect({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "connected" },
+      removable: true,
+    });
+
+    expect(actions).toEqual([
+      { type: "setup-step", state: { step: "confirm-disconnect", provider: "openai" } },
+    ]);
+  });
+
+  test("an ignored row opens confirm-connect to re-enable", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+
+    onSetupSelect({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "ignored" },
+      removable: false,
+    });
+
+    expect(actions).toEqual([
+      { type: "setup-step", state: { step: "confirm-connect", provider: "openai" } },
+    ]);
+  });
+
+  test("confirm-disconnect writes the ignore and refreshes the list", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupRemove } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => ({ step: "confirm-disconnect", provider: "openai" }),
+      configDir,
+    });
+
+    onSetupRemove({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "connected" },
+      removable: true,
+    });
+
+    expect(actions.some((a) => a.type === "transcript-append")).toBe(true);
+    const step = actions.find((a) => a.type === "setup-step");
+    expect(step?.type === "setup-step" && step.state.step).toBe("list");
+    expect(existsSync(join(configDir, CODEX_IGNORE_FILENAME))).toBe(true);
+  });
+
+  test("confirm-connect clears the ignore and refreshes the list", () => {
+    ignoreCodexSubscription(configDir);
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupRemove } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => ({ step: "confirm-connect", provider: "openai" }),
+      configDir,
+    });
+
+    onSetupRemove({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "ignored" },
+      removable: false,
+    });
+
+    const step = actions.find((a) => a.type === "setup-step");
+    expect(step?.type === "setup-step" && step.state.step).toBe("list");
+    expect(existsSync(join(configDir, CODEX_IGNORE_FILENAME))).toBe(false);
   });
 });
 

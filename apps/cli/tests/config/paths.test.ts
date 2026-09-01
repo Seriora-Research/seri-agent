@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { CODEX_IGNORE_FILENAME } from "../../src/auth/codexIgnore";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import {
   DAEMON_DESCRIPTOR_FILENAME,
@@ -199,8 +200,8 @@ describe("profileNameError", () => {
   });
 
   // Pinned against the literal expected membership, not derived from getReservedProfileNames()
-  // itself: the three file names are read from the module that actually writes each file, so a
-  // real desync between paths.ts's reserved set and what config.ts/authStore.ts/store.ts write
+  // itself: the file names are read from the module that actually writes each file, so a
+  // real desync between paths.ts's reserved set and what config.ts/authStore.ts/store.ts/codexIgnore.ts write
   // would fail here; the four directory names (no single owning file) are hardcoded literals, so
   // an accidental deletion from the reserved set — permissions.yaml or bin included — turns this
   // test red instead of silently shrinking the set the iteration test above checks.
@@ -209,6 +210,7 @@ describe("profileNameError", () => {
       CONFIG_FILENAME,
       AUTH_FILENAME,
       PERMISSIONS_FILENAME,
+      CODEX_IGNORE_FILENAME,
       "sessions",
       "checkpoints",
       "rg",

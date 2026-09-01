@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { CODEX_AUTH_FILENAME } from "../../src/auth/codexAuthStore";
+import { CODEX_IGNORE_FILENAME, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { logout } from "../../src/auth/commands";
+import { XAI_AUTH_FILENAME } from "../../src/auth/xaiAuthStore";
 import { runUsageCommand } from "../../src/usage/command";
 import { LOGGED_OUT_USAGE } from "../../src/usage/format";
 import type { UsageReport } from "../../src/usage/report";
@@ -101,5 +104,48 @@ describe("logout", () => {
     expect(messages).toEqual(["Logged out."]);
     expect(existsSync(join(configDir, AUTH_FILENAME))).toBe(false);
     expect(existsSync(join(configDir, USAGE_SNAPSHOT_FILENAME))).toBe(false);
+  });
+
+  test("does not clear Grok, Codex ignore, or a separate Codex CLI login", () => {
+    writeFileSync(
+      join(configDir, AUTH_FILENAME),
+      JSON.stringify({
+        accessToken: "at",
+        refreshToken: "rt",
+        userId: "u",
+        email: "a@b.c",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    writeFileSync(
+      join(configDir, XAI_AUTH_FILENAME),
+      JSON.stringify({ accessToken: "a", refreshToken: "r" }),
+    );
+    ignoreCodexSubscription(configDir);
+
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = mkdtempSync(join(tmpdir(), "seri-logout-codex-"));
+    process.env.CODEX_HOME = codexHome;
+    const codexAuth = join(codexHome, CODEX_AUTH_FILENAME);
+    writeFileSync(
+      codexAuth,
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const beforeCodex = readFileSync(codexAuth);
+
+    try {
+      logout(configDir, () => {});
+      expect(existsSync(join(configDir, AUTH_FILENAME))).toBe(false);
+      expect(existsSync(join(configDir, XAI_AUTH_FILENAME))).toBe(true);
+      expect(existsSync(join(configDir, CODEX_IGNORE_FILENAME))).toBe(true);
+      expect(readFileSync(codexAuth)).toEqual(beforeCodex);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
   });
 });

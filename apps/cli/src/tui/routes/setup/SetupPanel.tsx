@@ -8,7 +8,11 @@ import { useState } from "react";
 import { GROK_BORROWED_CLIENT_WARNING } from "../../../auth/xaiConnect";
 import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
-import type { SetupGrokSubscriptionRow, SetupProviderRow } from "../../state/commands";
+import type {
+  SetupGrokSubscriptionRow,
+  SetupProviderRow,
+  SetupSubscriptionRow,
+} from "../../state/commands";
 import { isSetupActionRow, setupRowId } from "../../state/commands";
 import type { SetupState } from "../../state/reducer";
 import { FRAME } from "../../theme/spacing";
@@ -24,6 +28,10 @@ const SUBSCRIPTION_ROW: SetupGrokSubscriptionRow = {
   provider: "xai",
   connected: false,
 };
+
+function subscriptionDisconnectable(row: SetupSubscriptionRow): boolean {
+  return row.provider === "xai" ? row.connected : row.status.status === "connected";
+}
 
 export function SetupPanel({
   pendingSetup,
@@ -70,6 +78,22 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-connect") {
+    if (pendingSetup.provider === "openai") {
+      return (
+        <ConfirmPrompt
+          subject="Re-enable ChatGPT plan via Codex (login is already present; this only clears the local ignore)"
+          onConfirm={() =>
+            onSetupRemove?.({
+              kind: "subscription",
+              provider: "openai",
+              status: { status: "ignored" },
+              removable: false,
+            })
+          }
+          onCancel={() => onSetupBack?.()}
+        />
+      );
+    }
     return (
       <SetupConnectWarning
         onConfirm={() => onSetupRemove?.(SUBSCRIPTION_ROW)}
@@ -78,10 +102,26 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-disconnect") {
+    const openai = pendingSetup.provider === "openai";
     return (
       <ConfirmPrompt
-        subject="Disconnect Grok subscription (local credential only; xAI access is not revoked)"
-        onConfirm={() => onSetupRemove?.({ ...SUBSCRIPTION_ROW, connected: true })}
+        subject={
+          openai
+            ? "Disconnect ChatGPT plan (local ignore only; Codex CLI login is not revoked)"
+            : "Disconnect Grok subscription (local credential only; xAI access is not revoked)"
+        }
+        onConfirm={() =>
+          onSetupRemove?.(
+            openai
+              ? {
+                  kind: "subscription",
+                  provider: "openai",
+                  status: { status: "connected" },
+                  removable: true,
+                }
+              : { ...SUBSCRIPTION_ROW, connected: true },
+          )
+        }
         onCancel={() => onSetupBack?.()}
       />
     );
@@ -154,7 +194,7 @@ function SetupList({
     }
     if (key.name === "delete") {
       if (row.kind === "key" && row.removable) onSetupRemove?.(row);
-      if (row.kind === "subscription" && row.provider === "xai" && row.connected) {
+      if (row.kind === "subscription" && subscriptionDisconnectable(row)) {
         onSetupSelect?.(row);
       }
       return;
@@ -167,7 +207,7 @@ function SetupList({
     }
     if (typed === "r") {
       if (row.kind === "key" && row.removable) onSetupRemove?.(row);
-      if (row.kind === "subscription" && row.provider === "xai" && row.connected) {
+      if (row.kind === "subscription" && subscriptionDisconnectable(row)) {
         onSetupSelect?.(row);
       }
     }
@@ -180,7 +220,11 @@ function SetupList({
         ? selectedRow.connected
           ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
           : "↑/↓ move · Enter connect · Esc/Ctrl-D close"
-        : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
+        : selectedRow.status.status === "connected"
+          ? "↑/↓ move · Enter/r disconnect · Esc/Ctrl-D close"
+          : selectedRow.status.status === "ignored"
+            ? "↑/↓ move · Enter re-enable · Esc/Ctrl-D close"
+            : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
       : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (

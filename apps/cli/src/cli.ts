@@ -112,7 +112,11 @@ import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { getModelCatalog, prewarmModelCatalog } from "./provider/catalog";
+import {
+  getModelCatalog,
+  isCodexPlanCatalogApplied,
+  prewarmModelCatalog,
+} from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
@@ -2382,6 +2386,9 @@ async function runTui(
             // the whole catalog once and hands back each entry's own group here, so this avoids
             // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
             (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
+            // Overlay-applied openai only: hasCodexSubscription without a successful model/list
+            // overlay still leaves the API catalog on screen, and those rows are not plan-included.
+            isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
           ),
         });
       } catch (err) {

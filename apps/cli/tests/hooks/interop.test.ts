@@ -23,23 +23,21 @@ function spec(path: string): HookSpec {
     script: "block-dangerous",
     path,
     matcher: undefined,
-    timeoutMs: DEFAULT_HOOK_TIMEOUT_MS,
+    // windows-latest cold-starts powershell.exe past bun's 5000 ms default. Same margins as
+    // tests/hooks/run.test.ts's real-powershell block: 15s on the hook, 20s on the bun test.
+    timeoutMs: process.platform === "win32" ? 15_000 : DEFAULT_HOOK_TIMEOUT_MS,
     source: "project",
     filePath: join(HOOK_DIR, "hooks.yaml"),
   };
 }
+
+const TEST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
 
 // A checkout without `.cursor/` is a valid checkout, and a missing reference implementation is not
 // this feature's failure. Skipped rather than failed, and named so a skip is visible.
 const describeIfPresent = existsSync(blockDangerous) ? describe : describe.skip;
 
 describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchanged", () => {
-  // powershell.exe cold-start on Windows CI can exceed bun's default 5s test timeout
-  // (measured: this test hit 5001ms then reported kind "failed"; the next hook in the
-  // same file then passed at 4318ms). Same 15000ms margin tools/powershell.test.ts
-  // already uses for the identical spawn.
-  const hookTimeoutMs = 15_000;
-
   test(
     "an ordinary command is allowed",
     async () => {
@@ -51,7 +49,7 @@ describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchange
       });
       expect(outcome.kind).toBe("ok");
     },
-    hookTimeoutMs,
+    TEST_TIMEOUT_MS,
   );
 
   // The negative control above is what makes this one mean anything: a runner that blocked
@@ -69,7 +67,7 @@ describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchange
       if (outcome.kind !== "block") return;
       expect(outcome.reason).toContain("BLOCKED");
     },
-    hookTimeoutMs,
+    TEST_TIMEOUT_MS,
   );
 
   test(
@@ -83,6 +81,6 @@ describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchange
       });
       expect(outcome.kind).toBe("block");
     },
-    hookTimeoutMs,
+    TEST_TIMEOUT_MS,
   );
 });
