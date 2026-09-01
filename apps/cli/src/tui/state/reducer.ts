@@ -1057,9 +1057,12 @@ function openOrAppendReasoning(state: TuiState, text: string, startedAt: number)
       },
     };
   }
+  // Tools already on the accumulator happened before this span. Flush them
+  // now so a later settle cannot park this caret above the tree it followed.
+  const flushed = state.toolActivity.length > 0 ? flushToolActivity(state) : state;
   return {
-    ...state,
-    reasoning: { ...state.reasoning, live: { text, startedAt } },
+    ...flushed,
+    reasoning: { ...flushed.reasoning, live: { text, startedAt } },
   };
 }
 

@@ -166,10 +166,23 @@ export function toolCallLine(name: string, args: unknown): string {
   return arg === "" ? `→ ${label}` : `→ ${label}(${arg})`;
 }
 
+function uniqueKeepOrder(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of paths) {
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  return out;
+}
+
 function grepPaths(result: GrepResult): string[] {
-  if (result.mode === "content") return (result.matches ?? []).map((m) => m.file);
-  if (result.mode === "count") return (result.counts ?? []).map((c) => c.file);
-  return result.files ?? [];
+  // Content/count modes emit one row per match, not per file. The detail
+  // list is a sample of which files hit, so the same path must not repeat.
+  if (result.mode === "content") return uniqueKeepOrder((result.matches ?? []).map((m) => m.file));
+  if (result.mode === "count") return uniqueKeepOrder((result.counts ?? []).map((c) => c.file));
+  return uniqueKeepOrder(result.files ?? []);
 }
 
 function asGrepResult(result: unknown): GrepResult | undefined {
