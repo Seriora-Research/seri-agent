@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
@@ -29,6 +30,7 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
   };
 }
 
+const ROADMAP = join("docs", "ROADMAP.md");
 const READ_A = `→ Read(a.txt)\n${TOOL_INDENT}Read 1 file`;
 const READ_TWO = `→ Read(a.txt)\n${TOOL_INDENT}Read 2 files`;
 const RAN_ECHO_A = `→ Bash(echo a)\n${TOOL_INDENT}Ran 1 shell command`;
@@ -530,7 +532,7 @@ describe("tuiReducer: loop-event", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "read_file",
-      args: { path: "docs/ROADMAP.md" },
+      args: { path: ROADMAP },
     });
     state = apply(state, {
       type: "error",
@@ -541,7 +543,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.pendingTool).toBeUndefined();
     const live = renderLiveToolActivity(state.toolActivity);
     expect(live).toHaveLength(1);
-    expect(live[0]).toContain("→ Read(docs/ROADMAP.md)");
+    expect(live[0]).toContain(`→ Read(${ROADMAP})`);
     expect(live[0]).toContain(`${TOOL_INDENT}${TREE_BRANCH}file not found`);
     expect(live[0]).not.toContain("threw during execution");
     expect(live[0]).not.toContain("ENOENT");

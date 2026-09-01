@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { parseColor, RGBA } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
@@ -1750,7 +1751,7 @@ describe("App", () => {
 
       dispatch({
         type: "loop-event",
-        event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+        event: { type: "tool-call", name: "read_file", args: { path: join("docs", "ROADMAP.md") } },
       });
       dispatch({
         type: "loop-event",
@@ -1762,7 +1763,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("→ Read(docs/ROADMAP.md)");
+      expect(frame).toContain(`→ Read(${join("docs", "ROADMAP.md")})`);
       expect(frame).toContain(`${TREE_BRANCH}file not found`);
       expect(frame).not.toContain("threw during execution");
       expect(frame).not.toContain("ENOENT");
