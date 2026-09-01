@@ -11,6 +11,7 @@ import {
   recordDenial,
   recordResult,
   recordThrow,
+  formatToolSummary,
   renderLiveToolActivity,
   renderToolActivity,
   summarizeArgs,
@@ -326,6 +327,35 @@ describe("anomalyLineForThrow", () => {
 
   test("an empty remainder becomes failed", () => {
     expect(anomalyLineForThrow('Tool "read_file" threw during execution: ')).toBe("failed");
+  });
+});
+
+describe("formatToolSummary", () => {
+  function entry(name: string, count: number): ToolActivityEntry {
+    return {
+      name,
+      count,
+      callLine: "",
+      singleLine: "",
+      detailLines: ["should not appear"],
+      anomalyLines: ["exit 1"],
+    };
+  }
+
+  test("one group is the count phrase, not the live tree", () => {
+    expect(formatToolSummary([entry("read_file", 1)])).toBe("Read 1 file");
+    expect(formatToolSummary([entry("read_file", 2)])).toBe("Read 2 files");
+  });
+
+  test("several groups join as one sentence", () => {
+    expect(formatToolSummary([entry("read_file", 1), entry("bash", 2), entry("grep", 1)])).toBe(
+      "Read 1 file, ran 2 shell commands, searched 1 file",
+    );
+  });
+
+  test("empty or zero-count groups produce nothing", () => {
+    expect(formatToolSummary([])).toBeUndefined();
+    expect(formatToolSummary([entry("read_file", 0)])).toBeUndefined();
   });
 });
 

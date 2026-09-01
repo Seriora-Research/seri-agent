@@ -382,6 +382,7 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
     expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 1 file")).toHaveLength(1);
     expect(state.transcript.at(-1)).toEqual({ role: "system", text: "done", muted: true });
     expect(state.toolActivity).toEqual([]);
   });
@@ -394,7 +395,8 @@ describe("tuiReducer: loop-event", () => {
     expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_TWO]);
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    expect(state.transcript.some((e) => e.text.includes("Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 2 files")).toHaveLength(1);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -448,6 +450,7 @@ describe("tuiReducer: loop-event", () => {
 
     expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
     expect(state.transcript.some((e) => e.text.includes("exit 1"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -463,6 +466,7 @@ describe("tuiReducer: loop-event", () => {
 
     expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
     expect(state.transcript.some((e) => e.text.includes("declined"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Wrote 1 file")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -490,7 +494,8 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    expect(state.transcript.some((e) => e.text.includes("Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 2 files")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -520,6 +525,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.some((e) => e.text.includes("explode"))).toBe(false);
     expect(state.transcript.some((e) => e.text.includes(`${TREE_BRANCH}boom`))).toBe(false);
     expect(state.transcript.every((e) => !e.text.includes("threw during execution"))).toBe(true);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -562,6 +568,7 @@ describe("tuiReducer: loop-event", () => {
     state = tuiReducer(state, { type: "turn-ended" });
 
     expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 1 file")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -2686,7 +2693,8 @@ describe("tuiReducer: reasoning spans", () => {
     expect(thought2Idx).toBeGreaterThan(thoughtIdx);
     expect(answerIdx).toBeGreaterThan(thought2Idx);
     expect(doneIdx).toBeGreaterThan(answerIdx);
-    expect(kinds.some((line) => line.includes("Read"))).toBe(false);
+    expect(kinds.some((line) => line.includes("→ Read"))).toBe(false);
+    expect(kinds).toContain("system:Read 1 file");
     expect(state.toolActivity).toEqual([]);
   });
 

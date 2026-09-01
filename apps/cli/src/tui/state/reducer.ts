@@ -23,6 +23,7 @@ import {
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import { firstSetupActionIndex } from "./commands";
 import {
+  formatToolSummary,
   recordCall,
   recordDenial,
   recordResult,
@@ -139,11 +140,11 @@ export type TuiState = {
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
   // tool-call/tool-result/permission-denied, and on an error that arrives while a call is in
   // flight (recordThrow). App live-paints the settled view of this
-  // accumulator during the turn (renderLiveToolActivity). Cleared — not copied into the
-  // transcript — on done and on turn-ended so the settled chat stays the thought caret,
-  // the answer, and the done line. An error LoopEvent is not turn-end (loop.ts continues),
-  // so this accumulator is left in place across it — live paint still shows it. After a
-  // real done, turn-ended's clear is a no-op on [].
+  // accumulator during the turn (renderLiveToolActivity). On done / turn-ended the tree
+  // is dropped and at most one muted count line is kept ("Read 1 file, ran 2 shell
+  // commands"). An error LoopEvent is not turn-end (loop.ts continues), so this
+  // accumulator is left in place across it — live paint still shows it. After a real
+  // done, turn-ended's clear is a no-op on [].
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
@@ -1000,7 +1001,13 @@ function flushStreaming(state: TuiState): TuiState {
 }
 
 function flushToolActivity(state: TuiState): TuiState {
-  return { ...state, toolActivity: [] };
+  const summary = formatToolSummary(state.toolActivity);
+  if (summary === undefined) return { ...state, toolActivity: [] };
+  return {
+    ...state,
+    transcript: [...state.transcript, { role: "system", text: summary, muted: true }],
+    toolActivity: [],
+  };
 }
 
 // Folds one completed model call's real usage onto `progress`'s running totals — shared by the

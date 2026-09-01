@@ -1765,7 +1765,7 @@ describe("App", () => {
       expect(frame).not.toContain("(done:");
     });
 
-    test("after done, the live tree is gone and only the done line remains", async () => {
+    test("after done, the live tree collapses to one count line", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({
@@ -1791,7 +1791,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).not.toContain("Read 2 files");
+      expect(countNeedle(frame, "Read 2 files")).toBe(1);
       expect(frame).not.toContain("→ Read");
       expect(frame).toContain("done");
     });
