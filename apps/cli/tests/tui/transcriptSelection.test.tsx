@@ -51,7 +51,15 @@ async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRende
   await flush(setup);
   const last = transcript.at(-1);
   if (last !== undefined) {
-    await waitForSettledFrame(setup, (frame) => frame.includes(last.text));
+    // The scrollbox is height 10. captureCharFrame can include last.text from an
+    // off-viewport paint while sticky-scroll is still moving, which is the macOS
+    // failure: shown already at the tail, drag still mapped through an older scrollTop.
+    await waitForSettledFrame(setup, (frame) =>
+      frame
+        .split("\n")
+        .slice(0, 10)
+        .some((row) => row.includes(last.text)),
+    );
   }
   return setup;
 }
@@ -107,6 +115,7 @@ async function probeScreenRow(
 ): Promise<{ scrollTop: number; shown: string; selected: string }> {
   const setup = await mountTranscript(transcript);
   try {
+    await setup.renderOnce();
     const shown = screenRow(setup.captureCharFrame(), y);
     await setup.mockMouse.drag(0, y, 45, y);
     return { scrollTop: scrollTopOf(setup), shown, selected: copiedText(setup) };
