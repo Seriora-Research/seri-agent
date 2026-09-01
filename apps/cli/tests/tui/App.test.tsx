@@ -6,10 +6,10 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
+import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
-import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
 import { App, type AppProps } from "../../src/tui/app";
 import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
 import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";

@@ -1,7 +1,7 @@
+import { clearUsageSnapshot } from "../usage/snapshot";
 import { clearAuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { openBrowser } from "./browser";
 import { pollForToken, requestDeviceCode } from "./deviceFlow";
-import { clearUsageSnapshot } from "../usage/snapshot";
 
 export async function login(
   mode: "login" | "signup",

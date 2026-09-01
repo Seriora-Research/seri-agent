@@ -1,5 +1,5 @@
-import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 import { parseResponseBody } from "./deviceGrant";
+import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 import {
   loadXaiSubscription,
   saveXaiSubscription,

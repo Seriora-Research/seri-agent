@@ -7,9 +7,9 @@ import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   GROK_CLIENT_IDENTIFIER,
   GROK_PROXY_BASE_URL_DEFAULT,
+  getXaiSubscriptionModel,
   grokCatalogHeaders,
   grokSubscriptionHeaders,
-  getXaiSubscriptionModel,
 } from "../../src/provider/xai";
 
 function asFetch(fn: (url: any, init?: any) => Promise<Response>): typeof fetch {
@@ -18,7 +18,11 @@ function asFetch(fn: (url: any, init?: any) => Promise<Response>): typeof fetch 
 
 describe("grokSubscriptionHeaders", () => {
   test("x-grok-client-identifier is the literal seri, not fx or Grok Build", () => {
-    const headers = grokSubscriptionHeaders({ modelId: "grok-4", accountId: "acct", sessionId: "s1" });
+    const headers = grokSubscriptionHeaders({
+      modelId: "grok-4",
+      accountId: "acct",
+      sessionId: "s1",
+    });
     expect(headers["x-grok-client-identifier"]).toBe("seri");
     expect(GROK_CLIENT_IDENTIFIER).toBe("seri");
     expect(headers["x-grok-client-identifier"]).not.toBe("fx");
@@ -60,9 +64,9 @@ describe("getXaiSubscriptionModel", () => {
       });
       const model = getXaiSubscriptionModel("grok-4", dir, "sess-1", fetchFn);
       await generateText({ model, prompt: "hi", maxRetries: 0 }).catch(() => {});
-      expect(urls.some((url) => url.includes(GROK_PROXY_BASE_URL_DEFAULT) && url.includes("/responses"))).toBe(
-        true,
-      );
+      expect(
+        urls.some((url) => url.includes(GROK_PROXY_BASE_URL_DEFAULT) && url.includes("/responses")),
+      ).toBe(true);
       expect(urls.some((url) => url.includes("/chat/completions"))).toBe(false);
       expect(urls.some((url) => url.includes("api.x.ai"))).toBe(false);
       expect(identifiers).toContain("seri");

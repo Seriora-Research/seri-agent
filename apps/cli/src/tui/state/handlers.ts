@@ -8,8 +8,11 @@
 // boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
-import { connectGrok as connectGrokReal, disconnectGrok as disconnectGrokReal } from "../../auth/xaiConnect";
 import { getWorkosClientId } from "../../auth/deviceFlow";
+import {
+  connectGrok as connectGrokReal,
+  disconnectGrok as disconnectGrokReal,
+} from "../../auth/xaiConnect";
 import type { CliDeps } from "../../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
 import { messageOf } from "../../errors";
@@ -27,8 +30,8 @@ import {
   decidePermissionsOpen,
   decideSetupOpen,
   firstSetupActionIndex,
-  setupRowId,
   type SetupProviderRow,
+  setupRowId,
 } from "./commands";
 import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } from "./reducer";
 

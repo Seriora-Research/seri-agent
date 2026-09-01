@@ -9,9 +9,9 @@ import {
   saveXaiSubscription,
   XAI_AUTH_FILENAME,
 } from "../../src/auth/xaiAuthStore";
+import { XAI_CLIENT_ID_DEFAULT } from "../../src/auth/xaiOAuth";
 import { refreshXaiSubscription, xaiAuthedFetch } from "../../src/auth/xaiRefresh";
 import { setConfigValue } from "../../src/config/config";
-import { XAI_CLIENT_ID_DEFAULT } from "../../src/auth/xaiOAuth";
 
 function jsonResponse(ok: boolean, status: number, body: unknown): Response {
   return { ok, status, text: async () => JSON.stringify(body) } as Response;

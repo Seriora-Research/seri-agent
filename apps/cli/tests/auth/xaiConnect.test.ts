@@ -2,8 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connectGrok, disconnectGrok, GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
-import { hasXaiSubscription, loadXaiSubscription, saveXaiSubscription } from "../../src/auth/xaiAuthStore";
+import {
+  hasXaiSubscription,
+  loadXaiSubscription,
+  saveXaiSubscription,
+} from "../../src/auth/xaiAuthStore";
+import {
+  connectGrok,
+  disconnectGrok,
+  GROK_BORROWED_CLIENT_WARNING,
+} from "../../src/auth/xaiConnect";
 import type { XaiEndpoints } from "../../src/auth/xaiOAuth";
 
 const ENDPOINTS: XaiEndpoints = {
@@ -71,9 +79,9 @@ describe("connectGrok", () => {
     });
 
     expect(events.indexOf("device")).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("browser:https://accounts.x.ai/oauth2/device?user_code=69GR-4SVP")).toBeGreaterThan(
-      events.indexOf("device"),
-    );
+    expect(
+      events.indexOf("browser:https://accounts.x.ai/oauth2/device?user_code=69GR-4SVP"),
+    ).toBeGreaterThan(events.indexOf("device"));
     expect(loadXaiSubscription(dir)?.accountId).toBe("acct-7");
     expect(loadXaiSubscription(dir)?.accessToken).toBe("a");
   });

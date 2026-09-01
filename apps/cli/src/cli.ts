@@ -119,7 +119,6 @@ import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway"
 import type { getGoogleModel as getGoogleModelReal } from "./provider/google";
 import type { getGroqModel as getGroqModelReal } from "./provider/groq";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES, tuiMissingKeyMessage } from "./provider/keys";
-import { subscribedProviders } from "./provider/subscriptions";
 import { dispatchModel } from "./provider/model";
 import type { getOpenAIModel as getOpenAIModelReal } from "./provider/openai";
 import type { getOpenRouterModel as getOpenRouterModelReal } from "./provider/openrouter";
@@ -136,6 +135,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
+import { subscribedProviders } from "./provider/subscriptions";
 import { toolDefinitions } from "./provider/tools";
 import type { RuleRegistry } from "./rules/registry";
 import {
@@ -1233,9 +1233,7 @@ export function tuiPresenter(
 
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
-    return (
-      configuredProviders(configDir).size === 0 && subscribedProviders(configDir).size === 0
-    );
+    return configuredProviders(configDir).size === 0 && subscribedProviders(configDir).size === 0;
   } catch (err) {
     // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
     // message is terminal for the run — nothing re-enters it after this catch returns. No
@@ -1644,7 +1642,11 @@ async function runTui(
       .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
 
-  const { onLogin, onLogout, onAbandon, onConnectGrok } = createAuthHandlers({ dispatch, deps, configDir });
+  const { onLogin, onLogout, onAbandon, onConnectGrok } = createAuthHandlers({
+    dispatch,
+    deps,
+    configDir,
+  });
 
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,

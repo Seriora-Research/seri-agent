@@ -105,10 +105,7 @@ export async function discoverXaiEndpoints(
       body.device_authorization_endpoint,
     ),
     tokenEndpoint: pin("token_endpoint", body.token_endpoint),
-    userinfoEndpoint: pin(
-      "userinfo_endpoint",
-      body.userinfo_endpoint ?? xaiUserinfoUrl(issuer),
-    ),
+    userinfoEndpoint: pin("userinfo_endpoint", body.userinfo_endpoint ?? xaiUserinfoUrl(issuer)),
   };
 }
 

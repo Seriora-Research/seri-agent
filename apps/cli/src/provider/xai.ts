@@ -1,7 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
-import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { loadXaiSubscription } from "../auth/xaiAuthStore";
+import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { getApiKey } from "../config/config";
 import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 

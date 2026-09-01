@@ -1,9 +1,5 @@
 import { openBrowser } from "./browser";
-import {
-  clearXaiSubscription,
-  saveXaiSubscription,
-  subscriptionFromTokens,
-} from "./xaiAuthStore";
+import { clearXaiSubscription, saveXaiSubscription, subscriptionFromTokens } from "./xaiAuthStore";
 import {
   discoverXaiEndpoints,
   fetchXaiAccountId,

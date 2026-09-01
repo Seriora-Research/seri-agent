@@ -222,9 +222,7 @@ export function setupRowId(row: SetupProviderRow): string {
   return `key:${row.provider}`;
 }
 
-export function isSetupActionRow(
-  row: SetupProviderRow,
-): row is SetupKeyRow | SetupSubscriptionRow {
+export function isSetupActionRow(row: SetupProviderRow): row is SetupKeyRow | SetupSubscriptionRow {
   return row.kind !== "heading";
 }
 
@@ -256,7 +254,8 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     // permanently unremovable from /setup the moment the same-named env var got exported.
     // `hasConfigEntry` is independent of which source wins for display.
     removable: state.hasConfigEntry,
-    unusedBecauseSubscription: grokConnected && state.provider === "xai" && state.source !== "unset",
+    unusedBecauseSubscription:
+      grokConnected && state.provider === "xai" && state.source !== "unset",
   }));
   return [
     { kind: "heading", label: "API keys" },
