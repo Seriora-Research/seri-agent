@@ -386,22 +386,19 @@ describe("run (task invocation)", () => {
     expect(capture()?.provider).toBe("openrouter");
     expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
     expect(
-      errors.some(
-        (line) =>
-          line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("on your seri plan"),
-      ),
+      errors.some((line) => line.includes("routing openai/gpt-oss-120b on your seri plan")),
     ).toBe(true);
+    expect(errors.some((line) => /openrouter/i.test(line))).toBe(false);
     // The regression: session.provider was never set on this blank first run, so the notice must
     // not blame DEFAULT_PROVIDER ("Groq") for a provider the user never requested.
     expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
-  // The defined-provider sibling of the test above: a resumed session that explicitly pinned
-  // "openrouter" (mirroring "a resumed session's reroute notice blames its own persisted
-  // provider" above) DID name a provider, and that provider genuinely has no key — so this time
-  // the notice must include the blame clause, naming the provider the session actually requested.
-  test("routes via the gateway on a resumed session, and blames the session's own persisted provider", async () => {
+  // The defined-provider sibling of the test above: a resumed session that pinned the
+  // OpenRouter-catalog row (the listing the gateway actually serves). That pin is the plan's
+  // happy path, not a missing BYOK key, so the notice names the seri plan and does not blame
+  // OpenRouter.
+  test("routes via the gateway on a resumed session without blaming OpenRouter", async () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     process.env.SERI_GATEWAY_URL = "http://localhost:9/api/gateway";
@@ -459,13 +456,10 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()?.provider).toBe("openrouter");
     expect(
-      errors.some(
-        (line) =>
-          line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("on your seri plan") &&
-          line.includes("no OpenRouter key configured"),
-      ),
+      errors.some((line) => line.includes("routing openai/gpt-oss-120b on your seri plan")),
     ).toBe(true);
+    expect(errors.some((line) => /openrouter/i.test(line))).toBe(false);
+    expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {

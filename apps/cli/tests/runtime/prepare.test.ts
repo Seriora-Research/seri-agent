@@ -21,6 +21,7 @@ import {
   bindSession,
   buildCheckpointedTools,
   createSessionTrajectory,
+  gatewayNotice,
   loadOrCreateSession,
   type PreparedRun,
   prepareSession,
@@ -492,5 +493,32 @@ describe("createSessionTrajectory held database", () => {
       SessionDatabase.prototype.close = originalClose;
       database.close();
     }
+  });
+});
+
+describe("gatewayNotice", () => {
+  const route = {
+    model: "openai/gpt-oss-120b",
+    provider: "openrouter" as const,
+    rerouted: false,
+    credential: "gateway" as const,
+  };
+
+  test("names the seri plan, not OpenRouter, when no provider was requested", () => {
+    expect(gatewayNotice(route, undefined)).toBe(
+      "routing openai/gpt-oss-120b on your seri plan",
+    );
+  });
+
+  test("does not blame a missing OpenRouter key when the plan is serving that catalog row", () => {
+    expect(gatewayNotice(route, "openrouter")).toBe(
+      "routing openai/gpt-oss-120b on your seri plan",
+    );
+  });
+
+  test("blames a different requested provider that had no key", () => {
+    expect(gatewayNotice(route, "groq")).toBe(
+      "routing openai/gpt-oss-120b on your seri plan — no Groq key configured",
+    );
   });
 });
