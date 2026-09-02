@@ -492,19 +492,20 @@ export function rerouteNotice(
 // The gateway counterpart to rerouteNotice above: a gateway-credential route is served through the
 // user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
 // TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
-// consumes gateway quota with zero indication it ever left the user's own keys. Same
-// `ModelProvider | undefined` signature and the same undefined branch as rerouteNotice, for the
-// same reason: a genuinely blank first run named no provider at all, so blaming one (Groq, via
-// DEFAULT_PROVIDER) in the "no X key configured" clause would name a provider the user never
-// touched.
+// consumes gateway quota with zero indication it ever left the user's own keys. The serving
+// provider is not named: `route.provider` is the catalog listing the gateway forwards (today
+// always GATEWAY_PROVIDER), not who pays, and the Route column already calls that "seri". A
+// requested provider that equals `route.provider` is also not blamed: persistDefaultModel writes
+// that pair after a successful hosted turn.
 export function gatewayNotice(
   route: ResolvedRoute,
   requestedProvider: ModelProvider | undefined,
 ): string {
-  if (requestedProvider === undefined) {
-    return `routing ${route.model} via ${route.provider} on your seri plan`;
+  const head = `routing ${route.model} on your seri plan`;
+  if (requestedProvider === undefined || requestedProvider === route.provider) {
+    return head;
   }
-  return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
+  return `${head} — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
 // The one place a TTY-path failure becomes an exit code, used by every catch between
