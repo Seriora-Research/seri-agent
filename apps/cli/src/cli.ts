@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -71,6 +71,7 @@ import {
   getTrajectoriesDir,
   profileNameError,
   resolveProfile,
+  resolveUserHome,
   setProfileOverride,
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
@@ -2995,7 +2996,7 @@ async function runTui(
         model: prepared.route.model,
         provider: prepared.route.provider,
         cwd: prepared.session.cwd,
-        home: process.env.HOME || homedir(),
+        home: resolveUserHome(),
       },
       onSubmit,
       onSessionChange,

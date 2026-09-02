@@ -143,9 +143,8 @@ export function decideModelPickerOpen(
   // routesFor's own O(catalog size) scan on every one of the ~350 rows this loop emits.
   planCoverage: (entry: ModelCatalogEntry, group: readonly ModelCatalogEntry[]) => boolean = () =>
     false,
-  // Providers whose catalog rows are actually plan-scoped (Codex overlay applied, not merely
-  // hasCodexSubscription). Default empty so a caller that passes nothing sees the same picker
-  // as before this set existed. Distinct from `configured`: a subscription is not an API key.
+  // Providers whose catalog rows are plan-reachable without a key. Grok from a persisted
+  // grant. openai only after a successful Codex overlay. Distinct from `configured`.
   subscribed: ReadonlySet<ModelProvider> = new Set(),
 ): ModelPickerEntry[] {
   const groups = groupRoutes(filterCatalogEntries(catalog.entries));

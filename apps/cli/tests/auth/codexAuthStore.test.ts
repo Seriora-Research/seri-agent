@@ -76,28 +76,23 @@ describe("codexAuthStore", () => {
   });
 });
 
-describe("codexHome Git Bash HOME on Windows", () => {
-  const originalHome = process.env.HOME;
-  const originalCodexHome = process.env.CODEX_HOME;
-  const originalPlatform = process.platform;
-
-  function setPlatform(platform: string): void {
-    Object.defineProperty(process, "platform", { value: platform });
-  }
-
-  afterEach(() => {
-    setPlatform(originalPlatform);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
-    else process.env.CODEX_HOME = originalCodexHome;
+describe("codexHome", () => {
+  test("CODEX_HOME wins on every platform", () => {
+    expect(codexHome({ CODEX_HOME: "/tmp/codex-override" }, "win32")).toBe("/tmp/codex-override");
+    expect(codexHome({ CODEX_HOME: "/tmp/codex-override" }, "linux")).toBe("/tmp/codex-override");
   });
 
-  test("a MSYS HOME /c/Users/... resolves to the Windows .codex directory", () => {
-    delete process.env.CODEX_HOME;
-    setPlatform("win32");
-    process.env.HOME = "/c/Users/dest";
-    expect(codexHome()).toBe(join("C:\\Users\\dest", ".codex"));
+  test("win32 ignores HOME and uses USERPROFILE", () => {
+    expect(
+      codexHome({ HOME: "/c/Users/dest", USERPROFILE: "C:\\Users\\dest" }, "win32"),
+    ).toBe(join("C:\\Users\\dest", ".codex"));
+    expect(
+      codexHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\dest" }, "win32"),
+    ).toBe(join("C:\\Users\\dest", ".codex"));
+  });
+
+  test("posix uses HOME", () => {
+    expect(codexHome({ HOME: "/home/dest" }, "linux")).toBe(join("/home/dest", ".codex"));
   });
 });
 

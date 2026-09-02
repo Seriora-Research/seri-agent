@@ -316,48 +316,112 @@ describe("decideModelPickerOpen", () => {
     expect(rows[0]?.rerouteTo).toBeUndefined();
   });
 
+  test("/model passes modelPickerSubscribedProviders the overlay flag", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/cli.ts"), "utf8");
+    expect(src).toContain(
+      "modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())",
+    );
+    expect(src).not.toContain(
+      'isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])',
+    );
+  });
+
+  test("a ChatGPT login without overlay keeps API openai rows unlabeled", async () => {
+    const home = mkdtempSync(join(tmpdir(), "seri-codex-picker-off-"));
+    const originalHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    try {
+      resetCodexPlanCatalogApplied();
+      const catalog: ModelCatalog = {
+        fetchedAt: "2026-08-09T00:00:00.000Z",
+        entries: [
+          catalogEntry({
+            id: "gpt-5.6",
+            provider: "openai",
+            displayName: "GPT-5.6",
+            family: "gpt",
+            pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+          }),
+        ],
+      };
+      const rows = decideModelPickerOpen(
+        catalog,
+        new Set(),
+        () => false,
+        modelPickerSubscribedProviders(configDir, false),
+      );
+      const openaiRow = rows.find((row) => row.entry.provider === "openai");
+      expect(openaiRow?.subscriptionCovered).toBe(false);
+      expect(formatModelRow(openaiRow!)).toContain("$4.00");
+      expect(formatModelRow(openaiRow!)).not.toContain("included");
+      expect(formatModelRow(openaiRow!)).not.toContain("codex");
+    } finally {
+      resetCodexPlanCatalogApplied();
+      if (originalHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("a persisted Grok grant labels native xai Route grok even when OpenRouter is configured", () => {
-    saveXaiSubscription(
-      {
-        accessToken: "a",
-        refreshToken: "r",
-        obtainedAt: new Date().toISOString(),
-        accountId: "acct-1",
-      },
-      configDir,
-    );
-    const catalog: ModelCatalog = {
-      fetchedAt: "2026-08-09T00:00:00.000Z",
-      entries: [
-        catalogEntry({
-          id: "grok-4.6",
-          provider: "xai",
-          displayName: "Grok 4.6",
-          family: "grok",
-          pricing: { inputPerMTok: 3, outputPerMTok: 15 },
-        }),
-        catalogEntry({
-          id: "x-ai/grok-4.6",
-          provider: "openrouter",
-          displayName: "Grok 4.6",
-          family: "grok",
-          pricing: { inputPerMTok: 3, outputPerMTok: 15 },
-        }),
-      ],
-    };
-    const rows = decideModelPickerOpen(
-      catalog,
-      new Set<ModelProvider>(["openrouter"]),
-      () => false,
-      modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
-    );
-    const xaiRow = rows.find((row) => row.entry.provider === "xai");
-    expect(xaiRow).toBeDefined();
-    const rendered = formatModelRow(xaiRow!);
-    expect(xaiRow?.subscriptionCovered).toBe(true);
-    expect(rendered).toContain("grok");
-    expect(rendered).toContain("included");
-    expect(rendered).not.toContain("→ openrouter");
+    const originalHome = process.env.CODEX_HOME;
+    const isolated = mkdtempSync(join(tmpdir(), "seri-grok-picker-"));
+    process.env.CODEX_HOME = isolated;
+    resetCodexPlanCatalogApplied();
+    try {
+      saveXaiSubscription(
+        {
+          accessToken: "a",
+          refreshToken: "r",
+          obtainedAt: new Date().toISOString(),
+          accountId: "acct-1",
+        },
+        configDir,
+      );
+      const catalog: ModelCatalog = {
+        fetchedAt: "2026-08-09T00:00:00.000Z",
+        entries: [
+          catalogEntry({
+            id: "grok-4.6",
+            provider: "xai",
+            displayName: "Grok 4.6",
+            family: "grok",
+            pricing: { inputPerMTok: 3, outputPerMTok: 15 },
+          }),
+          catalogEntry({
+            id: "x-ai/grok-4.6",
+            provider: "openrouter",
+            displayName: "Grok 4.6",
+            family: "grok",
+            pricing: { inputPerMTok: 3, outputPerMTok: 15 },
+          }),
+        ],
+      };
+      const rows = decideModelPickerOpen(
+        catalog,
+        new Set<ModelProvider>(["openrouter"]),
+        () => false,
+        modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
+      );
+      const xaiRow = rows.find((row) => row.entry.provider === "xai");
+      expect(xaiRow).toBeDefined();
+      const rendered = formatModelRow(xaiRow!);
+      expect(xaiRow?.subscriptionCovered).toBe(true);
+      expect(rendered).toContain("grok");
+      expect(rendered).toContain("included");
+      expect(rendered).not.toContain("→ openrouter");
+    } finally {
+      if (originalHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalHome;
+      rmSync(isolated, { recursive: true, force: true });
+    }
   });
 
   test("a ChatGPT login plus a successful overlay labels openai plan rows codex/included", async () => {
