@@ -140,9 +140,8 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
       listener = { server: Bun.serve({ hostname: "127.0.0.1", port, fetch: handle }), port };
       break;
     } catch {
-      // Another application, or another seri login, already holds this one. Every candidate is a
-      // registered redirect URI (clientMetadata, mcp/authProvider.ts), so the next one works
-      // without re-registering anything and without persisting the choice.
+      // Port taken. MCP candidates are registered redirect URIs. Codex then tries 1457 and an
+      // ephemeral port (fallbackEphemeral) that is not pre-registered.
     }
   }
   if (listener === undefined && opts?.fallbackEphemeral === true) {

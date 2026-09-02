@@ -6,10 +6,6 @@ import { expiresAtFrom } from "./authStore";
 import { isCodexSubscriptionIgnored } from "./codexIgnore";
 
 export const CODEX_AUTH_FILENAME = "auth.json";
-
-// A separate file from ~/.codex/auth.json and from WorkOS auth.json. `codex` owns the former and
-// rotates it; `clearAuthSession` unlinks the latter wholesale. Two credentials with independent
-// lifecycles get independent files, same as xai-auth.json.
 export const CODEX_SERI_AUTH_FILENAME = "codex-auth.json";
 
 export type CodexAuth = {
@@ -22,8 +18,6 @@ export type CodexAuth = {
 
 export type CodexSubscription = {
   accessToken: string;
-  // ROTATES when the token endpoint returns a new one. Persist the response's token, never the
-  // one the call started with — the same rule xaiAuthStore states for xAI.
   refreshToken: string;
   obtainedAt: string;
   expiresAt?: string;
@@ -180,8 +174,6 @@ export function hasCodexSubscription(
   return hasLeftoverCodexSubscription(env);
 }
 
-// auth_mode without requiring an access token. An API-key Codex login has no tokens.access_token,
-// so loadCodexAuth is undefined, but leftover-file inspection still needs the mode.
 export function readCodexAuthMode(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const path = codexAuthPath(env);
   if (!existsSync(path)) return undefined;

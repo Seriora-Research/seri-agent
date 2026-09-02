@@ -65,7 +65,7 @@ async function refreshCodexSubscriptionOnce(
     try {
       accountId = extractCodexAccountId(tokens.accessToken);
     } catch {
-      // Leftover Codex CLI tokens may lack the auth claim. Keep the stored id.
+      // keep stored accountId
     }
     const updated = subscriptionFromCodexTokens({ ...tokens, accountId });
     saveCodexSubscription(updated, configDir);

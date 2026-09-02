@@ -358,20 +358,11 @@ export function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
-// /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
-// (dispatch/deps/configDir in). `deps.login ?? loginReal`
-// / `deps.logout ?? logoutReal` is the injection seam pty tests use to fake the device flow.
-// Every recompute-and-dispatch is wrapped so a failure
-// (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
-// `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
-// caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
-// already has, just landing on `auth-step`/result instead of a bare command-error, since login/logout
-// are a blocking panel (pendingAuth), not a list this file can just re-show.
+// /login, /signup, /logout, and the /setup Grok/Codex connect confirm. Failures land on
+// auth-step result instead of throwing out of onSubmit.
 export function createAuthHandlers(opts: {
   dispatch: Dispatch;
-  // Pick, not the full CliDeps: this factory only ever reads these two injection seams, and naming
-  // them here documents the actual contract instead of overstating it with cli.ts's ~20-field deps
-  // bag (any CliDeps value still satisfies this — every caller keeps passing its own `deps` as-is).
+  // login, logout, connectGrok, connectCodex. Callers still pass the full CliDeps bag.
   deps: Pick<CliDeps, "login" | "logout" | "connectGrok" | "connectCodex">;
   configDir: string;
 }): {
