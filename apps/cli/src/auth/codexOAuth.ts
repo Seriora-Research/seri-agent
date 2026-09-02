@@ -184,9 +184,7 @@ export async function refreshCodexGrant(
     throw error;
   }
   if (payload.error === "invalid_grant") {
-    const error = new Error(
-      "Your ChatGPT plan session has expired. Connect it again from /setup.",
-    );
+    const error = new Error("Your ChatGPT plan session has expired. Connect it again from /setup.");
     error.name = "CodexReconnectRequired";
     throw error;
   }

@@ -2684,15 +2684,16 @@ describe("App", () => {
         expect(text).toContain("Grok subscription is connected");
       });
 
-      test("a Codex subscription row names the plan status, not an API key", () => {
+      test("a Codex subscription row names chatgpt, not an API key", () => {
         const text = formatSetupRow({
           kind: "subscription",
           provider: "openai",
           status: { status: "connected" },
           removable: true,
         });
-        expect(text).toContain("codex");
-        expect(text).toContain("ChatGPT plan connected");
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("connected");
+        expect(text).not.toContain("codex");
         expect(text).not.toContain("openai");
       });
 
@@ -2703,7 +2704,8 @@ describe("App", () => {
           status: { status: "ignored" },
           removable: false,
         });
-        expect(text).toContain("ChatGPT plan ignored");
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("ignored");
         expect(text).not.toContain("connected");
       });
 
@@ -2714,7 +2716,8 @@ describe("App", () => {
           status: { status: "connected", planType: "free" },
           removable: true,
         });
-        expect(text).toContain("ChatGPT free plan connected");
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("connected — free");
       });
 
       test("an unused openai key names the ChatGPT plan as the reason", () => {
@@ -3394,7 +3397,8 @@ describe("App", () => {
       });
       const rendered = formatModelRow(row);
       expect(rendered).toContain("included");
-      expect(rendered).toContain("codex");
+      expect(rendered).toContain("chatgpt");
+      expect(rendered).not.toContain("codex");
       expect(rendered).not.toContain("no key");
       expect(rendered).not.toContain("$");
       expect(
@@ -3403,7 +3407,7 @@ describe("App", () => {
           subscriptionCovered: true,
           provider: "openai",
         }),
-      ).toBe("codex");
+      ).toBe("chatgpt");
     });
 
     test("subscriptionCovered beats keyConfigured in the Route column", () => {
@@ -3486,7 +3490,7 @@ describe("App", () => {
           subscriptionCovered: true,
           provider: "openai",
         }),
-      ).toBe("codex");
+      ).toBe("chatgpt");
       expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
     });
 

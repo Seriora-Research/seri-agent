@@ -198,10 +198,9 @@ describe("refreshCodexSubscription", () => {
     const result = await refreshCodexSubscription(home, {
       env: { CODEX_HOME: home },
       fetchFn: (async () =>
-        new Response(
-          JSON.stringify({ access_token: "new", refresh_token: "refresh-new" }),
-          { status: 200 },
-        )) as unknown as typeof fetch,
+        new Response(JSON.stringify({ access_token: "new", refresh_token: "refresh-new" }), {
+          status: 200,
+        })) as unknown as typeof fetch,
     });
     expect(result.status).toBe("ok");
     expect(JSON.parse(readFileSync(join(home, "codex-auth.json"), "utf8")).refreshToken).toBe(
@@ -227,21 +226,21 @@ describe("parseAccountRead", () => {
 });
 
 describe("describeCodexSetupStatus", () => {
-  test("connected without planType keeps the original copy", () => {
-    expect(describeCodexSetupStatus({ status: "connected" })).toBe("ChatGPT plan connected");
+  test("connected without planType matches the grok/seri status word", () => {
+    expect(describeCodexSetupStatus({ status: "connected" })).toBe("connected");
   });
 
   test("connected with planType names the tier", () => {
     expect(describeCodexSetupStatus({ status: "connected", planType: "free" })).toBe(
-      "ChatGPT free plan connected",
+      "connected — free",
     );
     expect(describeCodexSetupStatus({ status: "connected", planType: "pro" })).toBe(
-      "ChatGPT pro plan connected",
+      "connected — pro",
     );
   });
 
   test("ignored is local-only copy, not connected", () => {
-    expect(describeCodexSetupStatus({ status: "ignored" })).toBe("ChatGPT plan ignored");
+    expect(describeCodexSetupStatus({ status: "ignored" })).toBe("ignored");
   });
 });
 

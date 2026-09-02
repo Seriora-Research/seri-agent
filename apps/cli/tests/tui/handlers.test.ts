@@ -297,7 +297,10 @@ describe("onSetupSelect for a Codex subscription row", () => {
     });
 
     expect(actions).toEqual([
-      { type: "setup-step", state: { step: "confirm-connect", provider: "openai", action: "connect" } },
+      {
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "connect" },
+      },
     ]);
   });
 

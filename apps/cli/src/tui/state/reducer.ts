@@ -53,7 +53,11 @@ export type SetupState =
       note?: string;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
-  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri"; action?: "connect" | "reenable" }
+  | {
+      step: "confirm-connect";
+      provider: "xai" | "openai" | "seri";
+      action?: "connect" | "reenable";
+    }
   | { step: "confirm-disconnect"; provider: "xai" | "openai" | "seri" };
 
 export type AuthMode = "login" | "signup" | "grok" | "codex";

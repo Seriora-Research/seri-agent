@@ -30,5 +30,5 @@ export function reconnectCodex(
   onMessage: (message: string) => void = console.log,
 ): void {
   clearCodexSubscriptionIgnore(configDir);
-  onMessage("Re-enabled ChatGPT plan via Codex for this profile.");
+  onMessage("Re-enabled ChatGPT plan for this profile.");
 }

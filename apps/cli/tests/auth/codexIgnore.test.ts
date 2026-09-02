@@ -88,6 +88,6 @@ describe("codexIgnore", () => {
 
     expect(isCodexSubscriptionIgnored(configDir)).toBe(false);
     expect(readFileSync(authPath)).toEqual(before);
-    expect(messages.length).toBeGreaterThan(0);
+    expect(messages).toEqual(["Re-enabled ChatGPT plan for this profile."]);
   });
 });

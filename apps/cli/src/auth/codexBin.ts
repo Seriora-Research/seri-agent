@@ -58,10 +58,8 @@ export function describeCodexSetupStatus(status: CodexSetupStatus): string {
     case "not-connected":
       return "not connected";
     case "connected":
-      return status.planType === undefined
-        ? "ChatGPT plan connected"
-        : `ChatGPT ${status.planType} plan connected`;
+      return status.planType === undefined ? "connected" : `connected — ${status.planType}`;
     case "ignored":
-      return "ChatGPT plan ignored";
+      return "ignored";
   }
 }
