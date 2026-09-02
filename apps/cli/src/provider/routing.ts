@@ -7,7 +7,7 @@ import {
   routesFor,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
-import { effectiveHostedPlan } from "../auth/seriIgnore";
+import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "./defaults";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
@@ -87,9 +87,16 @@ export type ResolvedRoute = {
 export function gatewayCoverageInGroup(
   group: readonly ModelCatalogEntry[],
   plan: Plan | null,
+  // A usable WorkOS login whose plan fetch failed (or never ran) still pays
+  // through the gateway. Quota is the server's job; asking for
+  // OPENROUTER_API_KEY here is the wrong refusal for that state.
+  hostedActive = false,
 ): ModelCatalogEntry | undefined {
   const gatewayEntry = group.find((candidate) => candidate.provider === GATEWAY_PROVIDER);
-  return gatewayEntry !== undefined && planCoverage(gatewayEntry, plan) ? gatewayEntry : undefined;
+  if (gatewayEntry === undefined) return undefined;
+  if (planCoverage(gatewayEntry, plan)) return gatewayEntry;
+  if (hostedActive && plan === null) return gatewayEntry;
+  return undefined;
 }
 
 // The single lookup both resolveRoute's own gateway branch AND the /model picker's coverage
@@ -107,8 +114,9 @@ export function gatewayCoverage(
   catalog: ModelCatalog,
   entry: ModelCatalogEntry,
   plan: Plan | null,
+  hostedActive = false,
 ): ModelCatalogEntry | undefined {
-  return gatewayCoverageInGroup(routesFor(catalog.entries, entry), plan);
+  return gatewayCoverageInGroup(routesFor(catalog.entries, entry), plan, hostedActive);
 }
 
 const EMPTY_SUBSCRIPTIONS: ReadonlySet<ModelProvider> = new Set();
@@ -152,6 +160,7 @@ export function resolveRoute(
   // {"openai"}, or both. A separate set rather than a member of `configured` because the two answer
   // different questions — `configured` means "has an API key", which a subscription does not.
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
+  hostedActive = false,
 ): ResolvedRoute {
   // Every early-return branch below stays on `requested` unchanged (code-review finding, PR #73,
   // round 2, item #9 — the four branches used to hand-duplicate this identical literal).
@@ -189,7 +198,7 @@ export function resolveRoute(
   // outcome; a configured sibling above still wins over it unconditionally, since this branch is
   // never reached when one exists.
   if (candidates.length === 0) {
-    const gatewayEntry = gatewayCoverage(catalog, entry, plan);
+    const gatewayEntry = gatewayCoverage(catalog, entry, plan, hostedActive);
     if (gatewayEntry !== undefined) {
       // model/provider become GATEWAY_PROVIDER's own — the id the server's catalog lookup and
       // upstream forward will actually recognize, not the originally-requested provider's id.
@@ -263,6 +272,7 @@ export function resolveSessionRoute(
     configured,
     effectiveHostedPlan(configDir, plan),
     subscribedProviders(configDir),
+    hostedPlanUsable(configDir),
   );
 }
 

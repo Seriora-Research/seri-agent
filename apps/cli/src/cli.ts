@@ -2405,8 +2405,11 @@ async function runTui(
             // the whole catalog once and hands back each entry's own group here, so this avoids
             // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
             (entry, group) =>
-              gatewayCoverageInGroup(group, effectiveHostedPlan(configDir, prepared.plan)) !==
-              undefined,
+              gatewayCoverageInGroup(
+                group,
+                effectiveHostedPlan(configDir, prepared.plan),
+                hostedPlanUsable(configDir),
+              ) !== undefined,
             // Overlay-applied openai only: hasCodexSubscription without a successful model/list
             // overlay still leaves the API catalog on screen, and those rows are not plan-included.
             isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
