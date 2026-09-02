@@ -1,12 +1,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
-import { hasCodexSubscription } from "../auth/codexAuthStore";
-import { isCodexSubscriptionIgnored } from "../auth/codexIgnore";
+import { hasLeftoverCodexSubscription, loadUsableCodexGrant } from "../auth/codexAuthStore";
 import { hasXaiSubscription } from "../auth/xaiAuthStore";
 
 export function codexSubscriptionActive(configDir?: string): boolean {
-  if (!hasCodexSubscription()) return false;
-  if (configDir === undefined) return true;
-  return !isCodexSubscriptionIgnored(configDir);
+  if (configDir === undefined) return hasLeftoverCodexSubscription();
+  return loadUsableCodexGrant(configDir) !== undefined;
 }
 
 // Deliberately NOT folded into provider/keys.ts's configuredProviders. That function answers

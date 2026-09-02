@@ -22,6 +22,7 @@ import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/system
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
   appendBarrier,
@@ -257,6 +258,7 @@ export type CliDeps = {
   login?: typeof loginReal;
   logout?: typeof logoutReal;
   connectGrok?: typeof connectGrokReal;
+  connectCodex?: typeof connectCodexReal;
   usageCommand?: typeof runUsageCommandReal;
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
@@ -1665,7 +1667,7 @@ async function runTui(
       .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
 
-  const { onLogin, onLogout, onAbandon, onConnectGrok } = createAuthHandlers({
+  const { onLogin, onLogout, onAbandon, onConnectGrok, onConnectCodex } = createAuthHandlers({
     dispatch,
     deps,
     configDir,
@@ -1676,6 +1678,7 @@ async function runTui(
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
     onConnectGrok,
+    onConnectCodex,
     onConnectSeri: () => onLogin("login"),
   });
 

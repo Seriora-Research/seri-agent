@@ -53,15 +53,15 @@ export type SetupState =
       note?: string;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
-  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri" }
+  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri"; action?: "connect" | "reenable" }
   | { step: "confirm-disconnect"; provider: "xai" | "openai" | "seri" };
 
-export type AuthMode = "login" | "signup" | "grok";
+export type AuthMode = "login" | "signup" | "grok" | "codex";
 
-// /login, /signup, and Grok subscription connect's own live state — the device-flow OAuth panel.
 export type AuthPanelState =
   | { step: "starting"; mode: AuthMode }
   | { step: "device"; mode: AuthMode; verificationUri: string; userCode: string }
+  | { step: "browser"; mode: AuthMode; verificationUri: string }
   | { step: "result"; message: string; error: boolean };
 
 // /config's own live state — structurally identical to SetupState above (list -> enter-value ->
@@ -188,7 +188,7 @@ export type TuiState = {
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
   // Whether the welcome splash should offer Log in / Sign up (true) or just Continue (false).
-  // Independent of `pendingAuth` — that flag is the blocking device-flow panel, this one only
+  // Independent of `pendingAuth` — that flag is the blocking auth panel, this one only
   // chooses the splash menu. Set by `auth-offer` (decideAuthOffer). The main TUI does not
   // render a sign-in banner from this flag.
   authOffer: boolean;
@@ -443,7 +443,7 @@ export type TuiAction =
   | { type: "setup-resolved"; leftoverInput?: string }
   // `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions land on these ten.
   // `auth-offer` chooses the splash menu (unsigned-in vs already signed in) — deliberately NOT
-  // `pendingAuth`, which is the blocking device-flow panel (see TuiState's own comment).
+  // `pendingAuth`, which is the blocking auth panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
   | { type: "auth-requested"; mode: AuthMode }
   | { type: "auth-step"; state: AuthPanelState }

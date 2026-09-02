@@ -7,8 +7,11 @@
 // ~670 of its lines) to live next to the functions it mirrors rather than across the module
 // boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
-import { codexSetupAction } from "../../auth/codexBin";
-import { disconnectCodex, reconnectCodex } from "../../auth/codexIgnore";
+import {
+  connectCodex as connectCodexReal,
+  disconnectCodex as disconnectCodexReal,
+} from "../../auth/codexConnect";
+import { reconnectCodex } from "../../auth/codexIgnore";
 import { disconnectSeri, reconnectSeri } from "../../auth/seriIgnore";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
@@ -56,6 +59,7 @@ export function createSetupHandlers(opts: {
   configDir: string;
   onPanelClosed?: () => void;
   onConnectGrok?: () => Promise<void>;
+  onConnectCodex?: () => Promise<void>;
   onConnectSeri?: () => Promise<void>;
 }): {
   onSetupSelect: (row: SetupProviderRow) => void;
@@ -63,8 +67,15 @@ export function createSetupHandlers(opts: {
   onSetupRemove: (row: SetupProviderRow) => void;
   onSetupBack: () => void;
 } {
-  const { dispatch, getPendingSetup, configDir, onPanelClosed, onConnectGrok, onConnectSeri } =
-    opts;
+  const {
+    dispatch,
+    getPendingSetup,
+    configDir,
+    onPanelClosed,
+    onConnectGrok,
+    onConnectCodex,
+    onConnectSeri,
+  } = opts;
 
   function setupListState(selectedId?: string): SetupState {
     const rows = decideSetupOpen(configDir);
@@ -148,11 +159,14 @@ export function createSetupHandlers(opts: {
       if (row.status.status === "ignored") {
         dispatch({
           type: "setup-step",
-          state: { step: "confirm-connect", provider: "openai" },
+          state: { step: "confirm-connect", provider: "openai", action: "reenable" },
         });
         return;
       }
-      dispatch({ type: "transcript-append", line: codexSetupAction(row.status) });
+      dispatch({
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "connect" },
+      });
       return;
     }
     dispatch({
@@ -251,7 +265,7 @@ export function createSetupHandlers(opts: {
         const onMessage = (message: string) => {
           dispatch({ type: "transcript-append", line: message });
         };
-        if (pending.provider === "openai") disconnectCodex(configDir, onMessage);
+        if (pending.provider === "openai") disconnectCodexReal(configDir, onMessage);
         else if (pending.provider === "seri") disconnectSeri(configDir, onMessage);
         else disconnectGrokReal(configDir, onMessage);
       } catch (err) {
@@ -263,6 +277,11 @@ export function createSetupHandlers(opts: {
     }
     if (pending?.step === "confirm-connect") {
       if (pending.provider === "openai") {
+        if (pending.action === "connect") {
+          dispatch({ type: "setup-resolved" });
+          void onConnectCodex?.();
+          return;
+        }
         try {
           reconnectCodex(configDir, (message) => {
             dispatch({ type: "transcript-append", line: message });
@@ -339,32 +358,25 @@ export function createSetupHandlers(opts: {
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
-// /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
-// (dispatch/deps/configDir in). `deps.login ?? loginReal`
-// / `deps.logout ?? logoutReal` is the injection seam pty tests use to fake the device flow.
-// Every recompute-and-dispatch is wrapped so a failure
-// (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
-// `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
-// caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
-// already has, just landing on `auth-step`/result instead of a bare command-error, since login/logout
-// are a blocking panel (pendingAuth), not a list this file can just re-show.
+// /login, /signup, /logout, and the /setup Grok/Codex connect confirm. Failures land on
+// auth-step result instead of throwing out of onSubmit.
 export function createAuthHandlers(opts: {
   dispatch: Dispatch;
-  // Pick, not the full CliDeps: this factory only ever reads these two injection seams, and naming
-  // them here documents the actual contract instead of overstating it with cli.ts's ~20-field deps
-  // bag (any CliDeps value still satisfies this — every caller keeps passing its own `deps` as-is).
-  deps: Pick<CliDeps, "login" | "logout" | "connectGrok">;
+  // login, logout, connectGrok, connectCodex. Callers still pass the full CliDeps bag.
+  deps: Pick<CliDeps, "login" | "logout" | "connectGrok" | "connectCodex">;
   configDir: string;
 }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => void;
   onAbandon: () => void;
   onConnectGrok: () => Promise<void>;
+  onConnectCodex: () => Promise<void>;
 } {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
   const connectGrokFn = deps.connectGrok ?? connectGrokReal;
+  const connectCodexFn = deps.connectCodex ?? connectCodexReal;
   // `attemptCounter` alone only mutes a dismissed attempt's own DISPATCHES — the underlying
   // login() would keep polling in the background regardless (a device code stays valid for
   // minutes) and could still call saveAuthSession later, with zero UI trace since the dispatches
@@ -468,6 +480,41 @@ export function createAuthHandlers(opts: {
     }
   }
 
+  async function onConnectCodex(): Promise<void> {
+    const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
+    dispatch({ type: "auth-requested", mode: "codex" });
+    try {
+      await connectCodexFn(configDir, {
+        onAuthorizeUrl: (url) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({
+            type: "auth-step",
+            state: { step: "browser", mode: "codex", verificationUri: url },
+          });
+        },
+        onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({ type: "transcript-append", line: message });
+        },
+        signal: controller.signal,
+      });
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+    } catch (err) {
+      if (myAttempt !== attemptCounter) return;
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: messageOf(err),
+          error: true,
+        },
+      });
+    }
+  }
+
   // Sync, not async — logoutFn (typeof logoutReal) is fully synchronous; the call site already
   // just `await`s this either way, which works fine on a non-async function too.
   function onLogout(): void {
@@ -498,7 +545,7 @@ export function createAuthHandlers(opts: {
     currentController?.abort();
   }
 
-  return { onLogin, onLogout, onAbandon, onConnectGrok };
+  return { onLogin, onLogout, onAbandon, onConnectGrok, onConnectCodex };
 }
 
 // SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are only ever read once, at prepareSession's own

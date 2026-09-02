@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { arch, platform } from "node:os";
 import pkg from "../../package.json";
 import { refreshCodexSubscription, type CodexRefreshResult } from "../auth/codexRefresh";
-import { loadCodexAuth } from "../auth/codexAuthStore";
+import { loadUsableCodexGrant } from "../auth/codexAuthStore";
 import { getApiKey } from "../config/config";
 import type { RouteCredential } from "./routing";
 
@@ -62,9 +62,9 @@ export function codexAuthedFetch(
       });
     };
 
-    const current = loadCodexAuth();
-    if (current === undefined || current.authMode !== "chatgpt") {
-      throw new Error("No ChatGPT plan is connected. Run `codex login`, then /setup.");
+    const current = loadUsableCodexGrant(configDir);
+    if (current === undefined) {
+      throw new Error("No ChatGPT plan is connected. Run /setup to connect one.");
     }
 
     const first = await attempt(current.accessToken, current.accountId);

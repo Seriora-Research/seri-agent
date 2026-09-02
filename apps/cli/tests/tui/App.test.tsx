@@ -3098,14 +3098,40 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("local ignore only");
-      expect(frame).toContain("Codex CLI login is not revoked");
+      expect(frame).toContain("local credential only");
+      expect(frame).toContain("~/.codex/auth.json is not touched");
       expect(frame).not.toContain("Grok Build");
 
       setup.mockInput.pressKey("y");
       await flush(setup);
       expect(confirmed).toHaveLength(1);
       expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "openai" });
+    });
+
+    test("confirm-connect for Codex connect shows the borrowed-client warning", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "connect" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Codex CLI's OAuth client id");
+      expect(frame).toContain("Shown before the browser opens");
+      expect(frame).not.toContain("Grok Build's OAuth client id");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed[0]).toMatchObject({
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "not-connected" },
+      });
     });
 
     test("confirm-connect for Codex re-enables without the Grok warning", async () => {

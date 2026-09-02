@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
@@ -130,57 +130,84 @@ describe("refreshCodexSubscription", () => {
     if (home !== undefined) rmSync(home, { recursive: true, force: true });
   });
 
-  test("without a chatgpt login it reports not-connected and never calls rpc", async () => {
+  test("without a chatgpt login it reports not-connected and never fetches", async () => {
     home = mkdtempSync(join(tmpdir(), "seri-codex-refresh-"));
     process.env.CODEX_HOME = home;
     let called = 0;
-    const rpc: CodexJsonRpc = {
-      request: async () => {
+    const result = await refreshCodexSubscription(home, {
+      env: { CODEX_HOME: home },
+      fetchFn: (async () => {
         called++;
-        return {};
-      },
-      notify: () => {},
-      close: () => {},
-    };
-    const result = await refreshCodexSubscription(home, { rpc, env: { CODEX_HOME: home } });
+        return new Response("{}", { status: 200 });
+      }) as unknown as typeof fetch,
+    });
     expect(result.status).toBe("not-connected");
     expect(called).toBe(0);
   });
 
-  test("account/read refreshToken true then re-reads the store", async () => {
+  test("HTTP refresh persists the rotated pair to the seri file", async () => {
+    home = mkdtempSync(join(tmpdir(), "seri-codex-refresh-"));
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "codex-auth.json"),
+      JSON.stringify({
+        accessToken: "old",
+        refreshToken: "refresh-old",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+        accountId: "acct-1",
+      }),
+    );
+    const result = await refreshCodexSubscription(home, {
+      fetchFn: (async (_url: string, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          client_id: expect.any(String),
+          grant_type: "refresh_token",
+          refresh_token: "refresh-old",
+        });
+        return new Response(
+          JSON.stringify({
+            access_token: "new",
+            refresh_token: "refresh-new",
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        );
+      }) as unknown as typeof fetch,
+    });
+    expect(result.status).toBe("ok");
+    if (result.status === "ok") {
+      expect(result.credential.accessToken).toBe("new");
+      expect(result.credential.accountId).toBe("acct-1");
+    }
+    const stored = JSON.parse(readFileSync(join(home, "codex-auth.json"), "utf8"));
+    expect(stored.accessToken).toBe("new");
+    expect(stored.refreshToken).toBe("refresh-new");
+  });
+
+  test("a leftover Codex CLI login refreshes over HTTP into the seri file", async () => {
     home = mkdtempSync(join(tmpdir(), "seri-codex-refresh-"));
     process.env.CODEX_HOME = home;
     writeFileSync(
       join(home, "auth.json"),
       JSON.stringify({
         auth_mode: "chatgpt",
-        tokens: { access_token: "old", account_id: "acct-1" },
+        tokens: { access_token: "old", refresh_token: "refresh-old", account_id: "acct-1" },
       }),
     );
-    const methods: string[] = [];
-    const rpc: CodexJsonRpc = {
-      request: async (method, params) => {
-        methods.push(method);
-        expect(params).toEqual({ refreshToken: true });
-        writeFileSync(
-          join(home, "auth.json"),
-          JSON.stringify({
-            auth_mode: "chatgpt",
-            tokens: { access_token: "new", account_id: "acct-1" },
-          }),
-        );
-        return { account: { type: "chatgpt", planType: "plus" } };
-      },
-      notify: () => {},
-      close: () => {},
-    };
-    const result = await refreshCodexSubscription(home, { rpc, env: { CODEX_HOME: home } });
-    expect(result).toEqual({
-      status: "ok",
-      credential: { provider: "openai", accessToken: "new", accountId: "acct-1", expiresAt: 0 },
+    const leftoverBefore = readFileSync(join(home, "auth.json"), "utf8");
+    const result = await refreshCodexSubscription(home, {
+      env: { CODEX_HOME: home },
+      fetchFn: (async () =>
+        new Response(
+          JSON.stringify({ access_token: "new", refresh_token: "refresh-new" }),
+          { status: 200 },
+        )) as unknown as typeof fetch,
     });
-    expect(methods).toEqual(["account/read"]);
-    expect(codexPlanType()).toBe("plus");
+    expect(result.status).toBe("ok");
+    expect(JSON.parse(readFileSync(join(home, "codex-auth.json"), "utf8")).refreshToken).toBe(
+      "refresh-new",
+    );
+    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe(leftoverBefore);
   });
 });
 

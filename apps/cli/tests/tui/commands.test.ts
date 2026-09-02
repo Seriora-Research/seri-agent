@@ -15,7 +15,7 @@ import { saveAuthSession } from "../../src/auth/authStore";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
 import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
-import { refreshCodexSubscription, resetCodexModelCache } from "../../src/auth/codexRefresh";
+import { listCodexModels, resetCodexModelCache } from "../../src/auth/codexRefresh";
 import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
@@ -623,7 +623,7 @@ describe("decideSetupOpen", () => {
     expect(plans[1]).toEqual({ kind: "subscription", provider: "xai", connected: false });
     expect(plans[2]?.provider).toBe("openai");
     expect(plans[2] && "status" in plans[2] ? plans[2].status.status : undefined).toBe(
-      "not-installed",
+      "not-connected",
     );
   });
 
@@ -849,6 +849,23 @@ describe("decideSetupOpen", () => {
     expect(xaiKey.unusedBecause).toBe("unused because a Grok subscription is connected");
   });
 
+  test("a seri-owned ChatGPT grant is connected with no Codex binary", () => {
+    delete process.env.SERI_CODEX_BIN;
+    writeFileSync(
+      join(setupConfigDir, "codex-auth.json"),
+      JSON.stringify({
+        accessToken: "tok",
+        refreshToken: "ref",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+        accountId: "acct",
+      }),
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(true);
+  });
+
   test("a chatgpt login with Codex on PATH is a connected subscription row", () => {
     process.env.SERI_CODEX_BIN = "/opt/codex";
     writeFileSync(
@@ -895,7 +912,7 @@ describe("decideSetupOpen", () => {
       notify: () => {},
       close: () => {},
     };
-    await refreshCodexSubscription(setupConfigDir, { rpc, env: { CODEX_HOME: setupConfigDir } });
+    await listCodexModels({ rpc, env: { CODEX_HOME: setupConfigDir } });
     const plan = decideSetupOpen(setupConfigDir).find(
       (row) => row.kind === "subscription" && row.provider === "openai",
     );
@@ -905,7 +922,7 @@ describe("decideSetupOpen", () => {
     });
   });
 
-  test("an API-key Codex login is not-logged-in, even without an access token", () => {
+  test("an API-key Codex login is not a ChatGPT plan", () => {
     process.env.SERI_CODEX_BIN = "/opt/codex";
     writeFileSync(
       join(setupConfigDir, "auth.json"),
@@ -915,8 +932,7 @@ describe("decideSetupOpen", () => {
       (row) => row.kind === "subscription" && row.provider === "openai",
     );
     expect(plan && "status" in plan ? plan.status : undefined).toEqual({
-      status: "not-logged-in",
-      reason: "api-key",
+      status: "not-connected",
     });
   });
 

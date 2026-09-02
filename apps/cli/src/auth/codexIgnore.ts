@@ -25,16 +25,6 @@ export function clearCodexSubscriptionIgnore(configDir: string): void {
   if (existsSync(path)) unlinkSync(path);
 }
 
-export function disconnectCodex(
-  configDir: string,
-  onMessage: (message: string) => void = console.log,
-): void {
-  ignoreCodexSubscription(configDir);
-  onMessage(
-    "Disconnected ChatGPT plan. seri will stop using it in this profile; the Codex CLI login was not revoked.",
-  );
-}
-
 export function reconnectCodex(
   configDir: string,
   onMessage: (message: string) => void = console.log,

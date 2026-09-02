@@ -83,7 +83,7 @@ export async function runGuidedSetup(
   // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
   // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
   // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
-  const { onConnectGrok, onLogin } = createAuthHandlers({
+  const { onConnectGrok, onConnectCodex, onLogin } = createAuthHandlers({
     dispatch,
     deps: {},
     configDir,
@@ -94,6 +94,7 @@ export async function runGuidedSetup(
     configDir,
     onPanelClosed: () => resolveClosed(),
     onConnectGrok,
+    onConnectCodex,
     onConnectSeri: () => onLogin("login"),
   });
 

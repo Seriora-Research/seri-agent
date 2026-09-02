@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../auth/authStore";
+import { CODEX_SERI_AUTH_FILENAME } from "../auth/codexAuthStore";
 import { CODEX_IGNORE_FILENAME } from "../auth/codexIgnore";
 import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
@@ -55,6 +56,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     AUTH_FILENAME,
     PERMISSIONS_FILENAME,
     CODEX_IGNORE_FILENAME,
+    CODEX_SERI_AUTH_FILENAME,
     "sessions",
     "checkpoints",
     "rg",
