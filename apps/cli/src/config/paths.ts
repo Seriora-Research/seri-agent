@@ -30,7 +30,6 @@ function msysDriveHomeToWin32(home: string): string {
   return `${home.charAt(1).toUpperCase()}:${rest || "\\"}`;
 }
 
-// Unprofiled: the vendored-rg cache and nothing else lives here. No throw path.
 export function getBaseConfigDir(): string {
   return join(resolveUserHome(), ".seri");
 }
