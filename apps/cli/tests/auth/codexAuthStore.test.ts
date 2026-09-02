@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  codexHome,
   hasCodexSubscription,
   jwtExpiryMs,
   loadCodexAuth,
@@ -72,6 +73,31 @@ describe("codexAuthStore", () => {
       JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "acct-1" } }),
     );
     expect(loadCodexAuth()).toBeUndefined();
+  });
+});
+
+describe("codexHome Git Bash HOME on Windows", () => {
+  const originalHome = process.env.HOME;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalPlatform = process.platform;
+
+  function setPlatform(platform: string): void {
+    Object.defineProperty(process, "platform", { value: platform });
+  }
+
+  afterEach(() => {
+    setPlatform(originalPlatform);
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+  });
+
+  test("a MSYS HOME /c/Users/... resolves to the Windows .codex directory", () => {
+    delete process.env.CODEX_HOME;
+    setPlatform("win32");
+    process.env.HOME = "/c/Users/dest";
+    expect(codexHome()).toBe(join("C:\\Users\\dest", ".codex"));
   });
 });
 

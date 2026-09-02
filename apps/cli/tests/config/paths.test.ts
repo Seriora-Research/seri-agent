@@ -55,6 +55,12 @@ describe("getBaseConfigDir", () => {
     expect(getBaseConfigDir()).toBe(join("C:\\Users\\test", ".seri"));
   });
 
+  test("win32 with a Git Bash HOME (/c/Users/...) uses the Windows home", () => {
+    setPlatform("win32");
+    process.env.HOME = "/c/Users/dest";
+    expect(getBaseConfigDir()).toBe(join("C:\\Users\\dest", ".seri"));
+  });
+
   // homedir() is read here, after HOME is deleted, not captured beforehand: Bun/Node's os.homedir()
   // consults $HOME first on POSIX, so a value captured before the delete would not reflect the
   // fallback this asserts.
