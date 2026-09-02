@@ -157,15 +157,19 @@ export function parseModelList(result: unknown): CodexListedModel[] {
       typeof row.metadata === "object" && row.metadata !== null
         ? (row.metadata as Record<string, unknown>)
         : undefined;
+    const visibility = typeof row.visibility === "string" ? row.visibility : undefined;
+    if (visibility !== undefined && visibility !== "list") continue;
     const effortsRaw = Array.isArray(row.supportedReasoningEfforts)
       ? row.supportedReasoningEfforts
       : Array.isArray(row.supported_reasoning_efforts)
         ? row.supported_reasoning_efforts
-        : Array.isArray(row.reasoningEfforts)
-          ? row.reasoningEfforts
-          : Array.isArray(metadata?.supported_reasoning_levels)
-            ? metadata.supported_reasoning_levels
-            : [];
+        : Array.isArray(row.supported_reasoning_levels)
+          ? row.supported_reasoning_levels
+          : Array.isArray(row.reasoningEfforts)
+            ? row.reasoningEfforts
+            : Array.isArray(metadata?.supported_reasoning_levels)
+              ? metadata.supported_reasoning_levels
+              : [];
     const supportedReasoningEfforts = effortsRaw.flatMap((effort) => {
       const named = reasoningEffortName(effort);
       return named === undefined ? [] : [named];
@@ -203,6 +207,10 @@ function rememberPlanType(result: unknown): void {
 
 const MODEL_LIST_PAGE = 100;
 const MODEL_LIST_MAX_PAGES = 20;
+// Required query on GET /models. The backend treats this as a Codex CLI
+// compatibility version: omit it and the list is HTTP 400; send seri's own
+// 0.0.1 and the catalog comes back empty. 0.0.0 is the ungated catalog.
+export const CODEX_UNGATED_CLIENT_VERSION = "0.0.0";
 
 function nextCursorOf(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null) return undefined;
@@ -274,9 +282,10 @@ function codexModelsUrl(configDir?: string, cursor?: string): string {
     /\/$/,
     "",
   );
-  const url = `${base}/models`;
-  if (cursor === undefined) return url;
-  return `${url}?cursor=${encodeURIComponent(cursor)}`;
+  const url = new URL(`${base}/models`);
+  url.searchParams.set("client_version", CODEX_UNGATED_CLIENT_VERSION);
+  if (cursor !== undefined) url.searchParams.set("cursor", cursor);
+  return url.toString();
 }
 
 async function listCodexModelsOverHttp(opts: RefreshCodexOpts): Promise<CodexListedModel[]> {
