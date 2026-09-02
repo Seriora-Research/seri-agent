@@ -117,6 +117,35 @@ describe("parseModelList", () => {
       },
     ]);
   });
+
+  test("reads the official Codex HTTP catalog body", () => {
+    expect(
+      parseModelList({
+        models: [
+          {
+            slug: "gpt-5.6-luna",
+            display_name: "GPT-5.6 Luna",
+            supported_reasoning_levels: [
+              { effort: "low", description: "low" },
+              { effort: "high", description: "high" },
+            ],
+            visibility: "list",
+          },
+          {
+            slug: "hidden-slug",
+            display_name: "Hidden",
+            visibility: "hide",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "gpt-5.6-luna",
+        displayName: "GPT-5.6 Luna",
+        supportedReasoningEfforts: ["low", "high"],
+      },
+    ]);
+  });
 });
 
 describe("refreshCodexSubscription", () => {
@@ -366,7 +395,10 @@ describe("listCodexModels", () => {
         },
       ]);
       expect(seen).toHaveLength(1);
-      expect(seen[0]?.url).toBe("https://chatgpt.com/backend-api/codex/models");
+      expect(seen[0]?.url).toBe(
+        "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0",
+      );
+      expect(seen[0]?.url).not.toContain("client_version=0.0.1");
       expect(seen[0]?.authorization).toBe("Bearer tok-plan");
       expect(seen[0]?.originator).toBe("seri");
     } finally {
