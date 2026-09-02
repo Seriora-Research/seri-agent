@@ -505,9 +505,7 @@ describe("gatewayNotice", () => {
   };
 
   test("names the seri plan, not OpenRouter, when no provider was requested", () => {
-    expect(gatewayNotice(route, undefined)).toBe(
-      "routing openai/gpt-oss-120b on your seri plan",
-    );
+    expect(gatewayNotice(route, undefined)).toBe("routing openai/gpt-oss-120b on your seri plan");
   });
 
   test("does not blame a missing OpenRouter key when the plan is serving that catalog row", () => {
