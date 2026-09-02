@@ -1,11 +1,10 @@
 import type { ModelProvider } from "@seri/model-catalog";
 
-// One credential class, two acquisitions. xAI implements RefreshSubscription with an OAuth
-// refresh_token grant. OpenAI implements it by spawning `codex app-server`. Routing,
-// credentialFor, reportForSubscription, the /setup row and the store consumers see this type
-// and cannot tell which is which. Provider-specific stores (xai-auth.json, ~/.codex/auth.json)
-// map onto this; callers that only need "is this a connected subscription, and whose token is
-// it" never read those files.
+// One credential class, two acquisitions. xAI and OpenAI both implement RefreshSubscription
+// with an HTTP refresh_token grant. Routing, credentialFor, reportForSubscription, the /setup
+// row and the store consumers see this type and cannot tell which is which. Provider-specific
+// stores (xai-auth.json, codex-auth.json) map onto this; callers that only need "is this a
+// connected subscription, and whose token is it" never read those files.
 export type SubscriptionCredential = {
   provider: ModelProvider;
   accessToken: string;

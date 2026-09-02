@@ -3,63 +3,91 @@ import {
   type ConnectCodexAppServerOpts,
   connectCodexAppServer,
 } from "./codexAppServer";
-import { credentialFromCodexAuth, hasCodexSubscription, loadCodexAuth } from "./codexAuthStore";
+import {
+  grantFromSubscription,
+  loadUsableCodexGrant,
+  saveCodexSubscription,
+  subscriptionFromCodexTokens,
+} from "./codexAuthStore";
+import { extractCodexAccountId, refreshCodexGrant, codexClientId, codexTokenUrl } from "./codexOAuth";
 import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 
 export type CodexRefreshResult =
   | { status: "ok"; credential: SubscriptionCredential }
   | { status: "not-connected" }
-  | { status: "not-installed"; message: string }
+  | { status: "reconnect-required"; message: string }
+  | { status: "tier-denied"; message: string }
   | { status: "error"; message: string };
 
 const inFlightRefreshes = new Map<string, Promise<CodexRefreshResult>>();
 
 export type RefreshCodexOpts = ConnectCodexAppServerOpts & {
   rpc?: CodexJsonRpc;
+  fetchFn?: typeof fetch;
 };
 
 export function refreshCodexSubscription(
   configDir: string,
   opts: RefreshCodexOpts = {},
 ): Promise<CodexRefreshResult> {
-  const key = process.env.CODEX_HOME ?? configDir;
-  const existing = inFlightRefreshes.get(key);
+  const existing = inFlightRefreshes.get(configDir);
   if (existing) return existing;
 
-  const promise = refreshCodexSubscriptionOnce(opts);
-  inFlightRefreshes.set(key, promise);
-  promise.finally(() => inFlightRefreshes.delete(key)).catch(() => {});
+  const promise = refreshCodexSubscriptionOnce(configDir, opts);
+  inFlightRefreshes.set(configDir, promise);
+  promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
 }
 
-async function refreshCodexSubscriptionOnce(opts: RefreshCodexOpts): Promise<CodexRefreshResult> {
-  if (!hasCodexSubscription(opts.env ?? process.env)) {
-    return { status: "not-connected" };
+async function refreshCodexSubscriptionOnce(
+  configDir: string,
+  opts: RefreshCodexOpts,
+): Promise<CodexRefreshResult> {
+  const grant = loadUsableCodexGrant(configDir, opts.env ?? process.env);
+  if (grant === undefined) return { status: "not-connected" };
+  if (grant.refreshToken === undefined || grant.refreshToken.length === 0) {
+    return {
+      status: "reconnect-required",
+      message: "Your ChatGPT plan session has expired. Connect it again from /setup.",
+    };
   }
 
-  let rpc = opts.rpc;
-  const closeOwned = rpc === undefined;
   try {
-    rpc ??= await connectCodexAppServer(opts);
-    const account = await rpc.request("account/read", { refreshToken: true });
-    rememberPlanType(account);
-    const auth = loadCodexAuth(opts.env ?? process.env);
-    if (auth === undefined || auth.authMode !== "chatgpt") {
-      return { status: "not-connected" };
+    const tokens = await refreshCodexGrant(
+      {
+        tokenUrl: codexTokenUrl(configDir),
+        clientId: codexClientId(configDir),
+        refreshToken: grant.refreshToken,
+      },
+      opts.fetchFn ?? fetch,
+    );
+    let accountId = grant.accountId;
+    try {
+      accountId = extractCodexAccountId(tokens.accessToken);
+    } catch {
+      // Leftover Codex CLI tokens may lack the auth claim. Keep the stored id.
     }
-    const tokens = credentialFromCodexAuth(auth);
+    const updated = subscriptionFromCodexTokens({ ...tokens, accountId });
+    saveCodexSubscription(updated, configDir);
+    const credential = grantFromSubscription(updated);
     return {
       status: "ok",
-      credential: { provider: "openai", ...tokens },
+      credential: {
+        provider: "openai",
+        accessToken: credential.accessToken,
+        accountId: credential.accountId,
+        expiresAt: credential.expiresAt,
+      },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (message.includes("not installed")) {
-      return { status: "not-installed", message };
+    if (err instanceof Error && err.name === "CodexTierDenied") {
+      return { status: "tier-denied", message };
+    }
+    if (err instanceof Error && err.name === "CodexReconnectRequired") {
+      return { status: "reconnect-required", message };
     }
     return { status: "error", message };
-  } finally {
-    if (closeOwned) rpc?.close();
   }
 }
 
@@ -68,7 +96,7 @@ export const refreshCodexCredential: RefreshSubscription = async (configDir) => 
   if (result.status !== "ok") {
     throw new Error(
       result.status === "not-connected"
-        ? "No ChatGPT plan is connected. Run `codex login`, then /setup."
+        ? "No ChatGPT plan is connected. Run /setup to connect one."
         : result.message,
     );
   }

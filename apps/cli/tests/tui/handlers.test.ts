@@ -265,13 +265,20 @@ describe("dispatchSetupList (via onSetupBack)", () => {
 
 describe("onSetupSelect for a Codex subscription row", () => {
   let configDir: string;
+  let codexHome: string;
+  const originalCodexHome = process.env.CODEX_HOME;
 
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), "seri-tui-handlers-codex-"));
+    codexHome = mkdtempSync(join(tmpdir(), "seri-tui-handlers-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
   });
 
   afterEach(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
     rmSync(configDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
   });
 
   test("does not open the API-key field", () => {
@@ -285,15 +292,13 @@ describe("onSetupSelect for a Codex subscription row", () => {
     onSetupSelect({
       kind: "subscription",
       provider: "openai",
-      status: { status: "not-installed" },
+      status: { status: "not-connected" },
       removable: false,
     });
 
-    expect(actions.map((a) => a.type)).toEqual(["transcript-append"]);
-    expect(actions[0]).toMatchObject({
-      type: "transcript-append",
-      line: expect.stringContaining("Codex CLI is not installed"),
-    });
+    expect(actions).toEqual([
+      { type: "setup-step", state: { step: "confirm-connect", provider: "openai", action: "connect" } },
+    ]);
   });
 
   test("a connected row opens confirm-disconnect instead of the transcript", () => {
@@ -332,11 +337,21 @@ describe("onSetupSelect for a Codex subscription row", () => {
     });
 
     expect(actions).toEqual([
-      { type: "setup-step", state: { step: "confirm-connect", provider: "openai" } },
+      {
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "reenable" },
+      },
     ]);
   });
 
-  test("confirm-disconnect writes the ignore and refreshes the list", () => {
+  test("confirm-disconnect unlinks the seri file, ignores leftover Codex auth, and refreshes", () => {
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
     const { actions, dispatch } = actionsCollector();
     const { onSetupRemove } = createSetupHandlers({
       dispatch,
@@ -355,6 +370,7 @@ describe("onSetupSelect for a Codex subscription row", () => {
     const step = actions.find((a) => a.type === "setup-step");
     expect(step?.type === "setup-step" && step.state.step).toBe("list");
     expect(existsSync(join(configDir, CODEX_IGNORE_FILENAME))).toBe(true);
+    expect(existsSync(join(codexHome, "auth.json"))).toBe(true);
   });
 
   test("confirm-connect clears the ignore and refreshes the list", () => {

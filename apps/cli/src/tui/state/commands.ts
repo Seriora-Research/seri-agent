@@ -20,8 +20,8 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
 import { hasHostedAuth, loadAuthSession } from "../../auth/authStore";
-import { loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
-import { type CodexSetupStatus, findCodexBin } from "../../auth/codexBin";
+import { hasLeftoverCodexSubscription, loadCodexSubscription } from "../../auth/codexAuthStore";
+import type { CodexSetupStatus } from "../../auth/codexBin";
 import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
 import { codexPlanType } from "../../auth/codexRefresh";
 import { type SeriSetupStatus, hostedPlanUsable, isSeriIgnored } from "../../auth/seriIgnore";
@@ -288,24 +288,7 @@ function seriSetupRow(configDir?: string): SetupSeriSubscriptionRow {
 }
 
 function codexSetupRow(configDir?: string): SetupSubscriptionRow {
-  if (findCodexBin() === undefined) {
-    return {
-      kind: "subscription",
-      provider: "openai",
-      status: { status: "not-installed" },
-      removable: false,
-    };
-  }
-  const auth = loadCodexAuth();
-  if (auth !== undefined && auth.authMode === "chatgpt") {
-    if (configDir !== undefined && isCodexSubscriptionIgnored(configDir)) {
-      return {
-        kind: "subscription",
-        provider: "openai",
-        status: { status: "ignored" },
-        removable: false,
-      };
-    }
+  if (configDir !== undefined && loadCodexSubscription(configDir) !== undefined) {
     const planType = codexPlanType();
     return {
       kind: "subscription",
@@ -314,19 +297,31 @@ function codexSetupRow(configDir?: string): SetupSubscriptionRow {
       removable: true,
     };
   }
-  const mode = readCodexAuthMode();
-  if (mode !== undefined && mode !== "chatgpt") {
+  if (
+    configDir !== undefined &&
+    isCodexSubscriptionIgnored(configDir) &&
+    hasLeftoverCodexSubscription()
+  ) {
     return {
       kind: "subscription",
       provider: "openai",
-      status: { status: "not-logged-in", reason: "api-key" },
+      status: { status: "ignored" },
       removable: false,
+    };
+  }
+  if (configDir !== undefined && codexSubscriptionActive(configDir)) {
+    const planType = codexPlanType();
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: planType === undefined ? { status: "connected" } : { status: "connected", planType },
+      removable: true,
     };
   }
   return {
     kind: "subscription",
     provider: "openai",
-    status: { status: "not-logged-in", reason: "no-auth" },
+    status: { status: "not-connected" },
     removable: false,
   };
 }

@@ -18,7 +18,12 @@ export type CallbackServer = {
   close(): void;
 };
 
-export type StartCallbackServer = (opts?: { ports?: readonly number[] }) => Promise<CallbackServer>;
+export type StartCallbackServer = (opts?: {
+  ports?: readonly number[];
+  path?: string;
+  redirectHost?: string;
+  fallbackEphemeral?: boolean;
+}) => Promise<CallbackServer>;
 
 // Ink on canvas with no accent hue, the palette docs/design/tokens.md defines for seri's web
 // surfaces, inverted under prefers-color-scheme: dark. Every value is inline and no font is
@@ -72,6 +77,8 @@ type ActiveWait = {
 // within reach of anything else on the network.
 export const startCallbackServer: StartCallbackServer = async (opts) => {
   const ports = opts?.ports ?? MCP_CALLBACK_PORTS;
+  const callbackPath = opts?.path ?? MCP_CALLBACK_PATH;
+  const redirectHost = opts?.redirectHost ?? "127.0.0.1";
   let active: ActiveWait | undefined;
   let stopped = false;
   // Carries the port alongside the server because Server.port is `number | undefined` (a
@@ -91,7 +98,7 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
     const url = new URL(req.url);
     // Exactly one path is the redirect. A browser fetches /favicon.ico off its own bat, and
     // treating whatever arrives on this port as the callback would settle the login on it.
-    if (req.method !== "GET" || url.pathname !== MCP_CALLBACK_PATH) {
+    if (req.method !== "GET" || url.pathname !== callbackPath) {
       return new Response("Not found", { status: 404 });
     }
     // No wait is active before waitForCallback is called and after it has settled, and there is no
@@ -138,6 +145,14 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
       // without re-registering anything and without persisting the choice.
     }
   }
+  if (listener === undefined && opts?.fallbackEphemeral === true) {
+    const ephemeral = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handle });
+    if (ephemeral.port !== undefined) {
+      listener = { server: ephemeral, port: ephemeral.port };
+    } else {
+      ephemeral.stop();
+    }
+  }
   if (listener === undefined) {
     throw new Error(
       `could not open an OAuth callback listener on any of ports ${ports.join(", ")}`,
@@ -146,7 +161,10 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
   // A listener leaked by a path that never reached close() must not be what keeps seri running.
   // close() is still the real cleanup; this only removes the failure mode where it is missed.
   listener.server.unref();
-  const redirectUri = mcpCallbackUri(listener.port);
+  const redirectUri =
+    opts?.path !== undefined || opts?.redirectHost !== undefined
+      ? `http://${redirectHost}:${listener.port}${callbackPath}`
+      : mcpCallbackUri(listener.port);
 
   function waitForCallback(waitOpts: {
     expectedState: string | undefined;

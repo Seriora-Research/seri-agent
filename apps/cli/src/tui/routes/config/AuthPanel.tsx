@@ -24,6 +24,7 @@ import { isEnter } from "../../util/keys";
 // in the background.
 function authModeLabel(mode: string): string {
   if (mode === "grok") return "Grok subscription";
+  if (mode === "codex") return "ChatGPT plan";
   return mode;
 }
 
@@ -50,6 +51,14 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
         <text fg={theme.muted}>{`Open ${state.verificationUri} and enter this code:`}</text>
         <text>{state.userCode}</text>
         <text fg={theme.muted}>Esc cancel</text>
+      </PanelBox>
+    );
+  }
+  if (state.step === "browser") {
+    return (
+      <PanelBox title="login">
+        <text fg={theme.muted}>{`Open ${state.verificationUri} to approve ${authModeLabel(state.mode)}`}</text>
+        <text fg={theme.muted}>Waiting for the browser. Esc cancel</text>
       </PanelBox>
     );
   }

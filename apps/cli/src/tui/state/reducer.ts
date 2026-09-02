@@ -53,15 +53,16 @@ export type SetupState =
       note?: string;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
-  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri" }
+  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri"; action?: "connect" | "reenable" }
   | { step: "confirm-disconnect"; provider: "xai" | "openai" | "seri" };
 
-export type AuthMode = "login" | "signup" | "grok";
+export type AuthMode = "login" | "signup" | "grok" | "codex";
 
-// /login, /signup, and Grok subscription connect's own live state — the device-flow OAuth panel.
+// /login, /signup, and subscription connect's own live state — the OAuth panel.
 export type AuthPanelState =
   | { step: "starting"; mode: AuthMode }
   | { step: "device"; mode: AuthMode; verificationUri: string; userCode: string }
+  | { step: "browser"; mode: AuthMode; verificationUri: string }
   | { step: "result"; message: string; error: boolean };
 
 // /config's own live state — structurally identical to SetupState above (list -> enter-value ->

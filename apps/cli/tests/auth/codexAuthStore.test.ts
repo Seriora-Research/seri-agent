@@ -1,13 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  clearCodexSubscription,
+  CODEX_SERI_AUTH_FILENAME,
   codexHome,
   hasCodexSubscription,
   jwtExpiryMs,
   loadCodexAuth,
+  loadCodexSubscription,
+  loadUsableCodexGrant,
   readCodexAuthMode,
+  saveCodexSubscription,
 } from "../../src/auth/codexAuthStore";
 
 function chatgptAuth(overrides: Record<string, unknown> = {}) {
@@ -93,6 +98,47 @@ describe("codexHome", () => {
 
   test("posix uses HOME", () => {
     expect(codexHome({ HOME: "/home/dest" }, "linux")).toBe(join("/home/dest", ".codex"));
+  });
+});
+
+describe("seri-owned Codex store", () => {
+  let configDir: string;
+
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), "seri-codex-seri-auth-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+  });
+
+  test("save and load round-trip", () => {
+    saveCodexSubscription(
+      {
+        accessToken: "a",
+        refreshToken: "r",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+        accountId: "acct-9",
+      },
+      configDir,
+    );
+    expect(loadCodexSubscription(configDir)?.accountId).toBe("acct-9");
+    expect(hasCodexSubscription(configDir)).toBe(true);
+    expect(loadUsableCodexGrant(configDir)?.source).toBe("seri");
+  });
+
+  test("clear unlinks only the seri file", () => {
+    saveCodexSubscription(
+      {
+        accessToken: "a",
+        refreshToken: "r",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      configDir,
+    );
+    clearCodexSubscription(configDir);
+    expect(loadCodexSubscription(configDir)).toBeUndefined();
+    expect(existsSync(join(configDir, CODEX_SERI_AUTH_FILENAME))).toBe(false);
   });
 });
 

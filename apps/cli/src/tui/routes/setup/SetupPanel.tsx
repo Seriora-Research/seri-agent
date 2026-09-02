@@ -5,6 +5,7 @@ import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
+import { CODEX_BORROWED_CLIENT_WARNING } from "../../../auth/codexConnect";
 import { GROK_BORROWED_CLIENT_WARNING } from "../../../auth/xaiConnect";
 import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
@@ -80,15 +81,31 @@ export function SetupPanel({
     );
   }
   if (pendingSetup.step === "confirm-connect") {
-    if (pendingSetup.provider === "openai") {
+    if (pendingSetup.provider === "openai" && pendingSetup.action !== "connect") {
       return (
         <ConfirmPrompt
-          subject="Re-enable ChatGPT plan via Codex (login is already present; this only clears the local ignore)"
+          subject="Re-enable ChatGPT plan (this only clears the local ignore; ~/.codex/auth.json is unchanged)"
           onConfirm={() =>
             onSetupRemove?.({
               kind: "subscription",
               provider: "openai",
               status: { status: "ignored" },
+              removable: false,
+            })
+          }
+          onCancel={() => onSetupBack?.()}
+        />
+      );
+    }
+    if (pendingSetup.provider === "openai") {
+      return (
+        <SetupConnectWarning
+          warning={CODEX_BORROWED_CLIENT_WARNING}
+          onConfirm={() =>
+            onSetupRemove?.({
+              kind: "subscription",
+              provider: "openai",
+              status: { status: "not-connected" },
               removable: false,
             })
           }
@@ -113,6 +130,7 @@ export function SetupPanel({
     }
     return (
       <SetupConnectWarning
+        warning={GROK_BORROWED_CLIENT_WARNING}
         onConfirm={() => onSetupRemove?.(SUBSCRIPTION_ROW)}
         onCancel={() => onSetupBack?.()}
       />
@@ -121,7 +139,7 @@ export function SetupPanel({
   if (pendingSetup.step === "confirm-disconnect") {
     const subject =
       pendingSetup.provider === "openai"
-        ? "Disconnect ChatGPT plan (local ignore only; Codex CLI login is not revoked)"
+        ? "Disconnect ChatGPT plan (local credential only; ~/.codex/auth.json is not touched)"
         : pendingSetup.provider === "seri"
           ? "Disconnect seri plan (this profile will use your API keys; you stay logged in)"
           : "Disconnect Grok subscription (local credential only; xAI access is not revoked)";
@@ -157,9 +175,11 @@ export function SetupPanel({
 }
 
 function SetupConnectWarning({
+  warning,
   onConfirm,
   onCancel,
 }: {
+  warning: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -177,7 +197,7 @@ function SetupConnectWarning({
   });
   return (
     <box {...FRAME} flexDirection="column" borderColor={theme.warning}>
-      <text fg={theme.warning}>{GROK_BORROWED_CLIENT_WARNING}</text>
+      <text fg={theme.warning}>{warning}</text>
       <text fg={theme.muted}>Shown before the browser opens. [y]es connect / [N]o cancel</text>
     </box>
   );
@@ -246,7 +266,7 @@ function SetupList({
             ? "↑/↓ move · Enter re-enable · Esc/Ctrl-D close"
             : selectedRow.provider === "seri"
               ? "↑/↓ move · Enter sign in · Esc/Ctrl-D close"
-              : "↑/↓ move · Enter show Codex setup · Esc/Ctrl-D close"
+              : "↑/↓ move · Enter connect · Esc/Ctrl-D close"
       : "↑/↓ move · Enter/a add or replace · r remove · Esc/Ctrl-D close";
 
   return (

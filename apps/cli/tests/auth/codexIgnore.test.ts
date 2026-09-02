@@ -3,10 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODEX_AUTH_FILENAME } from "../../src/auth/codexAuthStore";
+import { disconnectCodex } from "../../src/auth/codexConnect";
 import {
   CODEX_IGNORE_FILENAME,
   clearCodexSubscriptionIgnore,
-  disconnectCodex,
   ignoreCodexSubscription,
   isCodexSubscriptionIgnored,
   reconnectCodex,
@@ -67,7 +67,7 @@ describe("codexIgnore", () => {
     expect(isCodexSubscriptionIgnored(configDir)).toBe(true);
     expect(readFileSync(authPath)).toEqual(before);
     expect(statSync(authPath).mtimeMs).toBe(mtime);
-    expect(messages.some((line) => /not revoked/i.test(line))).toBe(true);
+    expect(messages.some((line) => /not touched/i.test(line))).toBe(true);
     expect(messages.some((line) => /xAI/i.test(line))).toBe(false);
   });
 
