@@ -7,6 +7,7 @@ import {
   routesFor,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
+import { effectiveHostedPlan } from "../auth/seriIgnore";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "./defaults";
 import { PROVIDER_API_KEY_NAMES } from "./keys";
 import { GATEWAY_PROVIDER, planCoverage } from "./planCoverage";
@@ -94,7 +95,7 @@ export function gatewayCoverageInGroup(
 // The single lookup both resolveRoute's own gateway branch AND the /model picker's coverage
 // predicate (cli.ts, decideModelPickerOpen's own planCoverage callback) must share — the same
 // drift risk byRoutePriority's own comment names for the reroute case, now applying to the gateway
-// case too: without ONE shared function, the picker could show "provided" for an entry resolveRoute
+// case too: without ONE shared function, the picker could show "seri" for an entry resolveRoute
 // would never actually route through the gateway (or the reverse), the two surfaces silently
 // disagreeing about what the same row means. Returns the OpenRouter-catalog
 // sibling entry when the gateway can actually serve `entry`'s route group under `plan`, `undefined`
@@ -111,6 +112,19 @@ export function gatewayCoverage(
 }
 
 const EMPTY_SUBSCRIPTIONS: ReadonlySet<ModelProvider> = new Set();
+
+// A leftover OpenRouter key must not beat an active seri plan — same as Grok/Codex leftover
+// keys. Drop GATEWAY_PROVIDER from the key set when a plan is in play so Rule 1/2 fall
+// through to Rule 4. Ignoring the plan (seri-ignore) passes plan: null and the key is used.
+function keysForRouting(
+  configured: ReadonlySet<ModelProvider>,
+  plan: Plan | null,
+): ReadonlySet<ModelProvider> {
+  if (plan === null || !configured.has(GATEWAY_PROVIDER)) return configured;
+  const next = new Set(configured);
+  next.delete(GATEWAY_PROVIDER);
+  return next;
+}
 
 // Subscription over key when a user holds both for the same provider. Both are the user's own
 // credential, so the only asymmetry is marginal cost: the subscription is already paid and
@@ -141,6 +155,7 @@ export function resolveRoute(
 ): ResolvedRoute {
   // Every early-return branch below stays on `requested` unchanged (code-review finding, PR #73,
   // round 2, item #9 — the four branches used to hand-duplicate this identical literal).
+  const keys = keysForRouting(configured, plan);
   const noReroute: ResolvedRoute = {
     model: requested.model,
     provider: requested.provider,
@@ -148,10 +163,11 @@ export function resolveRoute(
     credential: credentialFor(requested.provider, subscribed),
   };
 
-  // Rule 1: an explicit pick whose own provider has a key wins, unconditionally — never
-  // second-guessed even when a native sibling also has one (MULTI-PROVIDER-BYOK-ROUTING.md:121,
-  // "picking the entry IS picking the route").
-  if (configured.has(requested.provider) || subscribed.has(requested.provider)) {
+  // Rule 1: an explicit pick whose own provider has a key (or vendor subscription) wins —
+  // never second-guessed even when a native sibling also has one. An active seri plan is
+  // the exception for OpenRouter: that leftover key is unused, same as a leftover xAI key
+  // next to a connected Grok plan.
+  if (keys.has(requested.provider) || subscribed.has(requested.provider)) {
     return noReroute;
   }
 
@@ -166,7 +182,7 @@ export function resolveRoute(
   const candidates = routesFor(catalog.entries, entry).filter(
     (candidate) =>
       candidate.provider !== requested.provider &&
-      (configured.has(candidate.provider) || subscribed.has(candidate.provider)),
+      (keys.has(candidate.provider) || subscribed.has(candidate.provider)),
   );
   // Reached only when no sibling provider has a configured key either — Rule 1 and Rule 2 have
   // both already failed to find one. The gateway covering the model under `plan` is the 4th
@@ -179,7 +195,7 @@ export function resolveRoute(
       // upstream forward will actually recognize, not the originally-requested provider's id.
       // `rerouted: false`, not true: that flag means "a locally configured key exists on a
       // sibling provider" (Rule 2), which is not the case here — formatRouteLabel keeps
-      // "→ provider" and "provided" as distinct, mutually exclusive states.
+      // "→ provider" and "seri" as distinct, mutually exclusive states.
       return {
         model: gatewayEntry.id,
         provider: gatewayEntry.provider,
@@ -245,7 +261,7 @@ export function resolveSessionRoute(
     catalog,
     { model, provider },
     configured,
-    plan,
+    effectiveHostedPlan(configDir, plan),
     subscribedProviders(configDir),
   );
 }

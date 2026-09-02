@@ -300,6 +300,36 @@ describe("resolveRoute", () => {
       });
     });
 
+    test("a leftover OpenRouter key is unused when a seri plan covers the same provider", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+    });
+
+    test("a leftover OpenRouter key is used when no seri plan is active", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        null,
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+
     // Regression: a configured sibling still wins over gateway coverage — when both a sibling key
     // AND planCoverage are available, the reroute-to-sibling outcome is returned, never
     // credential: "gateway".

@@ -19,11 +19,12 @@ import type { Plan } from "@seri/plans";
 import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
-import { loadAuthSession } from "../../auth/authStore";
+import { hasHostedAuth, loadAuthSession } from "../../auth/authStore";
 import { loadCodexAuth, readCodexAuthMode } from "../../auth/codexAuthStore";
 import { type CodexSetupStatus, findCodexBin } from "../../auth/codexBin";
 import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
 import { codexPlanType } from "../../auth/codexRefresh";
+import { type SeriSetupStatus, hostedPlanUsable, isSeriIgnored } from "../../auth/seriIgnore";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
@@ -46,6 +47,8 @@ import {
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
 } from "../../provider/keys";
+import { loadCachedAccountPlan } from "../../provider/accountStatus";
+import { GATEWAY_PROVIDER } from "../../provider/planCoverage";
 import { resolveReasoningEffort } from "../../provider/reasoning";
 import {
   byRoutePriority,
@@ -244,7 +247,15 @@ export type SetupCodexSubscriptionRow = {
   status: CodexSetupStatus;
   removable: boolean;
 };
-export type SetupSubscriptionRow = SetupGrokSubscriptionRow | SetupCodexSubscriptionRow;
+export type SetupSeriSubscriptionRow = {
+  kind: "subscription";
+  provider: "seri";
+  status: SeriSetupStatus;
+};
+export type SetupSubscriptionRow =
+  | SetupGrokSubscriptionRow
+  | SetupCodexSubscriptionRow
+  | SetupSeriSubscriptionRow;
 export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
 
 export function setupRowId(row: SetupProviderRow): string {
@@ -264,6 +275,17 @@ export function firstSetupActionIndex(rows: readonly SetupProviderRow[]): number
 
 export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubscriptionRow {
   return row.kind === "subscription";
+}
+
+function seriSetupRow(configDir?: string): SetupSeriSubscriptionRow {
+  if (configDir === undefined || !hasHostedAuth(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "not-logged-in" } };
+  }
+  const planType = loadCachedAccountPlan(configDir) ?? undefined;
+  if (isSeriIgnored(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "ignored", planType } };
+  }
+  return { kind: "subscription", provider: "seri", status: { status: "connected", planType } };
 }
 
 function codexSetupRow(configDir?: string): SetupSubscriptionRow {
@@ -313,12 +335,15 @@ function codexSetupRow(configDir?: string): SetupSubscriptionRow {
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
   const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
+  const seriActive = configDir !== undefined && hostedPlanUsable(configDir);
   const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
     let unusedBecause: string | undefined;
     if (grokConnected && state.provider === "xai" && state.source !== "unset") {
       unusedBecause = "unused because a Grok subscription is connected";
     } else if (openaiSubscribed && state.provider === "openai" && state.source !== "unset") {
       unusedBecause = "unused because a ChatGPT plan is connected";
+    } else if (seriActive && state.provider === GATEWAY_PROVIDER && state.source !== "unset") {
+      unusedBecause = "unused because a seri plan is connected";
     }
     return {
       kind: "key",
@@ -334,6 +359,7 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
     { kind: "heading", label: "API keys" },
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
+    seriSetupRow(configDir),
     { kind: "subscription", provider: "xai", connected: grokConnected },
     codexSetupRow(configDir),
   ];

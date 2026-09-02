@@ -1,9 +1,39 @@
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import { fetchWithTimeout } from "@seri/model-catalog";
 import { type Plan, toPlan } from "@seri/plans";
+import { atomicWriteFile } from "../atomicWriteFile";
 import { loadAuthSession } from "../auth/authStore";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 import { authedFetch } from "./authedFetch";
 import { gatewayBaseUrl } from "./gateway";
+
+export const ACCOUNT_PLAN_FILENAME = "account-plan";
+
+function accountPlanPath(configDir: string): string {
+  return join(configDir, ACCOUNT_PLAN_FILENAME);
+}
+
+// Last successful /account-status plan, so /setup can name free/pro/max/ultra without
+// another network call. A failed fetch keeps whatever was already here; logout clears it.
+export function loadCachedAccountPlan(configDir: string): Plan | null {
+  const path = accountPlanPath(configDir);
+  if (!existsSync(path)) return null;
+  try {
+    return toPlan(readFileSync(path, "utf8").trim());
+  } catch {
+    return null;
+  }
+}
+
+export function cacheAccountPlan(configDir: string, plan: Plan): void {
+  atomicWriteFile(accountPlanPath(configDir), `${plan}\n`);
+}
+
+export function clearCachedAccountPlan(configDir: string): void {
+  const path = accountPlanPath(configDir);
+  if (existsSync(path)) unlinkSync(path);
+}
 
 type AccountStatusDeps = {
   fetchFn?: typeof fetch;
@@ -47,7 +77,9 @@ export async function fetchAccountPlan(
       async (response) => {
         if (!response.ok) return null;
         const body = await response.json();
-        return toPlan(body?.plan);
+        const plan = toPlan(body?.plan);
+        if (plan !== null) cacheAccountPlan(configDir, plan);
+        return plan;
       },
     );
   } catch {

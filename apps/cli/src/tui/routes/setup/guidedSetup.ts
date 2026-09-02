@@ -31,9 +31,11 @@ const GUIDED_MODEL_LOADING = "Loading available models…";
 // Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
-// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
-// configured anywhere (env or config.json) — the "genuinely blank first run" case that would
-// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Renders
+// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and
+// `needsGuidedSetup` is true — no BYOK key, no vendor subscription, and no usable seri plan. A
+// logged-in session that has not ignored the plan reaches models via the gateway without a
+// local key, so that case must not land here. The remaining blank-first-run case is what would otherwise hard-exit
+// before the TUI ever mounts. Renders
 // `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
 // action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
 // The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s
@@ -81,7 +83,7 @@ export async function runGuidedSetup(
   // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
   // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
   // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
-  const { onConnectGrok } = createAuthHandlers({
+  const { onConnectGrok, onLogin } = createAuthHandlers({
     dispatch,
     deps: {},
     configDir,
@@ -92,6 +94,7 @@ export async function runGuidedSetup(
     configDir,
     onPanelClosed: () => resolveClosed(),
     onConnectGrok,
+    onConnectSeri: () => onLogin("login"),
   });
 
   const closed = new Promise<void>((resolve) => {

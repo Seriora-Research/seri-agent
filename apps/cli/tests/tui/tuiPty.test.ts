@@ -38,8 +38,26 @@ function lockSessionStore(sessionsDir: string): void {
   const path = join(configDirForStore(sessionsDir, "sessions"), DATABASE_FILENAME);
   const lock = new Database(path);
   lock.exec("PRAGMA busy_timeout = 0");
-  lock.exec("BEGIN EXCLUSIVE");
-  exclusiveLocks.set(sessionsDir, lock);
+  // RUNLOOP_READY can fire while the child's first save is still in a write
+  // transaction. busy_timeout=0 then fails this BEGIN, not the child's later /mode
+  // save. Retry until the first save commits, then hold the lock.
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      lock.exec("BEGIN EXCLUSIVE");
+      exclusiveLocks.set(sessionsDir, lock);
+      return;
+    } catch (err) {
+      const busy =
+        err instanceof Error &&
+        ((err as { code?: string }).code === "SQLITE_BUSY" || /locked/i.test(err.message));
+      if (!busy || Date.now() >= deadline) {
+        lock.close();
+        throw err;
+      }
+      Bun.sleepSync(20);
+    }
+  }
 }
 
 function restoreSessionStore(sessionsDir: string): void {
@@ -415,7 +433,7 @@ function childScriptAccountStatusOnce(dir: string): string {
 // /logout left the previous (possibly paid) plan in place, so
 // resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
 // logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
-// key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
+// key, shows "seri"), then logs out and re-opens /model to prove that same entry's row drops
 // back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
 // leaving it stale.
 function childScriptPlanClearedOnLogout(dir: string): string {
@@ -1354,6 +1372,47 @@ function childScriptGuidedSetup(dir: string): string {
     `}`,
     `const code = await cli.run(["do", "a", "task"], {`,
     `  runLoop: runLoopFake,`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+// The hosted-login counterpart of childScriptGuidedSetup: still zero local keys (every
+// provider env var deleted), but prepareSession can resolve via the gateway because this
+// script mocks /account-status and injects getGatewayModel. Used with a host-side auth.json
+// (seedAuth) so the first-run gate sees a real session and must skip /setup.
+function childScriptLoggedInZeroKeys(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.XAI_API_KEY;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGatewayModel: (id) => ({ id, via: "gateway" }),`,
     `  loadAgentsFile: () => "",`,
     `  isTTY: process.stdout.isTTY,`,
     `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
@@ -2705,7 +2764,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
-      expect(lastFrame()).toContain("provided");
+      expect(lastFrame()).toContain("seri");
 
       child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -2727,8 +2786,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
-      // still read "provided" here, from the plan a session that no longer exists once had.
-      expect(lastFrame()).not.toContain("provided");
+      // still read as a seri-plan route here, from the plan a session that no longer exists once had.
       expect(lastFrame()).toContain("no key");
     } finally {
       child.kill("SIGKILL");
@@ -3946,7 +4004,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/setup", () => {
-    test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
+    test("lists every BYOK provider with correct source, masked values, and disabled removal for an env row", async () => {
       seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -3956,7 +4014,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // default columns before panels took their `PAD_X` interior padding (theme/spacing.ts), so
       // at 80 the row now middle-truncates and the phrase below never appears whole. The
       // truncation is pinned by its own test further down rather than left to break this one.
-      const { child, sawLine } = await startChild(scriptPath, dir, {
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
         terminalSize: { cols: 100, rows: 30 },
       });
       try {
@@ -3970,6 +4028,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("sk-a...efgh");
         await sawLine("set by $GROQ_API_KEY in your environment");
+        await sawLine("openrouter");
+        await sawLine("not set");
       } finally {
         child.kill("SIGKILL");
       }
@@ -4022,27 +4082,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — one Down
-        // reaches openrouter, unset at this point (only GROQ_API_KEY is set, as an env var).
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
-        const secret = "sk-or-added-secret-key";
+        const secret = "sk-ant-added-secret-key";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
         // caught elsewhere in this file (waitForConfig's own comment).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secret,
+          (c) => c.ANTHROPIC_API_KEY === secret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secret);
 
         // The negative control at the process level: the raw key must never have reached stdout,
         // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
@@ -4267,8 +4328,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
-        // anthropic=2, openai=3).
+        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4315,8 +4375,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("config entry underneath — removable");
         expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
-        // anthropic=2, openai=3).
+        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4426,6 +4485,75 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // pass vacuously either way. A stack frame's file path is not interleaved the same way
         // (confirmed the same way), so this checks for that instead.
         expect(rawOccurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a logged-in /setup lists seri as a subscription and OpenRouter as a key", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-seri.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("done ·");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("Subscriptions");
+        await sawLine("seri");
+        await sawLine("connected");
+        await sawLine("openrouter");
+        expect(lastFrame()).toContain("not set");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a logged-in user can paste an OpenRouter key; it is unused while the seri plan is connected", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-own-key.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("seri");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        const secret = "sk-or-hosted-own-override";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        await sawLine("unused because a seri plan is connected");
+        expect(lastFrame()).toContain("seri");
       } finally {
         child.kill("SIGKILL");
       }
@@ -4860,28 +4988,30 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // If the picker silently replaced this mid-typing (the bug), the rest of this input would
-        // land in ModelPicker's own filter box instead, and "Saved OPENROUTER_API_KEY." would
+        // land in ModelPicker's own filter box instead, and "Saved ANTHROPIC_API_KEY." would
         // never print — sawLine's own bounded poll is what turns that into a real test failure
         // rather than a hang.
         const secondSecret = "sk-guided-setup-second-key-secret";
         child.stdin?.write(secondSecret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secondSecret,
+          (c) => c.ANTHROPIC_API_KEY === secondSecret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secondSecret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secondSecret);
         expect(config.GROQ_API_KEY).toBe(secret);
 
         // The flow still completes normally afterward: back at the list step, a fresh Escape opens
@@ -4972,12 +5102,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
-        // resolves.
+        // resolves. groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
         // is still true.
@@ -5001,8 +5133,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — two Downs
-        // reach anthropic (same navigation the /setup "remove" pty tests above already use).
+        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -5176,18 +5307,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         const secret = "sk-guided-setup-catalog-missing-provider-secret";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
         await wait100ms();
@@ -5828,7 +5961,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-zero-key.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
@@ -5840,8 +5975,34 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
-        // rather than bypassing it.
+        // rather than bypassing it. OpenRouter is a normal BYOK row here, unset.
         await sawLine("/setup — provider API keys");
+        await sawLine("openrouter");
+        await sawLine("not set");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The hosted-login cell of the same gate: auth.json is already on disk (seedAuth), zero
+    // local keys, splash dismissed via Continue. Before the gate treated a hosted session as
+    // blank, this path mounted /setup and never reached RUNLOOP_READY. Reverting
+    // needsGuidedSetup's loadAuthSession check against this script reproduces that.
+    test("a logged-in user with zero local keys continues past splash into the main TUI, not /setup", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
+      try {
+        await sawLine(SPLASH_MARK);
+        await sawLine("> Continue");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY");
+        expect(rawOccurrences("/setup — provider API keys")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }

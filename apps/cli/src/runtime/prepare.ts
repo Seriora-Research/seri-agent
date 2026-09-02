@@ -37,6 +37,7 @@ import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadGrants } from "../permissions/store";
+import { effectiveHostedPlan } from "../auth/seriIgnore";
 import { fetchAccountPlan } from "../provider/accountStatus";
 import { getModelCatalog } from "../provider/catalog";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "../provider/defaults";
@@ -98,7 +99,7 @@ export async function resolveModelRoute(
     catalog,
     { model: requested.model, provider: requestedProvider },
     configured,
-    plan,
+    effectiveHostedPlan(configDir, plan),
     subscribedProviders(configDir),
   );
   const model = dispatchModel(route, sessionId, configDir, deps);

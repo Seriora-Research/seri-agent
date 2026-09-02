@@ -64,12 +64,14 @@ serves it.
 | How you pay | What it is |
 | --- | --- |
 | **Key** | your own API key for that provider (`/setup`, or the env var above) |
-| **Subscription** | a consumer plan you already pay for — **Grok** (SuperGrok / X Premium+) on xAI, or **ChatGPT / Codex** on OpenAI |
-| **Hosted** | a seri account (`/signup` / `/login`) that routes on your behalf |
+| **Subscription** | a plan you already pay for — **seri** (`/login`, free / pro / max / ultra), **Grok** (SuperGrok / X Premium+) on xAI, or **ChatGPT / Codex** on OpenAI |
+| **Hosted** | the seri plan above: a seri account that routes on your behalf |
 
-`/setup` lists API keys and Subscriptions in one panel. Connect a Grok plan with a browser
-sign-in. Connect a ChatGPT plan by logging in with the Codex CLI (`codex login`); seri reads
-that login and does not host its own ChatGPT OAuth. Disconnect is local to this profile.
+`/setup` lists API keys and Subscriptions in one panel. seri, Grok, and Codex each appear as
+their own subscription row. Connect a Grok plan with a browser sign-in. Connect a ChatGPT plan
+by logging in with the Codex CLI (`codex login`); seri reads that login and does not host its
+own ChatGPT OAuth. Disconnect is local to this profile and leaves the login in place so you
+can switch back to the plan or to your own keys.
 
 A subscription and a metered key can both be present. For that vendor the subscription wins, and
 the key is marked unused. Turns on a subscription report `(cost: included)` instead of a dollar
@@ -124,9 +126,13 @@ seri
 ```
 
 That opens the TUI. On a first run, guided setup asks how you want to pay: paste a provider
-key and pick a model, sign into a hosted account (`/login` / `/signup`), or connect a Grok or
-ChatGPT (Codex) subscription from `/setup`. Setting a key in the environment before you launch
-(`GROQ_API_KEY` or `XAI_API_KEY`, say) skips setup.
+key and pick a model, or connect a seri, Grok, or ChatGPT (Codex) subscription from `/setup`.
+Signing into a hosted account on the welcome splash (`Log in` / `Sign up`) skips setup — the
+seri plan covers OpenRouter without a local key, and `/setup` lists it under Subscriptions
+with the plan name (free / pro / max / ultra). OpenRouter stays a normal API-key row for a
+key you bring yourself. Disconnecting the seri plan (without `/logout`) switches this
+profile back to your keys. Setting a key in the environment before you launch
+(`GROQ_API_KEY` or `XAI_API_KEY`, say) also skips setup.
 
 ```text
 seri <task>                   one-shot, non-interactive
@@ -157,7 +163,7 @@ Everything below is a slash command inside the session.
 | `/usage` | hosted-gateway spend vs allowance |
 | `/exit` | end the session (or Ctrl-D) |
 | `/model` | open the model picker across all six providers and subscription routes |
-| `/setup` | add or remove a provider key; connect or disconnect a Grok or Codex subscription |
+| `/setup` | add or replace a provider API key; connect or ignore seri, Grok, or Codex plans |
 | `/login` | sign in to a hosted seri account |
 | `/signup` | create a hosted seri account |
 | `/logout` | leave a hosted seri account |

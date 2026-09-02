@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveAuthSession } from "../../src/auth/authStore";
 import { CODEX_IGNORE_FILENAME, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { needsGuidedSetup } from "../../src/cli";
+import { setConfigValue } from "../../src/config/config";
 import {
   createConfigHandlers,
   createEffortHandlers,
@@ -45,6 +48,178 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     expect(actions.map((a) => a.type)).toEqual(["setup-step"]);
     const [action] = actions;
     expect(action?.type === "setup-step" && action.state.step).toBe("list");
+  });
+
+  test("selecting an unset OpenRouter row opens enter-key with no hosted note", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+    onSetupSelect({
+      kind: "key",
+      provider: "openrouter",
+      keyName: "OPENROUTER_API_KEY",
+      source: "unset",
+      masked: undefined,
+      removable: false,
+    });
+    expect(actions).toEqual([
+      {
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          busy: false,
+        },
+      },
+    ]);
+  });
+
+  test("saving an OpenRouter key while logged in lists it as unused under the seri plan", async () => {
+    const originalSkip = process.env.SERI_SKIP_KEY_VALIDATION;
+    process.env.SERI_SKIP_KEY_VALIDATION = "1";
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      const { actions, dispatch } = actionsCollector();
+      const { onSetupKeyEntered } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => undefined,
+        configDir,
+      });
+      await onSetupKeyEntered("openrouter", "sk-or-own-override");
+      const step = actions.find((a) => a.type === "setup-step" && a.state.step === "list");
+      expect(step?.type === "setup-step" && step.state.step).toBe("list");
+      if (step?.type !== "setup-step" || step.state.step !== "list") return;
+      const row = step.state.rows.find(
+        (entry) => entry.kind === "key" && entry.provider === "openrouter",
+      );
+      expect(row).toMatchObject({
+        source: "config",
+        removable: true,
+        unusedBecause: "unused because a seri plan is connected",
+      });
+    } finally {
+      if (originalSkip === undefined) delete process.env.SERI_SKIP_KEY_VALIDATION;
+      else process.env.SERI_SKIP_KEY_VALIDATION = originalSkip;
+    }
+  });
+
+  test("selecting a connected seri row asks to disconnect", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onSetupSelect } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => undefined,
+      configDir,
+    });
+    onSetupSelect({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "connected", planType: "pro" },
+    });
+    expect(actions).toEqual([
+      { type: "setup-step", state: { step: "confirm-disconnect", provider: "seri" } },
+    ]);
+  });
+
+  test("confirming seri disconnect ignores the plan and keeps the login", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      const { actions, dispatch } = actionsCollector();
+      const { onSetupRemove } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => ({ step: "confirm-disconnect", provider: "seri" }),
+        configDir,
+      });
+      onSetupRemove({
+        kind: "subscription",
+        provider: "seri",
+        status: { status: "connected" },
+      });
+      const step = actions.find((a) => a.type === "setup-step");
+      expect(step?.type === "setup-step" && step.state.step).toBe("list");
+      if (step?.type !== "setup-step" || step.state.step !== "list") return;
+      const seri = step.state.rows.find(
+        (entry) => entry.kind === "subscription" && entry.provider === "seri",
+      );
+      expect(seri).toMatchObject({ status: { status: "ignored" } });
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("removing a local OpenRouter key while logged in leaves the seri plan, not a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      setConfigValue("OPENROUTER_API_KEY", "sk-or-own", configDir);
+      const { actions, dispatch } = actionsCollector();
+      const { onSetupRemove } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => ({
+          step: "confirm-remove",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+        }),
+        configDir,
+      });
+      onSetupRemove({
+        kind: "key",
+        provider: "openrouter",
+        keyName: "OPENROUTER_API_KEY",
+        source: "config",
+        masked: "sk-o...own1",
+        removable: true,
+      });
+      const step = actions.find((a) => a.type === "setup-step");
+      expect(step?.type === "setup-step" && step.state.step).toBe("list");
+      if (step?.type !== "setup-step" || step.state.step !== "list") return;
+      const row = step.state.rows.find(
+        (entry) => entry.kind === "key" && entry.provider === "openrouter",
+      );
+      const seri = step.state.rows.find(
+        (entry) => entry.kind === "subscription" && entry.provider === "seri",
+      );
+      expect(row).toMatchObject({ source: "unset", removable: false });
+      expect(seri).toMatchObject({ status: { status: "connected" } });
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
   });
 
   test("onSetupBack on a corrupted config.json closes the panel instead of leaving confirm-remove stuck", () => {

@@ -61,6 +61,18 @@ export function loadAuthSession(configDir: string): AuthSession | undefined {
   }
 }
 
+// loadAuthSession is a bare JSON.parse — a Codex auth.json (or any other object) in the same
+// directory comes back truthy. Gateway coverage needs a real WorkOS access token, not "a file
+// that parsed".
+export function hasHostedAuth(configDir: string): boolean {
+  const session = loadAuthSession(configDir);
+  return (
+    session !== undefined &&
+    typeof session.accessToken === "string" &&
+    session.accessToken.length > 0
+  );
+}
+
 export function clearAuthSession(configDir: string): void {
   const path = authPath(configDir);
   if (existsSync(path)) unlinkSync(path);

@@ -3,6 +3,7 @@
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import { describeCodexSetupStatus } from "../../auth/codexBin";
+import { describeSeriSetupStatus } from "../../auth/seriIgnore";
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
@@ -360,21 +361,31 @@ export function formatDoneLine(
 // bug of promising a fallback that does not exist.
 // Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
 // persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
-// they can never independently drift on what "your key"/"plan"/"→ provider"/"provided"/"no key"
+// they can never independently drift on what "your key"/"grok"/"codex"/"seri"/"→ provider"/"no key"
 // means for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
 // `formatModeDetail`'s caller passed a real plan-coverage predicate/route. `subscriptionCovered`
-// is the ChatGPT-plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
+// is a vendor plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
 // row still reads as included.
+function subscriptionRouteLabel(provider?: ModelProvider): string {
+  if (provider === "xai") return "grok";
+  if (provider === "openai") return "codex";
+  return "plan";
+}
+
 export function formatRouteLabel(input: {
   keyConfigured: boolean;
   rerouteTo?: ModelProvider;
   gatewayReachable?: boolean;
   subscriptionCovered?: boolean;
+  provider?: ModelProvider;
 }): string {
-  if (input.subscriptionCovered) return "plan";
-  if (input.keyConfigured) return "your key";
+  if (input.subscriptionCovered) return subscriptionRouteLabel(input.provider);
+  // Leftover OpenRouter key under an active seri plan: the plan pays, same as Grok/Codex.
+  if (input.keyConfigured && !(input.gatewayReachable && input.provider === "openrouter")) {
+    return "your key";
+  }
   if (input.rerouteTo) return `→ ${input.rerouteTo}`;
-  if (input.gatewayReachable) return "provided";
+  if (input.gatewayReachable) return "seri";
   return "no key";
 }
 
@@ -416,6 +427,7 @@ export function formatModeDetail(
     subscriptionCovered: !route.rerouted && route.credential === "subscription",
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.credential === "gateway",
+    provider: route.provider,
   });
   const withRoute = `${model} · ${routeLabel}`;
   const withEffort =
@@ -459,6 +471,7 @@ export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): stri
     rerouteTo,
     gatewayReachable,
     subscriptionCovered,
+    provider: entry.provider,
   });
   const suffix =
     keyConfigured && alternatives > 0
@@ -516,7 +529,7 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     .split(/\s+/)
     .filter((term) => term.length > 0);
   if (terms.length === 0) return true;
-  const { entry, subscriptionCovered } = row;
+  const { entry, subscriptionCovered, gatewayReachable } = row;
   const haystacks = [
     entry.id.toLowerCase(),
     entry.displayName.toLowerCase(),
@@ -527,7 +540,8 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     (entry.family ?? "").toLowerCase(),
     entry.provider.toLowerCase(),
     priceLabel(entry),
-    ...(subscriptionCovered ? ["included", "plan"] : []),
+    ...(subscriptionCovered ? ["included", "plan", subscriptionRouteLabel(entry.provider)] : []),
+    ...(gatewayReachable ? ["seri", "plan"] : []),
   ];
   return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }
@@ -557,6 +571,9 @@ export function formatSetupRow(row: SetupProviderRow): string {
     if (row.provider === "xai") {
       const name = truncatePad("grok", PROVIDER_WIDTH);
       return row.connected ? `${name} connected` : `${name} not connected`;
+    }
+    if (row.provider === "seri") {
+      return `${truncatePad("seri", PROVIDER_WIDTH)} ${describeSeriSetupStatus(row.status)}`;
     }
     return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
   }

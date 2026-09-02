@@ -32,7 +32,8 @@ import {
 } from "./toolActivity";
 
 // /setup's own live state — a three-step flow, mirrored on the reducer
-// the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
+// the same way /model's picker is: "list" shows the BYOK key rows decideSetupOpen
+// computed, "enter-key" is the masked
 // text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. "list" carries its
 // own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
 // reaching back into a stale copy, so a step transition always renders what config.json/env
@@ -49,10 +50,11 @@ export type SetupState =
       keyName: string;
       error?: string;
       busy: boolean;
+      note?: string;
     }
   | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
-  | { step: "confirm-connect"; provider: "xai" | "openai" }
-  | { step: "confirm-disconnect"; provider: "xai" | "openai" };
+  | { step: "confirm-connect"; provider: "xai" | "openai" | "seri" }
+  | { step: "confirm-disconnect"; provider: "xai" | "openai" | "seri" };
 
 export type AuthMode = "login" | "signup" | "grok";
 
