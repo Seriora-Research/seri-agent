@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { CODEX_SERI_AUTH_FILENAME } from "../../src/auth/codexAuthStore";
 import { CODEX_IGNORE_FILENAME } from "../../src/auth/codexIgnore";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import {
@@ -226,6 +227,7 @@ describe("profileNameError", () => {
       AUTH_FILENAME,
       PERMISSIONS_FILENAME,
       CODEX_IGNORE_FILENAME,
+      CODEX_SERI_AUTH_FILENAME,
       "sessions",
       "checkpoints",
       "rg",
