@@ -140,7 +140,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
-import { subscribedProviders } from "./provider/subscriptions";
+import { modelPickerSubscribedProviders, subscribedProviders } from "./provider/subscriptions";
 import { toolDefinitions } from "./provider/tools";
 import type { RuleRegistry } from "./rules/registry";
 import {
@@ -2410,9 +2410,7 @@ async function runTui(
                 effectiveHostedPlan(configDir, prepared.plan),
                 hostedPlanUsable(configDir),
               ) !== undefined,
-            // Overlay-applied openai only: hasCodexSubscription without a successful model/list
-            // overlay still leaves the API catalog on screen, and those rows are not plan-included.
-            isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
+            modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
           ),
         });
       } catch (err) {

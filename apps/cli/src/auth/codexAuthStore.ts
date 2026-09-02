@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveUserHome } from "../config/paths";
 
 export const CODEX_AUTH_FILENAME = "auth.json";
 
@@ -13,7 +13,7 @@ export type CodexAuth = {
 };
 
 export function codexHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CODEX_HOME || join(env.HOME || homedir(), ".codex");
+  return env.CODEX_HOME || join(resolveUserHome(env), ".codex");
 }
 
 export function codexAuthPath(env: NodeJS.ProcessEnv = process.env): string {

@@ -19,3 +19,15 @@ export function subscribedProviders(configDir: string): ReadonlySet<ModelProvide
   if (codexSubscriptionActive(configDir)) subscribed.add("openai");
   return subscribed;
 }
+
+// /model's Route column. Grok is labeled from the persisted grant. openai is labeled
+// only after a successful Codex overlay. A chatgpt login without that overlay still
+// shows the API catalog, and those rows are not plan-included.
+export function modelPickerSubscribedProviders(
+  configDir: string,
+  overlayApplied: boolean,
+): ReadonlySet<ModelProvider> {
+  const subscribed = new Set(subscribedProviders(configDir));
+  if (!overlayApplied) subscribed.delete("openai");
+  return subscribed;
+}

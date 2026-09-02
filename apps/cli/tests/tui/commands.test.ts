@@ -33,6 +33,7 @@ import {
   resetCodexPlanCatalogApplied,
   withCodexSubscriptionCatalog,
 } from "../../src/provider/catalog";
+import { modelPickerSubscribedProviders } from "../../src/provider/subscriptions";
 import type { SessionState } from "../../src/session/session";
 import {
   configKeyInfo,
@@ -315,12 +316,6 @@ describe("decideModelPickerOpen", () => {
     expect(rows[0]?.rerouteTo).toBeUndefined();
   });
 
-  // What /model in cli.ts actually passes as `subscribed`. Kept here so a rewrite of that
-  // call site cannot silently drop the Grok grant or start labeling API-catalog openai rows.
-  function modelPickerSubscribedAsCliPasses(): ReadonlySet<ModelProvider> {
-    return isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set();
-  }
-
   test("a persisted Grok grant labels native xai Route grok even when OpenRouter is configured", () => {
     saveXaiSubscription(
       {
@@ -354,7 +349,7 @@ describe("decideModelPickerOpen", () => {
       catalog,
       new Set<ModelProvider>(["openrouter"]),
       () => false,
-      modelPickerSubscribedAsCliPasses(),
+      modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
     );
     const xaiRow = rows.find((row) => row.entry.provider === "xai");
     expect(xaiRow).toBeDefined();
@@ -404,7 +399,7 @@ describe("decideModelPickerOpen", () => {
         overlaid,
         new Set(),
         () => false,
-        modelPickerSubscribedAsCliPasses(),
+        modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
       );
       const openaiRow = rows.find((row) => row.entry.provider === "openai");
       expect(openaiRow).toBeDefined();

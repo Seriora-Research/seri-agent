@@ -6,10 +6,33 @@ import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
 
-// Unprofiled: the vendored-rg cache and nothing else lives here. Platform-independent by
-// design: no win32 branch, no throw path.
+// Git Bash on Windows sets HOME=/c/Users/name. Node's win32 join treats that as
+// \c\Users\name, which is not %USERPROFILE%. Codex auth and seri's profile root
+// both live next to the Windows home, so a MSYS drive path has to become C:\Users\name
+// before anything is joined onto it.
+export function resolveUserHome(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = process.platform,
+): string {
+  const home = env.HOME;
+  if (platform === "win32" && home !== undefined && isMsysDriveHome(home)) {
+    return msysDriveHomeToWin32(home);
+  }
+  return home || homedir();
+}
+
+function isMsysDriveHome(home: string): boolean {
+  return /^\/[a-zA-Z](\/|$)/.test(home);
+}
+
+function msysDriveHomeToWin32(home: string): string {
+  const rest = home.slice(2).replace(/\//g, "\\");
+  return `${home.charAt(1).toUpperCase()}:${rest || "\\"}`;
+}
+
+// Unprofiled: the vendored-rg cache and nothing else lives here. No throw path.
 export function getBaseConfigDir(): string {
-  return join(process.env.HOME || homedir(), ".seri");
+  return join(resolveUserHome(), ".seri");
 }
 
 export const DEFAULT_PROFILE = "default";
