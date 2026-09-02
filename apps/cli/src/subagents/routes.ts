@@ -96,10 +96,11 @@ export function resolveChildRoute(
   // missingKeyError, and the child is silently downgraded to the parent's model even though a
   // usable credential exists. Defaulted so callers that never had it keep compiling.
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
+  hostedActive = false,
 ): RoleRoute {
   const taskPin = pinFromTask(request);
   if (taskPin !== undefined) {
-    const resolved = resolveRoute(catalog, taskPin, configured, plan, subscribed);
+    const resolved = resolveRoute(catalog, taskPin, configured, plan, subscribed, hostedActive);
     return {
       model: resolved.model,
       provider: resolved.provider,
@@ -108,7 +109,7 @@ export function resolveChildRoute(
       inherited: false,
     };
   }
-  return resolveRoleRoute(role, parent, pins, catalog, configured, plan, subscribed);
+  return resolveRoleRoute(role, parent, pins, catalog, configured, plan, subscribed, hostedActive);
 }
 
 export function resolveRoleRoute(
@@ -119,6 +120,7 @@ export function resolveRoleRoute(
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
+  hostedActive = false,
 ): RoleRoute {
   const pin = role === undefined ? undefined : pins[role];
   if (pin === undefined) {
@@ -130,7 +132,7 @@ export function resolveRoleRoute(
       inherited: true,
     };
   }
-  const resolved = resolveRoute(catalog, pin, configured, plan, subscribed);
+  const resolved = resolveRoute(catalog, pin, configured, plan, subscribed, hostedActive);
   return {
     model: resolved.model,
     provider: resolved.provider,

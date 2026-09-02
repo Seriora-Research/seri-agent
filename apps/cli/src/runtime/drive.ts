@@ -21,7 +21,7 @@ import {
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
 import type { CostReport } from "../provider/cost";
-import { effectiveHostedPlan } from "../auth/seriIgnore";
+import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
@@ -296,6 +296,7 @@ export async function driveLoop(
       configured,
       effectiveHostedPlan(ctx.configDir, prepared.plan),
       subscribedProviders(ctx.configDir),
+      hostedPlanUsable(ctx.configDir),
     );
     const samePair = intended.model === route.model && intended.provider === route.provider;
     let childModel = model;

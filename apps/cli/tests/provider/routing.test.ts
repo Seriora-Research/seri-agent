@@ -202,6 +202,53 @@ describe("resolveRoute", () => {
       expect(route.credential).toBe("key");
     });
 
+    // A logged-in session whose /account-status fetch failed (or never ran) used to
+    // fall through to missingKeyError for OPENROUTER_API_KEY — the wrong refusal:
+    // the WorkOS session is the credential, and the server is the quota authority.
+    test("a usable hosted login with plan: null still routes via the gateway", () => {
+      const viaGroq = resolveRoute(
+        catalog,
+        { model: "shared-model", provider: "groq" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(viaGroq).toEqual({
+        model: "groq/shared-model",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+
+      const viaOpenRouter = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(viaOpenRouter).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+    });
+
+    test("a usable hosted login does not invent a gateway route for a model with no OpenRouter sibling", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "solo-model", provider: "groq" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(route.credential).toBe("key");
+    });
+
     // A provider-exclusive model (no OpenRouter-catalog sibling at all) never shows a gateway credential,
     // even under a covering plan — correct, not a regression: the gateway only ever forwards to
     // GATEWAY_PROVIDER, so it structurally cannot serve a model that provider doesn't list.
@@ -395,6 +442,34 @@ describe("resolveLegalReasoningTiers", () => {
 // triplet (session.model ?? resolveDefaultModel fallback, session.provider ?? DEFAULT_PROVIDER,
 // then resolveRoute) was independently copy-pasted at four call sites in cli.ts.
 describe("resolveSessionRoute", () => {
+  test("a logged-in profile with no keys and no fetched plan uses the gateway, not a missing OpenRouter key", () => {
+    writeFileSync(
+      join(tmpRoot, "auth.json"),
+      JSON.stringify({
+        accessToken: "at",
+        refreshToken: "rt",
+        userId: "user-0",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const route = resolveSessionRoute(
+      { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+      catalog,
+      new Set(),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "anthropic/claude-sonnet-5",
+      provider: "openrouter",
+      rerouted: false,
+      credential: "gateway",
+    });
+  });
+
   test("a session with model/provider both set resolves exactly like a direct resolveRoute call", () => {
     process.env.ANTHROPIC_API_KEY = "fake-test-key";
 

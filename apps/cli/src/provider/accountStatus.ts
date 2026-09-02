@@ -48,8 +48,10 @@ type AccountStatusDeps = {
 // codebase's own best-effort, fail-closed startup network calls, not a fresh number.
 const ACCOUNT_STATUS_TIMEOUT_MS = 10_000;
 
-// Fails closed to null on anything short of a clean 200 — a missing/unknown plan is NOT free,
-// the same posture apps/server/lib/quota.ts's isZeroPriceModel comment states for pricing. This
+// Fails closed to null on anything short of a clean 200 when nothing was cached
+// — a missing/unknown plan is NOT free, the same posture apps/server/lib/quota.ts's
+// isZeroPriceModel comment states for pricing. A prior successful fetch is kept:
+// a down gateway must not make a logged-in session forget it has a plan. This
 // function never throws: a plan-coverage display is not worth blocking session startup over.
 export async function fetchAccountPlan(
   configDir: string,
@@ -75,14 +77,14 @@ export async function fetchAccountPlan(
       `${gatewayBaseUrl(configDir)}/account-status`,
       deps.timeoutMs ?? ACCOUNT_STATUS_TIMEOUT_MS,
       async (response) => {
-        if (!response.ok) return null;
+        if (!response.ok) return loadCachedAccountPlan(configDir);
         const body = await response.json();
         const plan = toPlan(body?.plan);
         if (plan !== null) cacheAccountPlan(configDir, plan);
-        return plan;
+        return plan ?? loadCachedAccountPlan(configDir);
       },
     );
   } catch {
-    return null;
+    return loadCachedAccountPlan(configDir);
   }
 }
