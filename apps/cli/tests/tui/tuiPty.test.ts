@@ -2804,9 +2804,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL model=~openai/gpt-latest provider=openrouter");
-      // Split the same way childScriptReroute's own test does: measured on a real pty, Ink can
-      // wrap this line across the terminal's own column width, landing "configured" on the
-      // following line.
       const noticePrefix = "↻ routing ~openai/gpt-latest on your seri plan";
       await sawLine(noticePrefix);
       await sawLine("done ·");

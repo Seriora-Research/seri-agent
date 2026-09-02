@@ -394,10 +394,6 @@ describe("run (task invocation)", () => {
     expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
-  // The defined-provider sibling of the test above: a resumed session that pinned the
-  // OpenRouter-catalog row (the listing the gateway actually serves). That pin is the plan's
-  // happy path, not a missing BYOK key, so the notice names the seri plan and does not blame
-  // OpenRouter.
   test("routes via the gateway on a resumed session without blaming OpenRouter", async () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.OPENROUTER_API_KEY;

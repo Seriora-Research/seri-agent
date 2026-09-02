@@ -492,13 +492,11 @@ export function rerouteNotice(
 // The gateway counterpart to rerouteNotice above: a gateway-credential route is served through the
 // user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
 // TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
-// consumes gateway quota with zero indication it ever left the user's own keys. Same
-// `ModelProvider | undefined` signature as rerouteNotice. The serving provider is not named:
-// `route.provider` is the catalog listing the gateway forwards (today always GATEWAY_PROVIDER),
-// not who pays, and the Route column already calls that "seri". A requested provider that equals
-// `route.provider` is also not blamed: persistDefaultModel writes that pair after a successful
-// hosted turn, and picking the plan-covered catalog row is the happy path, not a missing BYOK key.
-// Blame stays for a different requested provider that had no key (Groq, Anthropic, …).
+// consumes gateway quota with zero indication it ever left the user's own keys. The serving
+// provider is not named: `route.provider` is the catalog listing the gateway forwards (today
+// always GATEWAY_PROVIDER), not who pays, and the Route column already calls that "seri". A
+// requested provider that equals `route.provider` is also not blamed: persistDefaultModel writes
+// that pair after a successful hosted turn.
 export function gatewayNotice(
   route: ResolvedRoute,
   requestedProvider: ModelProvider | undefined,
