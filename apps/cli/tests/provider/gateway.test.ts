@@ -122,6 +122,21 @@ describe("gatewayBaseUrl — default host", () => {
     delete process.env.SERI_GATEWAY_URL;
     expect(gatewayBaseUrl(tmpRoot)).not.toBe("https://gateway.seriora.ai/api/gateway");
   });
+
+  test("rewrites leftover gateway-dev.seriora.ai to api-dev.seriora.ai", () => {
+    process.env.SERI_GATEWAY_URL = "https://gateway-dev.seriora.ai/api/gateway";
+    expect(gatewayBaseUrl(tmpRoot)).toBe("https://api-dev.seriora.ai/api/gateway");
+  });
+
+  test("rewrites leftover gateway.seriora.ai to api.seriora.ai", () => {
+    process.env.SERI_GATEWAY_URL = "https://gateway.seriora.ai/api/gateway";
+    expect(gatewayBaseUrl(tmpRoot)).toBe("https://api.seriora.ai/api/gateway");
+  });
+
+  test("leaves api-dev.seriora.ai alone", () => {
+    process.env.SERI_GATEWAY_URL = "https://api-dev.seriora.ai/api/gateway";
+    expect(gatewayBaseUrl(tmpRoot)).toBe("https://api-dev.seriora.ai/api/gateway");
+  });
 });
 
 describe("getGatewayModel — outgoing request", () => {
