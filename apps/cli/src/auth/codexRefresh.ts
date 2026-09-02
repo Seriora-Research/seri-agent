@@ -1,8 +1,8 @@
-import {
-  type CodexJsonRpc,
-  type ConnectCodexAppServerOpts,
-  connectCodexAppServer,
-} from "./codexAppServer";
+import { randomUUID } from "node:crypto";
+import { arch, platform } from "node:os";
+import pkg from "../../package.json";
+import { getApiKey } from "../config/config";
+import type { CodexJsonRpc, ConnectCodexAppServerOpts } from "./codexAppServer";
 import {
   grantFromSubscription,
   loadUsableCodexGrant,
@@ -10,6 +10,8 @@ import {
   subscriptionFromCodexTokens,
 } from "./codexAuthStore";
 import {
+  CODEX_BASE_URL_DEFAULT,
+  CODEX_ORIGINATOR,
   extractCodexAccountId,
   refreshCodexGrant,
   codexClientId,
@@ -29,6 +31,7 @@ const inFlightRefreshes = new Map<string, Promise<CodexRefreshResult>>();
 export type RefreshCodexOpts = ConnectCodexAppServerOpts & {
   rpc?: CodexJsonRpc;
   fetchFn?: typeof fetch;
+  configDir?: string;
 };
 
 export function refreshCodexSubscription(
@@ -145,14 +148,24 @@ export function parseModelList(result: unknown): CodexListedModel[] {
     const displayName =
       typeof row.displayName === "string"
         ? row.displayName
-        : typeof row.name === "string"
-          ? row.name
-          : id;
+        : typeof row.display_name === "string"
+          ? row.display_name
+          : typeof row.name === "string"
+            ? row.name
+            : id;
+    const metadata =
+      typeof row.metadata === "object" && row.metadata !== null
+        ? (row.metadata as Record<string, unknown>)
+        : undefined;
     const effortsRaw = Array.isArray(row.supportedReasoningEfforts)
       ? row.supportedReasoningEfforts
-      : Array.isArray(row.reasoningEfforts)
-        ? row.reasoningEfforts
-        : [];
+      : Array.isArray(row.supported_reasoning_efforts)
+        ? row.supported_reasoning_efforts
+        : Array.isArray(row.reasoningEfforts)
+          ? row.reasoningEfforts
+          : Array.isArray(metadata?.supported_reasoning_levels)
+            ? metadata.supported_reasoning_levels
+            : [];
     const supportedReasoningEfforts = effortsRaw.flatMap((effort) => {
       const named = reasoningEffortName(effort);
       return named === undefined ? [] : [named];
@@ -219,7 +232,7 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
   if (cachedModels !== undefined && now - cachedModelsAt < MODEL_LIST_CACHE_MS) {
     return cachedModels;
   }
-  // A caller-supplied rpc is owned by that caller. Only the spawn path is shared
+  // A caller-supplied rpc is owned by that caller. The HTTP list is shared
   // across overlapping getModelCatalog fetches (prepareSession and run both call it).
   if (opts.rpc !== undefined) {
     return listCodexModelsOnce(opts);
@@ -235,24 +248,94 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
 
 async function listCodexModelsOnce(opts: RefreshCodexOpts): Promise<CodexListedModel[]> {
   const now = Date.now();
-  let rpc = opts.rpc;
-  const closeOwned = rpc === undefined;
-  try {
-    rpc ??= await connectCodexAppServer(opts);
-    const listed = await listAllCodexModelPages(rpc);
-    try {
-      rememberPlanType(await rpc.request("account/read"));
-    } catch {
-      // planType is chrome; a failed account/read must not drop the model list
-    }
-    if (listed.length > 0) {
-      cachedModels = listed;
-      cachedModelsAt = now;
-    }
-    return listed;
-  } finally {
-    if (closeOwned) rpc?.close();
+  const listed =
+    opts.rpc !== undefined
+      ? await listCodexModelsViaRpc(opts.rpc)
+      : await listCodexModelsOverHttp(opts);
+  if (listed.length > 0) {
+    cachedModels = listed;
+    cachedModelsAt = now;
   }
+  return listed;
+}
+
+async function listCodexModelsViaRpc(rpc: CodexJsonRpc): Promise<CodexListedModel[]> {
+  const listed = await listAllCodexModelPages(rpc);
+  try {
+    rememberPlanType(await rpc.request("account/read"));
+  } catch {
+    // planType is chrome; a failed account/read must not drop the model list
+  }
+  return listed;
+}
+
+function codexModelsUrl(configDir?: string, cursor?: string): string {
+  const base = (getApiKey("SERI_CODEX_BASE_URL", configDir) ?? CODEX_BASE_URL_DEFAULT).replace(
+    /\/$/,
+    "",
+  );
+  const url = `${base}/models`;
+  if (cursor === undefined) return url;
+  return `${url}?cursor=${encodeURIComponent(cursor)}`;
+}
+
+async function listCodexModelsOverHttp(opts: RefreshCodexOpts): Promise<CodexListedModel[]> {
+  const configDir = opts.configDir;
+  if (configDir === undefined) {
+    throw new Error("No ChatGPT plan is connected. Run /setup to connect one.");
+  }
+  const grant = loadUsableCodexGrant(configDir, opts.env ?? process.env);
+  if (grant === undefined) {
+    throw new Error("No ChatGPT plan is connected. Run /setup to connect one.");
+  }
+
+  const fetchFn = opts.fetchFn ?? fetch;
+  const originator = getApiKey("SERI_CODEX_ORIGINATOR", configDir) ?? CODEX_ORIGINATOR;
+  const sessionId = randomUUID();
+  let token = grant.accessToken;
+  let accountId = grant.accountId;
+  let refreshed = false;
+  const models: CodexListedModel[] = [];
+  let cursor: string | undefined;
+
+  const headersFor = (accessToken: string, account: string): Record<string, string> => {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+      originator,
+      "user-agent": `seri/${pkg.version} (${platform()}; ${arch()})`,
+      session_id: sessionId,
+    };
+    if (account.length > 0) headers["ChatGPT-Account-Id"] = account;
+    return headers;
+  };
+
+  for (let page = 0; page < MODEL_LIST_MAX_PAGES; page++) {
+    const response = await fetchFn(codexModelsUrl(configDir, cursor), {
+      method: "GET",
+      headers: headersFor(token, accountId),
+    });
+    if (response.status === 401 && !refreshed) {
+      const retry = await refreshCodexSubscription(configDir, opts);
+      if (retry.status !== "ok") {
+        throw new Error(`ChatGPT plan model list failed (${response.status})`);
+      }
+      token = retry.credential.accessToken;
+      accountId = retry.credential.accountId;
+      refreshed = true;
+      page--;
+      continue;
+    }
+    if (!response.ok) {
+      throw new Error(`ChatGPT plan model list failed (${response.status})`);
+    }
+    const body: unknown = JSON.parse(await response.text());
+    rememberPlanType(body);
+    models.push(...parseModelList(body));
+    const next = nextCursorOf(body);
+    if (next === undefined) break;
+    cursor = next;
+  }
+  return models;
 }
 
 export function resetCodexModelCache(): void {

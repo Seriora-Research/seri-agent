@@ -110,7 +110,12 @@ export async function getModelCatalog(
   if (configDir !== undefined && hasXaiSubscription(configDir)) {
     merged = await mergeGrokSubscriptionModels(merged, configDir, fetchFn);
   }
-  return withCodexSubscriptionCatalog(merged, sink, listCodexModels, configDir);
+  return withCodexSubscriptionCatalog(
+    merged,
+    sink,
+    () => listCodexModels({ configDir, fetchFn }),
+    configDir,
+  );
 }
 
 const CODEX_DEFAULT_CONTEXT = 272_000;

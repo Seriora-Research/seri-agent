@@ -6,11 +6,12 @@ import { arch, platform } from "node:os";
 import pkg from "../../package.json";
 import { refreshCodexSubscription, type CodexRefreshResult } from "../auth/codexRefresh";
 import { loadUsableCodexGrant } from "../auth/codexAuthStore";
+import { CODEX_BASE_URL_DEFAULT, CODEX_ORIGINATOR } from "../auth/codexOAuth";
 import { getApiKey } from "../config/config";
 import type { RouteCredential } from "./routing";
 
-export const CODEX_BASE_URL_DEFAULT = "https://chatgpt.com/backend-api/codex";
-export const CODEX_ORIGINATOR_DEFAULT = "seri";
+export { CODEX_BASE_URL_DEFAULT };
+export const CODEX_ORIGINATOR_DEFAULT = CODEX_ORIGINATOR;
 
 export function codexBaseUrl(configDir?: string): string {
   return getApiKey("SERI_CODEX_BASE_URL", configDir) ?? CODEX_BASE_URL_DEFAULT;

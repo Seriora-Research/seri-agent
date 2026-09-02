@@ -4,6 +4,7 @@ import { parseResponseBody } from "./deviceGrant";
 
 export const CODEX_ISSUER_DEFAULT = "https://auth.openai.com";
 export const CODEX_TOKEN_URL_DEFAULT = "https://auth.openai.com/oauth/token";
+export const CODEX_BASE_URL_DEFAULT = "https://chatgpt.com/backend-api/codex";
 export const CODEX_SCOPE =
   "openid profile email offline_access api.connectors.read api.connectors.invoke";
 export const CODEX_ORIGINATOR = "seri";

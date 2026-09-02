@@ -318,4 +318,60 @@ describe("listCodexModels", () => {
     expect(await listCodexModels({ rpc, env: { CODEX_HOME: home } })).toEqual([]);
     expect(n).toBe(2);
   });
+
+  test("lists models over HTTP with no Codex CLI and no leftover ~/.codex", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-codex-http-list-cfg-"));
+    const leftover = mkdtempSync(join(tmpdir(), "seri-codex-http-list-home-"));
+    writeFileSync(
+      join(configDir, "codex-auth.json"),
+      JSON.stringify({
+        accessToken: "tok-plan",
+        refreshToken: "refresh-plan",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-plan",
+      }),
+    );
+    const seen: Array<{ url: string; authorization?: string; originator?: string }> = [];
+    try {
+      const listed = await listCodexModels({
+        configDir,
+        env: { PATH: "", CODEX_HOME: leftover, HOME: leftover },
+        fetchFn: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const headers = new Headers(init?.headers);
+          seen.push({
+            url,
+            authorization: headers.get("authorization") ?? undefined,
+            originator: headers.get("originator") ?? undefined,
+          });
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  slug: "gpt-5.6-luna",
+                  display_name: "GPT-5.6 Luna",
+                  supported_reasoning_efforts: ["low", "high"],
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }) as typeof fetch,
+      });
+      expect(listed).toEqual([
+        {
+          id: "gpt-5.6-luna",
+          displayName: "GPT-5.6 Luna",
+          supportedReasoningEfforts: ["low", "high"],
+        },
+      ]);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.url).toBe("https://chatgpt.com/backend-api/codex/models");
+      expect(seen[0]?.authorization).toBe("Bearer tok-plan");
+      expect(seen[0]?.originator).toBe("seri");
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(leftover, { recursive: true, force: true });
+    }
+  });
 });
