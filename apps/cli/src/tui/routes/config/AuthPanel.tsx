@@ -45,7 +45,9 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
   if (state.step === "browser") {
     return (
       <PanelBox title="login">
-        <text fg={theme.muted}>{`Open ${state.verificationUri} to approve ${authModeLabel(state.mode)}`}</text>
+        <text
+          fg={theme.muted}
+        >{`Open ${state.verificationUri} to approve ${authModeLabel(state.mode)}`}</text>
         <text fg={theme.muted}>Waiting for the browser. Esc cancel</text>
       </PanelBox>
     );

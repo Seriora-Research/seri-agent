@@ -88,12 +88,12 @@ describe("codexHome", () => {
   });
 
   test("win32 ignores HOME and uses USERPROFILE", () => {
-    expect(
-      codexHome({ HOME: "/c/Users/dest", USERPROFILE: "C:\\Users\\dest" }, "win32"),
-    ).toBe(join("C:\\Users\\dest", ".codex"));
-    expect(
-      codexHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\dest" }, "win32"),
-    ).toBe(join("C:\\Users\\dest", ".codex"));
+    expect(codexHome({ HOME: "/c/Users/dest", USERPROFILE: "C:\\Users\\dest" }, "win32")).toBe(
+      join("C:\\Users\\dest", ".codex"),
+    );
+    expect(codexHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\dest" }, "win32")).toBe(
+      join("C:\\Users\\dest", ".codex"),
+    );
   });
 
   test("posix uses HOME", () => {

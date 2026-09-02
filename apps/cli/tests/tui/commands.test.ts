@@ -318,12 +318,8 @@ describe("decideModelPickerOpen", () => {
 
   test("/model passes modelPickerSubscribedProviders the overlay flag", () => {
     const src = readFileSync(join(import.meta.dir, "../../src/cli.ts"), "utf8");
-    expect(src).toContain(
-      "modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())",
-    );
-    expect(src).not.toContain(
-      'isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])',
-    );
+    expect(src).toContain("modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())");
+    expect(src).not.toContain('isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])');
   });
 
   test("a ChatGPT login without overlay keeps API openai rows unlabeled", async () => {
@@ -361,7 +357,7 @@ describe("decideModelPickerOpen", () => {
       expect(openaiRow?.subscriptionCovered).toBe(false);
       expect(formatModelRow(openaiRow!)).toContain("$4.00");
       expect(formatModelRow(openaiRow!)).not.toContain("included");
-      expect(formatModelRow(openaiRow!)).not.toContain("codex");
+      expect(formatModelRow(openaiRow!)).not.toContain("chatgpt");
     } finally {
       resetCodexPlanCatalogApplied();
       if (originalHome === undefined) delete process.env.CODEX_HOME;
@@ -424,7 +420,7 @@ describe("decideModelPickerOpen", () => {
     }
   });
 
-  test("a ChatGPT login plus a successful overlay labels openai plan rows codex/included", async () => {
+  test("a ChatGPT login plus a successful overlay labels openai plan rows chatgpt/included", async () => {
     const home = mkdtempSync(join(tmpdir(), "seri-codex-picker-"));
     const originalHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = home;
@@ -469,8 +465,9 @@ describe("decideModelPickerOpen", () => {
       expect(openaiRow).toBeDefined();
       const rendered = formatModelRow(openaiRow!);
       expect(openaiRow?.subscriptionCovered).toBe(true);
-      expect(rendered).toContain("codex");
+      expect(rendered).toContain("chatgpt");
       expect(rendered).toContain("included");
+      expect(rendered).not.toContain("codex");
       expect(rendered).not.toContain("$4.00");
       expect(rendered).not.toContain("no key");
     } finally {

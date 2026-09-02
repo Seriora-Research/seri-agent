@@ -361,14 +361,14 @@ export function formatDoneLine(
 // bug of promising a fallback that does not exist.
 // Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
 // persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
-// they can never independently drift on what "your key"/"grok"/"codex"/"seri"/"→ provider"/"no key"
+// they can never independently drift on what "your key"/"grok"/"chatgpt"/"seri"/"→ provider"/"no key"
 // means for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
 // `formatModeDetail`'s caller passed a real plan-coverage predicate/route. `subscriptionCovered`
 // is a vendor plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
 // row still reads as included.
 function subscriptionRouteLabel(provider?: ModelProvider): string {
   if (provider === "xai") return "grok";
-  if (provider === "openai") return "codex";
+  if (provider === "openai") return "chatgpt";
   return "plan";
 }
 
@@ -395,7 +395,7 @@ export function formatRouteLabel(input: {
 // gateway-served route was indistinguishable from a local one here — both have `rerouted: false`.
 // `route.credential` is what tells them apart now: `keyConfigured` is true only for a
 // non-rerouted `key` credential, `subscriptionCovered` for `subscription`, and `gatewayReachable`
-// for `gateway` — so a ChatGPT-plan route reads "plan" here exactly as it already does in the
+// for `gateway` — so a ChatGPT-plan route reads "chatgpt" here exactly as it already does in the
 // model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
 // App before any provider key exists, so there is genuinely no route to show yet. Falls back to no
@@ -575,7 +575,7 @@ export function formatSetupRow(row: SetupProviderRow): string {
     if (row.provider === "seri") {
       return `${truncatePad("seri", PROVIDER_WIDTH)} ${describeSeriSetupStatus(row.status)}`;
     }
-    return `${truncatePad("codex", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
+    return `${truncatePad("chatgpt", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
   }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;

@@ -9,7 +9,12 @@ import {
   saveCodexSubscription,
   subscriptionFromCodexTokens,
 } from "./codexAuthStore";
-import { extractCodexAccountId, refreshCodexGrant, codexClientId, codexTokenUrl } from "./codexOAuth";
+import {
+  extractCodexAccountId,
+  refreshCodexGrant,
+  codexClientId,
+  codexTokenUrl,
+} from "./codexOAuth";
 import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 
 export type CodexRefreshResult =
