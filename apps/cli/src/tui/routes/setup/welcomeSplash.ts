@@ -7,7 +7,7 @@
 // owning a separate mount. Reuses `createAuthHandlers` (./handlers) — the same device-flow auth
 // wiring `runTui` reuses, rather than a second implementation of it.
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { resolveUserHome } from "../../../config/userHome";
 import { createElement } from "react";
 import pkg from "../../../../package.json";
 import type { CliDeps } from "../../../cli";
@@ -130,10 +130,7 @@ export async function runWelcomeSplash(
         model: defaultModel.model,
         provider: defaultModel.provider ?? DEFAULT_PROVIDER,
         cwd: process.cwd(),
-        // `process.env.HOME || homedir()`, the same order config/paths.ts resolves the seri root
-        // with — so a HOME override that moves the config directory also moves what this row
-        // abbreviates, instead of the two disagreeing about where home is.
-        home: process.env.HOME || homedir(),
+        home: resolveUserHome(),
       },
       onPreSessionSubmit,
       showSplash: true,

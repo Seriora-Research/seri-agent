@@ -19,3 +19,12 @@ export function subscribedProviders(configDir: string): ReadonlySet<ModelProvide
   if (codexSubscriptionActive(configDir)) subscribed.add("openai");
   return subscribed;
 }
+
+export function modelPickerSubscribedProviders(
+  configDir: string,
+  overlayApplied: boolean,
+): ReadonlySet<ModelProvider> {
+  const subscribed = new Set(subscribedProviders(configDir));
+  if (!overlayApplied) subscribed.delete("openai");
+  return subscribed;
+}

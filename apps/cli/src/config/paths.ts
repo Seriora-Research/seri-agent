@@ -1,15 +1,15 @@
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../auth/authStore";
 import { CODEX_IGNORE_FILENAME } from "../auth/codexIgnore";
 import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
 import { CONFIG_FILENAME } from "./config";
+import { resolveUserHome } from "./userHome";
 
-// Unprofiled: the vendored-rg cache and nothing else lives here. Platform-independent by
-// design: no win32 branch, no throw path.
+export { resolveUserHome } from "./userHome";
+
 export function getBaseConfigDir(): string {
-  return join(process.env.HOME || homedir(), ".seri");
+  return join(resolveUserHome(), ".seri");
 }
 
 export const DEFAULT_PROFILE = "default";

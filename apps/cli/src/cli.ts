@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -71,6 +71,7 @@ import {
   getTrajectoriesDir,
   profileNameError,
   resolveProfile,
+  resolveUserHome,
   setProfileOverride,
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
@@ -140,7 +141,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
-import { subscribedProviders } from "./provider/subscriptions";
+import { modelPickerSubscribedProviders, subscribedProviders } from "./provider/subscriptions";
 import { toolDefinitions } from "./provider/tools";
 import type { RuleRegistry } from "./rules/registry";
 import {
@@ -2410,9 +2411,7 @@ async function runTui(
                 effectiveHostedPlan(configDir, prepared.plan),
                 hostedPlanUsable(configDir),
               ) !== undefined,
-            // Overlay-applied openai only: hasCodexSubscription without a successful model/list
-            // overlay still leaves the API catalog on screen, and those rows are not plan-included.
-            isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"]) : new Set(),
+            modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
           ),
         });
       } catch (err) {
@@ -2997,7 +2996,7 @@ async function runTui(
         model: prepared.route.model,
         provider: prepared.route.provider,
         cwd: prepared.session.cwd,
-        home: process.env.HOME || homedir(),
+        home: resolveUserHome(),
       },
       onSubmit,
       onSessionChange,

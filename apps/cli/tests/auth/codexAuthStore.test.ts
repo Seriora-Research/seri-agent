@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  codexHome,
   hasCodexSubscription,
   jwtExpiryMs,
   loadCodexAuth,
@@ -72,6 +73,26 @@ describe("codexAuthStore", () => {
       JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: "acct-1" } }),
     );
     expect(loadCodexAuth()).toBeUndefined();
+  });
+});
+
+describe("codexHome", () => {
+  test("CODEX_HOME wins on every platform", () => {
+    expect(codexHome({ CODEX_HOME: "/tmp/codex-override" }, "win32")).toBe("/tmp/codex-override");
+    expect(codexHome({ CODEX_HOME: "/tmp/codex-override" }, "linux")).toBe("/tmp/codex-override");
+  });
+
+  test("win32 ignores HOME and uses USERPROFILE", () => {
+    expect(
+      codexHome({ HOME: "/c/Users/dest", USERPROFILE: "C:\\Users\\dest" }, "win32"),
+    ).toBe(join("C:\\Users\\dest", ".codex"));
+    expect(
+      codexHome({ HOME: "/home/user", USERPROFILE: "C:\\Users\\dest" }, "win32"),
+    ).toBe(join("C:\\Users\\dest", ".codex"));
+  });
+
+  test("posix uses HOME", () => {
+    expect(codexHome({ HOME: "/home/dest" }, "linux")).toBe(join("/home/dest", ".codex"));
   });
 });
 
