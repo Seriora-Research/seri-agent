@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@seri/model-catalog";
+import { resetCodexModelCache } from "../../src/auth/codexRefresh";
 import {
   catalogWithFallback,
   getModelCatalog,
   idsFromGrokModelsPayload,
+  isCodexPlanCatalogApplied,
   mergeGrokSubscriptionCatalog,
+  resetCodexPlanCatalogApplied,
   resetFallbackWarning,
 } from "../../src/provider/catalog";
 
@@ -173,6 +176,48 @@ describe("getModelCatalog", () => {
     expect(errors[0]).toContain("SERI_DISABLE_MODELS_FETCH");
     expect(errors[0]).not.toContain("could not reach");
     expect(catalog.entries.length).toBeGreaterThan(0);
+  });
+
+  test("overlays ChatGPT plan models from HTTP with no Codex CLI", async () => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = mkdtempSync(join(tmpdir(), "seri-catalog-codex-http-"));
+    writeFileSync(
+      join(configDir, "codex-auth.json"),
+      JSON.stringify({
+        accessToken: "tok-plan",
+        refreshToken: "refresh-plan",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-plan",
+      }),
+    );
+    resetCodexModelCache();
+    resetCodexPlanCatalogApplied();
+    try {
+      const catalog = await getModelCatalog(
+        (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/backend-api/codex/models")) {
+            return new Response(
+              JSON.stringify({
+                data: [{ id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" }],
+              }),
+              { status: 200 },
+            );
+          }
+          throw new Error(`unexpected fetch ${url}`);
+        }) as typeof fetch,
+        undefined,
+        configDir,
+      );
+      expect(isCodexPlanCatalogApplied()).toBe(true);
+      expect(
+        catalog.entries.some((entry) => entry.provider === "openai" && entry.id === "gpt-5.6-luna"),
+      ).toBe(true);
+    } finally {
+      resetCodexModelCache();
+      resetCodexPlanCatalogApplied();
+      rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });
 
