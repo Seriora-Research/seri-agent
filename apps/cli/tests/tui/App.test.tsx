@@ -2147,6 +2147,7 @@ describe("App", () => {
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
+        route: route({ model: "openai/gpt-oss-120b", provider: "groq" }),
       });
 
       dispatch({ type: "transcript-append", role: "system", line: "Session s1 created." });

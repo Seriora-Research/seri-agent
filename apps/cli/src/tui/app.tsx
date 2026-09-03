@@ -250,10 +250,9 @@ export type AppProps = {
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
-  // The splash's own identity block (routes/setup/SplashBanner.tsx). Not derived from `route`/
-  // `catalog` above, which are both genuinely `undefined` at the only mount that renders the
-  // splash — `runWelcomeSplash` computes it from config.json and package.json instead, and passes
-  // it through here rather than this component reaching for either itself.
+  // SplashBanner's version, cwd, and home, plus the pre-session model pair
+  // (`runWelcomeSplash` has no route). A live session overlays `state.route` onto
+  // model and provider so a `/model` switch matches the mode row.
   splashBanner?: SplashBannerInfo;
   // Takes the first task typed before a session exists. `runWelcomeSplash` passes this; the value
   // reaches `runTui` through `run()` (cli.ts), not through this component's own state, because the
@@ -368,6 +367,10 @@ export function App({
   );
   const stream = useMemo(() => createStreamDispatch(setState), []);
   const dispatch = stream.dispatch;
+  const sessionBanner =
+    splashBanner === undefined || state.route === undefined
+      ? splashBanner
+      : { ...splashBanner, model: state.route.model, provider: state.route.provider };
   const [pendingReasoning, setPendingReasoning] = useState("");
   useEffect(
     () => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())),
@@ -710,12 +713,10 @@ export function App({
         >
           {state.pendingChildView === undefined ? (
             <>
-              {/* The session header, inside the scrollbox rather than pinned above it, so it
-              behaves the way Codex's own session history cell does: it holds the top of an empty
-              transcript, and scrolls away on its own once enough conversation accumulates below
-              it. Static after mount — a later `/model` switch moves `state.route` and the mode
-              indicator, not this, which reports what the session opened on. */}
-              {splashBanner !== undefined && <SplashBanner info={splashBanner} />}
+              {/* Session header inside the scrollbox so it holds the top of an empty
+              transcript and scrolls away once conversation accumulates. Model and
+              provider follow `state.route`, the same source as the mode row. */}
+              {sessionBanner !== undefined && <SplashBanner info={sessionBanner} />}
               <TranscriptList
                 transcript={state.transcript}
                 scrollTop={scrollTop}
