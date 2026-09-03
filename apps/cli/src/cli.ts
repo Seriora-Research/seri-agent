@@ -1630,17 +1630,27 @@ async function runTui(
 
   // ModelPicker's own two resolutions (App.tsx's onModelSelected/onModelPickerCancel props) — both
   // dispatch model-picker-resolved, the one action that clears the picker and (only when a model
-  // was actually picked) merges the pick into `state.session` in the same atomic transition
-  // (reducer.ts's own comment on why that is one dispatch, not two). This is deliberately the ONLY
-  // effect of a pick: `state.session.model`/`.provider` changes immediately, so the very next
-  // runTurn call (which reads them fresh — that function's own comment) attempts the new model —
-  // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
-  // still-working model/provider to disk until a turn actually succeeds on the new one.
+  // was actually picked) merges the pick into `state.session` and `state.route` in the same atomic
+  // transition (reducer.ts's own comment on why that is one dispatch, not two). The route is
+  // resolved here, not left to runTurn's own `route-updated`: the session banner and mode row read
+  // `state.route`, and the reducer alone can only name a route for a pick whose own provider has
+  // a key — a hosted-plan pick has none. A pick changes in-memory state only:
+  // `state.session.model`/`.provider` changes immediately, so the very next runTurn call (which
+  // reads them fresh — that function's own comment) attempts the new model — but `confirmedModel`
+  // (below) does NOT move here, so onSessionChange keeps writing the OLD, still-working
+  // model/provider to disk until a turn actually succeeds on the new one.
   function onModelSelected(
     pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ): void {
-    dispatch({ type: "model-picker-resolved", pick, leftoverInput });
+    const route = resolveSessionRoute(
+      pick,
+      prepared.catalog,
+      configuredProviders(configDir),
+      prepared.plan,
+      configDir,
+    );
+    dispatch({ type: "model-picker-resolved", pick, leftoverInput, route });
   }
 
   function onModelPickerCancel(): void {
