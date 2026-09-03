@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
+  CONFIG_FILENAME,
   getApiKey,
   loadConfig,
   loadTrajectoryConfig,
@@ -42,6 +43,31 @@ afterEach(() => {
 describe("loadConfig", () => {
   test("returns {} when config.json does not exist", () => {
     expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is empty", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "");
+    expect(loadConfig()).toEqual({});
+  });
+
+  // Bun's JSON.parse of `\0` prints `Unrecognized token ''` — the quotes look empty
+  // because the token is invisible. That is the Windows `--profile staging` crash.
+  test("returns {} when config.json is a NUL byte", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is malformed UTF-8 JSON", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "{not valid json");
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("reads a UTF-16 LE config.json the way Windows editors write one", () => {
+    writeFileSync(
+      join(configDir, CONFIG_FILENAME),
+      Buffer.from(`\uFEFF${JSON.stringify({ GROQ_API_KEY: "gsk_from_notepad" })}`, "utf16le"),
+    );
+    expect(loadConfig()).toEqual({ GROQ_API_KEY: "gsk_from_notepad" });
   });
 });
 

@@ -828,10 +828,8 @@ export async function prepareSession(
 
     // resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
-    // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
-    // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
-    // mode `getModel` itself already guards against below, and why this needs to be inside the try
-    // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
+    // Read here, before the routing decision that needs it. getModel and the catalog fetch
+    // can throw, which is why this stays inside the try.
     // The catalog load and the plan fetch (inside resolveModelRoute) are independent network calls,
     // run together rather than stacked. `plan` is still fetched even when the session's own provider
     // already has a configured key (resolveRoute's own Rule 1 would discard it for THIS route): the
