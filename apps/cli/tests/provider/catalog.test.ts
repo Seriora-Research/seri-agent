@@ -250,29 +250,27 @@ describe("getModelCatalog", () => {
           accountId: "acct-plan",
         }),
       );
-      const refreshed = await catalogForModelPicker(
-        apiCatalog,
-        configDir,
-        (async (input: RequestInfo | URL) => {
-          const url = String(input);
-          if (url.includes("/backend-api/codex/models")) {
-            return new Response(
-              JSON.stringify({
-                models: [
-                  {
-                    slug: "gpt-5.4-mini",
-                    display_name: "GPT-5.4 mini",
-                    visibility: "list",
-                    supported_in_api: true,
-                  },
-                ],
-              }),
-              { status: 200 },
-            );
-          }
-          throw new Error(`unexpected fetch ${url}`);
-        }) as typeof fetch,
-      );
+      const refreshed = await catalogForModelPicker(apiCatalog, configDir, (async (
+        input: RequestInfo | URL,
+      ) => {
+        const url = String(input);
+        if (url.includes("/backend-api/codex/models")) {
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  slug: "gpt-5.4-mini",
+                  display_name: "GPT-5.4 mini",
+                  visibility: "list",
+                  supported_in_api: true,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      }) as unknown as typeof fetch);
       expect(isCodexPlanCatalogApplied()).toBe(true);
       expect(
         refreshed.entries.some(
@@ -301,7 +299,7 @@ describe("getModelCatalog", () => {
     };
     const boom = (async () => {
       throw new Error("should not fetch");
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       expect(await catalogForModelPicker(current, configDir, boom)).toBe(current);
       writeFileSync(

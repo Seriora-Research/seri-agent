@@ -213,7 +213,6 @@ const MODEL_LIST_MAX_PAGES = 20;
 // both return an empty list. 0.148.0 is the live-validated Codex protocol
 // version vercel-labs/fx uses.
 export const CODEX_PROTOCOL_CLIENT_VERSION = "0.148.0";
-export const CODEX_UNGATED_CLIENT_VERSION = CODEX_PROTOCOL_CLIENT_VERSION;
 
 function nextCursorOf(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null) return undefined;

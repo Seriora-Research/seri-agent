@@ -165,7 +165,12 @@ export async function catalogForModelPicker(
   if (!codexSubscriptionActive(configDir) || isCodexPlanCatalogApplied()) {
     return current;
   }
-  return getModelCatalog(fetchFn, sink, configDir);
+  return withCodexSubscriptionCatalog(
+    current,
+    sink,
+    () => listCodexModels({ configDir, fetchFn }),
+    configDir,
+  );
 }
 
 export async function withCodexSubscriptionCatalog(
