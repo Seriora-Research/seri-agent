@@ -4398,25 +4398,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Code-review finding (PR #73, round 2, item #1): round 1 only guarded the /setup-OPEN
-    // interceptor (cli.ts's onSubmit) against a malformed config.json — this exercises the two
-    // remaining call sites reached only AFTER the panel is already open, which round 1 missed:
-    // onSetupRemove's own request branch (providerKeyState), and onSetupBack (setupListState via
-    // the new dispatchSetupList wrapper). onSetupSelect is deliberately NOT exercised for a crash
-    // here — this round's fix made it a pure PROVIDER_API_KEY_NAMES lookup with no I/O at all, so
-    // it has nothing left to throw on; the "a" step below instead proves exactly that, by using it
-    // successfully while config.json is still malformed.
-    //
-    // Title says "a clean command-error", not "instead of crashing the TUI": measured directly
-    // (temporarily reverting both guards and re-running this test) — on this Bun/Ink combination, an
-    // unguarded synchronous throw out of a `useInput` callback does NOT actually kill the process
-    // (`emitInput`, ink/build/components/App.js's own `internal_eventEmitter.current.emit('input',
-    // ...)`, survives it and the TUI keeps accepting input either way), so "still alive after"
-    // cannot be this test's own discriminator. What the guard actually changes, confirmed by that
-    // same revert: without it, Bun's own uncaught-exception printer dumps a multi-line, ANSI-colored
-    // stack trace (a source excerpt plus "at providerKeyState (...)"/"at onSetupRemove (...)"
-    // frames) straight into the pty, smeared across Ink's own managed screen redraw — which is what
-    // the final assertion below checks is absent.
+    // A throw out of a key handler does not kill this TUI, but Bun's uncaught-exception
+    // printer dumps a stack into the pty. The assertions below check that dump is absent.
     test("a config.json that becomes malformed while /setup is already open does not dump a stack trace", async () => {
       seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-value" });
       const scriptPath = join(dir, "child-setup-malformed-config.mjs");
@@ -4437,20 +4420,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // is a SECOND read, from a call site reached only once /setup is already open.
         writeFileSync(configPath, "{not valid json");
 
-        // openrouter (index 1) was removable while config.json was still valid. onSetupRemove
-        // now reads `{}` from the broken file and no-ops instead of throwing.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("r");
         await wait100ms();
 
-        // Still on the list step — "a" on the same row exercises onSetupSelect, which does no
-        // I/O and so must succeed even with config.json still malformed.
         child.stdin?.write("a");
         await wait100ms();
         await sawLine("OPENROUTER_API_KEY for openrouter");
 
-        // Escape from enter-key exercises onSetupBack -> dispatchSetupList -> decideSetupOpen.
         child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
         await sawLine("/setup — provider API keys");

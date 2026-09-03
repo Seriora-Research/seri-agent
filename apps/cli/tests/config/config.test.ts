@@ -45,16 +45,13 @@ describe("loadConfig", () => {
     expect(loadConfig()).toEqual({});
   });
 
-  // `bun run src/cli.ts --profile staging` on Windows printed
-  // `JSON Parse error: Unrecognized token ''` and exited 1. Bun's JSON.parse of a NUL
-  // (`\0`) uses that message; the quotes look empty because the token is invisible.
-  // PowerShell `Out-File` and Notepad "Unicode" write UTF-16 LE, which is NULs when
-  // read as UTF-8. An empty file is the other startup form of the same throw.
   test("returns {} when config.json is empty", () => {
     writeFileSync(join(configDir, CONFIG_FILENAME), "");
     expect(loadConfig()).toEqual({});
   });
 
+  // Bun's JSON.parse of `\0` prints `Unrecognized token ''` — the quotes look empty
+  // because the token is invisible. That is the Windows `--profile staging` crash.
   test("returns {} when config.json is a NUL byte", () => {
     writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
     expect(loadConfig()).toEqual({});

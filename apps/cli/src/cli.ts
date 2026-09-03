@@ -1949,12 +1949,9 @@ async function runTui(
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.
     //
-    // `resolveRoute`/`configuredProviders` used to run OUTSIDE this try. `runTurn` is called
-    // fire-and-forget (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so a
-    // throw here became an unhandled rejection and crashed the running TUI on the very next
-    // turn. Inside the try, it degrades the same way a getModel failure already does: a
-    // command-error the user can see and recover from, not a crash. loadConfig itself no
-    // longer throws on a broken config.json.
+    // `runTurn` is fire-and-forget (`currentTurn = runTurn(...)`, no `.catch()`). A throw
+    // here is an unhandled rejection. The try turns getModel/resolveSessionRoute failures
+    // into a command-error.
     // `ResolvedRoute` directly, not `ReturnType<typeof resolveRoute>`: the
     // `resolveRoute` VALUE was never called from this scope (only `resolveSessionRoute`, just
     // below), so it was imported as a type-only binding purely to spell this declaration — dropped
@@ -1971,12 +1968,6 @@ async function runTui(
         configDir,
       );
       model = dispatchModel(route, sessionId, configDir, deps);
-      // Read inside the same try as route/model resolution, not after it: `configuredProviders`
-      // above already reads config.json via `loadConfig`, so config.json can be rewritten
-      // concurrently between that read and this one (another `seri` process, a hand edit) — and
-      // this function is called fire-and-forget (no `.catch()` at either call site), so a throw
-      // reaching past this try would become an unhandled rejection instead of the command-error
-      // the catch below degrades every other failure in this block to.
       config = loadConfig(configDir);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
@@ -2387,9 +2378,7 @@ async function runTui(
       await quit();
     },
     "/model": async () => {
-      // catalogForModelPicker and decideModelPickerOpen can still throw (network, a bad catalog
-      // row). onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget), so this
-      // must be a visible command-error the same way every other failure here degrades.
+      // onSubmit is fire-and-forget. A throw here must be a command-error.
       try {
         prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
         dispatch({

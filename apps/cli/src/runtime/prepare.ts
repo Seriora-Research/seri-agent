@@ -828,9 +828,8 @@ export async function prepareSession(
 
     // resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
-    // Read here, before the routing decision that needs it. loadConfig no longer throws on a
-    // broken config.json (it returns `{}`); getModel and the catalog fetch still can, which is
-    // why this stays inside the try.
+    // Read here, before the routing decision that needs it. getModel and the catalog fetch
+    // can throw, which is why this stays inside the try.
     // The catalog load and the plan fetch (inside resolveModelRoute) are independent network calls,
     // run together rather than stacked. `plan` is still fetched even when the session's own provider
     // already has a configured key (resolveRoute's own Rule 1 would discard it for THIS route): the

@@ -89,17 +89,9 @@ export function createSetupHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
-  // A shared "refresh the list, degrade to command-error if that throws" primitive: decideSetupOpen
-  // reads config.json, and a malformed file is exactly as reachable once the panel is already open
-  // (a racing second `seri` process, a hand edit) as it is at the /setup-OPEN interceptor (cli.ts).
-  // Used by onSetupRemove's success path and onSetupBack — both reached only from INSIDE an
-  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
-  // callback, so the catch also dispatches `setup-resolved` to close the panel rather than leaving
-  // it stuck on whatever step it was (mirroring dispatchConfigList/dispatchPermissionsList), and
-  // calls `onPanelClosed` for callers (the guided-setup mount) that need to resolve their own
-  // promise when that happens. NOT used by onSetupKeyEntered's own success path: that one needs its
-  // OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just showing a
-  // command-error while leaving the panel's own busy gate stuck — see its own comment.
+  // Refresh the list. The catch closes the panel rather than leaving it stuck, and calls
+  // `onPanelClosed` so the guided-setup mount can resolve. onSetupKeyEntered has its own
+  // catch so it can also reset `busy: false`.
   function dispatchSetupList(selectedId?: string): void {
     try {
       dispatch({ type: "setup-step", state: setupListState(selectedId) });
@@ -560,9 +552,7 @@ function verifyConfigTakesEffectNote(key: string): string {
 // /config's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/getPendingConfig/configDir in). Calls the DATA
 // functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts).
-// Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
-// can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
-// own comment already documents for /setup.
+// Recompute-and-dispatch is wrapped in try/catch so a throw becomes a command-error.
 export function createConfigHandlers(opts: {
   dispatch: Dispatch;
   getPendingConfig: () => ConfigPanelState | undefined;
@@ -587,11 +577,8 @@ export function createConfigHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
-  // Same "refresh the list, degrade to command-error" shape dispatchSetupList uses — and, like the
-  // post-write refreshes below, closes the panel on that error rather than leaving `pendingConfig`
-  // on whatever step it was: this is `onConfigBack`'s own refresh too, so a throwing
-  // decideConfigOpen (a corrupted config.json) while sitting on confirm-unset used to leave that
-  // step showing forever, since command-error alone never touches `pendingConfig`.
+  // Close the panel on a refresh throw. command-error alone never clears `pendingConfig`,
+  // so a failure on confirm-unset would otherwise leave that step up forever.
   function dispatchConfigList(selectedKey?: string): void {
     try {
       dispatch({ type: "config-step", state: configListState(selectedKey) });
@@ -785,9 +772,8 @@ export function createPermissionsHandlers(opts: {
   const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
   // loadGrants never THROWS on a malformed permissions.yaml — it degrades to an empty result and
-  // reports through this callback instead. loadConfig does the same for a broken config.json
-  // (`{}`, no warning). Without this callback, a malformed store would render as a silently-empty
-  // "nothing approved" panel instead of a visible error.
+  // reports through this callback instead. Without this callback, a malformed store would
+  // render as a silently-empty "nothing approved" panel instead of a visible error.
   const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
 
   function permissionsListState(selectedTool?: string): PermissionsPanelState {

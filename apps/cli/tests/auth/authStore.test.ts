@@ -41,8 +41,6 @@ describe("authStore", () => {
     expect(loadAuthSession(configDir)).toBeUndefined();
   });
 
-  // A corrupted auth.json degrades to the exact same "not authenticated" state as no file
-  // at all, in the one place that reads it. Same shape as loadConfig's unreadable-file path.
   test("loadAuthSession returns undefined, not a throw, when auth.json is corrupted", () => {
     writeFileSync(join(configDir, AUTH_FILENAME), "{not valid json");
 

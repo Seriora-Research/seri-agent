@@ -37,13 +37,8 @@ export function loadConfig(configDir: string = getConfigDir()): Record<string, s
   return result;
 }
 
-// config.json holds provider API keys, so it gets the same owner-only treatment as
-// auth.json (see auth/authStore.ts). atomicWriteFile.ts's shared helper: write-then-rename means
-// a truncating in-place write that is interrupted leaves a partial config.json. loadConfig
-// treats that the same as a missing file so a launch still starts; the next successful write
-// replaces the broken bytes. The non-colliding tmp name (that module's own comment) is what
-// /memory approval on|off and /memory archivist on|off now need too, as new concurrent writers
-// to this same file.
+// Owner-only, write-then-rename: config.json holds API keys, and a colliding tmp name
+// races two writers (atomicWriteFile.ts). /memory approval and archivist toggles write here too.
 function writeConfig(config: Record<string, string>, configDir: string): void {
   atomicWriteFile(configPath(configDir), JSON.stringify(config, null, 2));
 }
