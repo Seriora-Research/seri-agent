@@ -1949,14 +1949,12 @@ async function runTui(
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.
     //
-    // Bug fixed here (code-review, PR #73): `resolveRoute`/`configuredProviders` used to run
-    // OUTSIDE this try — `configuredProviders` reads config.json via a bare `JSON.parse`, so a
-    // corrupted file threw SYNCHRONOUSLY. `runTurn` is called fire-and-forget
-    // (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so that throw became an
-    // unhandled rejection — a config.json corrupted mid-session (a concurrent /setup write from
-    // another instance, say) crashed the running TUI on the very next turn, losing in-progress
-    // work. Inside the try, it degrades the same way a getModel failure already does: a
-    // command-error the user can see and recover from, not a crash.
+    // `resolveRoute`/`configuredProviders` used to run OUTSIDE this try. `runTurn` is called
+    // fire-and-forget (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so a
+    // throw here became an unhandled rejection and crashed the running TUI on the very next
+    // turn. Inside the try, it degrades the same way a getModel failure already does: a
+    // command-error the user can see and recover from, not a crash. loadConfig itself no
+    // longer throws on a broken config.json.
     // `ResolvedRoute` directly, not `ReturnType<typeof resolveRoute>`: the
     // `resolveRoute` VALUE was never called from this scope (only `resolveSessionRoute`, just
     // below), so it was imported as a type-only binding purely to spell this declaration — dropped
@@ -2389,9 +2387,9 @@ async function runTui(
       await quit();
     },
     "/model": async () => {
-      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file throws
-      // synchronously, and onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget),
-      // so this must be a visible command-error the same way every other failure here degrades.
+      // catalogForModelPicker and decideModelPickerOpen can still throw (network, a bad catalog
+      // row). onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget), so this
+      // must be a visible command-error the same way every other failure here degrades.
       try {
         prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
         dispatch({

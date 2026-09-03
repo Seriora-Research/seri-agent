@@ -785,9 +785,9 @@ export function createPermissionsHandlers(opts: {
   const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
   // loadGrants never THROWS on a malformed permissions.yaml — it degrades to an empty result and
-  // reports through this callback instead (unlike decideConfigOpen's loadConfig, which does
-  // throw, so /config's try/catch guards actually catch something). Without this, a malformed
-  // store would render as a silently-empty "nothing approved" panel instead of a visible error.
+  // reports through this callback instead. loadConfig does the same for a broken config.json
+  // (`{}`, no warning). Without this callback, a malformed store would render as a silently-empty
+  // "nothing approved" panel instead of a visible error.
   const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
 
   function permissionsListState(selectedTool?: string): PermissionsPanelState {

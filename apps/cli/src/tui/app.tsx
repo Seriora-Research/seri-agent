@@ -126,7 +126,7 @@ export type AppProps = {
   // `| undefined`: config.json can be read at any point in startup regardless of whether a
   // `PreparedRun` exists yet, so every call site (including the two that pass `route`/`catalog`
   // as `undefined`) has a real record to pass — `loadConfig` itself never fails to produce one,
-  // returning `{}` rather than throwing when config.json doesn't exist.
+  // returning `{}` rather than throwing when config.json is missing or not readable JSON.
   config: Record<string, string>;
   // The seam driveLoop's dispatch is wired through: called once on mount with App's own
   // dispatch (stream-coalesced for text-delta). Optional because some tests exercise

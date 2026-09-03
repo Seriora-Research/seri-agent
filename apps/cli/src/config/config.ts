@@ -9,10 +9,27 @@ function configPath(configDir: string): string {
   return join(configDir, CONFIG_FILENAME);
 }
 
+function readConfigText(path: string): string {
+  const buf = readFileSync(path);
+  // UTF-16 LE BOM (FF FE): PowerShell 5 `Out-File` and Notepad "Unicode" write this.
+  // Read as utf8, those files are NULs, and Bun's JSON.parse reports
+  // `Unrecognized token ''` because the token is the invisible `\0`.
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return buf.subarray(2).toString("utf16le");
+  }
+  return buf.toString("utf8");
+}
+
 export function loadConfig(configDir: string = getConfigDir()): Record<string, string> {
   const path = configPath(configDir);
   if (!existsSync(path)) return {};
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readConfigText(path));
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (typeof value === "string") result[key] = value;
@@ -22,10 +39,11 @@ export function loadConfig(configDir: string = getConfigDir()): Record<string, s
 
 // config.json holds provider API keys, so it gets the same owner-only treatment as
 // auth.json (see auth/authStore.ts). atomicWriteFile.ts's shared helper: write-then-rename means
-// a truncating in-place write that is interrupted leaves a partial config.json, which makes every
-// later command throw from JSON.parse — including `seri config` itself, since it reads before
-// writing; the non-colliding tmp name (that module's own comment) is what /memory approval on|off
-// and /memory archivist on|off now need too, as new concurrent writers to this same file.
+// a truncating in-place write that is interrupted leaves a partial config.json. loadConfig
+// treats that the same as a missing file so a launch still starts; the next successful write
+// replaces the broken bytes. The non-colliding tmp name (that module's own comment) is what
+// /memory approval on|off and /memory archivist on|off now need too, as new concurrent writers
+// to this same file.
 function writeConfig(config: Record<string, string>, configDir: string): void {
   atomicWriteFile(configPath(configDir), JSON.stringify(config, null, 2));
 }
