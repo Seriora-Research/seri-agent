@@ -23,24 +23,13 @@ PR. Gates still run. Default review is `/interrogate` + `/no-comments`, plus
 Push the branch and open the PR; do not merge locally. Naming: a descriptive
 branch name derived from the work (e.g. `feat/<slug>`) is reasonable.
 
-## PR review: `/code-review` stays the default; `@claude` in PRs is now also set up
-Considered and explicitly rejected (user directive, 2026-08-02): the official Claude
-GitHub App's managed "Code Review" product (auto-triggers on PR open, ~$15-25/review
-flat via usage credits, needs a Team/Enterprise plan) — **this part of the rejection
-still stands**, that product is not installed.
-
-**Revised 2026-08-15:** `claude-code-action` in GitHub Actions was rejected at the same
-time for "per-token billing, needs `ANTHROPIC_API_KEY` as a repo secret" — that specific
-objection no longer applies. The action supports `claude_code_oauth_token` (generated via
-`claude setup-token`) as an alternative to `anthropic_api_key`; runs then bill against the
-user's Claude Pro/Max subscription instead of separate API usage. Set up in this repo:
-`.github/workflows/claude.yml`, triggered by `@claude` in a PR/issue comment, secret
-`CLAUDE_CODE_OAUTH_TOKEN`, GitHub App installed. This is a manually-triggered mention
-workflow, not an auto-review-every-PR one.
+## PR review: `/code-review` stays the default
+The official Claude GitHub App's managed "Code Review" product is not installed
+(user directive, 2026-08-02). The `@claude` mention workflow that later lived in
+`.github/workflows/claude.yml` is also gone.
 
 Default in-session review is pstack `/interrogate` (and `/no-comments` before the PR).
-`/code-review` remains available as a user-triggered pass. The `@claude` mention
-workflow is an ad hoc supplementary path (tagging `@claude` on a PR from GitHub's UI).
+`/code-review` remains available as a user-triggered pass.
 Thermo-nuclear is user-triggered, not dispatched by default.
 
 **Open, not yet resolved:** whether the conductor merges a PR itself once gates +
