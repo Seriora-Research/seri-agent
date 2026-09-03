@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
+  CONFIG_FILENAME,
   getApiKey,
   loadConfig,
   loadTrajectoryConfig,
@@ -42,6 +43,34 @@ afterEach(() => {
 describe("loadConfig", () => {
   test("returns {} when config.json does not exist", () => {
     expect(loadConfig()).toEqual({});
+  });
+
+  // `bun run src/cli.ts --profile staging` on Windows printed
+  // `JSON Parse error: Unrecognized token ''` and exited 1. Bun's JSON.parse of a NUL
+  // (`\0`) uses that message; the quotes look empty because the token is invisible.
+  // PowerShell `Out-File` and Notepad "Unicode" write UTF-16 LE, which is NULs when
+  // read as UTF-8. An empty file is the other startup form of the same throw.
+  test("returns {} when config.json is empty", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "");
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is a NUL byte", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is malformed UTF-8 JSON", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "{not valid json");
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("reads a UTF-16 LE config.json the way Windows editors write one", () => {
+    writeFileSync(
+      join(configDir, CONFIG_FILENAME),
+      Buffer.from(`\uFEFF${JSON.stringify({ GROQ_API_KEY: "gsk_from_notepad" })}`, "utf16le"),
+    );
+    expect(loadConfig()).toEqual({ GROQ_API_KEY: "gsk_from_notepad" });
   });
 });
 
