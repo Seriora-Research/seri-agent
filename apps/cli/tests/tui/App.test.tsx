@@ -2224,6 +2224,45 @@ describe("App", () => {
       expect(banner).not.toContain("openai/gpt-oss-120b");
     });
 
+    // A hosted-plan pick has no provider key (keyConfigured false), so only the caller-supplied
+    // `route` can move the chrome before the next turn's route-updated.
+    test("a seri-plan /model pick updates the banner and mode row before any turn", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+        route: route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const banner = frame.split("\n").find((l) => l.includes("seri v0.4.2"));
+      const mode = frame.split("\n").find((l) => l.includes(MODE_LABEL["approve-each"]));
+      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).not.toContain("openai/gpt-oss-120b");
+      expect(mode).toContain("minimax/minimax-m3:fr");
+      expect(mode).toContain("seri");
+      expect(mode).not.toContain("openai/gpt-oss-120b");
+    });
+
     // The pre-session window used to render a dead placeholder, so a task typed while
     // `prepareSession` was still running was lost. These pin both halves: the box takes the line,
     // and the second one goes away so a second line cannot silently replace the first.
@@ -3704,12 +3743,8 @@ describe("App", () => {
       expect(frame).not.toContain("claude-sonnet-5");
     });
 
-    // Picking a provider with no configured key means the picker itself doesn't know where
-    // resolveRoute will actually route it (a sibling reroute or the gateway) — only the NEXT
-    // turn's route-updated dispatch does. Optimistically claiming `rerouted: false` here would
-    // render "your key" for a provider the user doesn't have a key for: a fabricated route,
-    // exactly what formatModeDetail's own comment says to avoid. The bar should stay on the OLD
-    // route rather than assert a wrong one.
+    // A no-key pick without a resolved route must not claim "your key". The caller that
+    // has catalog/plan supplies `route` on the same action; without it the bar stays put.
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
       expect(setup.captureCharFrame()).toContain("claude-sonnet-5");

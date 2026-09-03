@@ -896,6 +896,58 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     // Consuming the prefill must not disturb the session the same dispatch already landed.
     expect(state.session.model).toBe(entry.id);
   });
+
+  test("model-picker-resolved uses a caller-supplied route even when keyConfigured is false", () => {
+    let state = tuiReducer(
+      initialTuiState(session(), {
+        route: {
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          rerouted: false,
+          credential: "gateway",
+        },
+      }),
+      { type: "model-picker-requested", entries: [row] },
+    );
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+      route: {
+        model: "minimax/minimax-m3:free",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      },
+    });
+
+    expect(state.route).toEqual({
+      model: "minimax/minimax-m3:free",
+      provider: "openrouter",
+      rerouted: false,
+      credential: "gateway",
+    });
+  });
+
+  test("model-picker-resolved without a supplied route leaves state.route alone when keyConfigured is false", () => {
+    const previous = {
+      model: "openai/gpt-oss-120b",
+      provider: "openrouter" as const,
+      rerouted: false,
+      credential: "gateway" as const,
+    };
+    let state = tuiReducer(initialTuiState(session(), { route: previous }), {
+      type: "model-picker-requested",
+      entries: [row],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+    });
+
+    expect(state.route).toEqual(previous);
+  });
 });
 
 describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
