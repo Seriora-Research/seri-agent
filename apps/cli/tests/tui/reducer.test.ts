@@ -1302,6 +1302,64 @@ describe("tuiReducer: effort-requested / effort-resolved", () => {
   });
 });
 
+describe("tuiReducer: chrome-requested / chrome-loaded / chrome-closed", () => {
+  test("chrome-requested opens pendingChrome in the loading state and bumps generation", () => {
+    const first = tuiReducer(initialTuiState(session()), {
+      type: "chrome-requested",
+      tab: "usage",
+      detail: false,
+    });
+    expect(first.pendingChrome).toEqual({
+      tab: "usage",
+      detail: false,
+      load: { status: "loading" },
+      generation: 1,
+    });
+
+    const second = tuiReducer(first, { type: "chrome-requested", tab: "usage", detail: true });
+    expect(second.pendingChrome?.generation).toBe(2);
+    expect(second.pendingChrome?.detail).toBe(true);
+    expect(second.pendingChrome?.load).toEqual({ status: "loading" });
+  });
+
+  test("chrome-loaded applies only when generation matches", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "chrome-requested",
+      tab: "usage",
+      detail: false,
+    });
+    const generation = state.pendingChrome!.generation;
+
+    state = tuiReducer(state, {
+      type: "chrome-loaded",
+      generation: generation + 1,
+      load: { status: "logged-out" },
+    });
+    expect(state.pendingChrome?.load).toEqual({ status: "loading" });
+
+    state = tuiReducer(state, {
+      type: "chrome-loaded",
+      generation,
+      load: { status: "logged-out" },
+    });
+    expect(state.pendingChrome?.load).toEqual({ status: "logged-out" });
+  });
+
+  test("chrome-closed clears the panel and carries leftoverInput into pendingInputPrefill", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "chrome-requested",
+      tab: "usage",
+      detail: false,
+    });
+    state = tuiReducer(state, {
+      type: "chrome-closed",
+      leftoverInput: "still typing",
+    });
+    expect(state.pendingChrome).toBeUndefined();
+    expect(state.pendingInputPrefill).toBe("still typing");
+  });
+});
+
 describe("tuiReducer: mcp-requested / mcp-closed", () => {
   const rows: McpPanelRow[] = [
     { kind: "header", scope: "project", sourceFile: ".seri/mcp/servers.yaml" },

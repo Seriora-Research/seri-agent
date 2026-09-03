@@ -5268,6 +5268,31 @@ describe("App", () => {
 
       expect(setup.captureCharFrame()).toContain("/effort — reasoning effort");
     });
+
+    test("pendingEffort wins over pendingChrome", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "chrome-requested", tab: "usage", detail: false });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Loading hosted usage");
+
+      dispatch({ type: "effort-requested", tiers: ["low", "medium", "high"], selected: 0 });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("/effort — reasoning effort");
+      expect(frame).not.toContain("Loading hosted usage");
+    });
+
+    test("pendingChrome wins over InputBox", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({ type: "chrome-requested", tab: "usage", detail: false });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("Loading hosted usage");
+      expect(setup.captureCharFrame()).toContain("esc close");
+    });
   });
 
   describe("subagent panel", () => {
