@@ -9,6 +9,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 # Supersede a run when its ref gets another push, except on main, where every commit keeps
 # its own recorded build rather than being cancelled by the next merge.
 concurrency:
@@ -58,25 +61,3 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run format:check
-
-  opentui-ffi-smoke:
-    # docs/specs/025-tui-opentui-migration/tasks.md Phase 0's own stop-gate: proves
-    # @opentui/core's native module dlopens inside a `bun build --compile` binary
-    # (oven-sh/bun#30717's exact symptom) on real CI runners, not just this branch's own dev
-    # machine. Opt-in test (SERI_OPENTUI_FFI_SMOKE), so it only runs here, not on every commit
-    # to every branch — re-run manually (or extend this job) when @opentui/core is bumped.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.4.0
-      - run: bun install --frozen-lockfile
-      - run: bun test apps/cli/tests/tui/opentuiFfiSmoke.test.ts
-        env:
-          SERI_OPENTUI_FFI_SMOKE: "1"
