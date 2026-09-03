@@ -2161,6 +2161,68 @@ describe("App", () => {
       expect(bannerIndex).toBeLessThan(createdIndex);
     });
 
+    // The session header used to keep the mount-time `splashBanner` pair after a live /model
+    // switch, so the top of the transcript named a different model than the mode row and the turn.
+    test("the session banner reflects a route-updated dispatch without remounting", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({ model: "openai/gpt-oss-120b", provider: "openrouter" }),
+      });
+
+      const bannerBefore = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(bannerBefore).toContain("openai/gpt-oss-120b · openrouter");
+
+      dispatch({
+        type: "route-updated",
+        route: route({ model: "minimax/minimax-m3:free", provider: "openrouter" }),
+      });
+      await flush(setup);
+
+      const bannerAfter = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(bannerAfter).toContain("minimax/minimax-m3:free · openrouter");
+      expect(bannerAfter).not.toContain("openai/gpt-oss-120b");
+    });
+
+    // `model-picker-resolved` must move the header the moment the pick lands, not wait for
+    // the next turn's `route-updated`.
+    test("the session banner updates immediately from a /model pick", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({ model: "openai/gpt-oss-120b", provider: "openrouter" }),
+      });
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: true },
+      });
+      await flush(setup);
+
+      const banner = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).not.toContain("openai/gpt-oss-120b");
+    });
+
     // The pre-session window used to render a dead placeholder, so a task typed while
     // `prepareSession` was still running was lost. These pin both halves: the box takes the line,
     // and the second one goes away so a second line cannot silently replace the first.
