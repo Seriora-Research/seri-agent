@@ -12,6 +12,8 @@ on:
 permissions:
   contents: read
 
+# Supersede a run when its ref gets another push, except on main, where every commit keeps
+# its own recorded build rather than being cancelled by the next merge.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -49,6 +51,7 @@ jobs:
           "$BIN" --version
 
   format:
+    # Formatting is OS-independent, so this runs once rather than on the full matrix.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -24,10 +24,9 @@ PR. Gates still run. Default review is `/interrogate` + `/no-comments`, plus
 (user-triggered). Push the branch and open the PR; do not merge locally. Naming: a
 descriptive branch name derived from the work (e.g. `feat/<slug>`) is reasonable.
 
-## PR review: `/code-review` stays the default
+## PR review
 The official Claude GitHub App's managed "Code Review" product is not installed
-(user directive, 2026-08-02). The `@claude` mention workflow that later lived in
-`.github/workflows/claude.yml` is also gone.
+(user directive, 2026-08-02).
 
 Default in-session review is pstack `/interrogate` (and `/no-comments` before the PR).
 `/code-review` remains available as a user-triggered pass.
