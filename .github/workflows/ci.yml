@@ -51,6 +51,7 @@ jobs:
           "$BIN" --version
 
   format:
+    # Formatting is OS-independent, so this runs once rather than on the full matrix.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
