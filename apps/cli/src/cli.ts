@@ -2393,7 +2393,6 @@ async function runTui(
       // synchronously, and onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget),
       // so this must be a visible command-error the same way every other failure here degrades.
       try {
-        // prepareSession loads the catalog once, before /setup can write the ChatGPT grant.
         prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
         dispatch({
           type: "model-picker-requested",
