@@ -33,8 +33,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Each target builds on a runner that already matches it: the vendored ripgrep is
-          # resolved for the build host, so cross-compiling would embed the wrong binary.
           - runner: ubuntu-latest
             target: linux-x64
           - runner: ubuntu-24.04-arm
