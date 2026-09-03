@@ -3427,7 +3427,19 @@ describe("App", () => {
       });
       expect(matchesFilter(covered, "included")).toBe(true);
       expect(matchesFilter(covered, "plan")).toBe(true);
+      expect(matchesFilter(covered, "chatgpt")).toBe(true);
       expect(matchesFilter(covered, "free")).toBe(false);
+      const leftover = pickerRow({
+        subscriptionCovered: false,
+        entry: entry({
+          id: "gpt-5.6",
+          displayName: "GPT-5.6",
+          provider: "openai",
+          family: "gpt",
+          pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+        }),
+      });
+      expect(matchesFilter(leftover, "chatgpt")).toBe(false);
       const zeroPrice = pickerRow({
         subscriptionCovered: false,
         entry: entry({
