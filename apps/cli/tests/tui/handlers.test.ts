@@ -222,7 +222,7 @@ describe("dispatchSetupList (via onSetupBack)", () => {
     }
   });
 
-  test("onSetupBack on a corrupted config.json closes the panel instead of leaving confirm-remove stuck", () => {
+  test("onSetupBack on a corrupted config.json refreshes the list instead of closing the panel", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
     const { actions, dispatch } = actionsCollector();
     const { onSetupBack } = createSetupHandlers({
@@ -237,10 +237,12 @@ describe("dispatchSetupList (via onSetupBack)", () => {
 
     onSetupBack();
 
-    expect(actions.map((a) => a.type)).toEqual(["command-error", "setup-resolved"]);
+    expect(actions.map((a) => a.type)).toEqual(["setup-step"]);
+    const [action] = actions;
+    expect(action?.type === "setup-step" && action.state.step).toBe("list");
   });
 
-  test("onPanelClosed fires exactly once when the refresh fails", () => {
+  test("onPanelClosed does not fire when a corrupted config.json still refreshes", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
     const { dispatch } = actionsCollector();
     let panelClosedCount = 0;
@@ -259,7 +261,7 @@ describe("dispatchSetupList (via onSetupBack)", () => {
 
     onSetupBack();
 
-    expect(panelClosedCount).toBe(1);
+    expect(panelClosedCount).toBe(0);
   });
 });
 
@@ -411,7 +413,7 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
   // Guards the existing fix against regression and pins the symmetry item 1 restores between
   // /setup, /config and /permissions.
-  test("a corrupted config.json closes the panel instead of leaving confirm-unset stuck", () => {
+  test("a corrupted config.json refreshes the list instead of closing the panel", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
     const { actions, dispatch } = actionsCollector();
     const { onConfigBack } = createConfigHandlers({
@@ -422,7 +424,9 @@ describe("dispatchConfigList (via onConfigBack)", () => {
 
     onConfigBack();
 
-    expect(actions.map((a) => a.type)).toEqual(["command-error", "config-resolved"]);
+    expect(actions.map((a) => a.type)).toEqual(["config-step"]);
+    const [action] = actions;
+    expect(action?.type === "config-step" && action.state.step).toBe("list");
   });
 });
 
