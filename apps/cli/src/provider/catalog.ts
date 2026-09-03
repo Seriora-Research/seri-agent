@@ -156,6 +156,18 @@ export function overlayCodexModels(
   };
 }
 
+export async function catalogForModelPicker(
+  current: ModelCatalog,
+  configDir: string,
+  fetchFn: typeof fetch = fetch,
+  sink?: (line: string) => void,
+): Promise<ModelCatalog> {
+  if (!codexSubscriptionActive(configDir) || isCodexPlanCatalogApplied()) {
+    return current;
+  }
+  return getModelCatalog(fetchFn, sink, configDir);
+}
+
 export async function withCodexSubscriptionCatalog(
   catalog: ModelCatalog,
   sink?: (line: string) => void,

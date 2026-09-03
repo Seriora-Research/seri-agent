@@ -116,6 +116,7 @@ import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import {
+  catalogForModelPicker,
   getModelCatalog,
   isCodexPlanCatalogApplied,
   prewarmModelCatalog,
@@ -2387,11 +2388,13 @@ async function runTui(
     "/exit": async () => {
       await quit();
     },
-    "/model": () => {
+    "/model": async () => {
       // configuredProviders reads config.json via a bare JSON.parse — a corrupted file throws
       // synchronously, and onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget),
       // so this must be a visible command-error the same way every other failure here degrades.
       try {
+        // prepareSession loads the catalog once, before /setup can write the ChatGPT grant.
+        prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
         dispatch({
           type: "model-picker-requested",
           // configuredProviders is re-read fresh on every open, not cached from prepareSession — a
