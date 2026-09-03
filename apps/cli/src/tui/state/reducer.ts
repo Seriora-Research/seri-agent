@@ -424,6 +424,9 @@ export type TuiAction =
       // (that's `resolveRoute`'s job, which needs the catalog/configured-providers/plan this
       // reducer doesn't have), only whether one is needed at all.
       pick?: { model: string; provider: ModelProvider; keyConfigured: boolean };
+      // The dispatcher's own resolveSessionRoute result for `pick` (cli.ts's onModelSelected).
+      // Guided setup (routes/setup/guidedSetup.ts) has no catalog or plan yet and omits it.
+      route?: ResolvedRoute;
       // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
       // present only on the rare chunked-input path, absent on every ordinary Enter.
       leftoverInput?: string;
@@ -728,18 +731,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
       // one — see TuiAction's own comment on `pick`.
       //
-      // `route` is also updated optimistically here, not just `session` — otherwise the status
-      // bar (which reads `state.route`) stays on the OLD model until the next turn's
-      // `route-updated` dispatch (cli.ts's runTurn), one full turn after the pick that's visibly
-      // supposed to have already switched it. Only done when `keyConfigured` is true, though: that's
-      // the one case this reducer can resolve on its own (Rule 1 of `resolveRoute`, routing.ts — a
-      // provider with its own key always wins unrerouted). When it's false, the picked provider will
-      // be rerouted or gateway-served, but WHERE it lands is `resolveRoute`'s computation (it needs
-      // the catalog/configured-providers/plan this reducer doesn't have) — guessing `rerouted: false`
-      // here would render "your key" for a provider the user doesn't actually have a key for, exactly
-      // the fabricated-route claim `formatModeDetail`'s own comment says to avoid. `state.route` is
-      // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
-      // than asserting something false.
+      // `route` moves here too, not just `session`: the mode row and session banner read
+      // `state.route`, and the next `route-updated` dispatch (cli.ts's runTurn) is a whole turn
+      // away. Without `action.route` this reducer can only name a route for a pick whose own
+      // provider has a key (Rule 1 of `resolveRoute`, routing.ts — never rerouted); for a no-key
+      // pick it cannot know where the reroute or gateway hop lands, and claiming `credential:
+      // "key"` would render "your key" for a key the user lacks, so `state.route` stays as-is.
       if (action.pick === undefined) {
         return {
           ...state,
@@ -756,14 +753,16 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           model: action.pick.model,
           provider: action.pick.provider,
         },
-        route: action.pick.keyConfigured
-          ? {
-              model: action.pick.model,
-              provider: action.pick.provider,
-              rerouted: false,
-              credential: "key",
-            }
-          : state.route,
+        route:
+          action.route ??
+          (action.pick.keyConfigured
+            ? {
+                model: action.pick.model,
+                provider: action.pick.provider,
+                rerouted: false,
+                credential: "key",
+              }
+            : state.route),
       };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
