@@ -159,6 +159,8 @@ export function parseModelList(result: unknown): CodexListedModel[] {
         : undefined;
     const visibility = typeof row.visibility === "string" ? row.visibility : undefined;
     if (visibility !== undefined && visibility !== "list") continue;
+    const supportedInApi = row.supported_in_api ?? row.supportedInApi;
+    if (supportedInApi === false) continue;
     const effortsRaw = Array.isArray(row.supportedReasoningEfforts)
       ? row.supportedReasoningEfforts
       : Array.isArray(row.supported_reasoning_efforts)
@@ -207,10 +209,10 @@ function rememberPlanType(result: unknown): void {
 
 const MODEL_LIST_PAGE = 100;
 const MODEL_LIST_MAX_PAGES = 20;
-// Required query on GET /models. The backend treats this as a Codex CLI
-// compatibility version: omit it and the list is HTTP 400; send seri's own
-// 0.0.1 and the catalog comes back empty. 0.0.0 is the ungated catalog.
-export const CODEX_UNGATED_CLIENT_VERSION = "0.0.0";
+// GET /models requires client_version. seri 0.0.1 and the 0.0.0 sentinel
+// both return an empty list. 0.148.0 is the live-validated Codex protocol
+// version vercel-labs/fx uses.
+export const CODEX_PROTOCOL_CLIENT_VERSION = "0.148.0";
 
 function nextCursorOf(result: unknown): string | undefined {
   if (typeof result !== "object" || result === null) return undefined;
@@ -283,7 +285,7 @@ function codexModelsUrl(configDir?: string, cursor?: string): string {
     "",
   );
   const url = new URL(`${base}/models`);
-  url.searchParams.set("client_version", CODEX_UNGATED_CLIENT_VERSION);
+  url.searchParams.set("client_version", CODEX_PROTOCOL_CLIENT_VERSION);
   if (cursor !== undefined) url.searchParams.set("cursor", cursor);
   return url.toString();
 }
@@ -311,6 +313,7 @@ async function listCodexModelsOverHttp(opts: RefreshCodexOpts): Promise<CodexLis
     const headers: Record<string, string> = {
       authorization: `Bearer ${accessToken}`,
       originator,
+      accept: "application/json",
       "user-agent": `seri/${pkg.version} (${platform()}; ${arch()})`,
       session_id: sessionId,
     };

@@ -318,6 +318,7 @@ describe("decideModelPickerOpen", () => {
 
   test("/model passes modelPickerSubscribedProviders the overlay flag", () => {
     const src = readFileSync(join(import.meta.dir, "../../src/cli.ts"), "utf8");
+    expect(src).toContain("catalogForModelPicker(");
     expect(src).toContain("modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())");
     expect(src).not.toContain('isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])');
   });
