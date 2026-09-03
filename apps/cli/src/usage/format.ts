@@ -33,12 +33,24 @@ function dateOnly(iso: string): string {
   return iso.slice(0, 10);
 }
 
+const UTC_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
 function resetLabel(iso: string): string {
   const d = new Date(iso);
-  const day = d.toLocaleDateString("en-GB", { day: "numeric", timeZone: "UTC" });
-  const month = d.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
-  const year = d.toLocaleDateString("en-GB", { year: "numeric", timeZone: "UTC" });
-  return `${day} ${month} ${year} UTC`;
+  return `${d.getUTCDate()} ${UTC_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} UTC`;
 }
 
 function paceLine(report: UsageReport): string {
@@ -48,10 +60,7 @@ function paceLine(report: UsageReport): string {
   return `Pace  At this pace you hit the cap on ${dateOnly(report.hitAt)}.`;
 }
 
-function modelLine(
-  model: UsageReport["models"][number],
-  detail: boolean,
-): string {
+function modelLine(model: UsageReport["models"][number], detail: boolean): string {
   const route = detail ? `  ${model.upstreamRoute}` : "";
   return `  ${model.modelId}  ${formatTokenCount(model.inputTokens)} in  ${formatTokenCount(model.outputTokens)} out  ${formatTokenCount(model.cacheReadTokens)} cache read  ${formatTokenCount(model.cacheWriteTokens)} cache write  ${formatShare(model.share)}${route}`;
 }

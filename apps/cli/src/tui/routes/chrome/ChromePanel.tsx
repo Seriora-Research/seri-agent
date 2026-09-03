@@ -28,13 +28,7 @@ function TabStrip({ active }: { active: ChromeTabId }) {
   );
 }
 
-function UsageBody({
-  load,
-  detail,
-}: {
-  load: ChromePanelState["load"];
-  detail: boolean;
-}) {
+function UsageBody({ load, detail }: { load: ChromePanelState["load"]; detail: boolean }) {
   if (load.status === "loading") {
     return <text fg={theme.muted}>Loading hosted usage…</text>;
   }

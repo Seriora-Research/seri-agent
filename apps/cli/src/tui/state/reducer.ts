@@ -854,7 +854,10 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     }
     case "chrome-loaded":
-      if (state.pendingChrome === undefined || state.pendingChrome.generation !== action.generation) {
+      if (
+        state.pendingChrome === undefined ||
+        state.pendingChrome.generation !== action.generation
+      ) {
         return state;
       }
       return { ...state, pendingChrome: { ...state.pendingChrome, load: action.load } };
