@@ -80,6 +80,8 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
+import { ChromePanel } from "./routes/chrome/ChromePanel";
+import type { ChromeTabId } from "./chrome/tabs";
 import type { SetupProviderRow } from "./state/commands";
 import { type Dispatch, initialTuiState } from "./state/reducer";
 import { createStreamDispatch } from "./state/streamDispatch";
@@ -233,6 +235,8 @@ export type AppProps = {
   onMemoryDiff?: (id: string) => string[];
   onMemoryApprove?: (id: string) => void;
   onMemoryReject?: (id: string) => void;
+  onChromeTab?: (tab: ChromeTabId) => void;
+  onChromeClose?: (leftoverInput?: string) => void;
   // Every completion source the input box may open (util/completion.ts). A function, not an array:
   // runTui is the only place the command catalog, the agent registry and the skill registry are all
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
@@ -351,6 +355,8 @@ export function App({
   onMemoryDiff,
   onMemoryApprove,
   onMemoryReject,
+  onChromeTab,
+  onChromeClose,
   getCompletionSources,
   onSplashLogin,
   onSplashSignup,
@@ -532,7 +538,8 @@ export function App({
         state.pendingEffort !== undefined ||
         state.pendingSkills !== undefined ||
         state.pendingMcp !== undefined ||
-        state.pendingMemory !== undefined));
+        state.pendingMemory !== undefined ||
+        state.pendingChrome !== undefined));
 
   // True when NOTHING modal owns the keyboard, approvals included — what every binding that is not
   // transcript paging still gates on (shift+tab's mode cycle below).
@@ -892,6 +899,12 @@ export function App({
           pendingEffort={state.pendingEffort}
           onEffortSelected={onEffortSelected}
           onEffortCancel={onEffortCancel}
+        />
+      ) : state.pendingChrome !== undefined ? (
+        <ChromePanel
+          pendingChrome={state.pendingChrome}
+          onChromeTab={onChromeTab}
+          onChromeClose={onChromeClose}
         />
       ) : state.pendingSplash ? (
         <WelcomeSplashPanel

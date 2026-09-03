@@ -25,7 +25,13 @@ const report: UsageReport = {
   dailyRequestCap: 500,
   hitAt: null,
   models: [],
-  cache: { inputTokens: 0, cacheReadTokens: 0, hitRate: 0 },
+  cache: {
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    hitRate: 0,
+    writeRate: 0,
+  },
   days: [],
   sessions: [],
 };
@@ -50,9 +56,6 @@ describe("runUsageCommand", () => {
         fetched += 1;
         return { status: "logged-out" };
       },
-      getCatalog: async () => {
-        throw new Error("catalog should not load when logged out");
-      },
     });
     expect(lines).toEqual(LOGGED_OUT_USAGE.split("\n"));
     expect(fetched).toBe(1);
@@ -65,21 +68,18 @@ describe("runUsageCommand", () => {
           status: "error",
           message: "Could not load hosted usage. Try again in a moment.",
         }),
-        getCatalog: async () => ({ fetchedAt: "", entries: [] }),
       }),
     ).rejects.toThrow("Could not load hosted usage");
   });
 
-  test("a catalog failure still prints the fetched report", async () => {
+  test("a fetched report prints the percent headline", async () => {
     const lines: string[] = [];
     await runUsageCommand(configDir, {
       presenter: { message: (text) => lines.push(text) },
       fetchUsage: async () => ({ status: "ok", report }),
-      getCatalog: async () => {
-        throw new Error("catalog fetch failed");
-      },
     });
-    expect(lines.join("\n")).toContain("Hosted gateway  (Pro)");
+    expect(lines.join("\n")).toContain("Hosted  Pro");
+    expect(lines.join("\n")).toContain("Included this month");
   });
 });
 

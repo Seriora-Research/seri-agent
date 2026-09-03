@@ -9,6 +9,8 @@ import type { McpPanelRow } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import type { UsageReport } from "../../usage/report";
+import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
 import { ERROR_MARK } from "../theme/theme";
 import {
@@ -87,6 +89,19 @@ export type PermissionsPanelState =
 // routing.ts). Flatter than PermissionsPanelState above: one step, no confirm/remove/value-entry —
 // there is nothing here but a tier to pick or cancel out of.
 export type EffortPanelState = { tiers: string[]; selected: number };
+
+export type ChromeLoad =
+  | { status: "loading" }
+  | { status: "logged-out" }
+  | { status: "ok"; report: UsageReport; staleFrom?: string }
+  | { status: "error"; message: string };
+
+export type ChromePanelState = {
+  tab: ChromeTabId;
+  detail: boolean;
+  load: ChromeLoad;
+  generation: number;
+};
 
 // Messages typed while a turn was already running, held in submission order until drainQueue
 // (cli.ts) re-submits the head. Rendered by components/QueueBlock.tsx.
@@ -224,6 +239,7 @@ export type TuiState = {
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
+  pendingChrome: ChromePanelState | undefined;
   // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
   // which App forwards from its `showSplash` prop so the first committed frame is already the
   // splash. `splash-requested` (runWelcomeSplash's connectDispatch) still sets it true after mount,
@@ -369,6 +385,7 @@ export function initialTuiState(
     pendingMcp: undefined,
     pendingMemory: undefined,
     pendingEffort: undefined,
+    pendingChrome: undefined,
     pendingSplash: opts?.showSplash ?? false,
     splashDone: false,
     ...EMPTY_ROSTER,
@@ -479,6 +496,10 @@ export type TuiAction =
   | { type: "memory-requested"; rows: readonly MemoryPanelRow[] }
   | { type: "memory-closed" }
   | { type: "effort-requested"; tiers: string[]; selected: number }
+  | { type: "chrome-requested"; tab: ChromeTabId; detail: boolean }
+  | { type: "chrome-loaded"; generation: number; load: ChromeLoad }
+  | { type: "chrome-tab"; tab: ChromeTabId }
+  | { type: "chrome-closed"; leftoverInput?: string }
   | { type: "effort-resolved"; tier?: string; leftoverInput?: string }
   | { type: "splash-requested" }
   | { type: "splash-resolved" }
@@ -820,6 +841,31 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return { ...state, pendingMemory: undefined };
     case "effort-requested":
       return { ...state, pendingEffort: { tiers: action.tiers, selected: action.selected } };
+    case "chrome-requested": {
+      const generation = (state.pendingChrome?.generation ?? 0) + 1;
+      return {
+        ...state,
+        pendingChrome: {
+          tab: action.tab,
+          detail: action.detail,
+          load: { status: "loading" },
+          generation,
+        },
+      };
+    }
+    case "chrome-loaded":
+      if (
+        state.pendingChrome === undefined ||
+        state.pendingChrome.generation !== action.generation
+      ) {
+        return state;
+      }
+      return { ...state, pendingChrome: { ...state.pendingChrome, load: action.load } };
+    case "chrome-tab":
+      if (state.pendingChrome === undefined) return state;
+      return { ...state, pendingChrome: { ...state.pendingChrome, tab: action.tab } };
+    case "chrome-closed":
+      return { ...state, pendingChrome: undefined, pendingInputPrefill: action.leftoverInput };
     case "effort-resolved":
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
       // one — same reasoning as `model-picker-resolved`'s own comment (TuiAction, above).

@@ -15,8 +15,16 @@ function validBody(): Record<string, unknown> {
     dailyRequestCap: 500,
     hitAt: null,
     models: [],
-    cache: { inputTokens: 0, cacheReadTokens: 0, hitRate: 0 },
-    days: [{ date: "2026-08-16", requests: 1, costUsd: 1 }],
+    cache: {
+      inputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      hitRate: 0,
+      writeRate: 0,
+    },
+    days: [
+      { date: "2026-08-16", requests: 1, costUsd: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+    ],
     sessions: [{ sessionId: null, requests: 1, costUsd: 1 }],
   };
 }
@@ -30,6 +38,15 @@ describe("parseUsageReport", () => {
     expect(parseUsageReport({ ...validBody(), window: null })).toBeNull();
     expect(parseUsageReport({ ...validBody(), quota: null })).toBeNull();
     expect(parseUsageReport({ ...validBody(), cache: null })).toBeNull();
+  });
+
+  test("a cache block without write fields is rejected", () => {
+    expect(
+      parseUsageReport({
+        ...validBody(),
+        cache: { inputTokens: 0, cacheReadTokens: 0, hitRate: 0 },
+      }),
+    ).toBeNull();
   });
 
   test("malformed days or sessions rows return null", () => {

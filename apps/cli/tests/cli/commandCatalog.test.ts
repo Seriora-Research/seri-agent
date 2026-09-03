@@ -45,6 +45,7 @@ const EXPECTED_TUI_CLAIMED = [
   // Session-surface, TUI-claimed: the bare form opens the review panel here, while
   // `seri "/memory approve all"` still runs on the non-TTY path that has no panel to open.
   "/memory",
+  "/usage",
   "/exit",
   "/model",
   "/setup",

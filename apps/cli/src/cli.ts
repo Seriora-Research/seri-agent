@@ -168,7 +168,9 @@ import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import type { CompletionSource } from "./tui/util/completion";
+import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
+import { fetchUsageReport } from "./usage/fetch";
 
 export { addCost, addTokens };
 
@@ -2628,6 +2630,15 @@ async function runTui(
         });
       }
     },
+    "/usage": async (args) => {
+      const detail = args[0] === "--detail";
+      dispatch({ type: "chrome-requested", tab: "usage", detail });
+      const generation = liveState.pendingChrome?.generation;
+      if (generation === undefined) return;
+      const result = await fetchUsageReport(configDir);
+      if (liveState.pendingChrome?.generation !== generation) return;
+      dispatch({ type: "chrome-loaded", generation, load: chromeLoadFromFetch(result) });
+    },
     "/profile": (args) => {
       try {
         const { dir, name: profileName } = decideProfileCreate(args);
@@ -3041,6 +3052,8 @@ async function runTui(
       onMemoryDiff,
       onMemoryApprove,
       onMemoryReject,
+      onChromeTab: (tab) => dispatch({ type: "chrome-tab", tab }),
+      onChromeClose: (leftoverInput) => dispatch({ type: "chrome-closed", leftoverInput }),
       getCompletionSources: buildCompletionSources,
       // No auth-offer recompute here — redundant: every path that reaches this (Escape on
       // "starting"/"device", Enter/Esc on a login-failure result, or

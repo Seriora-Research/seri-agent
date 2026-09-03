@@ -160,7 +160,7 @@ Everything below is a slash command inside the session.
 | `/compact [instructions]` | summarize older messages so the conversation fits the context window |
 | `/memory` | review staged memory writes |
 | `/trajectory` | show or turn local trajectory recording on or off |
-| `/usage` | hosted-gateway spend vs allowance |
+| `/usage` | hosted allowance used |
 | `/exit` | end the session (or Ctrl-D) |
 | `/model` | open the model picker across all six providers and subscription routes |
 | `/setup` | add or replace a provider API key; connect or ignore seri, Grok, or Codex plans |

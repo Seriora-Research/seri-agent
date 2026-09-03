@@ -21,7 +21,13 @@ const report: UsageReport = {
   dailyRequestCap: 500,
   hitAt: null,
   models: [],
-  cache: { inputTokens: 0, cacheReadTokens: 0, hitRate: 0 },
+  cache: {
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    hitRate: 0,
+    writeRate: 0,
+  },
   days: [],
   sessions: [],
 };
