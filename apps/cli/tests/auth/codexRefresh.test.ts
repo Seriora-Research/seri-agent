@@ -136,6 +136,12 @@ describe("parseModelList", () => {
             display_name: "Hidden",
             visibility: "hide",
           },
+          {
+            slug: "unsupported-slug",
+            display_name: "Unsupported",
+            visibility: "list",
+            supported_in_api: false,
+          },
         ],
       }),
     ).toEqual([
@@ -360,7 +366,12 @@ describe("listCodexModels", () => {
         accountId: "acct-plan",
       }),
     );
-    const seen: Array<{ url: string; authorization?: string; originator?: string }> = [];
+    const seen: Array<{
+      url: string;
+      authorization?: string;
+      originator?: string;
+      accept?: string;
+    }> = [];
     try {
       const listed = await listCodexModels({
         configDir,
@@ -372,14 +383,17 @@ describe("listCodexModels", () => {
             url,
             authorization: headers.get("authorization") ?? undefined,
             originator: headers.get("originator") ?? undefined,
+            accept: headers.get("accept") ?? undefined,
           });
           return new Response(
             JSON.stringify({
-              data: [
+              models: [
                 {
-                  slug: "gpt-5.6-luna",
-                  display_name: "GPT-5.6 Luna",
-                  supported_reasoning_efforts: ["low", "high"],
+                  slug: "gpt-5.4-mini",
+                  display_name: "GPT-5.4 mini",
+                  visibility: "list",
+                  supported_in_api: true,
+                  supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }],
                 },
               ],
             }),
@@ -389,18 +403,20 @@ describe("listCodexModels", () => {
       });
       expect(listed).toEqual([
         {
-          id: "gpt-5.6-luna",
-          displayName: "GPT-5.6 Luna",
+          id: "gpt-5.4-mini",
+          displayName: "GPT-5.4 mini",
           supportedReasoningEfforts: ["low", "high"],
         },
       ]);
       expect(seen).toHaveLength(1);
       expect(seen[0]?.url).toBe(
-        "https://chatgpt.com/backend-api/codex/models?client_version=0.0.0",
+        "https://chatgpt.com/backend-api/codex/models?client_version=0.148.0",
       );
+      expect(seen[0]?.url).not.toContain("client_version=0.0.0");
       expect(seen[0]?.url).not.toContain("client_version=0.0.1");
       expect(seen[0]?.authorization).toBe("Bearer tok-plan");
       expect(seen[0]?.originator).toBe("seri");
+      expect(seen[0]?.accept).toBe("application/json");
     } finally {
       rmSync(configDir, { recursive: true, force: true });
       rmSync(leftover, { recursive: true, force: true });

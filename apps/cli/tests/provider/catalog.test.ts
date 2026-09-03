@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type ModelCatalog, type ModelCatalogEntry, resetCatalogCache } from "@seri/model-catalog";
 import { resetCodexModelCache } from "../../src/auth/codexRefresh";
 import {
+  catalogForModelPicker,
   catalogWithFallback,
   getModelCatalog,
   idsFromGrokModelsPayload,
@@ -213,6 +214,71 @@ describe("getModelCatalog", () => {
       expect(
         catalog.entries.some((entry) => entry.provider === "openai" && entry.id === "gpt-5.6-luna"),
       ).toBe(true);
+    } finally {
+      resetCodexModelCache();
+      resetCodexPlanCatalogApplied();
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("catalogForModelPicker overlays plan ids after a mid-session ChatGPT connect", async () => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = mkdtempSync(join(tmpdir(), "seri-catalog-picker-refresh-"));
+    resetCodexModelCache();
+    resetCodexPlanCatalogApplied();
+    const apiCatalog: ModelCatalog = {
+      fetchedAt: "2026-09-03T00:00:00.000Z",
+      entries: [
+        catalogEntry({
+          id: "gpt-4.1",
+          provider: "openai",
+          displayName: "GPT-4.1",
+          family: "gpt",
+          pricing: { inputPerMTok: 2, outputPerMTok: 8 },
+        }),
+      ],
+    };
+    try {
+      expect(isCodexPlanCatalogApplied()).toBe(false);
+      writeFileSync(
+        join(configDir, "codex-auth.json"),
+        JSON.stringify({
+          accessToken: "tok-plan",
+          refreshToken: "refresh-plan",
+          obtainedAt: new Date().toISOString(),
+          accountId: "acct-plan",
+        }),
+      );
+      const refreshed = await catalogForModelPicker(
+        apiCatalog,
+        configDir,
+        (async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/backend-api/codex/models")) {
+            return new Response(
+              JSON.stringify({
+                models: [
+                  {
+                    slug: "gpt-5.4-mini",
+                    display_name: "GPT-5.4 mini",
+                    visibility: "list",
+                    supported_in_api: true,
+                  },
+                ],
+              }),
+              { status: 200 },
+            );
+          }
+          throw new Error(`unexpected fetch ${url}`);
+        }) as typeof fetch,
+      );
+      expect(isCodexPlanCatalogApplied()).toBe(true);
+      expect(
+        refreshed.entries.some(
+          (entry) => entry.provider === "openai" && entry.id === "gpt-5.4-mini",
+        ),
+      ).toBe(true);
+      expect(refreshed.entries.some((entry) => entry.id === "gpt-4.1")).toBe(false);
     } finally {
       resetCodexModelCache();
       resetCodexPlanCatalogApplied();
