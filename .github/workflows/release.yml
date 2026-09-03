@@ -4,11 +4,15 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   verify-version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tag must match apps/cli/package.json
         shell: bash
         run: |
@@ -24,12 +28,11 @@ jobs:
   build:
     needs: verify-version
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Each target builds on a runner that already matches it: the vendored ripgrep is
-          # resolved for the build host, so cross-compiling would embed the wrong binary.
           - runner: ubuntu-latest
             target: linux-x64
           - runner: ubuntu-24.04-arm
@@ -42,7 +45,7 @@ jobs:
             target: windows-x64
             ext: .exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
@@ -68,6 +71,7 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
