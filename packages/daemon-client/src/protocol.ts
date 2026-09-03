@@ -11,6 +11,7 @@ export type TurnRequest = {
 
 export type PublicLoopEvent =
   | { type: "text-delta"; text: string }
+  | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; name: string; args: unknown }
   | { type: "tool-result"; name: string; result: unknown }
   // Mirrors loop.ts's own reason union, including "hook". Not caught by the compiler: the daemon

@@ -9,6 +9,7 @@
 
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
+import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
 import { SplashBanner, type SplashBannerInfo } from "./SplashBanner";
@@ -57,17 +58,7 @@ export function WelcomeSplashPanel({
   });
 
   return (
-    // paddingLeft/paddingRight={1}: the intro is the first thing a launch paints, and every
-    // row of it ran flush against the border before this. Scoped to this panel, not the app
-    // root, for the same reason the transcript scrollbox scopes its own margin.
-    <box
-      borderStyle="single"
-      borderColor={theme.muted}
-      flexDirection="column"
-      flexGrow={1}
-      paddingLeft={1}
-      paddingRight={1}
-    >
+    <box {...FRAME} flexDirection="column" flexGrow={1}>
       {banner === undefined ? <text>seri</text> : <SplashBanner info={banner} />}
       {/* Eats the leftover height, so the banner keeps the top of the screen and the choice sits
       on the bottom edge next to its own key hint, rather than crowding the banner. */}

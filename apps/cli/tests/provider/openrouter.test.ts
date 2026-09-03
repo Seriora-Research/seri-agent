@@ -6,6 +6,7 @@ import { getOpenRouterModel } from "../../src/provider/openrouter";
 
 const originalKey = process.env.OPENROUTER_API_KEY;
 const originalHome = process.env.HOME;
+const originalPin = process.env.SERI_OPENROUTER_PROVIDER;
 
 function restoreEnv(key: string, original: string | undefined): void {
   if (original === undefined) delete process.env[key];
@@ -16,6 +17,7 @@ let tmpRoot: string;
 
 beforeEach(() => {
   delete process.env.OPENROUTER_API_KEY;
+  delete process.env.SERI_OPENROUTER_PROVIDER;
   // Point the config dir at an empty temp dir so a real config.json on this
   // machine can never supply OPENROUTER_API_KEY and mask the "unset" case.
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-openrouter-test-"));
@@ -25,6 +27,7 @@ beforeEach(() => {
 afterEach(() => {
   restoreEnv("OPENROUTER_API_KEY", originalKey);
   restoreEnv("HOME", originalHome);
+  restoreEnv("SERI_OPENROUTER_PROVIDER", originalPin);
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -55,5 +58,17 @@ describe("getOpenRouterModel", () => {
       settings: { extraBody?: Record<string, unknown> };
     };
     expect(model.settings.extraBody).toEqual({ session_id: "my-session-id" });
+  });
+
+  test("a pin sets provider.order and drops session_id", () => {
+    process.env.OPENROUTER_API_KEY = "fake-test-key";
+    process.env.SERI_OPENROUTER_PROVIDER = "Anthropic,OpenAI";
+    const model = getOpenRouterModel("openai/gpt-oss-120b", "my-session-id") as unknown as {
+      settings: { extraBody?: Record<string, unknown> };
+    };
+    expect(model.settings.extraBody).toEqual({
+      provider: { order: ["Anthropic", "OpenAI"], allow_fallbacks: false },
+    });
+    expect(model.settings.extraBody).not.toHaveProperty("session_id");
   });
 });

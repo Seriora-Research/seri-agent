@@ -63,6 +63,22 @@ describe("printCost", () => {
     expect(line).toBe("(cost: ≥ $0.0020, partially unknown)");
     expect(line).not.toBe("(cost: $0.0020)");
   });
+
+  test("renders a subscription turn as included, never a dollar figure", () => {
+    const [line] = captureLog(() =>
+      printCost({ amountUsd: undefined, status: "included", source: "custom_contract" }),
+    );
+    expect(line).toBe("(cost: included)");
+    expect(line).not.toContain("$");
+  });
+
+  test("included wins over a leftover dollar amount from an earlier turn", () => {
+    const [line] = captureLog(() =>
+      printCost({ amountUsd: 0.002, status: "included", source: "custom_contract" }),
+    );
+    expect(line).toBe("(cost: included)");
+    expect(line).not.toContain("$");
+  });
 });
 
 function archivistReport(overrides: Partial<ArchivistReport> = {}): ArchivistReport {
@@ -171,13 +187,13 @@ describe("pendingQueueNotice", () => {
   // archivist and the daemon's idle flush both stage with no terminal attached.
   test("names both queues and the command that reviews each", () => {
     expect(pendingQueueNotice(5, 2)).toBe(
-      "5 memory writes and 2 skills waiting for review · /memory pending, /skills pending",
+      "! 5 memory writes and 2 skills waiting for review · /memory pending, /skills pending",
     );
   });
 
   test("names only the queue that has entries, singular when there is one", () => {
-    expect(pendingQueueNotice(1, 0)).toBe("1 memory write waiting for review · /memory pending");
-    expect(pendingQueueNotice(0, 1)).toBe("1 skill waiting for review · /skills pending");
+    expect(pendingQueueNotice(1, 0)).toBe("! 1 memory write waiting for review · /memory pending");
+    expect(pendingQueueNotice(0, 1)).toBe("! 1 skill waiting for review · /skills pending");
   });
 
   // Negative control: an empty queue prints nothing, so this cannot become a line every session

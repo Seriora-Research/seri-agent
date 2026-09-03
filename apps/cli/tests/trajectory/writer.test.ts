@@ -73,12 +73,46 @@ describe("createTrajectoryWriter SQLite persistence", () => {
     }
   });
 
+  test("a held database is not closed per record; an unheld writer still closes", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-held-"));
+    const dir = join(configDir, "trajectories");
+    const database = new SessionDatabase(configDir);
+    const originalClose = SessionDatabase.prototype.close;
+    let closes = 0;
+    SessionDatabase.prototype.close = function (this: SessionDatabase) {
+      closes++;
+      return originalClose.call(this);
+    };
+    try {
+      const writer = createTrajectoryWriter(writerOpts(dir, { database }));
+      writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      writer.recordLoopEvent({ type: "retry", attempt: 1 });
+      expect(closes).toBe(0);
+      expect(database.readTrajectory("sess-1").slice(1)).toMatchObject([
+        { seq: 1, kind: "done" },
+        { seq: 2, kind: "retry" },
+      ]);
+
+      const beforeUnheld = closes;
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "other" })).recordLoopEvent({
+        type: "done",
+        reason: "no-tool-call",
+      });
+      expect(closes).toBeGreaterThan(beforeUnheld);
+    } finally {
+      SessionDatabase.prototype.close = originalClose;
+      database.close();
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
   test("ignored loop events do not create storage or consume sequence", () => {
     const configDir = mkdtempSync(join(tmpdir(), "seri-traj-delta-"));
     const dir = join(configDir, "trajectories");
     try {
       const writer = createTrajectoryWriter(writerOpts(dir));
       writer.recordLoopEvent({ type: "text-delta", text: "hi" });
+      writer.recordLoopEvent({ type: "reasoning-delta", text: "a thought" });
       expect(readdirSync(configDir)).toEqual([]);
 
       writer.recordLoopEvent({ type: "done", reason: "no-tool-call" });
@@ -252,4 +286,95 @@ test("legacy trajectory JSONL imports once and remains byte-identical", () => {
   } finally {
     rmSync(configDir, { recursive: true, force: true });
   }
+});
+
+describe("createTrajectoryWriter retention", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const past = new Date("2026-06-01T00:00:00Z");
+  const present = new Date(past.getTime() + 60 * day);
+
+  test("an enabled writer ages out database trajectories at startup", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      createTrajectoryWriter(
+        writerOpts(dir, { sessionId: "stale", now: () => past }),
+      ).recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "sess-1", now: () => present }));
+
+      expect(readTrajectory(join(dir, "stale.jsonl"))).toEqual([]);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  test("the session being written keeps its records however old they are", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-retention-keep-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      createTrajectoryWriter(
+        writerOpts(dir, { sessionId: "stale", now: () => past }),
+      ).recordLoopEvent({ type: "done", reason: "no-tool-call" });
+      createTrajectoryWriter(writerOpts(dir, { sessionId: "stale", now: () => present }));
+
+      expect(readTrajectory(join(dir, "stale.jsonl"))).toHaveLength(2);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("run manifest header", () => {
+  test("first write includes the manifest and step ceiling", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-manifest-"));
+    const dir = join(configDir, "trajectories");
+    try {
+      const writer = createTrajectoryWriter(
+        writerOpts(dir, {
+          manifest: () => ({
+            harness: { version: "0.0.1", commit: "abc" },
+            upstreamProvider: "Anthropic",
+            temperature: 0,
+            seed: 7,
+            reasoningEffort: "low",
+            maxIterations: 500,
+            context: [{ path: "AGENTS.md", sha256: "deadbeef" }],
+          }),
+        }),
+      );
+      writer.setStepCeiling(12);
+      writer.recordLoopEvent({
+        type: "usage",
+        usage: {
+          inputTokens: 1,
+          outputTokens: 1,
+          totalTokens: 2,
+          inputTokenDetails: {
+            noCacheTokens: undefined,
+            cacheReadTokens: undefined,
+            cacheWriteTokens: undefined,
+          },
+          outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+        },
+        servedProvider: "Anthropic",
+      });
+      const records = readTrajectory(join(dir, "sess-1.jsonl"));
+      expect(records[0]).toMatchObject({
+        kind: "header",
+        harness: { version: "0.0.1", commit: "abc" },
+        upstreamProvider: "Anthropic",
+        temperature: 0,
+        seed: 7,
+        reasoningEffort: "low",
+        maxIterations: 12,
+        context: [{ path: "AGENTS.md", sha256: "deadbeef" }],
+      });
+      expect(records[1]).toMatchObject({
+        kind: "usage",
+        servedProvider: "Anthropic",
+      });
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
 });

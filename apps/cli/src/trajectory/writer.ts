@@ -6,6 +6,7 @@ import type { CostReport } from "../provider/cost";
 import { configDirForStore, DATABASE_FILENAME, SessionDatabase } from "../session/database";
 import type { ChildEventPayload } from "../subagents/dispatch";
 import { writeFileVerification } from "../verify/outcome";
+import type { TrajectoryManifest } from "./manifest";
 import { pruneTrajectories } from "./prune";
 import {
   TRAJECTORY_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ export type TrajectoryWriter = {
   ) => void;
   setEnabled: (enabled: boolean) => void;
   isEnabled: () => boolean;
+  setStepCeiling: (maxIterations: number) => void;
 };
 
 type WriterOpts = {
@@ -40,6 +42,8 @@ type WriterOpts = {
   retentionDays: number;
   now?: () => Date;
   onWarning: (message: string) => void;
+  database?: SessionDatabase;
+  manifest?: () => TrajectoryManifest;
 };
 
 function messageOf(err: unknown): string {
@@ -82,22 +86,22 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   let enabled = opts.enabled;
   let lastWritePath: string | undefined;
   let header: TrajectoryHeader | undefined;
+  let stepCeiling: number | undefined;
   const parent: TrajectoryActor = { type: "parent" };
 
-  function pruneIfPresent(keepSessionId?: string): void {
+  function prune(keepSessionId?: string): void {
     try {
-      if (existsSync(opts.dir)) {
-        pruneTrajectories(opts.dir, {
-          now: now(),
-          retentionDays: opts.retentionDays,
-          ...(keepSessionId !== undefined ? { keepSessionId } : {}),
-        });
-      }
+      pruneTrajectories(opts.dir, {
+        now: now(),
+        retentionDays: opts.retentionDays,
+        ...(keepSessionId !== undefined ? { keepSessionId } : {}),
+        ...(opts.database !== undefined ? { database: opts.database } : {}),
+      });
     } catch (err) {
       opts.onWarning(`could not prune trajectories: ${messageOf(err)}`);
     }
   }
-  if (!enabled) pruneIfPresent(opts.sessionId);
+  prune(opts.sessionId);
 
   function writeRecord(kind: TrajectoryKind, actor: TrajectoryActor = parent): void {
     if (!enabled) return;
@@ -110,17 +114,28 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
         startedAt: now().toISOString(),
         model: opts.model,
         provider: opts.provider,
+        ...(opts.manifest === undefined
+          ? {}
+          : {
+              ...opts.manifest(),
+              ...(stepCeiling !== undefined ? { maxIterations: stepCeiling } : {}),
+            }),
       };
+      const record = {
+        v: TRAJECTORY_SCHEMA_VERSION,
+        ts: now().toISOString(),
+        sessionId: opts.sessionId,
+        actor,
+        ...kind,
+      } as Omit<TrajectoryRecord, "seq">;
+      if (opts.database !== undefined) {
+        opts.database.appendTrajectory(header, record);
+        return;
+      }
       const database = new SessionDatabase(configDirForStore(opts.dir, "trajectories"));
       try {
         database.importLegacyTrajectories(opts.dir);
-        database.appendTrajectory(header, {
-          v: TRAJECTORY_SCHEMA_VERSION,
-          ts: now().toISOString(),
-          sessionId: opts.sessionId,
-          actor,
-          ...kind,
-        } as Omit<TrajectoryRecord, "seq">);
+        database.appendTrajectory(header, record);
       } finally {
         database.close();
       }
@@ -130,7 +145,13 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
   }
 
   function recordLoopEvent(event: LoopEvent, actor: TrajectoryActor = parent): void {
-    if (event.type === "text-delta" || event.type === "messages-updated") return;
+    if (
+      event.type === "text-delta" ||
+      event.type === "reasoning-delta" ||
+      event.type === "messages-updated"
+    ) {
+      return;
+    }
     if (event.type === "tool-call") {
       if (
         event.name === "write_file" &&
@@ -183,11 +204,23 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       return;
     }
     if (event.type === "usage") {
-      writeRecord({ kind: "usage", usage: event.usage, cost: event.cost, source: "turn" }, actor);
+      writeRecord(
+        {
+          kind: "usage",
+          usage: event.usage,
+          cost: event.cost,
+          source: "turn",
+          ...(event.servedProvider !== undefined ? { servedProvider: event.servedProvider } : {}),
+        },
+        actor,
+      );
       return;
     }
     if (event.type === "compacted") {
-      writeRecord({ kind: "compacted", evictedCount: event.evictedCount }, actor);
+      writeRecord(
+        { kind: "compacted", evictedCount: event.evictedCount, tokensBefore: event.tokensBefore },
+        actor,
+      );
       writeRecord({ kind: "usage", usage: event.usage, source: "compaction" }, actor);
       return;
     }
@@ -230,7 +263,7 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     },
     recordChildEvent: (payload) => {
       if (payload.event.type === "child-started") return;
-      if (payload.event.type === "text-delta") return;
+      if (payload.event.type === "text-delta" || payload.event.type === "reasoning-delta") return;
       if (payload.event.type === "usage") return;
       recordLoopEvent(payload.event, {
         type: "child",
@@ -255,8 +288,11 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     },
     setEnabled: (next) => {
       enabled = next;
-      if (!next) pruneIfPresent(opts.sessionId);
+      if (!next) prune(opts.sessionId);
     },
     isEnabled: () => enabled,
+    setStepCeiling: (maxIterations) => {
+      stepCeiling = maxIterations;
+    },
   };
 }

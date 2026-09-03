@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
 import type { refreshSession as refreshSessionReal } from "../../src/auth/refresh";
-import { fetchAccountPlan } from "../../src/provider/accountStatus";
+import { fetchAccountPlan, loadCachedAccountPlan } from "../../src/provider/accountStatus";
 
 let tmpRoot: string;
 
@@ -77,6 +77,7 @@ describe("fetchAccountPlan — success", () => {
     const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: refreshNeverCalled });
 
     expect(plan).toBe("pro");
+    expect(loadCachedAccountPlan(tmpRoot)).toBe("pro");
   });
 });
 
@@ -112,6 +113,18 @@ describe("fetchAccountPlan — failure paths fail closed to null", () => {
     expect(plan).toBeNull();
   });
 
+  test("a failed fetch returns the last cached plan instead of forgetting a known login", async () => {
+    seedAuthJson(tmpRoot);
+    writeFileSync(join(tmpRoot, "account-plan"), "pro\n");
+    const fetchFn = (async () => {
+      throw new Error("fetch failed");
+    }) as unknown as typeof fetch;
+
+    const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: refreshNeverCalled });
+
+    expect(plan).toBe("pro");
+  });
+
   test("a non-2xx response (e.g. 503) returns null", async () => {
     seedAuthJson(tmpRoot);
     const fetchFn = (async () =>
@@ -120,6 +133,17 @@ describe("fetchAccountPlan — failure paths fail closed to null", () => {
     const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: refreshNeverCalled });
 
     expect(plan).toBeNull();
+  });
+
+  test("a non-2xx response still returns the last cached plan", async () => {
+    seedAuthJson(tmpRoot);
+    writeFileSync(join(tmpRoot, "account-plan"), "max\n");
+    const fetchFn = (async () =>
+      jsonResponse({ code: "entitlement_error" }, 503)) as unknown as typeof fetch;
+
+    const plan = await fetchAccountPlan(tmpRoot, { fetchFn, refreshSession: refreshNeverCalled });
+
+    expect(plan).toBe("max");
   });
 
   test("a malformed JSON body returns null", async () => {

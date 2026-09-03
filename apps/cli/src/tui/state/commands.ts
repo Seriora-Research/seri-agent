@@ -19,7 +19,13 @@ import type { Plan } from "@seri/plans";
 import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../agents/systemPrompt";
-import { loadAuthSession } from "../../auth/authStore";
+import { hasHostedAuth, loadAuthSession } from "../../auth/authStore";
+import { hasLeftoverCodexSubscription, loadCodexSubscription } from "../../auth/codexAuthStore";
+import type { CodexSetupStatus } from "../../auth/codexBin";
+import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
+import { codexPlanType } from "../../auth/codexRefresh";
+import { type SeriSetupStatus, hostedPlanUsable, isSeriIgnored } from "../../auth/seriIgnore";
+import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
   checkpointStoreDir,
@@ -41,6 +47,8 @@ import {
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
 } from "../../provider/keys";
+import { loadCachedAccountPlan } from "../../provider/accountStatus";
+import { GATEWAY_PROVIDER } from "../../provider/planCoverage";
 import { resolveReasoningEffort } from "../../provider/reasoning";
 import {
   byRoutePriority,
@@ -48,6 +56,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "../../provider/routing";
+import { codexSubscriptionActive } from "../../provider/subscriptions";
 import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
 import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
@@ -102,6 +111,10 @@ export type ModelPickerEntry = {
   // never `undefined`) — so every consumer gets a real boolean too, with no `undefined` case to
   // handle that can't actually occur.
   gatewayReachable: boolean;
+  // Same shape as gatewayReachable: always a real boolean. True when this row's provider is in
+  // the subscribed set the caller passed — a ChatGPT-plan overlay, not an API key. Distinct
+  // from keyConfigured so /setup's key rows stay honest when both a plan and a key exist.
+  subscriptionCovered: boolean;
 };
 
 // The decision half of /model, mirroring decideModeCycle's own pure, no-I/O shape: what to show,
@@ -130,36 +143,46 @@ export function decideModelPickerOpen(
   // routesFor's own O(catalog size) scan on every one of the ~350 rows this loop emits.
   planCoverage: (entry: ModelCatalogEntry, group: readonly ModelCatalogEntry[]) => boolean = () =>
     false,
+  // Providers whose catalog rows are plan-reachable without a key. Grok from a persisted
+  // grant. openai only after a successful Codex overlay. Distinct from `configured`.
+  subscribed: ReadonlySet<ModelProvider> = new Set(),
 ): ModelPickerEntry[] {
   const groups = groupRoutes(filterCatalogEntries(catalog.entries));
   const rows: ModelPickerEntry[] = [];
   for (const group of groups.values()) {
     const ordered = [...group].sort(byRoutePriority);
     // Computed once per GROUP, not per row: resolveRoute's rule 2 depends only on the group's
-    // siblings and `configured`, never on which keyless member is asking, so every keyless row
-    // in a group shares the same answer — and calling resolveRoute itself, through any one
-    // keyless member as the "requested" pair, ties this display to the actual routing decision
-    // instead of a hand-rolled second copy of its tie-break that could silently drift from it
-    // (a per-row `ordered.find` re-deriving resolveRoute's own filter+sort rather than calling it
-    // would be an O(n^2)-per-group re-derivation of one answer).
-    const firstKeyless = ordered.find((candidate) => !configured.has(candidate.provider));
+    // siblings and `configured`/`subscribed`, never on which unresolved member is asking, so
+    // every still-unresolved row in a group shares the same answer — and calling resolveRoute
+    // itself, through any one of those members as the "requested" pair, ties this display to
+    // the actual routing decision instead of a hand-rolled second copy of its tie-break.
+    // A subscribed member is reachable without a key, so it must not be the probe: using it
+    // would make resolveRoute return no-reroute and wipe the fallback a real keyless sibling
+    // still needs.
+    const firstUnresolved = ordered.find(
+      (candidate) => !configured.has(candidate.provider) && !subscribed.has(candidate.provider),
+    );
     const resolved =
-      firstKeyless === undefined
+      firstUnresolved === undefined
         ? undefined
         : resolveRoute(
             catalog,
-            { model: firstKeyless.id, provider: firstKeyless.provider },
+            { model: firstUnresolved.id, provider: firstUnresolved.provider },
             configured,
+            null,
+            subscribed,
           );
     const rerouteTarget = resolved?.rerouted ? resolved.provider : undefined;
     for (const entry of ordered) {
       const keyConfigured = configured.has(entry.provider);
+      const subscriptionCovered = subscribed.has(entry.provider);
       rows.push({
         entry,
         keyConfigured,
         alternatives: group.length - 1,
-        rerouteTo: keyConfigured ? undefined : rerouteTarget,
+        rerouteTo: keyConfigured || subscriptionCovered ? undefined : rerouteTarget,
         gatewayReachable: planCoverage(entry, group),
+        subscriptionCovered,
       });
     }
   }
@@ -194,50 +217,154 @@ export function decideGuidedModelPickerOpen(
   return keyed.map((row) => ({ ...row, alternatives: shownAlternatives.get(row.entry) ?? 0 }));
 }
 
-// One row per provider — /setup's own table. `removable` is false only when config.json
-// genuinely has nothing to unset for this provider — an env-sourced
-// row IS removable when a config.json entry also sits underneath it (providerKeyState's own
-// `hasConfigEntry`, independent of which source wins for display); only a row with no config
-// entry at all (source "env" with nothing saved, or "unset") has nothing for /setup to remove
-// (the panel states why, for the env case — App.tsx's own SetupPanel).
-export type SetupProviderRow = {
+// One /setup list row. A heading is not selectable for a side-effect; a key row is a BYOK
+// provider; a subscription row is either Grok connect/disconnect or the Codex plan status.
+// The union is what lets one list carry both sections without keying selection on provider
+// alone (xAI and OpenAI each have a key row AND a subscription row).
+//
+// `removable` on a key row is false only when config.json genuinely has nothing to unset —
+// an env-sourced row IS removable when a config.json entry also sits underneath it
+// (providerKeyState's own `hasConfigEntry`).
+export type SetupHeadingRow = { kind: "heading"; label: string };
+export type SetupKeyRow = {
+  kind: "key";
   provider: ModelProvider;
   keyName: string;
   source: "env" | "config" | "unset";
   masked: string | undefined;
   removable: boolean;
+  unusedBecause?: string;
 };
+export type SetupGrokSubscriptionRow = {
+  kind: "subscription";
+  provider: "xai";
+  connected: boolean;
+};
+export type SetupCodexSubscriptionRow = {
+  kind: "subscription";
+  provider: "openai";
+  status: CodexSetupStatus;
+  removable: boolean;
+};
+export type SetupSeriSubscriptionRow = {
+  kind: "subscription";
+  provider: "seri";
+  status: SeriSetupStatus;
+};
+export type SetupSubscriptionRow =
+  | SetupGrokSubscriptionRow
+  | SetupCodexSubscriptionRow
+  | SetupSeriSubscriptionRow;
+export type SetupProviderRow = SetupHeadingRow | SetupKeyRow | SetupSubscriptionRow;
 
-// The decision half of /setup, mirroring decideModelPickerOpen's own shape: what to show, not how
-// to show it. Unlike decideModelPickerOpen this DOES do real I/O (allProviderKeyStates reads
-// config.json) — the same contract decideUndo/decideRestore already have (this file's own header
-// comment: no saveSession, no console.log/print*, but a read is not a write).
-//
-// `allProviderKeyStates`, not five `providerKeyState` calls — the same anti-pattern already fixed
-// in `configuredProviders` (keys.ts): one `providerKeyState` call per CATALOG_PROVIDERS member
-// meant five redundant `loadConfig` reads
-// of the identical file to open /setup, or to refresh it after any add/remove — was never applied
-// here. `allProviderKeyStates` loads config.json exactly once for all five.
+export function setupRowId(row: SetupProviderRow): string {
+  if (row.kind === "heading") return `heading:${row.label}`;
+  if (row.kind === "subscription") return `subscription:${row.provider}`;
+  return `key:${row.provider}`;
+}
+
+export function isSetupActionRow(row: SetupProviderRow): row is SetupKeyRow | SetupSubscriptionRow {
+  return row.kind !== "heading";
+}
+
+export function firstSetupActionIndex(rows: readonly SetupProviderRow[]): number {
+  const index = rows.findIndex(isSetupActionRow);
+  return index < 0 ? 0 : index;
+}
+
+export function isSetupSubscriptionRow(row: SetupProviderRow): row is SetupSubscriptionRow {
+  return row.kind === "subscription";
+}
+
+function seriSetupRow(configDir?: string): SetupSeriSubscriptionRow {
+  if (configDir === undefined || !hasHostedAuth(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "not-logged-in" } };
+  }
+  const planType = loadCachedAccountPlan(configDir) ?? undefined;
+  if (isSeriIgnored(configDir)) {
+    return { kind: "subscription", provider: "seri", status: { status: "ignored", planType } };
+  }
+  return { kind: "subscription", provider: "seri", status: { status: "connected", planType } };
+}
+
+function codexSetupRow(configDir?: string): SetupSubscriptionRow {
+  if (configDir !== undefined && loadCodexSubscription(configDir) !== undefined) {
+    const planType = codexPlanType();
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: planType === undefined ? { status: "connected" } : { status: "connected", planType },
+      removable: true,
+    };
+  }
+  if (
+    configDir !== undefined &&
+    isCodexSubscriptionIgnored(configDir) &&
+    hasLeftoverCodexSubscription()
+  ) {
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "ignored" },
+      removable: false,
+    };
+  }
+  if (configDir !== undefined && codexSubscriptionActive(configDir)) {
+    const planType = codexPlanType();
+    return {
+      kind: "subscription",
+      provider: "openai",
+      status: planType === undefined ? { status: "connected" } : { status: "connected", planType },
+      removable: true,
+    };
+  }
+  return {
+    kind: "subscription",
+    provider: "openai",
+    status: { status: "not-connected" },
+    removable: false,
+  };
+}
+
 export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
-  return allProviderKeyStates(configDir).map((state) => ({
-    provider: state.provider,
-    keyName: state.keyName,
-    source: state.source,
-    masked: state.masked,
-    // NOT `state.source === "config"` — that would always be false whenever an env var shadowed a
-    // config.json entry, making a previously-saved secret
-    // permanently unremovable from /setup the moment the same-named env var got exported.
-    // `hasConfigEntry` is independent of which source wins for display.
-    removable: state.hasConfigEntry,
-  }));
+  const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
+  const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
+  const seriActive = configDir !== undefined && hostedPlanUsable(configDir);
+  const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
+    let unusedBecause: string | undefined;
+    if (grokConnected && state.provider === "xai" && state.source !== "unset") {
+      unusedBecause = "unused because a Grok subscription is connected";
+    } else if (openaiSubscribed && state.provider === "openai" && state.source !== "unset") {
+      unusedBecause = "unused because a ChatGPT plan is connected";
+    } else if (seriActive && state.provider === GATEWAY_PROVIDER && state.source !== "unset") {
+      unusedBecause = "unused because a seri plan is connected";
+    }
+    return {
+      kind: "key",
+      provider: state.provider,
+      keyName: state.keyName,
+      source: state.source,
+      masked: state.masked,
+      removable: state.hasConfigEntry,
+      unusedBecause,
+    };
+  });
+  return [
+    { kind: "heading", label: "API keys" },
+    ...keyRows,
+    { kind: "heading", label: "Subscriptions" },
+    seriSetupRow(configDir),
+    { kind: "subscription", provider: "xai", connected: grokConnected },
+    codexSetupRow(configDir),
+  ];
 }
 
 // The decide* functions below share the same contract as every decide* function above: recompute
 // fresh from disk on every call, plain functions, no Ink import, no saveSession/console.log/print*,
 // let a bad input throw for the caller's try/catch to turn into a command-error.
 
-// /login and /signup's own non-blocking offer (AuthBanner, App.tsx): true iff no auth session is
-// saved yet, so a first-run user sees the offer without it blocking anything they're already doing.
+// Welcome splash's unsigned-in menu (Log in / Sign up / Continue without logging in): true iff
+// no auth session is saved yet. The main TUI does not re-offer login as a persistent banner.
 export function decideAuthOffer(configDir: string): boolean {
   return loadAuthSession(configDir) === undefined;
 }
@@ -315,6 +442,46 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       takesEffectNextRun: false,
     },
   ],
+  [
+    "SERI_TEMPERATURE",
+    {
+      label: "Temperature",
+      description: "Sampling temperature. Unset keeps the provider default and records that.",
+      kind: "string",
+      takesEffectNextRun: false,
+    },
+  ],
+  [
+    "SERI_SEED",
+    {
+      label: "Seed",
+      description: "Integer seed where the provider accepts one. Unset is recorded, not assumed.",
+      kind: "string",
+      takesEffectNextRun: false,
+    },
+  ],
+  [
+    "SERI_OPENROUTER_PROVIDER",
+    {
+      label: "OpenRouter pin",
+      description: "Pin OpenRouter to this upstream (no fallback). Disables sticky cache routing.",
+      kind: "string",
+      takesEffectNextRun: true,
+    },
+  ],
+  [
+    "SERI_TUI_BACKGROUND",
+    {
+      label: "Background color",
+      // Same length budget as the two descriptions above (ConfigPanel's own single-row
+      // `selectedDescription`, measured at 75 chars).
+      description: "Hex ground, default #141413. Set to terminal to keep the terminal's own.",
+      kind: "string",
+      // The renderer is built once, at launch (tui/runtime/renderer.ts), and its background is
+      // applied there — a /config write lands in config.json but paints nothing until next run.
+      takesEffectNextRun: true,
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
@@ -333,13 +500,13 @@ export function configKeyInfo(key: string): ConfigKeyInfo {
   );
 }
 
-// Never listed by /config, even if present in config.json: the OAuth client id /login's device
-// flow resolves live (auth/deviceFlow.ts) — an internal/advanced setting, not one a common
+// Never listed by /config, even if present in config.json: OAuth client ids (/login's WorkOS
+// device flow, /setup's Grok connect) are internal/advanced settings, not ones a common
 // /config user should see or change. (process.env never adds a row on its own — it only affects
 // the source/value of a key already in the list below — so no separate env guard is needed
 // here.) This is a display policy, not a lock: `seri config set SERI_WORKOS_CLIENT_ID <value>`
 // (config/commands.ts) still writes it deliberately, for whoever needs the escape hatch.
-const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID"];
+const HIDDEN_CONFIG_KEYS = ["SERI_WORKOS_CLIENT_ID", "SERI_GROK_CLIENT_ID"];
 
 // The decision half of /config, mirroring decideSetupOpen's own shape. Every key the "other
 // keys" tail below must not emit: the two known keys (already shown, in their own fixed order),

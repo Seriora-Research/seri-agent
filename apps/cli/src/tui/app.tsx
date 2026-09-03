@@ -2,13 +2,16 @@
 // Root TUI component, rendered inside the one `CliRenderer` shared by `routes/setup/
 // welcomeSplash.ts`, `routes/setup/guidedSetup.ts`, and `cli.ts`'s `runTui` (`runtime/renderer.ts`,
 // `screenMode: "alternate-screen"`) — each phase `root.render`s different props into the same
-// instance rather than mounting its own. The transcript is a native `<scrollbox>` fed the FULL,
-// unwindowed `state.transcript` — `stickyScroll`/`stickyStart="bottom"` (below) follow newly
-// appended content while at the bottom, and hold position when scrolled away from it, natively
-// (OpenTUI's own Yoga layout + scroll-anchor logic, not a reducer-computed slice). No mid-generation
-// text is ever rendered in it: `state.streaming` accumulates every `text-delta` for `pushLine`'s
-// next flush (state/reducer.ts), but is never itself displayed live, character by character — while
-// a turn is active, `TurnStatus` (below) stays mounted for the whole turn as a fixed row OUTSIDE
+// instance rather than mounting its own. The transcript is a native `<scrollbox>` whose
+// `stickyScroll`/`stickyStart="bottom"` (below) follow newly appended content while at the
+// bottom, and hold position when scrolled away from it, natively (OpenTUI's own Yoga layout +
+// scroll-anchor logic, not a reducer-computed slice). `state.transcript` stays the complete
+// append-only array; `TranscriptList` mounts only the viewport plus overscan and holds the
+// unmounted prefix/suffix as spacer boxes so `scrollHeight` still matches the full history. No
+// mid-generation text is ever rendered in it: `text-delta` chunks buffer off the React path until
+// a non-delta action drains them into `tuiReducer` as one `state.streaming` append for `pushLine`'s
+// next flush (state/reducer.ts, state/streamDispatch.ts), and that buffer is never itself displayed
+// live — while a turn is active, `TurnStatus` (below) stays mounted for the whole turn as a fixed row OUTSIDE
 // the scrollbox, directly beneath it — it never unmounts mid-turn, and it stays visible regardless
 // of scroll position, since a child scrolled out of view is exactly what a native scrollbox would
 // otherwise do to it. Each finished segment of the answer (the run of `text-delta`s up to whatever
@@ -50,9 +53,8 @@ import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isShiftTabModeCycle } from "../cli/commandCatalog";
-import { truncateArgsDisplay } from "../cli/output";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
@@ -64,10 +66,11 @@ import { ApprovalBox } from "./components/ApprovalBox";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
-import { TranscriptList } from "./components/TranscriptList";
+import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
-import { AuthBanner, AuthPanel } from "./routes/config/AuthPanel";
+import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
 import { PermissionsPanel } from "./routes/config/PermissionsPanel";
@@ -77,8 +80,12 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
-import { type Dispatch, initialTuiState, tuiReducer } from "./state/reducer";
+import type { SetupProviderRow } from "./state/commands";
+import { type Dispatch, initialTuiState } from "./state/reducer";
+import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
+import { FRAME, gapBefore } from "./theme/spacing";
+import { approvalCopy } from "./util/approvalCopy";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
 import type { CompletionSource } from "./util/completion";
@@ -88,9 +95,10 @@ import {
   FALLBACK_CHROME_ROWS,
   formatModeDetail,
   MODE_CYCLE_HINT,
-  MODE_HINT_COLS,
   MODE_LABEL,
+  modeRowHintVisible,
 } from "./util/format";
+import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 
 export type AppProps = {
   session: SessionState<ModelMessage>;
@@ -117,12 +125,12 @@ export type AppProps = {
   // that is and how it stays live afterward. Unlike `route`/`catalog` just above, this is never
   // `| undefined`: config.json can be read at any point in startup regardless of whether a
   // `PreparedRun` exists yet, so every call site (including the two that pass `route`/`catalog`
-  // as `undefined`) has a real record to pass — `loadConfig` itself never fails to produce one,
-  // returning `{}` rather than throwing when config.json doesn't exist.
+  // as `undefined`) has a real record to pass — `loadConfig` returns `{}` when the file is
+  // missing or not readable JSON.
   config: Record<string, string>;
-  // The seam driveLoop's dispatch is wired through: called once on mount with the reducer's own
-  // dispatch function, the same shape `useReducer` returns. Optional because some tests exercise
-  // the reducer via `connectDispatch` directly, with no live loop behind it.
+  // The seam driveLoop's dispatch is wired through: called once on mount with App's own
+  // dispatch (stream-coalesced for text-delta). Optional because some tests exercise
+  // the tree via `connectDispatch` directly, with no live loop behind it.
   connectDispatch?: (dispatch: Dispatch) => void;
   // Submitted line from the input box, wired to the task/slash-command dispatch.
   onSubmit?: (value: string) => void;
@@ -139,6 +147,14 @@ export type AppProps = {
   // normal Unix "end input" convention). `cli.ts`'s `quit()` is what actually ends the renderer now
   // (this component no longer calls any exit hook itself — see this file's own header comment).
   onQuit?: () => void;
+  // Escape at the input box while a turn is in flight: cancels it, after which cli.ts's own
+  // drainQueue starts whatever was queued behind it. A prop rather than a `deliverSignal` call from
+  // this component, on the same split every other interactive surface here follows — presentation
+  // calls a prop, cli.ts owns the decision — and here that split is load-bearing rather than
+  // stylistic: the guards that keep an Escape away from signals.ts's fatal path read `turnInFlight`
+  // and a per-turn latch, neither of which exists on this side of the boundary. See `onEscape` in
+  // cli.ts for what each guard prevents.
+  onEscape?: () => void;
   // Answers the TUI-native approval prompt (runTui's own tuiApprovalPrompt, cli.ts) — a real prompt
   // rendered inside this same tree, not readline's own stdin-based prompt: a second stdin consumer
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
@@ -161,9 +177,9 @@ export type AppProps = {
   // into cli.ts's own handlers, which recompute the whole next
   // SetupState (rows included) and dispatch it, the same "presentation calls a prop, cli.ts owns
   // the decision" split every other interactive command in this file already has.
-  onSetupSelect?: (provider: ModelProvider) => void;
+  onSetupSelect?: (row: SetupProviderRow) => void;
   onSetupKeyEntered?: (provider: ModelProvider, value: string) => void;
-  onSetupRemove?: (provider: ModelProvider) => void;
+  onSetupRemove?: (row: SetupProviderRow) => void;
   onSetupBack?: () => void;
   onSetupClose?: (leftoverInput?: string) => void;
   // AuthPanel's own "result" step (a device-flow failure — a denied/expired code, a network error,
@@ -222,15 +238,21 @@ export type AppProps = {
   // in scope, and `/clear` reloads the latter two mid-process — so this is called at render time
   // rather than captured, and a skill approved since startup completes after a /clear.
   getCompletionSources?: () => readonly CompletionSource[];
+  // Seeds `pendingSplash` at `useState` init. `connectDispatch`'s `splash-requested` cannot win
+  // the first paint: that effect runs after the first commit. `runWelcomeSplash` is the only
+  // production caller that passes true; `runTui` / `runGuidedSetup` omit it.
+  showSplash?: boolean;
+  // Seeds `authOffer` the same way. Default false would paint the authenticated "Continue" menu
+  // on a splash first frame until `auth-offer` landed from `connectDispatch`.
+  authOffer?: boolean;
   // The welcome-splash mount's own three resolutions — unreachable in runTui/runGuidedSetup, whose
   // own initialTuiState calls never set pendingSplash (reducer.ts's own comment).
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
-  // The splash's own identity block (routes/setup/SplashBanner.tsx). Not derived from `route`/
-  // `catalog` above, which are both genuinely `undefined` at the only mount that renders the
-  // splash — `runWelcomeSplash` computes it from config.json and package.json instead, and passes
-  // it through here rather than this component reaching for either itself.
+  // SplashBanner's version, cwd, and home, plus the pre-session model pair
+  // (`runWelcomeSplash` has no route). A live session overlays `state.route` onto
+  // model and provider so a `/model` switch matches the mode row.
   splashBanner?: SplashBannerInfo;
   // Takes the first task typed before a session exists. `runWelcomeSplash` passes this; the value
   // reaches `runTui` through `run()` (cli.ts), not through this component's own state, because the
@@ -257,10 +279,10 @@ export type AppProps = {
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
 // two, before its window-size ioctl has actually landed (reproduced live over a real pty in WSL) —
-// `formatModeDetail` (below) picks its display tier off this width, and a stray `0` would collapse
-// it to the narrowest tier for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the
-// same as `undefined`/`null`, which is exactly the substitution a column count of zero needs —
-// there is no real terminal width `0` is ever the correct value for.
+// leftover packing of the mode-row detail (below) would otherwise see a 0 leftover and drop the
+// suffix for no real reason. `|| DEFAULT_COLUMNS`, not `??`: `||` treats `0` the same as
+// `undefined`/`null`, which is exactly the substitution a column count of zero needs — there is
+// no real terminal width `0` is ever the correct value for.
 function resolveWidth(columns: number): number {
   return columns || DEFAULT_COLUMNS;
 }
@@ -281,6 +303,16 @@ function resolveHeight(rows: number): number {
 // reasons, so precision here isn't worth chasing further.
 const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
 
+function WritePreview({ name, args }: { name: string; args: unknown }) {
+  const copy = approvalCopy(name, args);
+  return (
+    <box {...FRAME} flexDirection="column">
+      <text fg={theme.text}>{copy.headline}</text>
+      {copy.detail.length > 0 && <text fg={theme.muted}>{copy.detail}</text>}
+    </box>
+  );
+}
+
 export function App({
   session,
   route,
@@ -290,6 +322,7 @@ export function App({
   onSubmit,
   onSessionChange,
   onQuit,
+  onEscape,
   onApprovalAnswer,
   onModelSelected,
   onModelPickerCancel,
@@ -326,8 +359,23 @@ export function App({
   onPreSessionSubmit,
   onCycleMode,
   skipPermissions,
+  showSplash,
+  authOffer,
 }: AppProps) {
-  const [state, dispatch] = useReducer(tuiReducer, initialTuiState(session, { route, config }));
+  const [state, setState] = useState(() =>
+    initialTuiState(session, { route, config, showSplash, authOffer }),
+  );
+  const stream = useMemo(() => createStreamDispatch(setState), []);
+  const dispatch = stream.dispatch;
+  const sessionBanner =
+    splashBanner === undefined || state.route === undefined
+      ? splashBanner
+      : { ...splashBanner, model: state.route.model, provider: state.route.provider };
+  const [pendingReasoning, setPendingReasoning] = useState("");
+  useEffect(
+    () => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())),
+    [stream],
+  );
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
@@ -340,6 +388,11 @@ export function App({
   const indicatorText = MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
+  // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
+  // a half-typed `/` cycles the list instead of also scrolling the transcript. Read on the
+  // keypress, not copied into React state: the popup's open-ness is already InputBox-local, and
+  // mirroring it here would add a render for no paint.
+  const arrowsReservedRef = useRef(false);
   // The scrollbox's own measured height (this file's own header comment explains why it needs a
   // definite number, not `flexGrow`) — `null` only for the frames before OpenTUI's own layout pass
   // has fired `onSizeChange` at least once on the wrapping box below; `FALLBACK_CHROME_ROWS` is a
@@ -391,6 +444,7 @@ export function App({
   // `state.transcript.length === 0` directly; removing it and re-running the `/clear`-while-
   // scrolled-up regression below showed the plain `layout-changed` listener already covers it).
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
   const renderer = useRenderer();
   useEffect(() => {
     const el = transcriptRef.current;
@@ -399,55 +453,98 @@ export function App({
     // `viewport.height` refresh (that happens later in the same layout pass) — so a single `sync`
     // call here can read one-frame-stale geometry; it settles on the NEXT `layout-changed` once Yoga
     // has caught up, which is why a shrink like `/clear` needs two passes to resolve, not one.
+    //
+    // That second pass used to arrive for free, from the scrollbar itself: crossing the
+    // fits/overflows boundary flipped its own `visible`, which set `display: none` on its Yoga node
+    // and so dirtied the layout again. Hiding it for good (below) takes that away, and the mirror
+    // was left permanently one frame stale — a terminal grown until everything fits kept showing
+    // "↑ scrolled". So the settled read is asked for directly instead of hoped for: `Renderable`
+    // emits its own "resize" AFTER running the `onSizeChange` the scrollbox registers on these two
+    // (@opentui/core's own `onResize`), and that callback is `recalculateBarProps` — the very
+    // refresh `layout-changed` is too early for. Both children are needed: the viewport's own size
+    // changes on a terminal resize, the content's on a `/clear`.
     const sync = () => {
       const maxScrollTop = Math.max(0, el.scrollHeight - el.viewport.height);
       setScrolledUp(el.scrollTop < maxScrollTop);
+      // Quantized so TranscriptList does not rebuild its mount range on every
+      // wheel tick; overscan covers the distance between quanta. Home is 0 and
+      // stays 0 (`quantizeScrollTop`), which is what the not-sticky start-at-0
+      // path needs.
+      const nextTop = quantizeScrollTop(el.scrollTop);
+      setScrollTop((prev) => (prev === nextTop ? prev : nextTop));
     };
     el.verticalScrollBar.on("change", sync);
+    el.viewport.on("resize", sync);
+    el.content.on("resize", sync);
     renderer.root.on("layout-changed", sync);
     return () => {
       el.verticalScrollBar.off("change", sync);
+      el.viewport.off("resize", sync);
+      el.content.off("resize", sync);
       renderer.root.off("layout-changed", sync);
     };
   }, [renderer]);
 
   useEffect(() => {
     connectDispatch?.(dispatch);
-  }, [connectDispatch]);
+  }, [connectDispatch, dispatch]);
 
   useEffect(() => {
     onSessionChange?.(state.session);
   }, [state.session, onSessionChange]);
 
-  // True when no modal panel owns the keyboard. Child inspect is not a modal: InputBox stays
-  // mounted and the shared scrollbox still takes PageUp/PageDown. The transcript box above
-  // (flexGrow/minHeight={0}) still renders unconditionally regardless of which branch is active,
-  // so on a terminal taller than the open panel's own content it stays partially visible above
-  // it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in the
-  // background while a modal is open: the user would close the panel to find the transcript
-  // scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs against
-  // the transcript to explain why.
-  const noPanelOpen =
-    state.pendingApproval === undefined &&
-    state.pendingModelPicker === undefined &&
-    state.pendingSetup === undefined &&
-    state.pendingAuth === undefined &&
-    state.pendingConfig === undefined &&
-    state.pendingPermissions === undefined &&
-    state.pendingEffort === undefined &&
-    state.pendingSkills === undefined &&
-    state.pendingMcp === undefined &&
-    state.pendingMemory === undefined &&
-    !state.pendingSplash;
+  // True when a modal panel that also claims the paging keys is the one ON SCREEN. Child inspect is
+  // not a modal: InputBox stays mounted and the shared scrollbox still takes PageUp/PageDown. The
+  // transcript box above (flexGrow/minHeight={0}) still renders unconditionally regardless of which
+  // branch is active, so on a terminal taller than the open panel's own content it stays partially
+  // visible above it, not fully occluded — but PageUp/PageDown/Home/End must still not scroll it in
+  // the background while one of these is showing: the user would close the panel to find the
+  // transcript scrolled and the "↑ scrolled" banner showing, with no visible keypress of theirs
+  // against the transcript to explain why.
+  //
+  // An approval is the one overlay the keys stay live behind, because reading back what you are
+  // approving is the entire point of the moment — the transcript above it is the diff, the command,
+  // the path. It is also the one moment the user cannot recover from by learning a different key:
+  // the wheel that used to scroll behind a panel now arrives as Up/Down (mouse reporting
+  // is off; runtime/renderOptions.ts) and this same handler routes those to the transcript.
+  // Nothing is silently mutated behind an approval either — the
+  // ApprovalBox is the ONLY thing on screen the keys could confuse the reader about, it stays put
+  // while the transcript moves under it, and the banner below is un-gated in the same breath so a
+  // scrolled transcript always says so. The two must be gated on the same boolean, which is why
+  // this is one list read twice rather than the same condition written out twice.
+  //
+  // Which is why `pendingApproval` guards the whole list instead of being a tenth field in it:
+  // "on screen" and "in state" come apart here. Panel commands stay legal mid-turn (cli.ts's own
+  // `tuiHandlers`), so a /model or /config left open when an approval arrives leaves both fields
+  // set at once — and the render ternary below checks `pendingApproval` FIRST, so the ApprovalBox
+  // is what the user is looking at. Reading the list on its own would leave the keys dead and the
+  // banner suppressed behind a fully visible approval, in the one state that needs them most.
+  // `pendingSplash` sits outside that override for the same reason from the other side: it returns
+  // above the ternary, so it is the one panel an approval does not appear over.
+  const pagingPanelOpen =
+    state.pendingSplash ||
+    (state.pendingApproval === undefined &&
+      (state.pendingModelPicker !== undefined ||
+        state.pendingSetup !== undefined ||
+        state.pendingAuth !== undefined ||
+        state.pendingConfig !== undefined ||
+        state.pendingPermissions !== undefined ||
+        state.pendingEffort !== undefined ||
+        state.pendingSkills !== undefined ||
+        state.pendingMcp !== undefined ||
+        state.pendingMemory !== undefined));
+
+  // True when NOTHING modal owns the keyboard, approvals included — what every binding that is not
+  // transcript paging still gates on (shift+tab's mode cycle below).
+  const noPanelOpen = !pagingPanelOpen && state.pendingApproval === undefined;
 
   // The mode row shares its line with the scroll banner / `state.status` (`justifyContent
-  // "space-between"`, below) — the row's own tier thresholds are sized against the LEFT side
-  // alone, so once the right side is actually showing, its own width has to come out of the
-  // budget BOTH the hint's own visibility check and `formatModeDetail` see, or the two collide and
-  // OpenTUI wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and
-  // status, only when both are shown at once. Also what the JSX below renders, rather than
-  // re-typing the banner string a second time — the two can't drift apart if there's only one copy.
-  const rightSideText = scrolledUp && noPanelOpen ? "↑ scrolled — End to follow" : "";
+  // "space-between"`, below) — leftover packing of the left-side detail and the hint-yield check
+  // both see remaining width after the right side is reserved, or the two collide and OpenTUI
+  // wraps the row across two lines. `+ 1` for the row's own `gap={1}` between banner and status,
+  // only when both are shown at once. Also what the JSX below renders, rather than re-typing the
+  // banner string a second time — the two can't drift apart if there's only one copy.
+  const rightSideText = scrolledUp && !pagingPanelOpen ? "↑ scrolled — End to follow" : "";
   const rawRightSideWidth =
     rightSideText.length +
     (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
@@ -455,8 +552,8 @@ export function App({
   // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/model/route,
   // it's never hidden or shortened as the terminal narrows (there's nothing smaller to fall back
   // to than the mode's own name). So on a narrow enough terminal, indicatorText + the right side
-  // together can still exceed `width` even after the hint/detail have already given up all the
-  // room they can. Rather than let that wrap the row, the right side loses instead: it only shows
+  // together can still exceed `width` even after leftover packing has already given up all the
+  // room it can. Rather than let that wrap the row, the right side loses instead: it only shows
   // when there's room for it alongside the label, which — like the hint/detail split above — is
   // real terminal width, not a real cell-width measurement (`.length`, not `stringWidth`; the
   // banner's own `—`/`↑` and `state.status`'s `…` can in principle render wider than 1 cell on a
@@ -471,7 +568,13 @@ export function App({
     resolveReasoningEffort(state.session, state.config),
     catalogEntry,
   );
-  const modeDetail = formatModeDetail(state.route, width - rightSideWidth, effortTier);
+  const remaining = width - rightSideWidth;
+  const modeDetail = formatModeDetail(
+    state.route,
+    Math.max(0, remaining - indicatorText.length),
+    effortTier,
+  );
+  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
@@ -483,6 +586,9 @@ export function App({
   useKeyboard((key) => {
     if (!noPanelOpen) return;
     if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
+    // Mouse reporting is off, so the live pin cannot be clicked. ctrl+t does
+    // not steal ↑/↓ or shift+tab; InputBox already ignores key.ctrl.
+    if (key.ctrl && key.name === "t") dispatch({ type: "reasoning-toggled" });
   });
 
   // A second, independent useKeyboard from InputBox's own — OpenTUI delivers the same keypress to
@@ -493,23 +599,32 @@ export function App({
   // dispatching into the reducer: scroll position is the scrollbox's own state now, not derived
   // state this component recomputes. The scrollbox itself is never given keyboard focus (no
   // `focused` prop, below), so its own internal `handleKeyPress` (which would otherwise also react
-  // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End are handled.
-  // Home/End's `scrollBy(∓1, "content")` matches `ScrollBarRenderable`'s own internal Home/End
-  // handling one-for-one (verified against @opentui/core's own compiled source). PageUp/PageDown's
-  // `scrollBy(∓1, "viewport")` deliberately does NOT match that same internal handling, which pages
-  // by half a viewport per press (`scrollBy(∓0.5, "viewport")`) — a full-viewport jump is the
-  // simpler of the two `scrollBy` unit multiples already available on this same API, chosen over
-  // reproducing the pre-migration reducer's own one-row-overlap pager convention
-  // (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved` pair to compute
-  // it from now that scroll position lives on the scrollbox itself.
+  // to these same keys) never fires — this is the ONLY place PageUp/PageDown/Home/End/Up/Down are
+  // handled. Home/End's `scrollBy(∓1, "content")` matches `ScrollBarRenderable`'s own internal
+  // Home/End handling one-for-one (verified against @opentui/core's own compiled source).
+  // PageUp/PageDown's `scrollBy(∓1, "viewport")` deliberately does NOT match that same internal
+  // handling, which pages by half a viewport per press (`scrollBy(∓0.5, "viewport")`) — a
+  // full-viewport jump is the simpler of the two `scrollBy` unit multiples already available on
+  // this same API, chosen over reproducing the pre-migration reducer's own one-row-overlap pager
+  // convention (`viewportRows - reserved - 1`), which no longer has a `viewportRows`/`reserved`
+  // pair to compute it from now that scroll position lives on the scrollbox itself.
+  // Up/Down use `step` (one row) because that is what a wheel notch becomes once mouse reporting
+  // is off: the terminal types one to three arrows per notch, and a viewport jump per arrow would
+  // page the transcript three times for one physical flick. Ctrl/Meta is left alone so the queue
+  // chords keep working; `arrowsReservedRef` is left alone so an open completion popup keeps
+  // owning the list. Gated on `pagingPanelOpen` rather than `noPanelOpen` — an approval is
+  // scrollable behind, see that boolean's own comment.
   useKeyboard((key) => {
-    if (!noPanelOpen) return;
+    if (pagingPanelOpen) return;
     const el = transcriptRef.current;
     if (!el) return;
     if (key.name === "pageup") el.scrollBy(-1, "viewport");
     else if (key.name === "pagedown") el.scrollBy(1, "viewport");
     else if (key.name === "home") el.scrollBy(-1, "content");
     else if (key.name === "end") el.scrollBy(1, "content");
+    else if (key.ctrl || key.meta || arrowsReservedRef.current) return;
+    else if (key.name === "up") el.scrollBy(-1, "step");
+    else if (key.name === "down") el.scrollBy(1, "step");
   });
 
   // The splash owns the whole terminal and returns before the session chrome below it renders.
@@ -539,29 +654,19 @@ export function App({
     // "console write scrolls the viewport out from under the redraw bookkeeping" failure mode to
     // guard against. Full terminal height is used directly.
     <box flexDirection="column" height={rows}>
-      {/* Rendered ABOVE the render ternary below, not as one of its branches — unlike
-      ApprovalBox/ModelPicker/SetupPanel this never replaces InputBox, it sits alongside it.
-      `state.pendingAuth === undefined` (not just `state.authOffer`) avoids needing a matching
-      `auth-offer: false` dispatch at every point the auth panel opens — a call site that forgets
-      one is a real bug class this closes by construction. The reducer already owns `pendingAuth` —
-      "is the panel currently open" is exactly what should gate "hide the redundant banner," derived
-      here instead of commanded from cli.ts. `!state.pendingSplash`: the splash mount's own
-      login/signup menu already offers the same thing, so the banner would otherwise render
-      underneath it. */}
-      <AuthBanner
-        show={state.authOffer && state.pendingAuth === undefined && !state.pendingSplash}
-      />
       {/* flexGrow/flexShrink/flexBasis={0}/minHeight={0} give this box whatever height is left over
       after every sibling below has laid out, independent of its own children's height (this file's
       own header comment explains why `flexBasis={0}` and `overflow="hidden"` are both needed here) —
       `transcriptHeight` (above) reads that back via `onSizeChange`; `scrollboxHeight` (above) hands
       the scrollbox its own share as a definite number, one row short of `transcriptHeight` whenever
-      TurnStatus (below) needs that row for itself. Fed the FULL `state.transcript` — no windowed
-      slice — with `stickyScroll`/`stickyStart="bottom"` doing what the old reducer-computed offset
-      used to: follow newly appended content while at the bottom, hold position when scrolled away
-      from it. No mid-generation text is ever rendered here: `state.streaming` still accumulates
-      every `text-delta` for `pushLine`'s next flush (state/reducer.ts), but each finished segment of
-      the answer only appears once `pushLine` commits it as a normal transcript entry. The scrollbox
+      TurnStatus (below) needs that row for itself. `state.transcript` is still the complete array
+      — the mount window lives in `TranscriptList`, as spacers plus a slice, so this scrollbox's
+      own `scrollHeight` stays the height of the full history. `stickyScroll`/`stickyStart="bottom"`
+      still do what the old reducer-computed offset used to: follow newly appended content while at
+      the bottom, hold position when scrolled away from it. No mid-generation text is ever rendered
+      here: pending `text-delta` text drains into `state.streaming` on the next non-delta action for
+      `pushLine`'s flush (state/reducer.ts), and each finished segment of the answer only appears
+      once `pushLine` commits it as a normal transcript entry. The scrollbox
       itself is not given keyboard focus (no `focused` prop) — see the `useKeyboard` handler's own
       comment above for why. */}
       <box
@@ -587,7 +692,16 @@ export function App({
         width at a narrow terminal — confirmed empirically to stop assistant markdown from
         rendering at all (not just narrowing it) at widths 4-5, where the bullet gutter alone
         still rendered fine. The margin is cosmetic; making it recede at extreme widths trades a
-        breathing-room nicety for the transcript still rendering at all. */}
+        breathing-room nicety for the transcript still rendering at all.
+        verticalScrollbarOptions: with mouse reporting off (runtime/renderOptions.ts) the thumb
+        cannot be dragged and the track cannot be clicked, and it is not merely dead — it paints
+        real block glyphs (█ ▀ ▄) into the frame's last column, so a terminal-native drag across a
+        full line copies one, and trailing-whitespace trimming does not strip a █. Nothing is lost
+        by hiding it: the "↑ scrolled — End to follow" banner is already this app's own scroll
+        position indicator, and it says what to press, which a thumb never did. `visible` (not the
+        scrollbar's other props) is what actually removes it, and it sticks — `ScrollBarRenderable`'s
+        own setter latches `_manualVisibility`, which its `recalculateVisibility` then early-returns
+        on, so a later transcript append cannot show it again. */}
         <scrollbox
           ref={transcriptRef}
           height={scrollboxHeight}
@@ -595,27 +709,44 @@ export function App({
           stickyStart="bottom"
           paddingLeft={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
           paddingRight={width >= TRANSCRIPT_PADDING_MIN_WIDTH ? 1 : 0}
+          verticalScrollbarOptions={{ visible: false }}
         >
           {state.pendingChildView === undefined ? (
             <>
-              {/* The session header, inside the scrollbox rather than pinned above it, so it
-              behaves the way Codex's own session history cell does: it holds the top of an empty
-              transcript, and scrolls away on its own once enough conversation accumulates below
-              it. Static after mount — a later `/model` switch moves `state.route` and the mode
-              indicator, not this, which reports what the session opened on. */}
-              {splashBanner !== undefined && (
-                <>
-                  <SplashBanner info={splashBanner} />
-                  <text> </text>
-                </>
-              )}
-              <TranscriptList transcript={state.transcript} />
+              {/* Session header inside the scrollbox so it holds the top of an empty
+              transcript and scrolls away once conversation accumulates. Model and
+              provider follow `state.route`, the same source as the mode row. */}
+              {sessionBanner !== undefined && <SplashBanner info={sessionBanner} />}
+              <TranscriptList
+                transcript={state.transcript}
+                scrollTop={scrollTop}
+                viewportHeight={scrollboxHeight}
+                sticky={!scrolledUp}
+                columns={width}
+              />
+              {state.reasoning.expanded &&
+                ((state.reasoning.live?.text ?? "") + pendingReasoning).length > 0 && (
+                  <text
+                    fg={theme.muted}
+                    marginTop={gapBefore(state.transcript.at(-1)?.role, "system")}
+                  >
+                    {indentReasoningBody((state.reasoning.live?.text ?? "") + pendingReasoning)}
+                  </text>
+                )}
               {/* Settled toolActivity groups, painted live inside the scrollbox so mid-turn
               scrollback includes them. pendingTool (below) stays pinned outside. After
-              flushToolActivity, toolActivity is [] and this region unmounts in the same
-              update that pushLine's the muted transcript entries — no double paint. */}
+              flushToolActivity, toolActivity is [] and this region unmounts — the tree is
+              not copied into the transcript.
+              These rows sit outside TranscriptList, so its own per-row rhythm cannot reach them.
+              The first row reads the last committed entry's role and takes its gap from the same
+              table: usually the user message that opened the turn, but a retry or compaction
+              notice can land in between, which a hardcoded pair would space wrongly. */}
               {renderLiveToolActivity(state.toolActivity).map((line, index) => (
-                <text key={index} fg={theme.muted}>
+                <text
+                  key={index}
+                  fg={theme.muted}
+                  marginTop={index === 0 ? gapBefore(state.transcript.at(-1)?.role, "system") : 0}
+                >
                   {line}
                 </text>
               ))}
@@ -642,26 +773,44 @@ export function App({
         first turn's stale `now`. The key forces a fresh element identity — and so a fresh mount —
         regardless. */}
         {turn !== undefined && (
-          <TurnStatus key={turn.startedAt} startedAt={turn.startedAt} tokenProgress={turn.tokens} />
+          <TurnStatus
+            key={turn.startedAt}
+            startedAt={turn.startedAt}
+            tokenProgress={turn.tokens}
+            pendingLiveOutputEstimate={stream.getPendingLiveOutputEstimate}
+            subscribePendingLive={stream.subscribe}
+            thinking={(state.reasoning.live?.text.length ?? 0) > 0 || pendingReasoning.length > 0}
+            thinkingExpanded={state.reasoning.expanded}
+            toolInFlight={state.pendingTool !== undefined}
+          />
         )}
       </box>
       {state.pendingTool !== undefined &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
-          <box borderStyle="single" borderColor={theme.warning}>
-            {/* truncateArgsDisplay (cli/output.ts), not a raw JSON.stringify: write_file/edit
-            args carry a whole file body — exactly the case the helper exists for, uncapped
-            here otherwise. */}
-            <text fg={theme.warning}>
-              {`${state.pendingTool.name}(${truncateArgsDisplay(state.pendingTool.args)})`}
-            </text>
-          </box>
+          <WritePreview name={state.pendingTool.name} args={state.pendingTool.args} />
         ) : (
           <text fg={theme.muted}>
             {summarizeArgs(state.pendingTool.name, state.pendingTool.args)}
           </text>
         ))}
       <ErrorLine message={state.commandError} />
+      {/* Directly above the input box and below TurnStatus, which is where the issue's own
+      simulation puts it: a queued message has already left the user's hands as far as the box is
+      concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
+      branch of it — like SubagentPanel it accompanies whatever is mounted there
+      rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
+      keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
+      key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
+      the transcript box above is `flexGrow`, so the rows it does draw come out of the scrollbox
+      with no height budget to thread through here. */}
+      <QueueBlock
+        queue={state.queue}
+        width={width}
+        noPanelOpen={noPanelOpen}
+        onSubmit={onSubmit ?? (() => {})}
+        dispatch={dispatch}
+      />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
       means anything until it clears. Extended to a third state for /model, a fourth for /setup,
@@ -775,12 +924,7 @@ export function App({
       ) : onSubmit === undefined && state.splashDone && queued !== undefined ? (
         // One task, not a queue: a second line typed here would silently replace the first, since
         // only one value survives to the session mount. The box goes away instead of lying about it.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>queued — sending when the session is ready</text>
         </box>
       ) : onSubmit === undefined ? (
@@ -789,30 +933,47 @@ export function App({
         // screen for as long as the startup work behind them takes — the models.dev fetch on the
         // way to `prepareSession` alone can hold it for seconds. Rendering InputBox here swallows a
         // task typed in that window: it echoes the text and then drops it on Enter, because there is
-        // nowhere to send it. Same top/bottom rule as InputBox so the mode row below does not jump
+        // nowhere to send it. Same FRAME as InputBox so the mode row below does not jump
         // when the real session mounts.
-        <box
-          flexDirection="row"
-          borderStyle="single"
-          borderColor={theme.muted}
-          border={["top", "bottom"]}
-        >
+        <box flexDirection="row" {...FRAME}>
           <text fg={theme.muted}>starting session…</text>
         </box>
       ) : (
-        <InputBox
-          onSubmit={onSubmit}
-          onQuit={onQuit}
-          prefill={state.pendingInputPrefill}
-          onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
-          onEmptyDown={
-            state.subagents.length > 0
-              ? () => dispatch({ type: "subagent-panel-focus" })
-              : undefined
-          }
-          inert={state.subagentPanelFocus || state.pendingChildView !== undefined}
-          completionSources={getCompletionSources?.()}
-        />
+        <>
+          <InputBox
+            onSubmit={onSubmit}
+            onQuit={onQuit}
+            // Only while a turn is actually in flight and no queue row is open in its own editor.
+            // Undefined otherwise, so the Escape that dismisses a completion popup or closes a panel
+            // never reaches cli.ts at all — cli.ts guards this again on its own side, because an
+            // Escape delivered with signals.ts's cancel slot empty kills the process rather than
+            // no-opping. While a row IS being edited this box is inert anyway; passing undefined as
+            // well states the intent rather than relying on that.
+            onEscape={state.turn !== undefined && !state.queue.editing ? onEscape : undefined}
+            prefill={state.pendingInputPrefill}
+            onPrefillConsumed={() => dispatch({ type: "input-prefill-consumed" })}
+            onEmptyDown={
+              state.subagents.length > 0 && !state.queue.editing && !scrolledUp
+                ? () => dispatch({ type: "subagent-panel-focus" })
+                : undefined
+            }
+            arrowsReservedRef={arrowsReservedRef}
+            // `state.queue.editing` joins the two subagent conditions: while a queue row holds its own
+            // InputBox, two of them are mounted at once, and OpenTUI delivers every keypress to every
+            // mounted handler — so without this a typed character lands in the row's editor AND in
+            // this box. `inert` no-ops exactly the set that must not double up (printables, paste,
+            // Enter, Ctrl-D) while keeping this mount, and so whatever draft was already typed here,
+            // alive. It deliberately still fires `onEmptyDown`, which is why that prop is suppressed
+            // above too: a Down pressed inside the row editor would otherwise hand the keyboard to
+            // the subagent roster mid-edit.
+            inert={
+              state.subagentPanelFocus ||
+              state.pendingChildView !== undefined ||
+              state.queue.editing
+            }
+            completionSources={getCompletionSources?.()}
+          />
+        </>
       )}
       {state.subagents.length > 0 && (
         <SubagentPanel
@@ -828,16 +989,15 @@ export function App({
         hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
-          {width - rightSideWidth >= MODE_HINT_COLS && (
-            <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>
-          )}
+          {showModeHint && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>
-          {/* `rightSideText`, not a re-check of `scrolledUp && noPanelOpen` (`noPanelOpen` matters
-          here too: while a panel is open, End is swallowed by the exact same gate that puts on the
-          transcript-scroll keys above — the banner would otherwise keep telling the user to press
-          a key that does nothing until they close the panel first) — reusing the already-computed
+          {/* `rightSideText`, not a re-check of `scrolledUp && !pagingPanelOpen` (`pagingPanelOpen`
+          matters here too: while one of those panels is open, End is swallowed by the exact same
+          gate that puts on the transcript-scroll keys above — the banner would otherwise keep
+          telling the user to press a key that does nothing until they close the panel first, and
+          behind an approval, where the keys DO work, it has to appear) — reusing the already-computed
           string keeps this render in lockstep with the width budget above, rather than risking the
           two drifting if one is ever edited without the other. `showRightSide` on both nodes: the
           label can't shrink, so on a narrow enough terminal these lose the row instead of wrapping

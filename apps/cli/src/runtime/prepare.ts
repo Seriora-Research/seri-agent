@@ -37,17 +37,19 @@ import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadGrants } from "../permissions/store";
+import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { fetchAccountPlan } from "../provider/accountStatus";
 import { getModelCatalog } from "../provider/catalog";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "../provider/defaults";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { appliedReasoningEffort } from "../provider/reasoning";
-import { type ResolvedRoute, resolveRoute } from "../provider/routing";
+import { type ResolvedRoute, type RouteCredential, resolveRoute } from "../provider/routing";
 import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
 import { createRulesState, type RulesState } from "../rules/match";
 import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
+import { configDirForStore, type SessionDatabase } from "../session/database";
 import {
   findMostRecentSession,
   loadSession,
@@ -57,6 +59,7 @@ import {
 import { listPendingSkills } from "../skills/pending";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
+import { buildRunManifest, collectContextFiles } from "../trajectory/manifest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";
 import { type CommandDirs, checkpointTarget } from "../tui/state/commands";
@@ -89,15 +92,16 @@ export async function resolveModelRoute(
   const requestedProvider =
     requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
   const [catalog, plan] = await Promise.all([
-    getModelCatalog(undefined, warnSink),
+    getModelCatalog(undefined, warnSink, configDir),
     fetchAccountPlan(configDir),
   ]);
   const route = resolveRoute(
     catalog,
     { model: requested.model, provider: requestedProvider },
     configured,
-    plan,
+    effectiveHostedPlan(configDir, plan),
     subscribedProviders(configDir),
+    hostedPlanUsable(configDir),
   );
   const model = dispatchModel(route, sessionId, configDir, deps);
   return { model, route, catalog, plan };
@@ -132,6 +136,7 @@ export function loadOrCreateSession(
   // of the session JSON.
   loadExtensions: (cwd: string) => { skills: SkillRegistry; rules: RuleRegistry; hooks: HooksLoad },
   onTruncated: () => void = () => {},
+  database?: SessionDatabase,
 ): {
   session: RunSession;
   modelRecorded: boolean;
@@ -140,9 +145,9 @@ export function loadOrCreateSession(
   hooks: HooksLoad;
 } {
   if (resuming) {
-    const id = resumeId ?? findMostRecentSession(sessionsDir);
+    const id = resumeId ?? findMostRecentSession(sessionsDir, database);
     if (!id) throw new Error("No session to resume.");
-    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated);
+    const loaded = loadSession<ModelMessage>(id, sessionsDir, onTruncated, database);
     // The two stored fields are treated differently on purpose.
     //
     // `systemPrompt` is rebuilt every time, never replayed: it is a product of this binary's
@@ -249,10 +254,25 @@ export function createSessionTrajectory(
   session: { id: string; cwd: string; model?: string; provider?: string },
   configDir: string,
   onWarning: (message: string) => void,
+  database?: SessionDatabase,
+  extras?: {
+    contextFiles?: () => readonly string[];
+    provider?: ModelProvider;
+    credential?: RouteCredential;
+  },
 ): TrajectoryWriter {
   const cfg = loadTrajectoryConfig(configDir);
+  const trajectoriesDir = getTrajectoriesDir(configDir);
+  // Tests often inject a throwaway sessionsDir whose store is not the profile root.
+  // Reuse the held handle only when it is that root; otherwise the writer opens the
+  // trajectory store itself, which is where readTrajectory looks.
+  const held =
+    database !== undefined &&
+    database.configDir === configDirForStore(trajectoriesDir, "trajectories")
+      ? database
+      : undefined;
   return createTrajectoryWriter({
-    dir: getTrajectoriesDir(configDir),
+    dir: trajectoriesDir,
     sessionId: session.id,
     cwd: session.cwd,
     model: session.model,
@@ -260,6 +280,16 @@ export function createSessionTrajectory(
     enabled: cfg.enabled,
     retentionDays: cfg.retentionDays,
     onWarning,
+    ...(held !== undefined ? { database: held } : {}),
+    manifest: () =>
+      buildRunManifest({
+        cwd: session.cwd,
+        configDir,
+        provider: extras?.provider,
+        credential: extras?.credential,
+        contextFiles: extras?.contextFiles?.(),
+        maxIterations: 500,
+      }),
   });
 }
 
@@ -267,15 +297,16 @@ export function createSessionTrajectory(
 // `taskText`) — one function rather than two independent booleans over the same inputs, which used
 // to require its own comment on the second one just to defend it against the first ("deliberately
 // NOT !hasNewTask(ctx)"). Shared by prepareSession (decides whether to push the initial user
-// message), run()'s own usage-error gate, and runTui's own connectDispatch (decides whether to echo
-// the task and whether to auto-start a turn) — one function, not the same distinction repeated at
-// every call site, so they can't silently drift out of sync with each other.
+// message), run()'s own usage-error gate and non-interactive turn start, and runTui's own
+// connectDispatch (decides whether to echo the task and whether to auto-start a turn) — one
+// function, not the same distinction repeated at every call site, so they can't silently drift
+// out of sync with each other.
 //   "task"   — real task text was given (new session or --continue/--resume with new text): push,
 //              echo, and start a turn on it.
 //   "resume" — --continue/--resume with no new text: nothing to push or echo. Whether a turn
 //              actually starts is a separate question the session's own messages answer, not
-//              this classification alone — see session/awaitsReply.ts, and connectDispatch's use
-//              of it, below.
+//              this classification alone — see session/awaitsReply.ts, used by both
+//              connectDispatch (TUI) and run()'s non-interactive branch.
 //   "idle"   — no resume target and no task text (bare `seri` in a TTY): mount with nothing to do.
 export type RunStart = "idle" | "task" | "resume";
 
@@ -327,9 +358,9 @@ export type PreparedRun = {
   catalog: ModelCatalog;
   // The catalog's own entry for `model`/`provider`, above — undefined when the catalog has no
   // entry for this exact id/provider pair (an id typed straight into SERI_MODEL, say). driveLoop
-  // reads two fields off it: `.contextWindow` (falls back to runLoop's own
-  // DEFAULT_CONTEXT_WINDOW_SIZE when undefined, matching what every run did before this field
-  // existed) and `.displayName` (falls back to the raw id, buildVolatileTier's own job). Carrying
+  // reads `.contextWindow` (falls back to runLoop's own DEFAULT_CONTEXT_WINDOW_SIZE when
+  // undefined), `.displayName` (falls back to the raw id, buildVolatileTier's own job), and
+  // `.family` (the llama narration overlay; missing/unknown family means no overlay). Carrying
   // the whole entry rather than just `contextWindow` means driveLoop needs exactly one
   // `findCatalogEntry` call per turn instead of two identical ones for the same (modelId, provider).
   catalogEntry: ModelCatalogEntry | undefined;
@@ -416,6 +447,9 @@ export type PreparedRun = {
   // are: /clear mints a new id, so a writer closed over the old one would keep appending under a
   // session nothing resumes. Disabled config still yields a no-op writer.
   trajectory: TrajectoryWriter;
+  // Borrowed from RunContext.database — the caller opens and closes it. /clear reuses this
+  // instance rather than constructing a second connection for the new session id.
+  database?: SessionDatabase;
   // Startup notices (session-created, permission warnings, pre-approved tools, the cross-project
   // checkpoint mismatch) that prepareSession would otherwise print directly. On the TUI path they
   // are queued here instead: prepareSession runs after runWelcomeSplash has already created the
@@ -458,19 +492,20 @@ export function rerouteNotice(
 // The gateway counterpart to rerouteNotice above: a gateway-credential route is served through the
 // user's own seri plan, not a key they brought, so both the piped/non-interactive path and a live
 // TUI turn need the same "never silent" notice a BYOK reroute already gets — otherwise a run
-// consumes gateway quota with zero indication it ever left the user's own keys. Same
-// `ModelProvider | undefined` signature and the same undefined branch as rerouteNotice, for the
-// same reason: a genuinely blank first run named no provider at all, so blaming one (Groq, via
-// DEFAULT_PROVIDER) in the "no X key configured" clause would name a provider the user never
-// touched.
+// consumes gateway quota with zero indication it ever left the user's own keys. The serving
+// provider is not named: `route.provider` is the catalog listing the gateway forwards (today
+// always GATEWAY_PROVIDER), not who pays, and the Route column already calls that "seri". A
+// requested provider that equals `route.provider` is also not blamed: persistDefaultModel writes
+// that pair after a successful hosted turn.
 export function gatewayNotice(
   route: ResolvedRoute,
   requestedProvider: ModelProvider | undefined,
 ): string {
-  if (requestedProvider === undefined) {
-    return `routing ${route.model} via ${route.provider} on your seri plan`;
+  const head = `routing ${route.model} on your seri plan`;
+  if (requestedProvider === undefined || requestedProvider === route.provider) {
+    return head;
   }
-  return `routing ${route.model} via ${route.provider} on your seri plan — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
+  return `${head} — no ${PROVIDER_DISPLAY_NAMES[requestedProvider]} key configured`;
 }
 
 // The one place a TTY-path failure becomes an exit code, used by every catch between
@@ -613,7 +648,16 @@ export function bindSession(
   permissionsDir: string,
   onWarning: (message: string) => void,
 ): ArchivistState {
-  const trajectory = createSessionTrajectory(session, configDir, onWarning);
+  const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database, {
+    contextFiles: () =>
+      collectContextFiles({
+        cwd: session.cwd,
+        rules: prepared.rules.values(),
+        skills: prepared.skills.values(),
+      }),
+    provider: prepared.route.provider,
+    credential: prepared.route.credential,
+  });
   const { checkpointer, tools } = buildCheckpointedTools({
     storeDir: prepared.storeDir,
     worktree: prepared.worktree,
@@ -753,6 +797,7 @@ export async function prepareSession(
           "the last message in this session's saved history was incomplete (an interrupted save) and has been dropped — everything before it is intact",
           warnSink,
         ),
+      ctx.database,
     );
 
     if (!ctx.resuming) emit(`Session ${session.id} created.`);
@@ -783,10 +828,8 @@ export async function prepareSession(
 
     // resolveRoute sits ahead of getModel's dispatch, not inside it — getModel
     // stays a pure, environment-independent switch with its own test file.
-    // Read here, before the routing decision that needs it: `getApiKey`'s own `loadConfig` call
-    // does a bare `JSON.parse`, so a corrupted config.json throws SYNCHRONOUSLY — the same failure
-    // mode `getModel` itself already guards against below, and why this needs to be inside the try
-    // at all ("a corrupted config.json prints a clean error and exits 1," not an uncaught crash).
+    // Read here, before the routing decision that needs it. getModel and the catalog fetch
+    // can throw, which is why this stays inside the try.
     // The catalog load and the plan fetch (inside resolveModelRoute) are independent network calls,
     // run together rather than stacked. `plan` is still fetched even when the session's own provider
     // already has a configured key (resolveRoute's own Rule 1 would discard it for THIS route): the
@@ -853,7 +896,11 @@ export async function prepareSession(
     // seri still pins only a model that answered: a typo in SERI_MODEL must not land in
     // config.json just because the catalog listed similar ids. A model the session already
     // recorded is untouched. It earned its place the same way.
-    saveSession(modelRecorded ? session : { ...session, model: undefined }, ctx.sessionsDir);
+    saveSession(
+      modelRecorded ? session : { ...session, model: undefined },
+      ctx.sessionsDir,
+      ctx.database,
+    );
 
     // Checkpointing is enabled by exactly this call, which is also why rolling it back is a
     // one-line revert: `runLoop`, the session store, the gate and every tool are unmodified, and
@@ -919,8 +966,17 @@ export async function prepareSession(
     // Resolved once, here — PreparedRun's own comment on `verifyConfig` explains why a later
     // /clear rebind (bindSession) must reuse this value rather than calling loadVerifyConfig again.
     const verifyConfig = loadVerifyConfig(configDir);
-    const trajectory = createSessionTrajectory(session, configDir, (msg) =>
-      printWarning(msg, warnSink),
+    const trajectory = createSessionTrajectory(
+      session,
+      configDir,
+      (msg) => printWarning(msg, warnSink),
+      ctx.database,
+      {
+        contextFiles: () =>
+          collectContextFiles({ cwd: session.cwd, rules: rules.values(), skills: skills.values() }),
+        provider: route.provider,
+        credential: route.credential,
+      },
     );
     const { checkpointer, tools } = buildCheckpointedTools({
       storeDir,
@@ -972,6 +1028,7 @@ export async function prepareSession(
       mcp,
       mcpClients,
       trajectory,
+      database: ctx.database,
       preMountMessages,
     };
   } catch (err) {

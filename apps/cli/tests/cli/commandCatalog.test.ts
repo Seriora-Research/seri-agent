@@ -9,6 +9,7 @@ import {
   isShiftTabModeCycle,
   isTuiClaimed,
   sessionMeta,
+  startsATurn,
   tuiClaimedNames,
 } from "../../src/cli/commandCatalog";
 import { USAGE } from "../../src/cli/output";
@@ -102,6 +103,10 @@ describe("command catalog completeness", () => {
     expect(missing).toEqual([]);
   });
 
+  test("README documents /compact optional instructions", () => {
+    expect(README).toContain("/compact [instructions]");
+  });
+
   test("the docs command reference names every catalog command as a /name token", () => {
     const missing = COMMAND_META.map((meta) => meta.name).filter(
       (name) => !mentionsName(DOCS_COMMANDS, name),
@@ -158,5 +163,56 @@ describe("command catalog completeness", () => {
     expect(isShiftTabModeCycle({ name: "tab", shift: true })).toBe(true);
     expect(isShiftTabModeCycle({ name: "tab", shift: false })).toBe(false);
     expect(isShiftTabModeCycle({ name: "enter", shift: true })).toBe(false);
+  });
+});
+
+// The one question cli.ts's message queue asks before it defers a submission instead of running it.
+// Every branch is exercised here rather than through the TUI, which is the reason it is a pure
+// function taking its registries as an argument at all.
+describe("startsATurn", () => {
+  const registries = {
+    agents: new Map<string, unknown>([["reviewer", {}]]),
+    skills: new Map<string, unknown>([["summarize", {}]]),
+  };
+
+  test("a plain task starts a turn", () => {
+    expect(startsATurn("fix", "fix the wrap", registries)).toBe(true);
+  });
+
+  test("a skill starts a turn, because its body is submitted as an ordinary user turn", () => {
+    expect(startsATurn("/summarize", "/summarize the diff", registries)).toBe(true);
+    expect(startsATurn("/summarize", "/summarize", registries)).toBe(true);
+  });
+
+  test("an agent dispatch with a goal starts a turn", () => {
+    expect(startsATurn("/reviewer", "/reviewer grade the diff", registries)).toBe(true);
+  });
+
+  // Deferring this one would put the usage error minutes away from the keypress that caused it,
+  // with nothing on screen to connect them. Falling through runs the error cli.ts already prints.
+  test("an agent dispatch with no goal does not, so its usage error stays immediate", () => {
+    expect(startsATurn("/reviewer", "/reviewer", registries)).toBe(false);
+    expect(startsATurn("/reviewer", "/reviewer   ", registries)).toBe(false);
+  });
+
+  // Both halves of the catalog: a TUI-claimed name opens a panel or quits, and a session command
+  // has its own mid-turn gate. Neither may be deferred, or /exit would stop working mid-turn.
+  test("no catalog command starts a turn", () => {
+    for (const meta of COMMAND_META) {
+      expect(startsATurn(meta.name, meta.name, registries)).toBe(false);
+    }
+  });
+
+  test("an unrecognised slash name does not, so its error stays immediate too", () => {
+    expect(startsATurn("/nope", "/nope whatever", registries)).toBe(false);
+  });
+
+  test("a name defined as both an agent and a skill is judged as the agent", () => {
+    const both = {
+      agents: new Map<string, unknown>([["shared", {}]]),
+      skills: new Map<string, unknown>([["shared", {}]]),
+    };
+    expect(startsATurn("/shared", "/shared", both)).toBe(false);
+    expect(startsATurn("/shared", "/shared do it", both)).toBe(true);
   });
 });

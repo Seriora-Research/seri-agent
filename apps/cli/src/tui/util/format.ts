@@ -2,6 +2,8 @@
 // terminal" property reducer.ts already has.
 
 import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@seri/model-catalog";
+import { describeCodexSetupStatus } from "../../auth/codexBin";
+import { describeSeriSetupStatus } from "../../auth/seriIgnore";
 import { escapeControlChars } from "../../cli/output";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
@@ -21,26 +23,26 @@ import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 // screen) — see `slideWindow`/`useListWindow.ts` for how the visible window slides to keep it in
 // view.
 // `MIN_LIST_WINDOW` is a floor for a short terminal, not a value any of today's real panels reach
-// (SetupPanel's own 5 providers already fits under it) — enough rows that a floor-clamped panel
+// (SetupPanel's provider list already fits under it) — enough rows that a floor-clamped panel
 // still shows more than one entry at a time. `PANEL_CHROME_ROWS` is how much of a panel's own
 // height is spent on its border, header/filter line, and "+N more" footer rather than list rows —
 // sized against ConfigPanel's own list step, the tallest of the four: unlike PermissionsPanel/
 // SetupPanel, it can render a "+N more" footer AND a selectedDescription line at once (one row
-// each), on top of the border/header/hint every panel already has.
+// each), on top of the border and hint every panel already has. The command title lives in the
+// top border, not an inner heading row.
 export const LIST_WINDOW_MAX = 10;
 export const MIN_LIST_WINDOW = 3;
-export const PANEL_CHROME_ROWS = 9;
+export const PANEL_CHROME_ROWS = 8;
 
 // Every row a panel's own budget has to share with the rest of App.tsx's render, reserved
-// unconditionally rather than threaded through as props: the unconditional mode-indicator row, a
-// `commandError` line (one row, shown above the panel), and AuthBanner's three-row bordered Box
-// (shown above everything when signed out) — 1 + 1 + 3 = 5. Unconditional because
-// `commandError`/`authOffer` live on reducer state inside App, out of scope for the four panel
-// components that call `useListWindow(rows, selected)` with nothing else in scope — threading both
-// flags into every one of them (plus App itself) costs far more than the alternative:
-// over-reserving these five rows when neither is actually showing costs at most one list row on a
-// 24-row terminal and nothing at all on a 25+ row one, while under-reserving pushes a panel row off
-// the alt screen with no scrollback to recover it.
+// unconditionally rather than threaded through as props: the unconditional mode-indicator row and
+// a `commandError` line (one row, shown above the panel) — 1 + 1 = 2. Unconditional because
+// `commandError` lives on reducer state inside App, out of scope for the four panel components
+// that call `useListWindow(rows, selected)` with nothing else in scope — threading that flag into
+// every one of them (plus App itself) costs far more than the alternative: over-reserving this
+// one extra row when no command-error is showing costs at most one list row on a 24-row terminal
+// and nothing at all on a 25+ row one, while under-reserving pushes a panel row off the alt
+// screen with no scrollback to recover it.
 //
 // Does NOT also reserve for `pendingTool`'s own three-row bordered Box, even though a panel can
 // genuinely be open while a write_file/edit call is in flight (/model, /setup, /config, and
@@ -51,7 +53,7 @@ export const PANEL_CHROME_ROWS = 9;
 // regression than the pendingTool overflow it was meant to close. Left as a known gap rather than
 // re-fixed here; a real fix needs either a shorter LIST_WINDOW_MAX floor or measuring pendingTool's
 // own height live instead of reserving for it unconditionally.
-export const APP_CHROME_ROWS = 5;
+export const APP_CHROME_ROWS = 2;
 
 // Rows reserved from the terminal height for everything OTHER than the transcript scrollbox
 // (app.tsx: `rows - FALLBACK_CHROME_ROWS`), for the one frame before `onSizeChange` has ever
@@ -65,7 +67,31 @@ export type TranscriptEntry = {
   text: string;
   muted?: boolean;
   markdown?: boolean;
+  // Settled thought caret. Not a fourth role: the gap table already treats this as
+  // system (same exchange as the answer). `body` is the raw trace; `expanded` is
+  // the open/closed caret. Absent unless a reasoning span actually settled.
+  kind?: "reasoning";
+  body?: string;
+  expanded?: boolean;
+  elapsedMs?: number;
 };
+
+export const REASONING_MARK_CLOSED = "▸";
+export const REASONING_MARK_OPEN = "▾";
+
+export function formatReasoningCaret(expanded: boolean, elapsedMs: number): string {
+  const mark = expanded ? REASONING_MARK_OPEN : REASONING_MARK_CLOSED;
+  return `${mark} thought · ${formatElapsed(elapsedMs)}`;
+}
+
+export function formatLiveThinkingStatus(
+  expanded: boolean,
+  elapsed: string,
+  tokens: string,
+): string {
+  const mark = expanded ? REASONING_MARK_OPEN : REASONING_MARK_CLOSED;
+  return `${mark} thinking · ${elapsed} · ${tokens}`;
+}
 
 // For a list-panel row rendered with `wrap="truncate-end"` (ConfigPanel, SetupPanel): that prop
 // only guards a value wider than the panel — it does nothing for a literal newline, which Ink still
@@ -146,18 +172,16 @@ export const MODE_LABEL = {
 // help a user who has never pressed the key yet.
 export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 
-// The persistent mode-indicator row's own 3-tier width breakpoints. `MODE_HINT_COLS` gates
-// MODE_CYCLE_HINT's own visibility (app.tsx's own JSX); `MODE_MODEL_MIN_COLS`/`MODE_ROUTE_MIN_COLS`
-// gate how much of formatModeDetail's own return value shows (below). Sized against the longest
-// label, "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders double-width) + the hint
-// (21 cols) = 47, still under 52; + the model name ("  " + NAME_WIDTH) = 71, still under 76; +
-// the route (" · " + the widest route label, "→ openrouter") = 86, still under 100 — every
-// threshold holds even in that worst case. This proof does not (and cannot) account for the mode
-// row's own right-hand content (the scroll banner / `state.status`) sharing the same row — see
-// app.tsx's own `showRightSide` for how that side of the row is kept from wrapping instead.
+// The persistent mode-indicator row still floors the cycle hint at `MODE_HINT_COLS` (app.tsx
+// via `modeRowHintVisible`). Model, route, and effort are leftover-packed by `formatModeDetail`
+// into whatever columns remain after the indicator — longest suffix that fits, then the next
+// shorter, then empty. Sized against the longest label, "⏵⏵ bypass permissions on" (26 cols,
+// worst case its glyph renders double-width) + the hint (21 cols) = 47, still under 52, so the
+// hint floor holds even in that worst case when detail is empty. This proof does not (and cannot)
+// account for the mode row's own right-hand content (the scroll banner / `state.status`) sharing
+// the same row — see app.tsx's own `showRightSide` for how that side of the row is kept from
+// wrapping instead.
 export const MODE_HINT_COLS = 52;
-export const MODE_MODEL_MIN_COLS = 76;
-export const MODE_ROUTE_MIN_COLS = 100;
 // formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
 // from models.dev, an external and unvalidated source, so this is a display budget, not a bound
 // on the data. The widest values referenced anywhere in this codebase's own provider tables today
@@ -166,12 +190,15 @@ export const MODE_ROUTE_MIN_COLS = 100;
 // convention above (13 for a 12-char worst case) rather than COST_WIDTH's wider 3-column margin.
 export const EFFORT_WIDTH = 8;
 
+export const INPUT_PLACEHOLDER = "describe a task · / for commands · @ for files";
+
 // A non-TTY production stdout (piped/redirected output) genuinely has `columns === undefined`,
 // and a real pty can separately report a genuine but unusable `columns === 0` for its first render
 // or two — both are what `resolveWidth`'s `stdout.columns || DEFAULT_COLUMNS` (App.tsx) guards
 // against; `||`, not `??`, is what makes the zero case fall back too. It is NOT what makes
-// App.test.tsx's own component tests land in the full tier: `createTestRenderer`'s own default
-// width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does that, not this fallback.
+// App.test.tsx's own component tests leftover-pack the full model+route suffix:
+// `createTestRenderer`'s own default width (App.test.tsx's own `DEFAULT_WIDTH`, 100) is what does
+// that, not this fallback.
 export const DEFAULT_COLUMNS = 80;
 
 // `resolveHeight`'s own fallback (App.tsx) — the same first-render `0` a pty can genuinely report
@@ -334,17 +361,31 @@ export function formatDoneLine(
 // bug of promising a fallback that does not exist.
 // Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
 // persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
-// they can never independently drift on what "your key"/"→ provider"/"provided"/"no key" means
-// for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
-// `formatModeDetail`'s caller passed a real plan-coverage predicate/route.
+// they can never independently drift on what "your key"/"grok"/"chatgpt"/"seri"/"→ provider"/"no key"
+// means for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
+// `formatModeDetail`'s caller passed a real plan-coverage predicate/route. `subscriptionCovered`
+// is a vendor plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
+// row still reads as included.
+function subscriptionRouteLabel(provider?: ModelProvider): string {
+  if (provider === "xai") return "grok";
+  if (provider === "openai") return "chatgpt";
+  return "plan";
+}
+
 export function formatRouteLabel(input: {
   keyConfigured: boolean;
   rerouteTo?: ModelProvider;
   gatewayReachable?: boolean;
+  subscriptionCovered?: boolean;
+  provider?: ModelProvider;
 }): string {
-  if (input.keyConfigured) return "your key";
+  if (input.subscriptionCovered) return subscriptionRouteLabel(input.provider);
+  // Leftover OpenRouter key under an active seri plan: the plan pays, same as Grok/Codex.
+  if (input.keyConfigured && !(input.gatewayReachable && input.provider === "openrouter")) {
+    return "your key";
+  }
   if (input.rerouteTo) return `→ ${input.rerouteTo}`;
-  if (input.gatewayReachable) return "provided";
+  if (input.gatewayReachable) return "seri";
   return "no key";
 }
 
@@ -352,70 +393,120 @@ export function formatRouteLabel(input: {
 // the same reason formatModelRow's own comment gives — unit-testable without mounting Ink.
 // `route.rerouted` alone used to disambiguate "your key" from "→ provider", back when a
 // gateway-served route was indistinguishable from a local one here — both have `rerouted: false`.
-// `route.credential` is what tells them apart now: `keyConfigured` is true only when NEITHER is
-// set, and `gatewayReachable` is threaded through so a gateway-served route reads "provided" here
-// exactly as it already does in the model picker's Route column.
+// `route.credential` is what tells them apart now: `keyConfigured` is true only for a
+// non-rerouted `key` credential, `subscriptionCovered` for `subscription`, and `gatewayReachable`
+// for `gateway` — so a ChatGPT-plan route reads "chatgpt" here exactly as it already does in the
+// model picker's Route column.
 // `route` can be undefined (found 2026-08-13, AppProps.route's own comment): runGuidedSetup mounts
 // App before any provider key exists, so there is genuinely no route to show yet. Falls back to no
-// suffix, same as the narrow-terminal branch below — showing a fabricated route would misreport
-// "your key"/"→ provider" during the exact flow where neither is true.
-// post-review fix: `route.model` is capped to NAME_WIDTH (the same width the picker table already
-// truncates model names to) before it goes into the return — a real catalog id (a long OpenRouter
-// id is well over 40 chars) was otherwise unbounded here, so it could push the row past the very
-// terminal width MODE_MODEL_MIN_COLS/MODE_ROUTE_MIN_COLS assumed it fit in.
-// Carries its own leading two spaces (mirroring the old inline `"  "` join) and is `""` when there
-// is nothing to show, so app.tsx's JSX never has to add spacing of its own — it renders this
-// directly next to the mode indicator, which app.tsx already has in hand and colors separately.
+// suffix — showing a fabricated route would misreport "your key"/"→ provider" during the exact
+// flow where neither is true.
+// `width` is the leftover budget for this suffix only: the caller has already subtracted the
+// indicator and any right-side banner/status. Hint visibility is applied by the caller
+// (`modeRowHintVisible`), not here, so the suffix claims space first. Greedy drop order:
+// model+route+effort, then model+route, then model, then empty. `route.model` is capped to
+// NAME_WIDTH (the same width the picker table already truncates model names to) before it goes
+// into the return — a real catalog id (a long OpenRouter id is well over 40 chars) was otherwise
+// unbounded here and could overflow the leftover. Carries its own leading two spaces (mirroring
+// the old inline `"  "` join) and is `""` when there is nothing to show, so app.tsx's JSX never
+// has to add spacing of its own — it renders this directly next to the mode indicator, which
+// app.tsx already has in hand and colors separately.
 // `effortTier` is the active `/effort` override (or `undefined` for none/auto/stale — see its
-// caller in app.tsx), appended only at the same width tier the route label already requires: 86
-// (this row's own proven worst case, see MODE_ROUTE_MIN_COLS's comment above) + 3 (" · ") + 8
-// (EFFORT_WIDTH) = 97 < 100, so the combined worst case still holds with room to spare. Truncated
-// with the same defensive shape as the model name below, since a tier value ultimately comes from
-// models.dev, an external and unvalidated source.
+// caller in app.tsx), packed with the route when leftover allows. Truncated with the same
+// defensive shape as the model name, since a tier value ultimately comes from models.dev, an
+// external and unvalidated source.
 export function formatModeDetail(
   route: ResolvedRoute | undefined,
   width: number,
   effortTier: string | undefined,
 ): string {
-  if (route === undefined || width < MODE_MODEL_MIN_COLS) return "";
-  const modelName = truncate(route.model, NAME_WIDTH);
-  if (width < MODE_ROUTE_MIN_COLS) return `  ${modelName}`;
+  if (route === undefined) return "";
+  const model = `  ${truncate(route.model, NAME_WIDTH)}`;
   const routeLabel = formatRouteLabel({
-    keyConfigured: !route.rerouted && route.credential !== "gateway",
+    keyConfigured: !route.rerouted && route.credential === "key",
+    subscriptionCovered: !route.rerouted && route.credential === "subscription",
     rerouteTo: route.rerouted ? route.provider : undefined,
     gatewayReachable: route.credential === "gateway",
+    provider: route.provider,
   });
-  if (effortTier === undefined) return `  ${modelName} · ${routeLabel}`;
-  return `  ${modelName} · ${routeLabel} · ${truncate(effortTier, EFFORT_WIDTH)}`;
+  const withRoute = `${model} · ${routeLabel}`;
+  const withEffort =
+    effortTier === undefined ? withRoute : `${withRoute} · ${truncate(effortTier, EFFORT_WIDTH)}`;
+  if (withEffort.length <= width) return withEffort;
+  if (withRoute.length <= width) return withRoute;
+  if (model.length <= width) return model;
+  return "";
 }
 
-export function formatModelRow(row: ModelPickerEntry): string {
-  const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable } = row;
-  const route = formatRouteLabel({ keyConfigured, rerouteTo, gatewayReachable });
+// Whether the persistent mode row still has room for MODE_CYCLE_HINT after leftover-packing the
+// detail suffix. Floors at MODE_HINT_COLS even when the hint itself would fit in a narrower row;
+// yields whenever indicator + hint + already-packed detail would overflow `remaining`.
+export function modeRowHintVisible(
+  remaining: number,
+  indicatorWidth: number,
+  detailLength: number,
+): boolean {
+  return (
+    remaining >= MODE_HINT_COLS &&
+    indicatorWidth + MODE_CYCLE_HINT.length + detailLength <= remaining
+  );
+}
+
+// Inside FRAME (single border 1+1, PAD_X 1+1) the ListRow marker ("> "/"  ", 2 cols) leaves this
+// many columns for the label. Numeric, not imported PAD_X: spacing.ts type-imports this file.
+export const PICKER_LABEL_CHROME = 6;
+
+export function pickerLabelWidth(terminalCols: number): number {
+  return Math.max(0, (terminalCols || DEFAULT_COLUMNS) - PICKER_LABEL_CHROME);
+}
+
+// Optional `labelWidth` is the columns ListRow has for this string (pickerLabelWidth). Omitted
+// returns the full five columns plus suffix. When the full string overflows, drop the suffix
+// first; if still over, drop the Route column. Context and Cost stay.
+export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): string {
+  const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable, subscriptionCovered } =
+    row;
+  const route = formatRouteLabel({
+    keyConfigured,
+    rerouteTo,
+    gatewayReachable,
+    subscriptionCovered,
+    provider: entry.provider,
+  });
   const suffix =
     keyConfigured && alternatives > 0
       ? ` +${alternatives} route${alternatives === 1 ? "" : "s"}`
       : "";
-  return (
-    [
-      truncatePad(entry.displayName, NAME_WIDTH),
-      truncatePad(entry.provider, PROVIDER_WIDTH),
-      formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
-      truncatePad(formatCost(entry.pricing), COST_WIDTH),
-      truncatePad(route, ROUTE_WIDTH),
-    ].join(" ") + suffix
-  );
+  const columns = [
+    truncatePad(entry.displayName, NAME_WIDTH),
+    truncatePad(entry.provider, PROVIDER_WIDTH),
+    formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
+    truncatePad(subscriptionCovered ? "included" : formatCost(entry.pricing), COST_WIDTH),
+    truncatePad(route, ROUTE_WIDTH),
+  ];
+  const full = columns.join(" ") + suffix;
+  if (labelWidth === undefined || full.length <= labelWidth) return full;
+  const withoutSuffix = columns.join(" ");
+  if (withoutSuffix.length <= labelWidth) return withoutSuffix;
+  return columns.slice(0, 4).join(" ");
 }
 
-// The picker's own column labels, same widths as formatModelRow's own columns — so the header sits
-// flush above the rows it names regardless of terminal width.
-export const MODEL_PICKER_HEADER = [
-  truncatePad("Name", NAME_WIDTH),
-  truncatePad("Provider", PROVIDER_WIDTH),
-  "Context".padStart(CONTEXT_WIDTH),
-  truncatePad("Cost", COST_WIDTH),
-  truncatePad("Route", ROUTE_WIDTH),
-].join(" ");
+// Same five header cells as the unbounded MODEL_PICKER_HEADER. Omitted width, or a width the
+// five-column string already fits, keeps Route; otherwise drop Route in lockstep with formatModelRow.
+export function formatModelPickerHeader(labelWidth?: number): string {
+  const columns = [
+    truncatePad("Name", NAME_WIDTH),
+    truncatePad("Provider", PROVIDER_WIDTH),
+    "Context".padStart(CONTEXT_WIDTH),
+    truncatePad("Cost", COST_WIDTH),
+    truncatePad("Route", ROUTE_WIDTH),
+  ];
+  const full = columns.join(" ");
+  if (labelWidth === undefined || full.length <= labelWidth) return full;
+  return columns.slice(0, 4).join(" ");
+}
+
+export const MODEL_PICKER_HEADER = formatModelPickerHeader();
 
 function priceLabel(entry: ModelCatalogEntry): string {
   if (entry.pricing === undefined) return "";
@@ -438,7 +529,7 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     .split(/\s+/)
     .filter((term) => term.length > 0);
   if (terms.length === 0) return true;
-  const { entry } = row;
+  const { entry, subscriptionCovered, gatewayReachable } = row;
   const haystacks = [
     entry.id.toLowerCase(),
     entry.displayName.toLowerCase(),
@@ -449,6 +540,8 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     (entry.family ?? "").toLowerCase(),
     entry.provider.toLowerCase(),
     priceLabel(entry),
+    ...(subscriptionCovered ? ["included", "plan", subscriptionRouteLabel(entry.provider)] : []),
+    ...(gatewayReachable ? ["seri", "plan"] : []),
   ];
   return terms.every((term) => haystacks.some((haystack) => haystack.includes(term)));
 }
@@ -473,14 +566,23 @@ export function envShadowReason(keyName: string): string {
 // impossible when it was not — commands.ts's own comment on `decideSetupOpen` already claimed
 // "the panel states why, for the env case," which was false for exactly this state until now.
 export function formatSetupRow(row: SetupProviderRow): string {
+  if (row.kind === "heading") return row.label;
+  if (row.kind === "subscription") {
+    if (row.provider === "xai") {
+      const name = truncatePad("grok", PROVIDER_WIDTH);
+      return row.connected ? `${name} connected` : `${name} not connected`;
+    }
+    if (row.provider === "seri") {
+      return `${truncatePad("seri", PROVIDER_WIDTH)} ${describeSeriSetupStatus(row.status)}`;
+    }
+    return `${truncatePad("chatgpt", PROVIDER_WIDTH)} ${describeCodexSetupStatus(row.status)}`;
+  }
   const name = truncatePad(row.provider, PROVIDER_WIDTH);
   if (row.source === "unset") return `${name} not set`;
-  // `singleLine`, not `row.masked` raw: `maskValue` keeps a value's first/last 4
-  // characters verbatim, so a literal newline in either survives masking — see `singleLine`'s own
-  // comment for how it reaches here. `?? ""`: `masked` is `undefined` only for the "unset" source
-  // already returned above, never for "env"/"config" — the fallback is unreachable in practice, not
-  // a real case being papered over.
   const masked = singleLine(row.masked ?? "");
+  if (row.unusedBecause !== undefined) {
+    return `${name} ${masked} (${row.source}, ${row.unusedBecause})`;
+  }
   if (row.source === "env") {
     return row.removable
       ? `${name} ${masked} (env, config entry underneath — removable)`

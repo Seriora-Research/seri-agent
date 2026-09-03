@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { SPLASH_MARK } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -48,9 +49,11 @@ function childScriptQuitAndExit(dir: string): string {
 // `cli.run` itself awaits (a bare `setTimeout`), so it becomes a genuine process-level
 // `uncaughtException`, unrelated to any of seri's own try/catch paths.
 function childScriptUncaughtException(dir: string): string {
+  const trigger = join(dir, "throw-now");
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `console.log("\\nCHILD_PID " + process.pid);`,
+    `const { existsSync } = await import("node:fs");`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `async function* runLoopFake(opts) {`,
     `  yield { type: "done", reason: "no-tool-call" };`,
@@ -65,7 +68,13 @@ function childScriptUncaughtException(dir: string): string {
     `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `}).then((code) => process.exit(code));`,
-    `setTimeout(() => { throw new Error("INJECTED_UNCAUGHT_TEST_ERROR"); }, 1000);`,
+    // Timer outside cli.run so the throw is a real process-level uncaughtException. The parent
+    // creates the trigger after "done ·" has rendered — after createCliRenderer and this file's
+    // own crash handlers are installed. A fixed delay from process start can fire while
+    // createCliRenderer is still awaiting, when OpenTUI's log-only handler is the only listener
+    // and the process stays up.
+    `const trigger = ${JSON.stringify(trigger)};`,
+    `setInterval(() => { if (existsSync(trigger)) throw new Error("INJECTED_UNCAUGHT_TEST_ERROR"); }, 50);`,
   ].join("\n");
 }
 
@@ -106,12 +115,11 @@ async function startChild(scriptPath: string, cwd: string) {
 
   // The welcome splash mounts ahead of the normal flow on every interactive launch (same as every
   // other childScript* fixture in tuiPty.test.ts) -- dismissed here the same way its own startChild
-  // does: wait for the splash's wordmark, write Escape, then a settle margin.
-  try {
-    await sawLine("SERI");
-    child.stdin?.write("\x1b");
-    await new Promise((r) => setTimeout(r, 100));
-  } catch {}
+  // does: wait for the splash's mark, write Escape, then a settle margin. Not swallowed, for the
+  // reason startChild's own comment gives.
+  await sawLine(SPLASH_MARK);
+  child.stdin?.write("\x1b");
+  await new Promise((r) => setTimeout(r, 100));
 
   return { child, exited, sawLine, stdoutSoFar: () => stdout };
 }
@@ -248,8 +256,9 @@ describe.skipIf(process.platform === "win32")(
         childPid = Number.parseInt(match[1], 10);
 
         await sawLine("done ·");
+        writeFileSync(join(dir, "throw-now"), "");
 
-        // No keypress here — the injected throw (scheduled 1s after mount, above) is what ends this
+        // No keypress here — the injected throw (armed above, after "done ·") is what ends this
         // run, not a user action. `exited` (the python3 pty wrapper's own exit) is a timing gate
         // only, not a source of the REAL process's exit code — `pty.spawn`'s child execs into the
         // real bun process, but python3 never propagates ITS exit status back to its own, so

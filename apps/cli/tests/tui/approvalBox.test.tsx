@@ -29,16 +29,28 @@ async function settle(setup: TestRendererSetup): Promise<void> {
 }
 
 // One settle after pressEnter can return before useKeyboard delivers the key, so `answers`
-// stays []. Poll a macrotick instead of a fixed pass count. OpenTUI's waitFor is the wrong
-// helper: it stops when the scheduler reports idle, which can happen before the handler runs.
+// stays []. Poll a real 20ms tick instead of 50 zero-delay macroticks: on a loaded macOS CI
+// runner those 50 passes finish in ~90ms, before a delayed useKeyboard useEffect has subscribed,
+// and a pressKey emitted then is dropped. OpenTUI's waitFor is the wrong helper: it stops when
+// the scheduler reports idle, which can happen before the handler runs. A second press after
+// 400ms covers the dropped-key case without doubling when the first press already landed.
 async function waitUntil(
   setup: TestRendererSetup,
   pred: () => boolean,
   label: string,
+  retry?: () => void,
 ): Promise<void> {
-  for (let i = 0; i < 50; i++) {
+  const start = Date.now();
+  const deadline = start + 1500;
+  let retried = false;
+  while (Date.now() < deadline) {
     if (pred()) return;
-    await settle(setup);
+    if (retry !== undefined && !retried && Date.now() - start > 400) {
+      retry();
+      retried = true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await setup.renderOnce();
   }
   if (pred()) return;
   throw new Error(label);
@@ -73,7 +85,7 @@ describe("ApprovalBox (OpenTUI)", () => {
   test("renders the approval prompt text", async () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, () => {});
-    expect(setup.captureCharFrame()).toContain("write_file");
+    expect(setup.captureCharFrame()).toContain("Write a.txt?");
   });
 
   test("'y' answers once", async () => {
@@ -81,8 +93,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, (a) => answers.push(a));
 
-    setup.mockInput.pressKey("y");
-    await waitUntil(setup, () => answers.length > 0, "y never answered");
+    const press = () => setup.mockInput.pressKey("y");
+    press();
+    await waitUntil(setup, () => answers.length > 0, "y never answered", press);
 
     expect(answers).toEqual(["once"]);
   });
@@ -92,8 +105,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, (a) => answers.push(a));
 
-    setup.mockInput.pressKey("a");
-    await waitUntil(setup, () => answers.length > 0, "a never answered");
+    const press = () => setup.mockInput.pressKey("a");
+    press();
+    await waitUntil(setup, () => answers.length > 0, "a never answered", press);
 
     expect(answers).toEqual(["always"]);
   });
@@ -103,8 +117,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, (a) => answers.push(a), undefined, false);
 
-    setup.mockInput.pressKey("a");
-    await waitUntil(setup, () => answers.length > 0, "a never answered");
+    const press = () => setup.mockInput.pressKey("a");
+    press();
+    await waitUntil(setup, () => answers.length > 0, "a never answered", press);
 
     expect(answers).toEqual(["no"]);
   });
@@ -114,8 +129,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, (a) => answers.push(a));
 
-    setup.mockInput.pressEnter();
-    await waitUntil(setup, () => answers.length > 0, "Enter never answered");
+    const press = () => setup.mockInput.pressEnter();
+    press();
+    await waitUntil(setup, () => answers.length > 0, "Enter never answered", press);
 
     expect(answers).toEqual(["no"]);
   });
@@ -125,8 +141,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     const setup = await createTestRenderer({ width: 60, height: 5 });
     await mountBox(setup, (a) => answers.push(a));
 
-    setup.mockInput.pressKey("z");
-    await waitUntil(setup, () => answers.length > 0, "z never answered");
+    const press = () => setup.mockInput.pressKey("z");
+    press();
+    await waitUntil(setup, () => answers.length > 0, "z never answered", press);
 
     expect(answers).toEqual(["no"]);
   });
@@ -154,8 +171,9 @@ describe("ApprovalBox (OpenTUI)", () => {
       },
     );
 
-    setup.mockInput.pressKey("d", { ctrl: true });
-    await waitUntil(setup, () => quit, "Ctrl-D never called onQuit");
+    const press = () => setup.mockInput.pressKey("d", { ctrl: true });
+    press();
+    await waitUntil(setup, () => quit, "Ctrl-D never called onQuit", press);
 
     expect(quit).toBe(true);
     expect(answers).toEqual([]);

@@ -7,21 +7,44 @@
 // accumulating error (vercel-labs/fx's own technique).
 import { useEffect, useState } from "react";
 import { theme } from "../theme/theme";
-import { formatElapsed, formatTokenProgress, type TokenProgress } from "../util/format";
+import {
+  formatElapsed,
+  formatLiveThinkingStatus,
+  formatTokenProgress,
+  type TokenProgress,
+} from "../util/format";
 
 export function TurnStatus({
   startedAt,
   tokenProgress,
+  pendingLiveOutputEstimate,
+  subscribePendingLive,
+  thinking = false,
+  thinkingExpanded = false,
+  toolInFlight = false,
 }: {
   startedAt: number;
   tokenProgress: TokenProgress;
+  pendingLiveOutputEstimate?: () => number;
+  subscribePendingLive?: (listener: () => void) => () => void;
+  thinking?: boolean;
+  thinkingExpanded?: boolean;
+  toolInFlight?: boolean;
 }) {
   const [now, setNow] = useState(() => Date.now());
+  const [pendingExtra, setPendingExtra] = useState(0);
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (subscribePendingLive === undefined || pendingLiveOutputEstimate === undefined) return;
+    const sync = () => setPendingExtra(pendingLiveOutputEstimate());
+    sync();
+    return subscribePendingLive(sync);
+  }, [subscribePendingLive, pendingLiveOutputEstimate]);
 
   // `truncate wrapMode="none"`: app.tsx reserves exactly one row for this component
   // (`scrollboxHeight = transcriptHeight - 1` while a turn is active), inside a wrapping box with
@@ -30,9 +53,16 @@ export function TurnStatus({
   // the wrapping box and get silently clipped by `overflow="hidden"` instead of just truncating
   // gracefully, the same reasoning `ErrorLine.tsx`/`ListRow.tsx` apply to their own single-line
   // rows.
+  const elapsed = formatElapsed(now - startedAt);
+  const tokens = formatTokenProgress({
+    ...tokenProgress,
+    liveOutputEstimate: tokenProgress.liveOutputEstimate + pendingExtra,
+  });
   return (
     <text fg={theme.muted} truncate wrapMode="none">
-      {formatElapsed(now - startedAt)} {formatTokenProgress(tokenProgress)}
+      {thinking && !toolInFlight
+        ? formatLiveThinkingStatus(thinkingExpanded, elapsed, tokens)
+        : `${elapsed} ${tokens}`}
     </text>
   );
 }

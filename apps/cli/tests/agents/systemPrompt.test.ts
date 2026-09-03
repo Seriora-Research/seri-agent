@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildSystemPrompt, buildVolatileTier } from "../../src/agents/systemPrompt";
+import { buildSystemPrompt, buildVolatileTier, familyOverlay } from "../../src/agents/systemPrompt";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
 
 let configDir: string | undefined;
@@ -84,11 +84,74 @@ describe("buildSystemPrompt", () => {
     }
   });
 
-  test("the assembled system prompt tells the model bash/powershell/write_file/edit are destructive and to investigate before overwriting unfamiliar state", () => {
+  test("the assembled system prompt tells the model write_file and the shells can destroy work, and to investigate before overwriting unfamiliar state", () => {
     const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
 
     expect(prompt).toMatch(/destroy work/i);
     expect(prompt).toMatch(/investigate before deleting or overwriting/i);
+    expect(prompt).not.toMatch(/`edit` can destroy work/i);
+  });
+
+  test("the assembled system prompt says to persist, inspect the worktree before asking, and treat tool results as evidence", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/persist until/i);
+    expect(prompt).toMatch(/inspect the worktree/i);
+    expect(prompt).toMatch(/tool results are evidence/i);
+  });
+
+  test("the assembled system prompt says a needed tool call happens in the same response, not as a later promise", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/same response/i);
+    expect(prompt).not.toMatch(/do not describe a call, plan one/i);
+  });
+
+  test("the stable prompt lists both shells and refuses to translate them, without naming this machine's OS", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toContain("`bash`");
+    expect(prompt).toContain("`powershell`");
+    expect(prompt).toMatch(/does not translate|no translation/i);
+    expect(prompt).not.toMatch(/this machine is/i);
+    expect(prompt).not.toMatch(/`powershell` on Windows/i);
+  });
+
+  test("the assembled system prompt says sibling read_file/grep/glob calls in one step run together, and that a write is a barrier", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/read_file[\s\S]*grep[\s\S]*glob/i);
+    expect(prompt).toMatch(/one step/i);
+    expect(prompt).toMatch(/together/i);
+    expect(prompt).toMatch(/barrier/i);
+    expect(prompt).toMatch(/one at a time/i);
+  });
+
+  test("the assembled system prompt says the harness does not translate bash and powershell into each other", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/does not translate|no translation/i);
+    expect(prompt).toMatch(/bash/i);
+    expect(prompt).toMatch(/powershell/i);
+  });
+
+  test("the assembled system prompt allows AGENTS.md and .seri contracts when the user asks, and forbids using them as memory", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).toMatch(/AGENTS\.md/);
+    expect(prompt).toMatch(/\.seri\/rules/);
+    expect(prompt).toMatch(/\.seri\/agents/);
+    expect(prompt).toMatch(/\.seri\/hooks/);
+    expect(prompt).toMatch(/when the user asks/i);
+    expect(prompt).toMatch(/remember|govern/i);
+    expect(prompt).not.toMatch(/Do not create or edit `AGENTS\.md`/);
+  });
+
+  test("the stable prompt does not name skill or mcp, which are absent unless this session composed them", () => {
+    const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    expect(prompt).not.toMatch(/`skill`/);
+    expect(prompt).not.toMatch(/`mcp`/);
   });
 
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
@@ -142,15 +205,17 @@ describe("buildVolatileTier", () => {
   // keeps a session with no memories yet reading the exact same prompt it read before Stage 6b
   // existed.
   describe("memory tier (Stage 6b, B2 no-regression)", () => {
-    test("an all-empty LoadedMemory renders no memory section — just the identity line", () => {
+    test("an all-empty LoadedMemory renders no memory section — just identity and the machine line", () => {
       const line = buildVolatileTier(
         "openai/gpt-oss-120b",
         "groq",
         "GPT OSS 120B",
         loadMemory(emptyMemoryCtx()),
+        { platform: "linux" },
       );
       expect(line).not.toContain("# Memory");
       expect(line).toContain("GPT OSS 120B");
+      expect(line).toMatch(/this machine is linux/i);
     });
 
     // The positive case, and the negative control for the test above: a genuinely non-empty
@@ -172,5 +237,56 @@ describe("buildVolatileTier", () => {
       expect(withMemory.indexOf("You are powered by")).toBe(0);
       expect(withMemory.indexOf("# Memory")).toBeGreaterThan(0);
     });
+  });
+
+  test("names the machine and the shell to use from the injected platform", () => {
+    const memory = loadMemory(emptyMemoryCtx());
+    const linux = buildVolatileTier("m", "groq", undefined, memory, { platform: "linux" });
+    expect(linux).toMatch(/this machine is linux/i);
+    expect(linux).toMatch(/use `bash`/i);
+
+    const win = buildVolatileTier("m", "groq", undefined, memory, { platform: "win32" });
+    expect(win).toMatch(/this machine is windows/i);
+    expect(win).toMatch(/use `powershell`/i);
+
+    const mac = buildVolatileTier("m", "groq", undefined, memory, { platform: "darwin" });
+    expect(mac).toMatch(/this machine is macos/i);
+    expect(mac).toMatch(/use `bash`/i);
+  });
+
+  test("a llama family adds the overlay; a null family is the same identity-plus-platform without it", () => {
+    const memory = loadMemory(emptyMemoryCtx());
+    const none = buildVolatileTier("m", "groq", undefined, memory, {
+      family: null,
+      platform: "linux",
+    });
+    const llama = buildVolatileTier("m", "groq", undefined, memory, {
+      family: "llama",
+      platform: "linux",
+    });
+
+    expect(none).not.toMatch(/text that looks like a call is not a call/i);
+    expect(llama).toMatch(/text that looks like a call is not a call/i);
+    expect(llama.startsWith(none)).toBe(true);
+    expect(llama.length).toBeGreaterThan(none.length);
+  });
+});
+
+describe("familyOverlay", () => {
+  test("null, empty, and unmeasured families return nothing", () => {
+    expect(familyOverlay(null)).toBeUndefined();
+    expect(familyOverlay(undefined)).toBeUndefined();
+    expect(familyOverlay("")).toBeUndefined();
+    expect(familyOverlay("gpt-oss")).toBeUndefined();
+    expect(familyOverlay("claude-sonnet")).toBeUndefined();
+  });
+
+  test("the llama family, the one measured to narrate calls as text, gets the enforcement overlay", () => {
+    const overlay = familyOverlay("llama");
+    expect(overlay).toBeDefined();
+    expect(overlay).toMatch(/same response/i);
+    expect(overlay).toMatch(/text that looks like a call is not a call/i);
+    expect(familyOverlay("Llama")).toBe(overlay);
+    expect(familyOverlay("  LLAMA  ")).toBe(overlay);
   });
 });

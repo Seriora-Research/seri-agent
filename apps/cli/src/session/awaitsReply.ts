@@ -1,7 +1,8 @@
 import type { ModelMessage } from "ai";
 
 // Whether a resumed session still owes the user a reply — the gate cli.ts's `connectDispatch`
-// applies before auto-starting a turn on a bare `--continue`/`--resume`. Not a plain
+// (TUI) and `run()`'s non-interactive branch both apply before auto-starting a turn on a bare
+// `--continue`/`--resume`. Not a plain
 // `role === "user"` check: loop.ts's own non-`"no-tool-call"` done reasons ("aborted" — including
 // a mid-tool-batch cancel, "max-iterations", "repeated-denials") never leave an assistant-text
 // message as the last row — either nothing gets pushed for that turn at all (an abort before any

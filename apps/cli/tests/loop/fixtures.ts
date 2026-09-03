@@ -29,6 +29,21 @@ export function textOnlyChunks(text: string): LanguageModelV4StreamPart[] {
   ];
 }
 
+export function reasoningThenTextChunks(
+  thought: string,
+  text: string,
+): LanguageModelV4StreamPart[] {
+  return [
+    { type: "reasoning-start", id: "r1" },
+    { type: "reasoning-delta", id: "r1", delta: thought },
+    { type: "reasoning-end", id: "r1" },
+    { type: "text-start", id: "1" },
+    { type: "text-delta", id: "1", delta: text },
+    { type: "text-end", id: "1" },
+    { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: usage(5, 5) },
+  ];
+}
+
 export function toolCallChunks(
   toolCallId: string,
   toolName: string,
@@ -38,6 +53,25 @@ export function toolCallChunks(
   return [
     { type: "tool-call", toolCallId, toolName, input: JSON.stringify(input) },
     { type: "finish", finishReason: { unified: "tool-calls", raw: undefined }, usage: tokenUsage },
+  ];
+}
+
+export function multiToolCallChunks(
+  calls: readonly { toolCallId: string; toolName: string; input: unknown }[],
+  tokenUsage = usage(5, 5),
+): LanguageModelV4StreamPart[] {
+  return [
+    ...calls.map((call) => ({
+      type: "tool-call" as const,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      input: JSON.stringify(call.input),
+    })),
+    {
+      type: "finish",
+      finishReason: { unified: "tool-calls", raw: undefined },
+      usage: tokenUsage,
+    },
   ];
 }
 

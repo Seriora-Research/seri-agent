@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -20,7 +20,10 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
+import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
+import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
   appendBarrier,
   type Checkpointer,
@@ -36,6 +39,7 @@ import {
   commandByName,
   isTuiClaimed,
   sessionMeta,
+  startsATurn,
 } from "./cli/commandCatalog";
 import {
   approvalPromptText,
@@ -68,6 +72,7 @@ import {
   getTrajectoriesDir,
   profileNameError,
   resolveProfile,
+  resolveUserHome,
   setProfileOverride,
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
@@ -85,7 +90,7 @@ import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
   type ApprovalPrompt,
-  DEFAULT_PRESERVE_RECENT_MESSAGES,
+  DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
@@ -110,7 +115,12 @@ import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
-import { getModelCatalog, prewarmModelCatalog } from "./provider/catalog";
+import {
+  catalogForModelPicker,
+  getModelCatalog,
+  isCodexPlanCatalogApplied,
+  prewarmModelCatalog,
+} from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
 import type { getGatewayModel as getGatewayModelReal } from "./provider/gateway";
@@ -133,6 +143,7 @@ import {
   resolveRoute,
   resolveSessionRoute,
 } from "./provider/routing";
+import { modelPickerSubscribedProviders, subscribedProviders } from "./provider/subscriptions";
 import { toolDefinitions } from "./provider/tools";
 import type { RuleRegistry } from "./rules/registry";
 import {
@@ -143,11 +154,12 @@ import {
   exitCodeFromDriveResult,
 } from "./runtime/drive";
 import { awaitsReply } from "./session/awaitsReply";
+import { configDirForStore, SessionDatabase } from "./session/database";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
-import type { AgentSpec } from "./subagents/registry";
+import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
@@ -179,7 +191,6 @@ export type { PreMountMessage, PreparedRun, RunSession };
 import {
   type CommandDirs,
   checkpointTarget,
-  decideAuthOffer,
   decideClear,
   decideConfigOpen,
   decideEffortOpen,
@@ -247,6 +258,8 @@ export type CliDeps = {
   authConfigDir?: string;
   login?: typeof loginReal;
   logout?: typeof logoutReal;
+  connectGrok?: typeof connectGrokReal;
+  connectCodex?: typeof connectCodexReal;
   usageCommand?: typeof runUsageCommandReal;
   startDaemon?: typeof startDaemonReal;
   executeTurn?: ExecuteTurn;
@@ -512,7 +525,10 @@ async function effortCommand(
   // independent, the same reasoning prepareSession's own identical pair already applies.
   // fetchAccountPlan's own login guard skips the network call entirely for a BYOK-only/logged-out
   // session, so the common case pays nothing extra for this.
-  const [catalog, plan] = await Promise.all([getModelCatalog(), fetchAccountPlan(dirs.configDir)]);
+  const [catalog, plan] = await Promise.all([
+    getModelCatalog(undefined, undefined, dirs.configDir),
+    fetchAccountPlan(dirs.configDir),
+  ]);
   await applyEffortCommand(session, args, catalog, plan, dirs.configDir, presenter);
 }
 
@@ -584,15 +600,12 @@ async function rewindCommand(
 // function rather than forcing a split that would fight nothing but "no speculative abstraction."
 async function compactCommand(
   session: SessionState<ModelMessage>,
-  _args: string[],
+  args: string[],
   dirs: CommandDirs,
   presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
-  const evictBoundary = findSafeEvictionBoundary(
-    session.messages,
-    DEFAULT_PRESERVE_RECENT_MESSAGES,
-  );
+  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_TOKENS);
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");
     return;
@@ -621,7 +634,10 @@ async function compactCommand(
   });
   let compacted: Awaited<ReturnType<typeof compactMessages>>;
   try {
-    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal);
+    const customInstructions = args.join(" ").trim();
+    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal, {
+      customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
+    });
   } catch (err) {
     // `cancelledSignal` is guaranteed defined here: `controller.signal.aborted` is only ever set
     // by the onSignalCancel callback above.
@@ -1131,6 +1147,9 @@ export type RunContext = CommandDirs & {
   // Explicit working directory for a new session. Direct CLI/TUI callers pass process.cwd(); the
   // daemon passes the session's stored cwd and never calls process.chdir.
   cwd: string;
+  // One SQLite handle for the process. Opened in run() / startDaemon, closed by those same
+  // callers — not by saveSession or the trajectory writer.
+  database?: SessionDatabase;
 };
 
 // Shared by confirmedModel's and lastPersistedModel's own guards (both inside runTui, below) —
@@ -1152,6 +1171,31 @@ function pushTranscriptLine(
   opts?: { muted?: boolean; markdown?: boolean },
 ): void {
   dispatch({ type: "transcript-append", line, muted: opts?.muted, markdown: opts?.markdown });
+}
+
+// A turn can legitimately END on a user message, so appending the next one needs a separator. This
+// is not hypothetical and it is not new: runLoop appends the matched glob-scoped rules as a user
+// message (loop.ts, the `onToolPhaseEnd` push) as the last thing an iteration does — wired for any
+// session with glob-scoped rules, via createRuleInjector (runtime/drive.ts) — and both an abort at
+// the top of the next iteration and the iteration cap then end the turn right there, with that
+// message last. That already reaches disk today through the ordinary messages-updated persist; the
+// queue only makes it easy to reach, because the very next thing that happens is another user turn
+// being appended.
+//
+// Whether a provider accepts two adjacent user messages is not something we may assume: seri ships
+// no model and routes across five providers (docs/CONSTITUTION.md, locked constraint 1). So the gap
+// is closed here, at the one place a user turn is appended to `session.messages`, rather than by
+// trusting each provider to combine them. `[interrupted]` in loop.ts's own assistant-content shape
+// (`[{ type: "text", text }]`) so the row is indistinguishable from any other assistant text entry
+// to everything downstream — the compactor, the trajectory writer, a resumed session.
+function withUserTurn(messages: ModelMessage[], content: string): ModelMessage[] {
+  const last = messages[messages.length - 1];
+  if (last?.role !== "user") return [...messages, { role: "user", content }];
+  return [
+    ...messages,
+    { role: "assistant", content: [{ type: "text", text: "[interrupted]" }] },
+    { role: "user", content },
+  ];
 }
 
 // The TUI's presenter: the same `{message}`/`{plan, message}` shapes tui/commands.ts's decision
@@ -1199,9 +1243,22 @@ export function tuiPresenter(
   };
 }
 
+// The mandatory first-run /setup panel exists only when the session has no way to reach a
+// model: no BYOK key, no vendor subscription, and no usable seri plan. A hosted login is not
+// an API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it
+// is the third credential resolveRoute already accepts — `credential: "gateway"`. An ignored
+// seri plan does not count: the user asked to use their keys instead.
+export function needsGuidedSetup(configDir: string): boolean {
+  return (
+    configuredProviders(configDir).size === 0 &&
+    subscribedProviders(configDir).size === 0 &&
+    !hostedPlanUsable(configDir)
+  );
+}
+
 function checkZeroKeysConfigured(configDir: string): boolean | number {
   try {
-    return configuredProviders(configDir).size === 0;
+    return needsGuidedSetup(configDir);
   } catch (err) {
     // The alt screen is still active here (entered by run()'s own isTTY block, above), and this
     // message is terminal for the run — nothing re-enters it after this catch returns. No
@@ -1237,6 +1294,13 @@ async function runTui(
   // `/model` or `/mode` behaves exactly as it would typed a second later.
   queuedTask?: string,
 ): Promise<DriveLoopResult> {
+  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
+  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
+  // both need it, and both must agree with prepareSession on where "the config dir" is. Resolved
+  // above `getTuiRenderer` rather than below it because that call now reads config.json for the
+  // renderer's own background (runtime/renderOptions.ts).
+  const configDir = deps.authConfigDir ?? getConfigDir();
+
   // `root` is awaited here, at the top of this function, instead of at a synchronous `render()`
   // call: `createCliRenderer` is async (`@opentui/core`'s own API, unlike Ink's synchronous
   // `render`), so
@@ -1244,18 +1308,14 @@ async function runTui(
   // before the promise executor — every closure below (`quit`, `runTurn`'s catch) can only ever
   // execute from a keypress or reducer effect, neither of which can fire before this `await`
   // resolves and the tree is actually mounted.
-  const { renderer, root } = await getTuiRenderer();
-
-  // Matches prepareSession's own resolution (D7, feature-plan.md) — routing-priority's per-turn
-  // re-resolution (runTurn, below) and /setup's own reads/writes (a later commit in this loop)
-  // both need it, and both must agree with prepareSession on where "the config dir" is.
-  const configDir = deps.authConfigDir ?? getConfigDir();
+  const { renderer, root } = await getTuiRenderer(configDir);
 
   // Findings 2/3/4/6 (thermo-nuclear structural review, round 6): `liveState` is a SYNCHRONOUS
   // mirror of the reducer's own state, kept current by running the exact same pure `tuiReducer`
   // function here, in `dispatch` below, every time ANY caller in this closure dispatches an
-  // action — the identical computation React's own `useReducer` (App.tsx) will ALSO run against
-  // its OWN copy, moments later. Every read in this file that used to go through `liveSession` (a
+  // action. App.tsx coalesces text-delta off the React path (streamDispatch.ts) and still
+  // runs tuiReducer for every other action; this funnel applies every action immediately,
+  // including text-delta. Every read in this file that used to go through `liveSession` (a)
   // value only ever refreshed by `onSessionChange`, which only fires from App.tsx's own
   // `useEffect(() => onSessionChange?.(state.session), [state.session])` — a REACT EFFECT, which
   // runs asynchronously after a render commits, never synchronously with the dispatch that
@@ -1338,9 +1398,9 @@ async function runTui(
   // "high". Reading config.json fresh at the comparison site below removes the staleness entirely
   // — there is no cached value left to go stale, whether it's this /config bypass or a process
   // killed between a session-only /effort merge and the first turn that would have persisted it.
-  // The raw `useReducer` dispatch App.tsx's own `connectDispatch` hands back — renamed from this
-  // file's old, single `dispatch` variable so that name is free for the wrapper below, which is
-  // what every other function in this closure actually calls now.
+  // The `connectDispatch` dispatch App.tsx hands back — stream-coalesced for text-delta —
+  // renamed from this file's old, single `dispatch` variable so that name is free for the wrapper
+  // below, which is what every other function in this closure actually calls now.
   let reactDispatch: Dispatch | undefined;
   // The single dispatch funnel every dispatch in this closure now goes through — driveLoop's own
   // onEvent mapping (runTurn, below), onSubmit, quit(), tuiPresenter, tuiApprovalPrompt. Updates
@@ -1361,11 +1421,30 @@ async function runTui(
   // skipped. Also clears a stale commandError from a PREVIOUS submission: this fires before every
   // submission's own branch runs (onSubmit's own comment), so a fresh command-error this
   // submission goes on to produce still lands afterward and is unaffected.
+  //
+  // One submission is deliberately NOT echoed here: a message that gets QUEUED (onSubmit's own
+  // gate, below) returns above this call. The reason above holds for a rejected submission, which
+  // has produced a command-error that needs its typed antecedent; a queued message has produced
+  // nothing to explain, is already visible in the queue block, and would otherwise appear in the
+  // transcript once now and a second time when drainQueue re-submits it for real.
   const echoUserInput = (text: string): void => {
     dispatch({ type: "transcript-append", line: `> ${text.trim()}`, role: "user", flush: false });
     dispatch({ type: "command-error-cleared" });
   };
   let turnInFlight = false;
+  // Whether the in-flight turn's single cancel slot has already been spent by an Esc this turn.
+  // signals.ts keeps no such flag of its own: `deliverSignal` CLEARS the slot as it invokes it,
+  // which is the whole mechanism that makes a second Ctrl-C fatal (signals.ts's own comment) — so
+  // nothing downstream can be asked "is a cancel already unwinding". Cleared in runTurn's `finally`
+  // rather than by the handler, because the slot is only genuinely free again once the turn it
+  // cancelled has actually settled. See onEscape below for what goes wrong without it.
+  let cancelDelivered = false;
+  // A queued message's React key, minted here rather than in the reducer, which mints nothing and
+  // reads no clock by design (state/reducer.ts's own note on the field). A counter rather than a
+  // uuid: the only requirement is that it not repeat within one session, and a counter says that
+  // plainly where a random id would invite the reader to look for a meaning it does not carry.
+  let queueIds = 0;
+  const nextQueueId = (): string => `q${++queueIds}`;
   // HIGH-B: the currently in-flight turn's own promise (a fresh one assigned at each of the two
   // call sites that start one, both guarded so a new turn is never started while one is already
   // running — see runTurn's own comment). quit() awaits this when a turn is in flight instead of
@@ -1455,7 +1534,7 @@ async function runTui(
       provider: confirmedModel.provider,
     };
     try {
-      saveSession(toPersist, ctx.sessionsDir);
+      saveSession(toPersist, ctx.sessionsDir, ctx.database);
     } catch (err) {
       const message = `could not save the session: ${messageOf(err)}`;
       // Not `printWarning(message)`: its default sink is `console.error`, a raw write that bypasses
@@ -1551,17 +1630,27 @@ async function runTui(
 
   // ModelPicker's own two resolutions (App.tsx's onModelSelected/onModelPickerCancel props) — both
   // dispatch model-picker-resolved, the one action that clears the picker and (only when a model
-  // was actually picked) merges the pick into `state.session` in the same atomic transition
-  // (reducer.ts's own comment on why that is one dispatch, not two). This is deliberately the ONLY
-  // effect of a pick: `state.session.model`/`.provider` changes immediately, so the very next
-  // runTurn call (which reads them fresh — that function's own comment) attempts the new model —
-  // but `confirmedModel` (below) does NOT move here, so onSessionChange keeps writing the OLD,
-  // still-working model/provider to disk until a turn actually succeeds on the new one.
+  // was actually picked) merges the pick into `state.session` and `state.route` in the same atomic
+  // transition (reducer.ts's own comment on why that is one dispatch, not two). The route is
+  // resolved here, not left to runTurn's own `route-updated`: the session banner and mode row read
+  // `state.route`, and the reducer alone can only name a route for a pick whose own provider has
+  // a key — a hosted-plan pick has none. A pick changes in-memory state only:
+  // `state.session.model`/`.provider` changes immediately, so the very next runTurn call (which
+  // reads them fresh — that function's own comment) attempts the new model — but `confirmedModel`
+  // (below) does NOT move here, so onSessionChange keeps writing the OLD, still-working
+  // model/provider to disk until a turn actually succeeds on the new one.
   function onModelSelected(
     pick: { model: string; provider: ModelProvider; keyConfigured: boolean },
     leftoverInput?: string,
   ): void {
-    dispatch({ type: "model-picker-resolved", pick, leftoverInput });
+    const route = resolveSessionRoute(
+      pick,
+      prepared.catalog,
+      configuredProviders(configDir),
+      prepared.plan,
+      configDir,
+    );
+    dispatch({ type: "model-picker-resolved", pick, leftoverInput, route });
   }
 
   function onModelPickerCancel(): void {
@@ -1589,17 +1678,24 @@ async function runTui(
       .catch((err: unknown) => dispatch({ type: "command-error", message: messageOf(err) }));
   }
 
+  const { onLogin, onLogout, onAbandon, onConnectGrok, onConnectCodex } = createAuthHandlers({
+    dispatch,
+    deps,
+    configDir,
+  });
+
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
+    onConnectGrok,
+    onConnectCodex,
+    onConnectSeri: () => onLogin("login"),
   });
 
   function onSetupClose(leftoverInput?: string): void {
     dispatch({ type: "setup-resolved", leftoverInput });
   }
-
-  const { onLogin, onLogout, onAbandon } = createAuthHandlers({ dispatch, deps, configDir });
 
   const { onConfigSelect, onConfigValueEntered, onConfigUnset, onConfigBack } =
     createConfigHandlers({
@@ -1770,39 +1866,55 @@ async function runTui(
   // Everything a leading "/" can resolve to this session, in the order onSubmit resolves them:
   // catalog commands, then agents, then skills.
   //
-  // Recomputed on demand rather than captured once. The registries are frozen for a session, but
-  // `/clear` mints a conceptually new one and bindSession (runtime/prepare.ts) reassigns
-  // `prepared.agents`/`prepared.skills` to freshly-loaded registries in the same process — that
-  // reload is the whole point of doing it there, so a skill approved or deleted since startup is
-  // live afterwards. A captured array would keep offering the pre-clear list while `onSubmit`
-  // resolved against the new one, so the popup could hand back a name that then failed with
-  // "Unrecognized command", and a genuinely new skill would not complete until the process
-  // restarted.
-  const buildCompletionSources = (): readonly CompletionSource[] => [
-    {
-      id: "commands",
-      trigger: "/",
-      // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
-      // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
-      lineStartOnly: true,
-      items: [
-        ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
-        ...[...prepared.agents.values()].map((agent) => ({
-          name: `/${agent.name}`,
-          description: describeCompletion("subagent", agent.description),
-        })),
-        // Skills last so an agent of the same name wins the list the way it wins the lookup —
-        // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
-        ...[...prepared.skills.values()].map((skill) => ({
-          name: `/${skill.name}`,
-          description: describeCompletion("skill", skill.description),
-        })),
-      ]
-        .filter((item, index, all) => all.findIndex((other) => other.name === item.name) === index)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((item) => ({ value: item.name, description: item.description })),
-    },
-  ];
+  // Recomputed when `prepared.agents` / `prepared.skills` identity changes, not on every App
+  // render. Those registries are frozen for a session, but `/clear` mints a conceptually new one
+  // and bindSession (runtime/prepare.ts) reassigns them to freshly-loaded registries in the same
+  // process — that reload is the whole point of doing it there, so a skill approved or deleted
+  // since startup is live afterwards. A captured array would keep offering the pre-clear list
+  // while `onSubmit` resolved against the new one, so the popup could hand back a name that then
+  // failed with "Unrecognized command", and a genuinely new skill would not complete until the
+  // process restarted.
+  let completionSourceCache:
+    | { agents: AgentRegistry; skills: SkillRegistry; sources: readonly CompletionSource[] }
+    | undefined;
+  const buildCompletionSources = (): readonly CompletionSource[] => {
+    if (
+      completionSourceCache !== undefined &&
+      completionSourceCache.agents === prepared.agents &&
+      completionSourceCache.skills === prepared.skills
+    ) {
+      return completionSourceCache.sources;
+    }
+    const sources: readonly CompletionSource[] = [
+      {
+        id: "commands",
+        trigger: "/",
+        // A "/" only opens this list as the first character of the line. Mid-sentence it is a path
+        // separator or a date, and a popup there would cover the transcript on every "src/cli.ts".
+        lineStartOnly: true,
+        items: [
+          ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+          ...[...prepared.agents.values()].map((agent) => ({
+            name: `/${agent.name}`,
+            description: describeCompletion("subagent", agent.description),
+          })),
+          // Skills last so an agent of the same name wins the list the way it wins the lookup —
+          // resolveCompletion keeps the first match for a value, and onSubmit checks agents first.
+          ...[...prepared.skills.values()].map((skill) => ({
+            name: `/${skill.name}`,
+            description: describeCompletion("skill", skill.description),
+          })),
+        ]
+          .filter(
+            (item, index, all) => all.findIndex((other) => other.name === item.name) === index,
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((item) => ({ value: item.name, description: item.description })),
+      },
+    ];
+    completionSourceCache = { agents: prepared.agents, skills: prepared.skills, sources };
+    return sources;
+  };
 
   // Runs one turn against whatever `session` is (the initial task on first call; the live
   // session plus a newly-submitted task on every later one — H-3), using the same dispatch the
@@ -1847,14 +1959,9 @@ async function runTui(
     // above — a routing-priority reroute (D2) must be reconsidered on every turn too, not just at
     // session start, so a key added mid-session via /setup takes effect on the very next turn.
     //
-    // Bug fixed here (code-review, PR #73): `resolveRoute`/`configuredProviders` used to run
-    // OUTSIDE this try — `configuredProviders` reads config.json via a bare `JSON.parse`, so a
-    // corrupted file threw SYNCHRONOUSLY. `runTurn` is called fire-and-forget
-    // (`currentTurn = runTurn(...)`, no `.catch()` at either call site), so that throw became an
-    // unhandled rejection — a config.json corrupted mid-session (a concurrent /setup write from
-    // another instance, say) crashed the running TUI on the very next turn, losing in-progress
-    // work. Inside the try, it degrades the same way a getModel failure already does: a
-    // command-error the user can see and recover from, not a crash.
+    // `runTurn` is fire-and-forget (`currentTurn = runTurn(...)`, no `.catch()`). A throw
+    // here is an unhandled rejection. The try turns getModel/resolveSessionRoute failures
+    // into a command-error.
     // `ResolvedRoute` directly, not `ReturnType<typeof resolveRoute>`: the
     // `resolveRoute` VALUE was never called from this scope (only `resolveSessionRoute`, just
     // below), so it was imported as a type-only binding purely to spell this declaration — dropped
@@ -1871,12 +1978,6 @@ async function runTui(
         configDir,
       );
       model = dispatchModel(route, sessionId, configDir, deps);
-      // Read inside the same try as route/model resolution, not after it: `configuredProviders`
-      // above already reads config.json via `loadConfig`, so config.json can be rewritten
-      // concurrently between that read and this one (another `seri` process, a hand edit) — and
-      // this function is called fire-and-forget (no `.catch()` at either call site), so a throw
-      // reaching past this try would become an unhandled rejection instead of the command-error
-      // the catch below degrades every other failure in this block to.
       config = loadConfig(configDir);
     } catch (err) {
       // tuiMissingKeyMessage, not a bare err.message: this catch is reachable ONLY from inside an
@@ -1909,6 +2010,18 @@ async function runTui(
       startedAt: Date.now(),
       inputEstimate: inputText === undefined ? 0 : estimateTokens(inputText),
     });
+    // The turn's own user message, committed before the model is called. Until this dispatch, the
+    // row `withUserTurn` merged into `session` at submit reached reducer state only if the loop
+    // echoed it back in a `messages-updated` — and a cancel landing before the first assistant
+    // message is pushed yields none (see loop.ts's own comment on why its stream catch discards
+    // what it holds). The prompt therefore died with the turn, while the transcript line kept
+    // showing it and the next turn was handed a message array with no trace of what was cancelled.
+    // The task a session STARTS with was never losable this way — prepareSession pushes it and
+    // saves before the first call — so the gap was only ever turns submitted from inside the TUI.
+    //
+    // A `/name` direct dispatch passes its session through unchanged (driveLoop appends the user
+    // row itself there), so this merges an identical array and changes nothing for it.
+    dispatch({ type: "user-turn-committed", messages: session.messages });
     // A rerouted OR gateway-served pair is never silent on the TUI path either — see
     // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
@@ -2117,6 +2230,10 @@ async function runTui(
       failure = { err };
     } finally {
       turnInFlight = false;
+      // Reset here, on every exit path, for the reason its declaration states: the cancel slot it
+      // mirrors is signals.ts's, and it is only genuinely free again once this turn has actually
+      // settled.
+      cancelDelivered = false;
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2125,6 +2242,12 @@ async function runTui(
       // dispatch issued only after `destroyTuiRenderer()` would have no host left to schedule a
       // React update on.
       dispatch({ type: "turn-ended" });
+      // The queue's main re-entry point: after `turn-ended`, so the drained turn's own
+      // `turn-started` can never be batched behind a `state.turn` this one has not yet cleared —
+      // and ONLY on the success path, because the `failure` branch immediately below destroys the
+      // renderer and rejects runTui, so a turn started from here would be dispatching into a host
+      // that is about to be torn down.
+      if (failure === undefined) drainQueue();
     }
     if (failure !== undefined) {
       // H-2: driveLoop rejecting (not just resolving with an aborted/errored `done`) used to
@@ -2167,6 +2290,19 @@ async function runTui(
   async function quit(): Promise<void> {
     if (reactDispatch === undefined || quitting) return;
     quitting = true;
+    // Before the rest of the sequence, so it reads as the first consequence of quitting rather
+    // than as something that happened during the unwind. `quitting` above is what actually stops
+    // the queue draining (drainQueue's own guard); this only says so — a queue is not persisted
+    // (reducer.ts's own comment on the field), so leaving without a word about it would silently
+    // drop work the user can see on screen at the moment they typed /exit.
+    if (liveState.queue.items.length > 0) {
+      const discarded = liveState.queue.items.length;
+      pushTranscriptLine(
+        dispatch,
+        `${discarded} queued message${discarded === 1 ? "" : "s"} discarded`,
+        { muted: true },
+      );
+    }
     // Without this, Ctrl-D would be silently swallowed while ApprovalBox is mounted instead of
     // InputBox. Denying the pending approval is folded into the SAME graceful
     // quit sequence — not a separate "deny just this one prompt" path the way the old
@@ -2219,6 +2355,30 @@ async function runTui(
     }
   }
 
+  // Escape at the input box cancels the in-flight turn — the same single-press cancel a Ctrl-C
+  // already performs, and then runTurn's `finally` drains whatever is queued into the next turn.
+  // Neither key is told apart from the other any more: cancelling means "I am done with this one,
+  // move on", and the queue advances by one either way.
+  //
+  // Both guards are load-bearing and neither is optional.
+  //
+  // `turnInFlight` — `deliverSignal` with an EMPTY cancel slot does not no-op, it falls straight
+  // through to signals.ts's fatal body and kills the process. An Escape pressed between turns must
+  // never reach it.
+  //
+  // `cancelDelivered` — `deliverSignal` clears the slot as it invokes it, while `turnInFlight`
+  // stays true for the whole unwind, which waits on whatever the in-flight tool does with its
+  // abort and can take seconds. So without this, a second Escape pressed precisely because nothing
+  // visibly moved yet finds an empty slot, falls through to that same fatal body, and kills the
+  // process: no unwind, no session save, the queue gone with it. Double-press-fatal is a
+  // documented Ctrl-C contract (AGENTS.md's own paragraph on the TUI), deliberately not an Escape
+  // one — Escape is the key people mash when a UI looks stuck, and Ctrl-C is not.
+  function onEscape(): void {
+    if (!turnInFlight || cancelDelivered) return;
+    cancelDelivered = true;
+    deliverSignal("SIGINT");
+  }
+
   // Claimed TUI names (and /effort, which is session but tuiClaimsFirst) run from this Record
   // before the SLASH_COMMANDS / turnInFlight gate. Panel commands stay legal mid-turn. Missing a
   // catalog name here is a load-time throw, not a silent fallthrough into effortCommand or a task.
@@ -2227,11 +2387,10 @@ async function runTui(
     "/exit": async () => {
       await quit();
     },
-    "/model": () => {
-      // configuredProviders reads config.json via a bare JSON.parse — a corrupted file throws
-      // synchronously, and onSubmit has no caller-side .catch() (InputBox calls it fire-and-forget),
-      // so this must be a visible command-error the same way every other failure here degrades.
+    "/model": async () => {
+      // onSubmit is fire-and-forget. A throw here must be a command-error.
       try {
+        prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
         dispatch({
           type: "model-picker-requested",
           // configuredProviders is re-read fresh on every open, not cached from prepareSession — a
@@ -2248,7 +2407,13 @@ async function runTui(
             // The group variant, not gatewayCoverage itself: decideModelPickerOpen already grouped
             // the whole catalog once and hands back each entry's own group here, so this avoids
             // re-deriving it via routesFor's own scan on every one of the ~350 rows it emits.
-            (entry, group) => gatewayCoverageInGroup(group, prepared.plan) !== undefined,
+            (entry, group) =>
+              gatewayCoverageInGroup(
+                group,
+                effectiveHostedPlan(configDir, prepared.plan),
+                hostedPlanUsable(configDir),
+              ) !== undefined,
+            modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
           ),
         });
       } catch (err) {
@@ -2324,7 +2489,7 @@ async function runTui(
       // Cleared directly rather than re-fetched: fetchAccountPlan would return null here anyway
       // (its login guard sees no session once logout succeeds), and if logout itself somehow
       // failed, null is still the fail-closed answer PreparedRun.plan already commits to — never
-      // let a stale paid plan keep resolveRoute / /model showing "provided" after the user asked
+      // let a stale paid plan keep resolveRoute / /model showing "seri" after the user asked
       // to log out.
       prepared.plan = null;
     },
@@ -2490,18 +2655,83 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
-  async function onSubmit(value: string): Promise<void> {
+  // Takes the head of the queue and re-enters onSubmit with it, rather than duplicating the
+  // dispatch below: that is what makes the echo land exactly once, at the moment the message
+  // actually starts, and what keeps a plain task, an `/agent` dispatch and a skill on one code
+  // path instead of three copies of the same decision.
+  function drainQueue(): void {
+    // Two overlapping turns is exactly what `turnInFlight` has always existed to prevent — they
+    // would fight over signals.ts's single cancel slot, and runTurn's own guard would silently
+    // DROP this one rather than re-queue it, losing the message outright.
+    if (turnInFlight) return;
+    // quit() captures the promise VALUE, not the variable (`void currentTurn.then(finishQuit)`,
+    // above), so reassigning `currentTurn` from here does not move that chain onto the new turn.
+    // An aborted turn RESOLVES rather than rejects, so without this guard an /exit with something
+    // queued drains, starts turn 2, and `finishQuit` then destroys the renderer and resolves
+    // runTui with turn 2 and whatever tool children it spawned still live — precisely the
+    // orphaned-child case HIGH-B exists to prevent.
+    if (quitting) return;
+    // A message still open in the row editor has not left the user's hands yet.
+    if (liveState.queue.editing) return;
+    const head = liveState.queue.items[0];
+    if (head === undefined) return;
+    dispatch({ type: "queue-head-taken" });
+    void onSubmit(head.text, true);
+  }
+
+  // `fromDrain` is drainQueue's own re-entry, and only ever true from the call above. A drained
+  // head has nothing ahead of it by construction — that is what taking it off the front MEANS — so
+  // it must skip the FIFO gate below. Without this, a queue holding two or more rows never drains
+  // at all: `queue-head-taken` leaves the tail behind, the gate reads that non-empty tail as
+  // "something is ahead of this", and the head it was just handed goes straight back on as the new
+  // LAST row. Nothing starts, the process sits idle, and the rows silently rotate one place per
+  // cancel. A one-row queue drained fine and hid it, which is every test this feature shipped with.
+  async function onSubmit(value: string, fromDrain = false): Promise<void> {
     if (reactDispatch === undefined) return;
+    // Above the empty-trim return below, deliberately: InputBox submits on a bare Enter too, and
+    // an empty commit means "keep the original text and leave edit mode", not "do nothing" —
+    // falling through to that return would strand `editing` true with the row editor still
+    // mounted and Escape the only key left that closes it.
+    if (liveState.queue.editing) {
+      const edited = value.trim();
+      dispatch(
+        edited.length === 0
+          ? { type: "queue-edit-cancelled" }
+          : { type: "queue-edit-committed", text: value },
+      );
+      // Either resolution ends the edit, and the edit was one of the three things holding the
+      // drain back (drainQueue's own guards) — so a commit made while nothing is running starts
+      // the head immediately instead of waiting for a turn that may never come.
+      drainQueue();
+      return;
+    }
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    // Hoisted above `echoUserInput`, where the split used to sit below it: the queue gate needs
+    // `name`, and a queued message must not be echoed. The move is safe because the parse is pure
+    // — nothing between here and the echo has a side effect — and every branch further down still
+    // reads this same `name`/`args`/`spec`.
+    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
+    const spec = commandByName(name);
+    // `|| liveState.queue.items.length > 0` is what keeps the queue FIFO. Without it, runTurn's
+    // own early return on a route/model/config resolution failure (its own catch, above) — which
+    // returns before the `try`, so it reaches no `finally` and no drain — leaves an IDLE process
+    // with a non-empty queue, and the user's next Enter would run immediately, ahead of every row
+    // queued before it.
+    if (
+      !fromDrain &&
+      (turnInFlight || liveState.queue.items.length > 0) &&
+      startsATurn(name, trimmed, prepared)
+    ) {
+      dispatch({ type: "queue-appended", id: nextQueueId(), text: value });
+      return;
+    }
     // Deliberately unconditional and before every branch below (not per-branch, and not moved
     // below the /exit/unrecognized-command guards): a rejected submission — invalid args, an
     // unrecognized command, /exit with arguments — still gets its typed text echoed here, so the
     // command-error it produces has an antecedent that scrolls with it instead of a floating
     // error with nothing to explain it. Do not sink this below the guards.
     echoUserInput(value);
-    const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
-    const spec = commandByName(name);
     if (spec !== undefined && isTuiClaimed(spec)) {
       if (!spec.accepts(args)) {
         dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
@@ -2555,7 +2785,7 @@ async function runTui(
           currentTurn = runTurn(
             {
               ...liveState.session,
-              messages: [...liveState.session.messages, { role: "user", content: prompt }],
+              messages: withUserTurn(liveState.session.messages, prompt),
             },
             prompt,
           );
@@ -2594,7 +2824,7 @@ async function runTui(
       currentTurn = runTurn(
         {
           ...liveState.session,
-          messages: [...liveState.session.messages, { role: "user", content: trimmed }],
+          messages: withUserTurn(liveState.session.messages, trimmed),
         },
         trimmed,
       );
@@ -2742,6 +2972,14 @@ async function runTui(
           });
         }
       }
+      // The queue's second re-entry point, and the one that is easy to miss: /compact, /clear and
+      // /rewind set `turnInFlight = true` above and clear it here without ever entering runTurn, so
+      // a task typed during /compact's own multi-second round trip is queued by the gate in this
+      // function's head and would otherwise sit there forever — and with that gate keeping the
+      // queue FIFO, every later submission would queue behind it too. Last in this block, after the
+      // /clear rebind and the /undo-/restore resync above, so a drained turn runs against the
+      // checkpointer and session those just rebound rather than the ones they replaced.
+      drainQueue();
     }
   }
 
@@ -2760,11 +2998,12 @@ async function runTui(
         model: prepared.route.model,
         provider: prepared.route.provider,
         cwd: prepared.session.cwd,
-        home: process.env.HOME || homedir(),
+        home: resolveUserHome(),
       },
       onSubmit,
       onSessionChange,
       onQuit: quit,
+      onEscape,
       onApprovalAnswer,
       onModelSelected,
       onModelPickerCancel,
@@ -2823,20 +3062,20 @@ async function runTui(
         // `.stream` is ignored deliberately (PreMountMessage's own comment): every queued line
         // lands in the transcript either way, regardless of which console stream it would have
         // gone to on a non-TTY run.
-        for (const { text } of prepared.preMountMessages) {
-          dispatch({ type: "transcript-append", line: text });
+        for (const { text, stream } of prepared.preMountMessages) {
+          dispatch({
+            type: "transcript-append",
+            line: text,
+            muted: stream === "stdout",
+          });
         }
-        // The non-blocking login/signup offer (AuthBanner) — true iff no auth session is
-        // saved yet, computed fresh at mount the same way decideSetupOpen/decideModelPickerOpen are
-        // computed fresh on their own open, not cached from prepareSession.
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         // runStart — the same three-state predicate prepareSession (above) uses to decide whether
         // it pushed the initial user message at all: "task" echoes and starts a turn on it,
         // "resume" (a bare `--continue`/`--resume`) starts a turn only if the resumed session
         // still awaitsReply (session/awaitsReply.ts), and "idle" (bare `seri`, no resume, no task)
-        // starts nothing. TUI-mount-only: the non-interactive branch below (`isTTY` false) still
-        // starts a turn unconditionally on "resume" — a known, narrower scope for this gate, not
-        // an oversight; see that branch's own comment.
+        // starts nothing. The non-interactive branch below (`isTTY` false) uses this same
+        // `shouldRunTurn` predicate — keep them in lockstep; do not move the check into driveLoop
+        // (daemon scheduled resume has empty taskText and must still drive).
         const start = runStart(ctx);
         if (start === "task") echoUserInput(ctx.taskText);
         const shouldRunTurn =
@@ -2941,6 +3180,27 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
 
+  const database = new SessionDatabase(configDirForStore(ctx.sessionsDir, "sessions"));
+  ctx.database = database;
+  try {
+    database.importLegacySessions(ctx.sessionsDir);
+    const trajectoriesDir = getTrajectoriesDir(ctx.configDir);
+    if (database.configDir === configDirForStore(trajectoriesDir, "trajectories")) {
+      database.importLegacyTrajectories(trajectoriesDir);
+    }
+    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, isTTY);
+  } finally {
+    database.close();
+  }
+}
+
+async function finishCliRun(
+  ctx: RunContext,
+  deps: CliDeps,
+  maxTurns: number | undefined,
+  skipPermissions: boolean,
+  isTTY: boolean,
+): Promise<number> {
   // Below every early-return above it, so `--help`, `--version` and `--selftest` never start a fetch
   // they have no use for, and above the splash, so the fetch runs while the user is reading it.
   // This is the only reason the pre-session window (App's own `starting session…` state) is short
@@ -2990,7 +3250,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       // `MAIN_TUI_RENDERER_CONFIG` (there is none today, runtime/renderOptions.ts) would reintroduce
       // that hazard.
       if (zeroKeysConfigured) {
-        await runGuidedSetup(ctx.configDir, getModelCatalog());
+        await runGuidedSetup(ctx.configDir, getModelCatalog(undefined, undefined, ctx.configDir));
       }
     } catch (err) {
       return fatalDuringTui(err);
@@ -3003,13 +3263,6 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const prepared: PreparedRun | number = await prepareSession(ctx, deps, skipPermissions, isTTY);
   if (typeof prepared === "number") return prepared;
 
-  // The non-interactive branch below still calls driveLoop unconditionally on a bare
-  // `--continue`/`--resume` (no new task text) — the same redundant-turn defect
-  // session/awaitsReply.ts's own comment describes for the TUI mount path above, left open here
-  // deliberately: piped/scripted invocations are a separate, unaudited surface (their own usage
-  // gate above only rejects `runStart(ctx) === "idle"`, not "resume"), and closing it needs its
-  // own reproduction and test coverage rather than reusing the TUI-mount fix's evidence for a
-  // different call site. Tracked as a known gap, not an oversight.
   let runResult: DriveLoopResult;
   if (isTTY) {
     // Same reasoning as the try/catch above this function's own welcome-splash/guided-setup block:
@@ -3025,17 +3278,38 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
       return fatalDuringTui(err, prepared.preMountMessages);
     }
   } else {
-    runResult = await driveLoop(
-      prepared,
-      ctx,
-      deps,
-      maxTurns,
-      printEvent,
-      () => prepared.permissionMode,
-      (session) => saveSession(session, ctx.sessionsDir),
-      makeApprovalPrompt(deps.createInterface),
-      createArchivistState(prepared.session),
-    );
+    // Same shouldRunTurn predicate as runTui's connectDispatch: a bare `--continue`/`--resume`
+    // with no new task text starts a turn only if the session still awaitsReply. Idle non-TTY
+    // already usage-errored above; the skip is a finished session. Keep the gate here, not
+    // inside driveLoop — daemon scheduled resume is `runStart === "resume"` with empty
+    // taskText and must still drive.
+    const start = runStart(ctx);
+    const shouldRunTurn =
+      start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
+    if (shouldRunTurn) {
+      runResult = await driveLoop(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        printEvent,
+        () => prepared.permissionMode,
+        (session) => saveSession(session, ctx.sessionsDir, ctx.database),
+        makeApprovalPrompt(deps.createInterface),
+        createArchivistState(prepared.session),
+      );
+    } else {
+      runResult = {
+        doneReason: undefined,
+        cancelledBy: undefined,
+        usage: { inputTokens: undefined, outputTokens: undefined },
+        cost: undefined,
+        refusedWithoutRunning: false,
+        archivist: undefined,
+        directSummary: undefined,
+        ranAnyTurn: false,
+      };
+    }
   }
   const { doneReason, cancelledBy, usage, cost, refusedWithoutRunning, archivist, ranAnyTurn } =
     runResult;
@@ -3113,11 +3387,11 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   // tests/cli/cli.test.ts already records. signals.ts still names Stage 6's subagents as a
   // second aborter this same fallback would also cover, unchanged.
   //
-  // `!ranAnyTurn` (bare `seri`, quit before ever submitting a task) is placed after the usage/cost/
-  // signal handling above, but before the doneReason-based exit mapping below: `doneReason` stays
-  // `undefined` for that session, and that mapping would otherwise fall through to the final
-  // `return 1` and call an idle session the user simply closed a failure. `ranAnyTurn` is always
-  // `true` on the non-interactive path (DriveLoopResult's own comment), where this never fires.
+  // `!ranAnyTurn` is placed after the usage/cost/signal handling above, but before the
+  // doneReason-based exit mapping below: `doneReason` stays `undefined` when nothing ran, and
+  // that mapping would otherwise fall through to the final `return 1`. Two producers: TUI quit
+  // before any task, and a non-interactive bare `--continue`/`--resume` of a session that no
+  // longer awaitsReply — both are a successful "nothing to do", not a failed turn.
   return exitCodeFromDriveResult(runResult);
 }
 

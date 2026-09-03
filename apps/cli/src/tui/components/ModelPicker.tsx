@@ -2,17 +2,25 @@
 // Ported from panels/ModelPicker.tsx: same logic, OpenTUI's element/hook names.
 
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
+import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { useListWindow } from "../hooks/useListWindow";
 import type { ModelPickerEntry } from "../state/commands";
+import { PanelBox } from "../ui/PanelBox";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
-import { formatModelRow, MODEL_PICKER_HEADER, matchesFilter } from "../util/format";
+import {
+  DEFAULT_COLUMNS,
+  formatModelPickerHeader,
+  formatModelRow,
+  matchesFilter,
+  pickerLabelWidth,
+} from "../util/format";
 import { isDismiss, isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 
-const FILTER_PLACEHOLDER = 'Type to filter — try "free" or "paid"…';
+const FILTER_PLACEHOLDER = 'Type to filter — try "included", "free" or "paid"…';
 
 // /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
 // exactly: its own keyboard handler, a single-bordered box, mutually exclusive with InputBox.
@@ -33,6 +41,8 @@ export function ModelPicker({
   onModelPickerCancel?: () => void;
 }) {
   const [filterQuery, setFilterQuery] = useState("");
+  const { width: rawWidth } = useTerminalDimensions();
+  const labelWidth = pickerLabelWidth(rawWidth || DEFAULT_COLUMNS);
 
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
@@ -95,8 +105,7 @@ export function ModelPicker({
   // same way: everything before the first `\r`/`\n` narrows the filter and selects the top match
   // now, same as pressing Enter right there; everything after is handed to `onModelSelected` so it
   // can prefill the very next InputBox mount.
-  usePaste((event) => {
-    const text = decodePasteBytes(event.bytes);
+  function insertPastedText(text: string) {
     const split = splitAtTerminator(text);
     if (split === null) {
       setFilterQuery((query) => query + text);
@@ -107,13 +116,19 @@ export function ModelPicker({
     const nextFiltered =
       nextQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, nextQuery));
     selectRow(nextFiltered[0], split.after || undefined);
-  });
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
+  // `insertPastedText` so the two paste paths cannot drift on what an embedded terminator does.
+  useClipboardPaste(insertPastedText);
 
   const promptText = filterQuery.length === 0 ? "> " : `> ${filterQuery}`;
   const showPlaceholder = filterQuery.length === 0;
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <PanelBox title="/model">
       <box flexDirection="row">
         {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
         the placeholder (empty filter only) renders after it instead of between them. `promptText`,
@@ -137,25 +152,25 @@ export function ModelPicker({
       </box>
       {/* The 2-space indent and the header text are separate `<text>` siblings, not one string —
       ui/ListRow.tsx's own comment explains why: a single truncated `<text>` whose content spans
-      more than one child renders BLANK once it overflows, and `MODEL_PICKER_HEADER`'s own fixed
-      column widths sum to ~87 chars, wider than a typical 80-column terminal once the border and
-      indent are subtracted — this is the common case, not an edge case. */}
+      more than one child renders BLANK once it overflows. The five columns are 74 chars; at 80
+      they fit inside FRAME + the ListRow marker. `truncate` stays as a last-resort clip once
+      Route is already dropped on a narrower-than-80 terminal. */}
       <box flexDirection="row">
         <text fg={theme.muted}>{"  "}</text>
         <text fg={theme.muted} truncate>
-          {MODEL_PICKER_HEADER}
+          {formatModelPickerHeader(labelWidth)}
         </text>
       </box>
       {visible.map(({ row, isSelected }) => (
         <ListRow
           key={`${row.entry.provider}/${row.entry.id}`}
           selected={isSelected}
-          label={formatModelRow(row)}
+          label={formatModelRow(row, labelWidth)}
         />
       ))}
       {remainingCount > 0 && (
         <text fg={theme.muted}>+{remainingCount} more — keep typing to narrow</text>
       )}
-    </box>
+    </PanelBox>
   );
 }

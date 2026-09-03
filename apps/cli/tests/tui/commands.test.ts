@@ -12,6 +12,11 @@ import type { ModelMessage } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
+import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
+import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
+import { listCodexModels, resetCodexModelCache } from "../../src/auth/codexRefresh";
+import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
   checkpointStoreDir,
@@ -23,6 +28,12 @@ import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "../../src/co
 import { getBaseConfigDir } from "../../src/config/paths";
 import { rememberGrant } from "../../src/permissions/store";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
+import {
+  isCodexPlanCatalogApplied,
+  resetCodexPlanCatalogApplied,
+  withCodexSubscriptionCatalog,
+} from "../../src/provider/catalog";
+import { modelPickerSubscribedProviders } from "../../src/provider/subscriptions";
 import type { SessionState } from "../../src/session/session";
 import {
   configKeyInfo,
@@ -43,6 +54,7 @@ import {
   decideUndo,
   KNOWN_CONFIG_KEYS,
 } from "../../src/tui/state/commands";
+import { formatModelRow } from "../../src/tui/util/format";
 
 let root: string;
 let storeDir: string;
@@ -252,6 +264,220 @@ describe("decideModelPickerOpen", () => {
     expect(openrouterRow?.gatewayReachable).toBe(true);
     expect(anthropicRow?.gatewayReachable).toBe(false);
   });
+
+  test("subscriptionCovered is false on every row when subscribed is omitted", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "gpt-5.6-terra", provider: "openai" }),
+        catalogEntry({ id: "llama-3.3-70b-versatile", provider: "groq" }),
+      ],
+    };
+    const rows = decideModelPickerOpen(catalog, new Set());
+    expect(rows.every((row) => row.subscriptionCovered === false)).toBe(true);
+  });
+
+  test("a subscribed openai row is plan-covered without flipping keyConfigured", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [
+        catalogEntry({ id: "gpt-5.6-terra", provider: "openai" }),
+        catalogEntry({ id: "openai/gpt-5.6-terra", provider: "openrouter" }),
+      ],
+    };
+    const rows = decideModelPickerOpen(
+      catalog,
+      new Set(),
+      () => false,
+      new Set<ModelProvider>(["openai"]),
+    );
+    const openaiRow = rows.find((row) => row.entry.provider === "openai");
+    const openrouterRow = rows.find((row) => row.entry.provider === "openrouter");
+    expect(openaiRow?.subscriptionCovered).toBe(true);
+    expect(openaiRow?.keyConfigured).toBe(false);
+    expect(openaiRow?.rerouteTo).toBeUndefined();
+    expect(openrouterRow?.subscriptionCovered).toBe(false);
+    expect(openrouterRow?.rerouteTo).toBe("openai");
+  });
+
+  test("a subscribed openai row with an API key keeps keyConfigured true", () => {
+    const catalog: ModelCatalog = {
+      fetchedAt: "2026-08-09T00:00:00.000Z",
+      entries: [catalogEntry({ id: "gpt-5.6-terra", provider: "openai" })],
+    };
+    const rows = decideModelPickerOpen(
+      catalog,
+      new Set<ModelProvider>(["openai"]),
+      () => false,
+      new Set<ModelProvider>(["openai"]),
+    );
+    expect(rows[0]?.keyConfigured).toBe(true);
+    expect(rows[0]?.subscriptionCovered).toBe(true);
+    expect(rows[0]?.rerouteTo).toBeUndefined();
+  });
+
+  test("/model passes modelPickerSubscribedProviders the overlay flag", () => {
+    const src = readFileSync(join(import.meta.dir, "../../src/cli.ts"), "utf8");
+    expect(src).toContain("catalogForModelPicker(");
+    expect(src).toContain("modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())");
+    expect(src).not.toContain('isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])');
+  });
+
+  test("a ChatGPT login without overlay keeps API openai rows unlabeled", async () => {
+    const home = mkdtempSync(join(tmpdir(), "seri-codex-picker-off-"));
+    const originalHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    try {
+      resetCodexPlanCatalogApplied();
+      const catalog: ModelCatalog = {
+        fetchedAt: "2026-08-09T00:00:00.000Z",
+        entries: [
+          catalogEntry({
+            id: "gpt-5.6",
+            provider: "openai",
+            displayName: "GPT-5.6",
+            family: "gpt",
+            pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+          }),
+        ],
+      };
+      const rows = decideModelPickerOpen(
+        catalog,
+        new Set(),
+        () => false,
+        modelPickerSubscribedProviders(configDir, false),
+      );
+      const openaiRow = rows.find((row) => row.entry.provider === "openai");
+      expect(openaiRow?.subscriptionCovered).toBe(false);
+      expect(formatModelRow(openaiRow!)).toContain("$4.00");
+      expect(formatModelRow(openaiRow!)).not.toContain("included");
+      expect(formatModelRow(openaiRow!)).not.toContain("chatgpt");
+    } finally {
+      resetCodexPlanCatalogApplied();
+      if (originalHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a persisted Grok grant labels native xai Route grok even when OpenRouter is configured", () => {
+    const originalHome = process.env.CODEX_HOME;
+    const isolated = mkdtempSync(join(tmpdir(), "seri-grok-picker-"));
+    process.env.CODEX_HOME = isolated;
+    resetCodexPlanCatalogApplied();
+    try {
+      saveXaiSubscription(
+        {
+          accessToken: "a",
+          refreshToken: "r",
+          obtainedAt: new Date().toISOString(),
+          accountId: "acct-1",
+        },
+        configDir,
+      );
+      const catalog: ModelCatalog = {
+        fetchedAt: "2026-08-09T00:00:00.000Z",
+        entries: [
+          catalogEntry({
+            id: "grok-4.6",
+            provider: "xai",
+            displayName: "Grok 4.6",
+            family: "grok",
+            pricing: { inputPerMTok: 3, outputPerMTok: 15 },
+          }),
+          catalogEntry({
+            id: "x-ai/grok-4.6",
+            provider: "openrouter",
+            displayName: "Grok 4.6",
+            family: "grok",
+            pricing: { inputPerMTok: 3, outputPerMTok: 15 },
+          }),
+        ],
+      };
+      const rows = decideModelPickerOpen(
+        catalog,
+        new Set<ModelProvider>(["openrouter"]),
+        () => false,
+        modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
+      );
+      const xaiRow = rows.find((row) => row.entry.provider === "xai");
+      expect(xaiRow).toBeDefined();
+      const rendered = formatModelRow(xaiRow!);
+      expect(xaiRow?.subscriptionCovered).toBe(true);
+      expect(rendered).toContain("grok");
+      expect(rendered).toContain("included");
+      expect(rendered).not.toContain("→ openrouter");
+    } finally {
+      if (originalHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalHome;
+      rmSync(isolated, { recursive: true, force: true });
+    }
+  });
+
+  test("a ChatGPT login plus a successful overlay labels openai plan rows chatgpt/included", async () => {
+    const home = mkdtempSync(join(tmpdir(), "seri-codex-picker-"));
+    const originalHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    writeFileSync(
+      join(home, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    try {
+      const catalog: ModelCatalog = {
+        fetchedAt: "2026-08-09T00:00:00.000Z",
+        entries: [
+          catalogEntry({
+            id: "gpt-5.6",
+            provider: "openai",
+            displayName: "GPT-5.6",
+            family: "gpt",
+            pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+          }),
+          catalogEntry({
+            id: "openai/gpt-5.6",
+            provider: "openrouter",
+            displayName: "GPT-5.6",
+            family: "gpt",
+            pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+          }),
+        ],
+      };
+      const overlaid = await withCodexSubscriptionCatalog(catalog, undefined, async () => [
+        { id: "gpt-5.6", displayName: "GPT-5.6", supportedReasoningEfforts: [] },
+      ]);
+      expect(isCodexPlanCatalogApplied()).toBe(true);
+      const rows = decideModelPickerOpen(
+        overlaid,
+        new Set(),
+        () => false,
+        modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied()),
+      );
+      const openaiRow = rows.find((row) => row.entry.provider === "openai");
+      expect(openaiRow).toBeDefined();
+      const rendered = formatModelRow(openaiRow!);
+      expect(openaiRow?.subscriptionCovered).toBe(true);
+      expect(rendered).toContain("chatgpt");
+      expect(rendered).toContain("included");
+      expect(rendered).not.toContain("codex");
+      expect(rendered).not.toContain("$4.00");
+      expect(rendered).not.toContain("no key");
+    } finally {
+      resetCodexPlanCatalogApplied();
+      if (originalHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 // byok-guided-setup-default-model bugfix report, Decision 3: the guided-setup picker must never
@@ -347,15 +573,20 @@ const ALL_KEY_NAMES = [
   "ANTHROPIC_API_KEY",
   "OPENAI_API_KEY",
   "GOOGLE_GENERATIVE_AI_API_KEY",
+  "XAI_API_KEY",
 ];
 const originalKeyEnv = Object.fromEntries(ALL_KEY_NAMES.map((name) => [name, process.env[name]]));
 
 describe("decideSetupOpen", () => {
   let setupConfigDir: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+  const originalCodexBin = process.env.SERI_CODEX_BIN;
 
   beforeEach(() => {
     for (const name of ALL_KEY_NAMES) delete process.env[name];
     setupConfigDir = mkdtempSync(join(tmpdir(), "seri-setup-commands-test-"));
+    process.env.CODEX_HOME = setupConfigDir;
+    delete process.env.SERI_CODEX_BIN;
   });
 
   afterEach(() => {
@@ -364,19 +595,210 @@ describe("decideSetupOpen", () => {
       if (original === undefined) delete process.env[name];
       else process.env[name] = original;
     }
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    if (originalCodexBin === undefined) delete process.env.SERI_CODEX_BIN;
+    else process.env.SERI_CODEX_BIN = originalCodexBin;
+    resetCodexModelCache();
     rmSync(setupConfigDir, { recursive: true, force: true });
   });
 
-  test("returns exactly 5 rows, in CATALOG_PROVIDERS order, all unset by default", () => {
+  test("returns API-keys heading, every BYOK key row, Subscriptions heading, and all three plan rows", () => {
     const rows = decideSetupOpen(setupConfigDir);
-    expect(rows.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
-    expect(rows.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
-    expect(rows.every((row) => row.removable === false)).toBe(true);
+    expect(rows[0]).toEqual({ kind: "heading", label: "API keys" });
+    const keys = rows.filter((row) => row.kind === "key");
+    const plans = rows.filter((row) => row.kind === "subscription");
+    expect(keys.map((row) => row.provider)).toEqual([...CATALOG_PROVIDERS]);
+    expect(keys.every((row) => row.source === "unset" && row.masked === undefined)).toBe(true);
+    expect(keys.every((row) => row.removable === false)).toBe(true);
+    expect(rows[keys.length + 1]).toEqual({ kind: "heading", label: "Subscriptions" });
+    expect(plans).toHaveLength(3);
+    expect(plans[0]).toEqual({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "not-logged-in" },
+    });
+    expect(plans[1]).toEqual({ kind: "subscription", provider: "xai", connected: false });
+    expect(plans[2]?.provider).toBe("openai");
+    expect(plans[2] && "status" in plans[2] ? plans[2].status.status : undefined).toBe(
+      "not-connected",
+    );
+  });
+
+  test("a hosted login with no local OpenRouter key is a seri subscription, and OpenRouter stays unset", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({
+      kind: "key",
+      provider: "openrouter",
+      source: "unset",
+      removable: false,
+    });
+    expect(seri).toMatchObject({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "connected" },
+    });
+  });
+
+  test("a cached account plan is named on the seri subscription row", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    writeFileSync(join(setupConfigDir, "account-plan"), "ultra\n");
+    const seri = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "subscription" && entry.provider === "seri",
+    );
+    expect(seri).toMatchObject({
+      status: { status: "connected", planType: "ultra" },
+    });
+  });
+
+  test("a Codex-shaped auth.json is not a seri subscription", () => {
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const seri = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "subscription" && entry.provider === "seri",
+    );
+    expect(seri).toMatchObject({ status: { status: "not-logged-in" } });
+  });
+
+  test("a local OpenRouter key still appears when the user is not logged in", () => {
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      provider: "openrouter",
+      source: "config",
+      removable: true,
+    });
+    expect(row && "unusedBecause" in row ? row.unusedBecause : undefined).toBeUndefined();
+  });
+
+  test("an env OpenRouter key is unused while a seri plan is connected", () => {
+    process.env.OPENROUTER_API_KEY = "sk-or-env";
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      source: "env",
+      removable: false,
+      unusedBecause: "unused because a seri plan is connected",
+    });
+  });
+
+  test("a local OpenRouter key while logged in is unused, not an override", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    const row = decideSetupOpen(setupConfigDir).find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    expect(row).toMatchObject({
+      kind: "key",
+      source: "config",
+      removable: true,
+      unusedBecause: "unused because a seri plan is connected",
+    });
+  });
+
+  test("removing a local OpenRouter key while logged in leaves the key unset and the seri plan connected", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    unsetConfigValue("OPENROUTER_API_KEY", setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({ source: "unset", removable: false });
+    expect(seri).toMatchObject({ status: { status: "connected" } });
+  });
+
+  test("ignoring the seri plan marks it unused and frees a leftover OpenRouter key", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("OPENROUTER_API_KEY", "sk-or-own", setupConfigDir);
+    ignoreSeriPlan(setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    const openrouter = rows.find(
+      (entry) => entry.kind === "key" && entry.provider === "openrouter",
+    );
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(openrouter).toMatchObject({ source: "config", removable: true });
+    expect(openrouter && "unusedBecause" in openrouter ? openrouter.unusedBecause : undefined).toBe(
+      undefined,
+    );
+    expect(seri).toMatchObject({ status: { status: "ignored" } });
   });
 
   test("a config-file entry is source: config, masked, and removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("config");
     expect(row?.masked).toBeDefined();
     expect(row?.removable).toBe(true);
@@ -385,7 +807,8 @@ describe("decideSetupOpen", () => {
   // D8: an env-sourced row cannot be removed from here — there is no config.json entry to unset.
   test("an env-shadowed row (no config entry) is source: env and NOT removable", () => {
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(false);
   });
@@ -398,9 +821,152 @@ describe("decideSetupOpen", () => {
   test("an env-shadowed row WITH a config entry underneath is source: env and IS removable", () => {
     setConfigValue("ANTHROPIC_API_KEY", "sk-fake-config-key", setupConfigDir);
     process.env.ANTHROPIC_API_KEY = "sk-fake-env-key";
-    const row = decideSetupOpen(setupConfigDir).find((r) => r.provider === "anthropic");
+    const keys = decideSetupOpen(setupConfigDir).filter((row) => row.kind === "key");
+    const row = keys.find((r) => r.provider === "anthropic");
     expect(row?.source).toBe("env");
     expect(row?.removable).toBe(true);
+  });
+
+  test("a connected Grok subscription marks the grok row connected and the xai key unused", () => {
+    saveXaiSubscription(
+      {
+        accessToken: "a",
+        refreshToken: "r",
+        obtainedAt: new Date().toISOString(),
+        accountId: "acct-1",
+      },
+      setupConfigDir,
+    );
+    setConfigValue("XAI_API_KEY", "xai-key", setupConfigDir);
+    const rows = decideSetupOpen(setupConfigDir);
+    const grok = rows.find((r) => r.kind === "subscription" && r.provider === "xai");
+    expect(grok).toEqual({ kind: "subscription", provider: "xai", connected: true });
+    const xaiKey = rows.find((r) => r.kind === "key" && r.provider === "xai");
+    expect(xaiKey?.kind).toBe("key");
+    if (xaiKey?.kind !== "key") return;
+    expect(xaiKey.unusedBecause).toBe("unused because a Grok subscription is connected");
+  });
+
+  test("a seri-owned ChatGPT grant is connected with no Codex binary", () => {
+    delete process.env.SERI_CODEX_BIN;
+    writeFileSync(
+      join(setupConfigDir, "codex-auth.json"),
+      JSON.stringify({
+        accessToken: "tok",
+        refreshToken: "ref",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+        accountId: "acct",
+      }),
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(true);
+  });
+
+  test("a chatgpt login with Codex on PATH is a connected subscription row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const rows = decideSetupOpen(setupConfigDir);
+    const plan = rows.find((row) => row.kind === "subscription" && row.provider === "openai");
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "connected" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(true);
+  });
+
+  test("a chatgpt login with a profile ignore is an ignored, non-removable row", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    ignoreCodexSubscription(setupConfigDir);
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({ status: "ignored" });
+    expect(plan && "removable" in plan ? plan.removable : undefined).toBe(false);
+  });
+
+  test("a connected Codex row includes planType after account/read", async () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    const rpc: CodexJsonRpc = {
+      request: async () => ({ account: { type: "chatgpt", planType: "plus" } }),
+      notify: () => {},
+      close: () => {},
+    };
+    await listCodexModels({ rpc, env: { CODEX_HOME: setupConfigDir } });
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({
+      status: "connected",
+      planType: "plus",
+    });
+  });
+
+  test("an API-key Codex login is not a ChatGPT plan", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-test" }),
+    );
+    const plan = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "subscription" && row.provider === "openai",
+    );
+    expect(plan && "status" in plan ? plan.status : undefined).toEqual({
+      status: "not-connected",
+    });
+  });
+
+  test("an openai key is marked unused when a ChatGPT plan is connected", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBe(
+      "unused because a ChatGPT plan is connected",
+    );
+  });
+
+  test("an openai key is used when the ChatGPT plan is ignored", () => {
+    process.env.SERI_CODEX_BIN = "/opt/codex";
+    writeFileSync(
+      join(setupConfigDir, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+    setConfigValue("OPENAI_API_KEY", "sk-fake-openai", setupConfigDir);
+    ignoreCodexSubscription(setupConfigDir);
+    const openai = decideSetupOpen(setupConfigDir).find(
+      (row) => row.kind === "key" && row.provider === "openai",
+    );
+    expect(openai?.kind === "key" ? openai.unusedBecause : undefined).toBeUndefined();
   });
 });
 
@@ -545,7 +1111,8 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 1,
     });
     // Written directly, bypassing the checkpointer's onAfterMutation — no ledger entry, so a
-    // restore back past this point cannot prove seri wrote it.
+    // restore back past this point cannot prove seri wrote it. The second write_file restages
+    // a.txt only (unchanged), so the two records share one tree and `/undo 1` is the step.
     writeFileSync(join(workTree, "b.txt"), "created outside write_file\n");
     snapshot({
       tool: "write_file",
@@ -554,7 +1121,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
       rewindTo: 2,
     });
 
-    const { plan, message } = decideUndo(session(), ["2"], {
+    const { plan, message } = decideUndo(session(), ["1"], {
       sessionsDir: join(root, "sessions"),
       checkpointsDir,
       configDir: root,
@@ -564,7 +1131,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     expect(plan.deleted).toEqual([]);
     expect(plan.preserved).toEqual(["b.txt"]);
     expect(message).toBe(
-      "Already at checkpoint 2; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
+      "Already at checkpoint 1; no file restored or deleted, but 1 file(s) preserved (no proof seri wrote them, or edited since).",
     );
   }, 30_000);
 
@@ -847,6 +1414,10 @@ describe("decideConfigOpen", () => {
     "SERI_VERIFY_ENABLED",
     "SERI_VERIFY_COMMAND",
     "SERI_REASONING_EFFORT",
+    "SERI_TEMPERATURE",
+    "SERI_SEED",
+    "SERI_OPENROUTER_PROVIDER",
+    "SERI_TUI_BACKGROUND",
   ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -873,6 +1444,10 @@ describe("decideConfigOpen", () => {
       "SERI_VERIFY_ENABLED",
       "SERI_VERIFY_COMMAND",
       "SERI_REASONING_EFFORT",
+      "SERI_TEMPERATURE",
+      "SERI_SEED",
+      "SERI_OPENROUTER_PROVIDER",
+      "SERI_TUI_BACKGROUND",
     ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });

@@ -11,14 +11,11 @@ import { messageOf } from "../../../errors";
 import { catalogWithFallback } from "../../../provider/catalog";
 import { persistDefaultModel } from "../../../provider/defaults";
 import { configuredProviders } from "../../../provider/keys";
+import { subscribedProviders } from "../../../provider/subscriptions";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
-import {
-  decideAuthOffer,
-  decideGuidedModelPickerOpen,
-  decideSetupOpen,
-} from "../../state/commands";
-import { createSetupHandlers } from "../../state/handlers";
+import { decideGuidedModelPickerOpen, decideSetupOpen } from "../../state/commands";
+import { createAuthHandlers, createSetupHandlers } from "../../state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
 
 // `runGuidedSetup`'s own mandatory-picker copy — named constants rather than inlined literals, so
@@ -34,9 +31,11 @@ const GUIDED_MODEL_LOADING = "Loading available models…";
 // Ctrl-D goes straight to onSetupClose, not through onSetupBack).
 const GUIDED_MODEL_STILL_LOADING = "Still loading available models — one moment.";
 
-// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and zero API keys
-// configured anywhere (env or config.json) — the "genuinely blank first run" case that would
-// otherwise hard-exit before the TUI ever mounts (BYOK-KEY-STORAGE-AND-SETUP.md, Open 2). Renders
+// Rendered only when the pre-`prepareSession` gate in `run()` finds a real TTY and
+// `needsGuidedSetup` is true — no BYOK key, no vendor subscription, and no usable seri plan. A
+// logged-in session that has not ignored the plan reaches models via the gateway without a
+// local key, so that case must not land here. The remaining blank-first-run case is what would otherwise hard-exit
+// before the TUI ever mounts. Renders
 // `App` seeded directly into the `/setup` panel via a `connectDispatch`-fired `setup-requested`
 // action, reusing `createSetupHandlers` so this shares byte-identical /setup logic with `runTui`.
 // The session passed to `App` is a throwaway: `id`/`cwd` only need to satisfy `AppProps.session`'s
@@ -57,7 +56,7 @@ export async function runGuidedSetup(
   configDir: string,
   catalogPromise: Promise<ModelCatalog>,
 ): Promise<void> {
-  const { root } = await getTuiRenderer();
+  const { root } = await getTuiRenderer(configDir);
 
   // Same synchronous-mirror pattern as runTui's own `liveState`/`dispatch` — kept here, not
   // shared, because runTui's copy is read from ~20 call sites across a much larger closure, where
@@ -84,11 +83,19 @@ export async function runGuidedSetup(
   // An arrow, not a bare `resolveClosed` reference: this call happens before `resolveClosed` is
   // assigned (below), so passing the binding directly would capture `undefined` — the arrow defers
   // the read of `resolveClosed` until `onPanelClosed` is actually invoked, by which point it is set.
+  const { onConnectGrok, onConnectCodex, onLogin } = createAuthHandlers({
+    dispatch,
+    deps: {},
+    configDir,
+  });
   const { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack } = createSetupHandlers({
     dispatch,
     getPendingSetup: () => liveState.pendingSetup,
     configDir,
     onPanelClosed: () => resolveClosed(),
+    onConnectGrok,
+    onConnectCodex,
+    onConnectSeri: () => onLogin("login"),
   });
 
   const closed = new Promise<void>((resolve) => {
@@ -161,7 +168,7 @@ export async function runGuidedSetup(
     }
     let configured: ReadonlySet<ModelProvider>;
     try {
-      configured = configuredProviders(configDir);
+      configured = new Set([...configuredProviders(configDir), ...subscribedProviders(configDir)]);
     } catch {
       // Same degrade as connectDispatch's own catch, below: a corrupted config.json resolves out
       // and falls through to prepareSession's own configuredProviders read, which prints the one
@@ -202,7 +209,10 @@ export async function runGuidedSetup(
           // above checks — without ever tripping it. Reusing the stale snapshot here could offer
           // (and persist) a default model for a provider whose key was removed in the meantime,
           // reproducing the exact missing-key bug this feature exists to prevent.
-          const freshConfigured = configuredProviders(configDir);
+          const freshConfigured = new Set([
+            ...configuredProviders(configDir),
+            ...subscribedProviders(configDir),
+          ]);
           if (freshConfigured.size === 0) {
             // Every key was removed during the wait — the same decline path as this function's
             // own initial `configured.size === 0` check, above.
@@ -300,10 +310,6 @@ export async function runGuidedSetup(
         // everywhere else, reached here without a second, differently-worded error message.
         try {
           dispatch({ type: "setup-requested", rows: decideSetupOpen(configDir) });
-          // The passive AuthBanner only — this phase's own `pendingAuth` is unreachable
-          // regardless (no createAuthHandlers here, by design; see this function's own header
-          // comment), but the banner is independent of that (TuiState.authOffer's own comment).
-          dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
         } catch {
           resolveClosed();
         }

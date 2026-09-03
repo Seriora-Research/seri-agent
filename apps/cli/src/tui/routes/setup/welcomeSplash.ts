@@ -7,7 +7,7 @@
 // owning a separate mount. Reuses `createAuthHandlers` (./handlers) — the same device-flow auth
 // wiring `runTui` reuses, rather than a second implementation of it.
 import { randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { resolveUserHome } from "../../../config/userHome";
 import { createElement } from "react";
 import pkg from "../../../../package.json";
 import type { CliDeps } from "../../../cli";
@@ -28,11 +28,16 @@ export async function runWelcomeSplash(
   // so a task typed in that window arrives AFTER the await below has already returned.
   onPreSessionSubmit: (task: string) => void,
 ): Promise<void> {
-  const { root } = await getTuiRenderer();
+  const { root } = await getTuiRenderer(configDir);
 
   // Same synchronous-mirror pattern as guidedSetup.ts's own liveState/dispatch — see that file's
   // own comment for why a caller reading state right after a dispatch needs this rather than
   // React's own effect-scheduled commit.
+  // Computed before the first render so App's reducer can seed `authOffer` the same way
+  // `showSplash` seeds `pendingSplash`. `connectDispatch` still dispatches both actions, but
+  // those effects run after the first commit and cannot win the first paint.
+  const offerAuth = decideAuthOffer(configDir);
+
   let liveState: TuiState = initialTuiState(
     {
       id: randomUUID(),
@@ -41,7 +46,7 @@ export async function runWelcomeSplash(
       permissionMode: "approve-each",
       messages: [],
     },
-    { showSplash: true },
+    { showSplash: true, authOffer: offerAuth },
   );
   let reactDispatch: Dispatch | undefined;
   const dispatch: Dispatch = (action) => {
@@ -125,24 +130,22 @@ export async function runWelcomeSplash(
         model: defaultModel.model,
         provider: defaultModel.provider ?? DEFAULT_PROVIDER,
         cwd: process.cwd(),
-        // `process.env.HOME || homedir()`, the same order config/paths.ts resolves the seri root
-        // with — so a HOME override that moves the config directory also moves what this row
-        // abbreviates, instead of the two disagreeing about where home is.
-        home: process.env.HOME || homedir(),
+        home: resolveUserHome(),
       },
       onPreSessionSubmit,
+      showSplash: true,
+      authOffer: offerAuth,
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,
       onAuthResolved,
       connectDispatch: (reducerDispatch: Dispatch) => {
         reactDispatch = reducerDispatch;
-        // App's own internal `useReducer(tuiReducer, initialTuiState(session))` call never sees
-        // this phase's `showSplash` opt (that only seeds `liveState`, above) — `splash-requested`
-        // is what actually flips App's OWN rendered `pendingSplash` to true, the same "requested"
-        // dispatch every other pending panel already fires from its own connectDispatch.
+        // Same values already seeded on the initializer. Re-dispatching after the first paint is
+        // a no-op visually (`pendingSplash`/`authOffer` are already true) and keeps this mount's
+        // connectDispatch on the same "requested at mount" shape every other pending panel uses.
         dispatch({ type: "splash-requested" });
-        dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+        dispatch({ type: "auth-offer", show: offerAuth });
       },
     }),
   );

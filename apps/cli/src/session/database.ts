@@ -352,9 +352,11 @@ export class SessionDatabase {
     ensureOwnerOnlyDir(configDir);
     this.database = new Database(join(configDir, DATABASE_FILENAME), { create: true });
     try {
+      // busy_timeout first: `journal_mode=WAL` is a write, and a second connection opening the
+      // same file hits SQLITE_BUSY on that pragma if the timeout is not already set.
+      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
-      this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.migrate();
       // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, so a missing FTS5 build
       // would not throw. A hyphenated token is FTS column syntax (`fts-probe` means column
@@ -560,6 +562,31 @@ export class SessionDatabase {
         .query("SELECT json FROM trajectory_records WHERE session_id = ? ORDER BY seq")
         .all(sessionId) as { json: string }[]
     ).map((row) => JSON.parse(row.json));
+  }
+
+  // Selected and deleted in one transaction, not two statements: another seri process can resume a
+  // session this query has already called stale and append to it, and a delete outside the read's
+  // own snapshot would take that fresh record with the rest. Inside one, SQLite refuses the write
+  // instead, which the writer reports as a warning and the next session start retries.
+  pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
+    return this.database.transaction(() => {
+      const stale = (
+        this.database
+          .query(
+            `SELECT session_id AS sessionId
+               FROM trajectory_records
+              WHERE session_id IS NOT ?
+              GROUP BY session_id
+             HAVING MAX(COALESCE(json_extract(json, '$.ts'), json_extract(json, '$.startedAt'))) < ?
+              ORDER BY session_id`,
+          )
+          .all(opts.keepSessionId ?? null, opts.cutoff) as { sessionId: string }[]
+      ).map((row) => row.sessionId);
+      if (stale.length === 0) return stale;
+      const remove = this.database.query("DELETE FROM trajectory_records WHERE session_id = ?");
+      for (const sessionId of stale) remove.run(sessionId);
+      return stale;
+    })();
   }
 
   insertTurn(id: string, sessionId: string, startedAt: string): void {

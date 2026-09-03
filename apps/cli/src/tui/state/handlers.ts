@@ -7,8 +7,18 @@
 // ~670 of its lines) to live next to the functions it mirrors rather than across the module
 // boundary from them.
 import type { ModelProvider } from "@seri/model-catalog";
+import {
+  connectCodex as connectCodexReal,
+  disconnectCodex as disconnectCodexReal,
+} from "../../auth/codexConnect";
+import { reconnectCodex } from "../../auth/codexIgnore";
+import { disconnectSeri, reconnectSeri } from "../../auth/seriIgnore";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
+import {
+  connectGrok as connectGrokReal,
+  disconnectGrok as disconnectGrokReal,
+} from "../../auth/xaiConnect";
 import type { CliDeps } from "../../cli";
 import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
 import { messageOf } from "../../errors";
@@ -25,6 +35,10 @@ import {
   decideConfigOpen,
   decidePermissionsOpen,
   decideSetupOpen,
+  firstSetupActionIndex,
+  isSetupSubscriptionRow,
+  type SetupProviderRow,
+  setupRowId,
 } from "./commands";
 import type { ConfigPanelState, Dispatch, PermissionsPanelState, SetupState } from "./reducer";
 
@@ -43,45 +57,44 @@ export function createSetupHandlers(opts: {
   dispatch: Dispatch;
   getPendingSetup: () => SetupState | undefined;
   configDir: string;
-  // Called after `setup-resolved` when a list refresh failed and the panel had to close itself.
-  // runTui needs nothing more — clearing `pendingSetup` returns the user to InputBox. The
-  // guided-setup mount has no InputBox and resolves only through its own `closed` promise, so it
-  // passes that promise's resolve here; without it, closing the panel there hangs the process.
   onPanelClosed?: () => void;
+  onConnectGrok?: () => Promise<void>;
+  onConnectCodex?: () => Promise<void>;
+  onConnectSeri?: () => Promise<void>;
 }): {
-  onSetupSelect: (provider: ModelProvider) => void;
+  onSetupSelect: (row: SetupProviderRow) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
-  onSetupRemove: (provider: ModelProvider) => void;
+  onSetupRemove: (row: SetupProviderRow) => void;
   onSetupBack: () => void;
 } {
-  const { dispatch, getPendingSetup, configDir, onPanelClosed } = opts;
+  const {
+    dispatch,
+    getPendingSetup,
+    configDir,
+    onPanelClosed,
+    onConnectGrok,
+    onConnectCodex,
+    onConnectSeri,
+  } = opts;
 
-  function setupListState(selectedProvider?: ModelProvider): SetupState {
+  function setupListState(selectedId?: string): SetupState {
     const rows = decideSetupOpen(configDir);
     const selected =
-      selectedProvider === undefined
-        ? 0
+      selectedId === undefined
+        ? firstSetupActionIndex(rows)
         : Math.max(
-            0,
-            rows.findIndex((row) => row.provider === selectedProvider),
+            firstSetupActionIndex(rows),
+            rows.findIndex((row) => setupRowId(row) === selectedId),
           );
     return { step: "list", rows, selected };
   }
 
-  // A shared "refresh the list, degrade to command-error if that throws" primitive: decideSetupOpen
-  // reads config.json, and a malformed file is exactly as reachable once the panel is already open
-  // (a racing second `seri` process, a hand edit) as it is at the /setup-OPEN interceptor (cli.ts).
-  // Used by onSetupRemove's success path and onSetupBack — both reached only from INSIDE an
-  // already-open panel, with nothing above them to catch a throw out of their own `useInput`
-  // callback, so the catch also dispatches `setup-resolved` to close the panel rather than leaving
-  // it stuck on whatever step it was (mirroring dispatchConfigList/dispatchPermissionsList), and
-  // calls `onPanelClosed` for callers (the guided-setup mount) that need to resolve their own
-  // promise when that happens. NOT used by onSetupKeyEntered's own success path: that one needs its
-  // OWN inline catch instead, to reset `busy: false` on a refresh failure rather than just showing a
-  // command-error while leaving the panel's own busy gate stuck — see its own comment.
-  function dispatchSetupList(selectedProvider?: ModelProvider): void {
+  // Refresh the list. The catch closes the panel rather than leaving it stuck, and calls
+  // `onPanelClosed` so the guided-setup mount can resolve. onSetupKeyEntered has its own
+  // catch so it can also reset `busy: false`.
+  function dispatchSetupList(selectedId?: string): void {
     try {
-      dispatch({ type: "setup-step", state: setupListState(selectedProvider) });
+      dispatch({ type: "setup-step", state: setupListState(selectedId) });
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -96,13 +109,64 @@ export function createSetupHandlers(opts: {
   // (PROVIDER_API_KEY_NAMES), so `decideSetupOpen(configDir).find(...)` — the full 5-provider
   // scan, just to pull one static field back out of it — would be both slower and a needless
   // crash surface for a value that never needs I/O to produce.
-  function onSetupSelect(provider: ModelProvider): void {
+  function onSetupSelect(row: SetupProviderRow): void {
+    if (row.kind === "heading") return;
+    if (isSetupSubscriptionRow(row)) {
+      if (row.provider === "xai") {
+        dispatch({
+          type: "setup-step",
+          state: {
+            step: row.connected ? "confirm-disconnect" : "confirm-connect",
+            provider: "xai",
+          },
+        });
+        return;
+      }
+      if (row.provider === "seri") {
+        if (row.status.status === "connected") {
+          dispatch({
+            type: "setup-step",
+            state: { step: "confirm-disconnect", provider: "seri" },
+          });
+          return;
+        }
+        if (row.status.status === "ignored") {
+          dispatch({
+            type: "setup-step",
+            state: { step: "confirm-connect", provider: "seri" },
+          });
+          return;
+        }
+        dispatch({ type: "setup-resolved" });
+        void onConnectSeri?.();
+        return;
+      }
+      if (row.status.status === "connected") {
+        dispatch({
+          type: "setup-step",
+          state: { step: "confirm-disconnect", provider: "openai" },
+        });
+        return;
+      }
+      if (row.status.status === "ignored") {
+        dispatch({
+          type: "setup-step",
+          state: { step: "confirm-connect", provider: "openai", action: "reenable" },
+        });
+        return;
+      }
+      dispatch({
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "connect" },
+      });
+      return;
+    }
     dispatch({
       type: "setup-step",
       state: {
         step: "enter-key",
-        provider,
-        keyName: PROVIDER_API_KEY_NAMES[provider],
+        provider: row.provider,
+        keyName: PROVIDER_API_KEY_NAMES[row.provider],
         busy: false,
       },
     });
@@ -166,7 +230,7 @@ export function createSetupHandlers(opts: {
     // for a failure in the read that happened after their write already landed. SetupEnterKey's own
     // `if (busy) return;` gate is what makes resetting `busy: false` here necessary.
     try {
-      dispatch({ type: "setup-step", state: setupListState(provider) });
+      dispatch({ type: "setup-step", state: setupListState(`key:${provider}`) });
     } catch (err) {
       dispatch({
         type: "setup-step",
@@ -186,10 +250,59 @@ export function createSetupHandlers(opts: {
   // props total, no separate "request confirmation" one — so which one this call means is read
   // off the CURRENT live reducer state, the same "trust liveState, not a caller-captured copy"
   // pattern this closure already uses throughout (this function's own top comment).
-  function onSetupRemove(provider: ModelProvider): void {
+  function onSetupRemove(row: SetupProviderRow): void {
     const pending = getPendingSetup();
+    if (pending?.step === "confirm-disconnect") {
+      try {
+        const onMessage = (message: string) => {
+          dispatch({ type: "transcript-append", line: message });
+        };
+        if (pending.provider === "openai") disconnectCodexReal(configDir, onMessage);
+        else if (pending.provider === "seri") disconnectSeri(configDir, onMessage);
+        else disconnectGrokReal(configDir, onMessage);
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+        return;
+      }
+      dispatchSetupList(`subscription:${pending.provider}`);
+      return;
+    }
+    if (pending?.step === "confirm-connect") {
+      if (pending.provider === "openai") {
+        if (pending.action === "connect") {
+          dispatch({ type: "setup-resolved" });
+          void onConnectCodex?.();
+          return;
+        }
+        try {
+          reconnectCodex(configDir, (message) => {
+            dispatch({ type: "transcript-append", line: message });
+          });
+        } catch (err) {
+          dispatch({ type: "command-error", message: messageOf(err) });
+          return;
+        }
+        dispatchSetupList("subscription:openai");
+        return;
+      }
+      if (pending.provider === "seri") {
+        try {
+          reconnectSeri(configDir, (message) => {
+            dispatch({ type: "transcript-append", line: message });
+          });
+        } catch (err) {
+          dispatch({ type: "command-error", message: messageOf(err) });
+          return;
+        }
+        dispatchSetupList("subscription:seri");
+        return;
+      }
+      dispatch({ type: "setup-resolved" });
+      void onConnectGrok?.();
+      return;
+    }
     if (pending?.step === "confirm-remove") {
-      const { keyName } = pending;
+      const { keyName, provider } = pending;
       try {
         unsetConfigValue(keyName, configDir);
       } catch (err) {
@@ -200,16 +313,13 @@ export function createSetupHandlers(opts: {
         return;
       }
       dispatch({ type: "transcript-append", line: `Removed ${keyName}.` });
-      dispatchSetupList(provider);
+      dispatchSetupList(`key:${provider}`);
       return;
     }
-    // `providerKeyState` for the one provider under the cursor, not a decideSetupOpen scan of all
-    // five — still real I/O (config.json), so still needs its own guard: without it, a malformed
-    // file here would throw straight out of this `useInput` callback, the same class of bug the
-    // /setup-OPEN interceptor already guards against.
+    if (row.kind !== "key") return;
     let state: ProviderKeyState;
     try {
-      state = providerKeyState(provider, configDir);
+      state = providerKeyState(row.provider, configDir);
     } catch (err) {
       dispatch({
         type: "command-error",
@@ -220,44 +330,45 @@ export function createSetupHandlers(opts: {
     if (!state.hasConfigEntry) return;
     dispatch({
       type: "setup-step",
-      state: { step: "confirm-remove", provider, keyName: state.keyName },
+      state: { step: "confirm-remove", provider: row.provider, keyName: state.keyName },
     });
   }
 
   function onSetupBack(): void {
     const current = getPendingSetup();
-    const provider =
-      current !== undefined && current.step !== "list" ? current.provider : undefined;
-    dispatchSetupList(provider);
+    const selectedId =
+      current?.step === "enter-key"
+        ? `key:${current.provider}`
+        : current?.step === "confirm-remove"
+          ? `key:${current.provider}`
+          : current?.step === "confirm-connect" || current?.step === "confirm-disconnect"
+            ? `subscription:${current.provider}`
+            : undefined;
+    dispatchSetupList(selectedId);
   }
 
   return { onSetupSelect, onSetupKeyEntered, onSetupRemove, onSetupBack };
 }
 
-// /login, /signup and /logout's own two handlers, mirroring createSetupHandlers's exact shape
-// (dispatch/deps/configDir in). `deps.login ?? loginReal`
-// / `deps.logout ?? logoutReal` is the injection seam pty tests use to fake the device flow.
-// Every recompute-and-dispatch is wrapped so a failure
-// (a network error, a denied/expired device code, a bad WorkOS client id) degrades to a rendered
-// `auth-step` result rather than an unhandled rejection out of onSubmit's own fire-and-forget
-// caller (InputBox's own useInput handler) — the same "never throw/crash" contract dispatchSetupList
-// already has, just landing on `auth-step`/result instead of a bare command-error, since login/logout
-// are a blocking panel (pendingAuth), not a list this file can just re-show.
+// /login, /signup, /logout, and the /setup Grok/Codex connect confirm. Failures land on
+// auth-step result instead of throwing out of onSubmit.
 export function createAuthHandlers(opts: {
   dispatch: Dispatch;
-  // Pick, not the full CliDeps: this factory only ever reads these two injection seams, and naming
-  // them here documents the actual contract instead of overstating it with cli.ts's ~20-field deps
-  // bag (any CliDeps value still satisfies this — every caller keeps passing its own `deps` as-is).
-  deps: Pick<CliDeps, "login" | "logout">;
+  // login, logout, connectGrok, connectCodex. Callers still pass the full CliDeps bag.
+  deps: Pick<CliDeps, "login" | "logout" | "connectGrok" | "connectCodex">;
   configDir: string;
 }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => void;
   onAbandon: () => void;
+  onConnectGrok: () => Promise<void>;
+  onConnectCodex: () => Promise<void>;
 } {
   const { dispatch, deps, configDir } = opts;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
+  const connectGrokFn = deps.connectGrok ?? connectGrokReal;
+  const connectCodexFn = deps.connectCodex ?? connectCodexReal;
   // `attemptCounter` alone only mutes a dismissed attempt's own DISPATCHES — the underlying
   // login() would keep polling in the background regardless (a device code stays valid for
   // minutes) and could still call saveAuthSession later, with zero UI trace since the dispatches
@@ -321,6 +432,81 @@ export function createAuthHandlers(opts: {
     }
   }
 
+  async function onConnectGrok(): Promise<void> {
+    const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
+    dispatch({ type: "auth-requested", mode: "grok" });
+    try {
+      await connectGrokFn(configDir, {
+        onDeviceCode: (device) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({
+            type: "auth-step",
+            state: {
+              step: "device",
+              mode: "grok",
+              verificationUri: device.verificationUri,
+              userCode: device.userCode,
+            },
+          });
+        },
+        onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({ type: "transcript-append", line: message });
+        },
+        signal: controller.signal,
+      });
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+    } catch (err) {
+      if (myAttempt !== attemptCounter) return;
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: messageOf(err),
+          error: true,
+        },
+      });
+    }
+  }
+
+  async function onConnectCodex(): Promise<void> {
+    const myAttempt = ++attemptCounter;
+    const controller = new AbortController();
+    currentController = controller;
+    dispatch({ type: "auth-requested", mode: "codex" });
+    try {
+      await connectCodexFn(configDir, {
+        onAuthorizeUrl: (url) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({
+            type: "auth-step",
+            state: { step: "browser", mode: "codex", verificationUri: url },
+          });
+        },
+        onMessage: (message) => {
+          if (myAttempt !== attemptCounter) return;
+          dispatch({ type: "transcript-append", line: message });
+        },
+        signal: controller.signal,
+      });
+      if (myAttempt !== attemptCounter) return;
+      dispatch({ type: "auth-resolved" });
+    } catch (err) {
+      if (myAttempt !== attemptCounter) return;
+      dispatch({
+        type: "auth-step",
+        state: {
+          step: "result",
+          message: messageOf(err),
+          error: true,
+        },
+      });
+    }
+  }
+
   // Sync, not async — logoutFn (typeof logoutReal) is fully synchronous; the call site already
   // just `await`s this either way, which works fine on a non-async function too.
   function onLogout(): void {
@@ -351,7 +537,7 @@ export function createAuthHandlers(opts: {
     currentController?.abort();
   }
 
-  return { onLogin, onLogout, onAbandon };
+  return { onLogin, onLogout, onAbandon, onConnectGrok, onConnectCodex };
 }
 
 // SERI_VERIFY_ENABLED and SERI_VERIFY_COMMAND are only ever read once, at prepareSession's own
@@ -366,9 +552,7 @@ function verifyConfigTakesEffectNote(key: string): string {
 // /config's own two handlers, mirroring createSetupHandlers's exact shape
 // (dispatch/getPendingConfig/configDir in). Calls the DATA
 // functions directly — loadConfig/setConfigValue/unsetConfigValue (config/config.ts).
-// Every recompute-and-dispatch is wrapped in try/catch degrading to command-error: config.json
-// can be hand-edited or corrupted mid-session, same reachable-anytime failure dispatchSetupList's
-// own comment already documents for /setup.
+// Recompute-and-dispatch is wrapped in try/catch so a throw becomes a command-error.
 export function createConfigHandlers(opts: {
   dispatch: Dispatch;
   getPendingConfig: () => ConfigPanelState | undefined;
@@ -393,11 +577,8 @@ export function createConfigHandlers(opts: {
     return { step: "list", rows, selected };
   }
 
-  // Same "refresh the list, degrade to command-error" shape dispatchSetupList uses — and, like the
-  // post-write refreshes below, closes the panel on that error rather than leaving `pendingConfig`
-  // on whatever step it was: this is `onConfigBack`'s own refresh too, so a throwing
-  // decideConfigOpen (a corrupted config.json) while sitting on confirm-unset used to leave that
-  // step showing forever, since command-error alone never touches `pendingConfig`.
+  // Close the panel on a refresh throw. command-error alone never clears `pendingConfig`,
+  // so a failure on confirm-unset would otherwise leave that step up forever.
   function dispatchConfigList(selectedKey?: string): void {
     try {
       dispatch({ type: "config-step", state: configListState(selectedKey) });
@@ -591,9 +772,8 @@ export function createPermissionsHandlers(opts: {
   const { dispatch, getPendingPermissions, permissionsDir, getWorktree } = opts;
 
   // loadGrants never THROWS on a malformed permissions.yaml — it degrades to an empty result and
-  // reports through this callback instead (unlike decideConfigOpen's loadConfig, which does
-  // throw, so /config's try/catch guards actually catch something). Without this, a malformed
-  // store would render as a silently-empty "nothing approved" panel instead of a visible error.
+  // reports through this callback instead. Without this callback, a malformed store would
+  // render as a silently-empty "nothing approved" panel instead of a visible error.
   const warnOnMalformedStore = (message: string) => dispatch({ type: "command-error", message });
 
   function permissionsListState(selectedTool?: string): PermissionsPanelState {

@@ -10,25 +10,30 @@ import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
 import type { ChildEventPayload } from "../../subagents/dispatch";
+import { ERROR_MARK } from "../theme/theme";
 import {
   estimateTokens,
   formatDoneLine,
+  formatReasoningCaret,
   type SkillsPanelRow,
   type TokenProgress,
   type TranscriptEntry,
   type TranscriptRole,
 } from "../util/format";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
+import { firstSetupActionIndex } from "./commands";
 import {
+  formatToolSummary,
   recordCall,
   recordDenial,
   recordResult,
-  renderToolActivity,
+  recordThrow,
   type ToolActivityEntry,
 } from "./toolActivity";
 
 // /setup's own live state — a three-step flow, mirrored on the reducer
-// the same way /model's picker is: "list" shows all five providers, "enter-key" is the masked
+// the same way /model's picker is: "list" shows the BYOK key rows decideSetupOpen
+// computed, "enter-key" is the masked
 // text-entry step (add or replace), "confirm-remove" is a single-keypress y/n. "list" carries its
 // own freshly-recomputed `rows` (SetupList, App.tsx, renders and navigates them) rather than
 // reaching back into a stale copy, so a step transition always renders what config.json/env
@@ -45,15 +50,22 @@ export type SetupState =
       keyName: string;
       error?: string;
       busy: boolean;
+      note?: string;
     }
-  | { step: "confirm-remove"; provider: ModelProvider; keyName: string };
+  | { step: "confirm-remove"; provider: ModelProvider; keyName: string }
+  | {
+      step: "confirm-connect";
+      provider: "xai" | "openai" | "seri";
+      action?: "connect" | "reenable";
+    }
+  | { step: "confirm-disconnect"; provider: "xai" | "openai" | "seri" };
 
-// /login and /signup's own live state — the device-flow OAuth panel. "starting" is the brief
-// moment before the provider returns a verification URL/code; "device" shows that URL+code for the
-// user to open in a browser; "result" is the terminal state (success or failure).
+export type AuthMode = "login" | "signup" | "grok" | "codex";
+
 export type AuthPanelState =
-  | { step: "starting"; mode: "login" | "signup" }
-  | { step: "device"; mode: "login" | "signup"; verificationUri: string; userCode: string }
+  | { step: "starting"; mode: AuthMode }
+  | { step: "device"; mode: AuthMode; verificationUri: string; userCode: string }
+  | { step: "browser"; mode: AuthMode; verificationUri: string }
   | { step: "result"; message: string; error: boolean };
 
 // /config's own live state — structurally identical to SetupState above (list -> enter-value ->
@@ -76,12 +88,36 @@ export type PermissionsPanelState =
 // there is nothing here but a tier to pick or cancel out of.
 export type EffortPanelState = { tiers: string[]; selected: number };
 
+// Messages typed while a turn was already running, held in submission order until drainQueue
+// (cli.ts) re-submits the head. Rendered by components/QueueBlock.tsx.
+//
+// The id is minted by cli.ts and carried in on `queue-appended`, never generated here: this reducer
+// mints nothing and reads no clock by design, which is why `turn-started` carries its timestamp in
+// from cli.ts rather than calling Date.now() itself (see that action's own comment). It earns its
+// place for one reason — a React key that survives a drop. Selection, editing and drop are all
+// index-based and an index key would satisfy them, but the row under the mounted editor would then
+// become a different element the moment a row above it went, taking the half-typed text with it.
+//
+// The invariant every action below re-establishes, and which normalizeQueue is the single place
+// that enforces: `items.length === 0` implies `selected === 0 && editing === false`; otherwise
+// `0 <= selected < items.length`.
+export type QueuedMessage = { id: string; text: string };
+
+export type MessageQueue = {
+  items: QueuedMessage[];
+  // Index into `items`. Pinned to 0 and meaningless while `items` is empty.
+  selected: number;
+  // The SELECTED item is being edited. A boolean rather than an id so "editing an item that is
+  // not the selected one" cannot be represented at all.
+  editing: boolean;
+};
+
 export type TuiState = {
   session: SessionState<ModelMessage>;
   // Append-only committed LOGICAL lines — one entry per `transcript-append`/pushLine call, never
-  // re-split or re-joined here. Rendered by App.tsx inside a native `<scrollbox>`, fed this array in
-  // full — OpenTUI's own Yoga layout handles wrapping/scrolling, so there is no wrapped-row cache to
-  // keep in sync with it here.
+  // re-split or re-joined here. The array stays complete; a mount window (spacers + slice) is a
+  // render concern in TranscriptList, not a field here. OpenTUI's own Yoga layout handles
+  // wrapping/scrolling, so there is no wrapped-row cache to keep in sync with it here.
   // Each entry carries a `role` ("user"/"assistant"/"system") alongside its logical text — used at
   // render time to band a user turn's rows with a background color and render an assistant answer
   // as markdown (App.tsx), without changing what gets stored.
@@ -99,19 +135,22 @@ export type TuiState = {
   // see TurnStatus's own comment for why.
   turn: { startedAt: number; tokens: TokenProgress } | undefined;
   // The in-flight tool call, if any — set on every tool-call event, cleared on its
-  // tool-result/permission-denied. Single-slot: loop.ts runs tools strictly sequentially, so
-  // the next result's args are always this pending call's. A dedicated field rather than
-  // App.tsx string-matching `status`'s rendered text (`"Running write_file…"`) against the last
-  // transcript line, which only worked by coincidence and would silently stop working the moment
-  // either string changed.
+  // tool-result/permission-denied, or on an error that arrives while this slot is set (thrown
+  // execute: tool-call then error, no tool-result). Single-slot: the loop still yields one
+  // call/result pair at a time even when consecutive read-only executes overlap, so the next
+  // result's args are always this pending call's. A dedicated field
+  // rather than App.tsx string-matching `status`'s rendered text (`"Running write_file…"`)
+  // against the last transcript line, which only worked by coincidence and would silently stop
+  // working the moment either string changed.
   pendingTool: { name: string; args: unknown } | undefined;
   // Per-tool-name stats for the current turn, living outside `transcript`. Updated on every
-  // tool-call/tool-result/permission-denied. App live-paints the settled view of this
-  // accumulator during the turn (renderLiveToolActivity). Flushed into the transcript as muted
-  // lines on done and on turn-ended (the latter covers loop.ts's error-then-return exits that
-  // never yield done). An error LoopEvent is not turn-end (loop.ts continues), so this
-  // accumulator is left in place across it — live paint still shows it. After a real done,
-  // turn-ended's flush is a no-op on [].
+  // tool-call/tool-result/permission-denied, and on an error that arrives while a call is in
+  // flight (recordThrow). App live-paints the settled view of this
+  // accumulator during the turn (renderLiveToolActivity). On done / turn-ended the tree
+  // is dropped and at most one muted count line is kept ("Read 1 file, ran 2 shell
+  // commands"). An error LoopEvent is not turn-end (loop.ts continues), so this
+  // accumulator is left in place across it — live paint still shows it. After a real
+  // done, turn-ended's clear is a no-op on [].
   toolActivity: ToolActivityEntry[];
   // A slash command that threw (previously uncaught, straight through Ink's own input handler),
   // or input shaped like a slash command that matched nothing / failed its own accepts() guard —
@@ -152,9 +191,10 @@ export type TuiState = {
   // `pendingApproval`/`pendingModelPicker` the same way those two already can with each other,
   // for the identical reason: cli.ts's onSubmit handles /setup before the turnInFlight guard.
   pendingSetup: SetupState | undefined;
-  // The non-blocking login/signup offer (AuthBanner, App.tsx) — independent of `pendingAuth`
-  // below, not a fourth mutually exclusive render-ternary state. Set by the `auth-offer` action
-  // (decideAuthOffer, dispatched from cli.ts/handlers.ts at every point the auth panel closes).
+  // Whether the welcome splash should offer Log in / Sign up (true) or just Continue (false).
+  // Independent of `pendingAuth` — that flag is the blocking auth panel, this one only
+  // chooses the splash menu. Set by `auth-offer` (decideAuthOffer). The main TUI does not
+  // render a sign-in banner from this flag.
   authOffer: boolean;
   // /login and /signup's own blocking panel. Mirrors `pendingSetup`'s mutual-exclusion role in the
   // render ternary.
@@ -184,18 +224,18 @@ export type TuiState = {
   // the bare, no-argument form opens the slider (runTui's own onSubmit interception, cli.ts),
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
-  // The welcome-splash mount's own blocking panel. `initialTuiState`'s own `showSplash` opt (below)
-  // only seeds the value App.tsx's OWN internal `useReducer(tuiReducer, initialTuiState(session))`
-  // call starts from — that call never passes `showSplash`, so every App instance still mounts with
-  // this `false` until `runWelcomeSplash`'s own `connectDispatch` fires `splash-requested` on mount,
-  // the same "seed false, flip true via a requested action fired at mount" shape `pendingSetup`/
-  // `pendingAuth` already use. `runTui` and `runGuidedSetup` never dispatch it, so their own
-  // separate App instances never render WelcomeSplash for the same launch.
+  // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
+  // which App forwards from its `showSplash` prop so the first committed frame is already the
+  // splash. `splash-requested` (runWelcomeSplash's connectDispatch) still sets it true after mount,
+  // but that effect cannot win the first paint — it runs after the first commit. `runTui` and
+  // `runGuidedSetup` omit the prop, so their App instances never render WelcomeSplash for the same
+  // launch.
   pendingSplash: boolean;
   // Latched by `splash-resolved`, never cleared. `pendingSplash` alone cannot tell "before the
-  // splash" from "after it": both are `false`, and the splash mount's own first frame lands in
-  // the first of those, before `connectDispatch` fires `splash-requested`. The pre-session
-  // input box (app.tsx) keys off this so it cannot appear until the login choice is answered.
+  // splash" from "after it": both are `false`. The pre-session input box (app.tsx) keys off this
+  // so it cannot appear until the login choice is answered. A mount that forgets `showSplash`
+  // still lands its first frame in the before-splash state; this latch is what keeps that frame
+  // from offering a live input box.
   splashDone: boolean;
   // The status bar's own model+route label reads this, not `AppProps.route` (App.tsx's own
   // comment on that prop) — the prop only seeds this field at mount; every later switch reaches
@@ -205,6 +245,10 @@ export type TuiState = {
   route: ResolvedRoute | undefined;
   // See `"config-updated"`'s own comment, below, for what this is and why.
   config: Record<string, string>;
+  // See MessageQueue's own comment, above. Not part of the session and never persisted: a queued
+  // message has not been said to the model yet, and a session resumed with one still pending
+  // would replay it with no way for the user to see it coming.
+  queue: MessageQueue;
   // In-memory live rows for the in-flight dispatch. Cleared when the parent
   // dispatch_subagents tool-result lands (the summaries are already in the parent
   // context), on transcript-cleared (`/clear`), and on turn-started. Not session JSON.
@@ -214,6 +258,14 @@ export type TuiState = {
   // the scrollbox (`undefined` = parent). Arrows never change `pendingChildView`.
   subagentPanelSelectedId: string | undefined;
   pendingChildView: string | undefined;
+  // In-flight thought span for the parent chat only. Settled rows live on
+  // `transcript` (`kind: "reasoning"`). Not session JSON.
+  reasoning: ReasoningState;
+};
+
+export type ReasoningState = {
+  expanded: boolean;
+  live?: { text: string; startedAt: number };
 };
 
 export type ChildView = {
@@ -239,16 +291,20 @@ export type ChildView = {
 // instance, so an in-place mutation of one state's `transcript` (nothing does this today, but
 // nothing stops it either) would otherwise corrupt every other state — including a concurrent test
 // — that spread from this same constant.
-const EMPTY_TRANSCRIPT: Readonly<Pick<TuiState, "transcript" | "streaming" | "toolActivity">> =
-  Object.freeze({
-    // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
-    // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
-    // genuinely different types — frozen at runtime regardless of this cast, which only restores the
-    // static type this field is spread into everywhere else.
-    transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
-    streaming: "",
-    toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
-  });
+const EMPTY_REASONING: ReasoningState = Object.freeze({ expanded: false });
+
+const EMPTY_TRANSCRIPT: Readonly<
+  Pick<TuiState, "transcript" | "streaming" | "toolActivity" | "reasoning">
+> = Object.freeze({
+  // `as TranscriptEntry[]`: TuiState.transcript is declared mutable (App.tsx replaces it wholesale
+  // rather than pushing in place), and TS's array variance treats `readonly T[]` and `T[]` as
+  // genuinely different types — frozen at runtime regardless of this cast, which only restores the
+  // static type this field is spread into everywhere else.
+  transcript: Object.freeze([] as TranscriptEntry[]) as TranscriptEntry[],
+  streaming: "",
+  toolActivity: Object.freeze([] as ToolActivityEntry[]) as ToolActivityEntry[],
+  reasoning: EMPTY_REASONING,
+});
 
 const EMPTY_ROSTER: Readonly<
   Pick<
@@ -262,14 +318,40 @@ const EMPTY_ROSTER: Readonly<
   pendingChildView: undefined,
 });
 
+// What "an empty queue" means, in one place — `initialTuiState` and every action that removes the
+// last item all reach the identical value, so none of them can drift into a shape
+// the MessageQueue invariant forbids. Frozen for the same reason EMPTY_TRANSCRIPT above is: every
+// state spread from this shares the SAME `items` instance.
+const EMPTY_QUEUE: MessageQueue = Object.freeze({
+  // `as string[]`: same cast, same reason as EMPTY_TRANSCRIPT's own — the field is declared
+  // mutable, and TS treats `readonly T[]` as a genuinely different type.
+  items: Object.freeze([] as QueuedMessage[]) as QueuedMessage[],
+  selected: 0,
+  editing: false,
+});
+
+// The single place MessageQueue's invariant is established. Every queue action routes its result
+// through here rather than clamping for itself, so "an empty list pins selection to 0 and cannot
+// be editing" is one statement instead of eight that have to agree.
+function normalizeQueue(items: QueuedMessage[], selected: number, editing: boolean): MessageQueue {
+  if (items.length === 0) return EMPTY_QUEUE;
+  return { items, selected: Math.min(Math.max(selected, 0), items.length - 1), editing };
+}
+
 export function initialTuiState(
   session: SessionState<ModelMessage>,
-  opts?: { showSplash?: boolean; route?: ResolvedRoute; config?: Record<string, string> },
+  opts?: {
+    showSplash?: boolean;
+    authOffer?: boolean;
+    route?: ResolvedRoute;
+    config?: Record<string, string>;
+  },
 ): TuiState {
   return {
     session,
     route: opts?.route,
     config: opts?.config ?? {},
+    queue: EMPTY_QUEUE,
     ...EMPTY_TRANSCRIPT,
     status: "",
     turn: undefined,
@@ -279,7 +361,7 @@ export function initialTuiState(
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
     pendingSetup: undefined,
-    authOffer: false,
+    authOffer: opts?.authOffer ?? false,
     pendingAuth: undefined,
     pendingConfig: undefined,
     pendingPermissions: undefined,
@@ -295,6 +377,12 @@ export function initialTuiState(
 
 export type TuiAction =
   | { type: "session-updated"; session: SessionState<ModelMessage> }
+  // The user row a turn is about to be run against, dispatched by runTurn (cli.ts) before the model
+  // is called. Merges exactly as `messages-updated` does, and is a separate action rather than a
+  // synthetic one of those because that event means "the provider answered this turn" to its other
+  // consumers — runTurn's own `onEvent` persists the default model pair and reasoning tier on it,
+  // which for an unanswered turn would pin a model that never worked.
+  | { type: "user-turn-committed"; messages: ModelMessage[] }
   // `flush` defaults to true (every existing caller relies on that) — set to false by a submission
   // echo that must not fragment an in-progress streamed answer into two transcript entries (see
   // pushLine's own comment).
@@ -336,6 +424,9 @@ export type TuiAction =
       // (that's `resolveRoute`'s job, which needs the catalog/configured-providers/plan this
       // reducer doesn't have), only whether one is needed at all.
       pick?: { model: string; provider: ModelProvider; keyConfigured: boolean };
+      // The dispatcher's own resolveSessionRoute result for `pick` (cli.ts's onModelSelected).
+      // Guided setup (routes/setup/guidedSetup.ts) has no catalog or plan yet and omits it.
+      route?: ResolvedRoute;
       // Text typed after a combined-chunk terminator (see `pendingInputPrefill`'s own comment) —
       // present only on the rare chunked-input path, absent on every ordinary Enter.
       leftoverInput?: string;
@@ -358,10 +449,10 @@ export type TuiAction =
   // also close mid-chunk on a real pty.
   | { type: "setup-resolved"; leftoverInput?: string }
   // `pendingAuth`/`pendingConfig`/`pendingPermissions`'s own step transitions land on these ten.
-  // `auth-offer` toggles the independent, non-blocking banner — deliberately NOT `pendingAuth`,
-  // which is the blocking panel (see TuiState's own comment).
+  // `auth-offer` chooses the splash menu (unsigned-in vs already signed in) — deliberately NOT
+  // `pendingAuth`, which is the blocking auth panel (see TuiState's own comment).
   | { type: "auth-offer"; show: boolean }
-  | { type: "auth-requested"; mode: "login" | "signup" }
+  | { type: "auth-requested"; mode: AuthMode }
   | { type: "auth-step"; state: AuthPanelState }
   | { type: "auth-resolved"; leftoverInput?: string }
   | { type: "config-requested"; rows: ConfigRow[] }
@@ -424,6 +515,28 @@ export type TuiAction =
   // and clearing TurnStatus's own state on any of those made a turn that was still very much in
   // progress look like it had silently died.
   | { type: "turn-ended" }
+  // streamDispatch drains buffered thought text with the wall-clock of the first
+  // delta, not the drain tick — otherwise a think that lasted seconds would settle
+  // as `0s` because start and end would share one Date.now().
+  | { type: "reasoning-flushed"; text: string; startedAt: number }
+  | { type: "reasoning-toggled" }
+  // The message queue's own eight actions (MessageQueue, above). Three of them — selection-moved,
+  // edit-started, item-dropped — deliberately no-op while `editing`, which is a correctness fix
+  // rather than politeness: without the first of those, two items queued, Ctrl+E on row 1 and then
+  // Ctrl+↓ moves `selected` to row 2, and the Enter that commits row 1's edited text writes it into
+  // row 2 instead, because `queue-edit-committed` targets whatever `selected` is at commit time.
+  // Each case below states its own version of that.
+  //
+  // `text` is carried untrimmed on both `queue-appended` and `queue-edit-committed`: cli.ts trims
+  // only to DECIDE (is this blank, does it start a turn), never to store, so what eventually
+  // reaches the model is the text the user actually typed.
+  | { type: "queue-appended"; id: string; text: string }
+  | { type: "queue-selection-moved"; delta: number }
+  | { type: "queue-edit-started" }
+  | { type: "queue-edit-committed"; text: string }
+  | { type: "queue-edit-cancelled" }
+  | { type: "queue-item-dropped" }
+  | { type: "queue-head-taken" }
   | ({ type: "subagent-child-event" } & ChildEventPayload)
   | { type: "subagent-panel-focus" }
   | { type: "subagent-panel-blur" }
@@ -432,7 +545,7 @@ export type TuiAction =
   | { type: "subagent-overlay-close" };
 
 // A shorthand for "given this action, do something with it": App.tsx's own `connectDispatch`
-// prop (the reducer's own `useReducer` dispatch, handed back to cli.ts's runTui), runTui's own
+// prop (the stream-coalesced dispatch handed back to cli.ts's runTui), runTui's own
 // `dispatch` handle built from it, and tuiPresenter (cli.ts), which dispatches into it rather
 // than printing. driveLoop itself takes a plain `onEvent: (event: LoopEvent) => void` now, not
 // this — it only ever dispatched one action shape, so it no longer needs to know TuiAction
@@ -474,6 +587,8 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
       return child;
     case "text-delta":
       return { ...child, streaming: child.streaming + event.text };
+    case "reasoning-delta":
+      return child;
     case "tool-call": {
       const flushed = flushChildStreaming(child);
       return {
@@ -491,14 +606,32 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
           child.currentTool?.args,
           event.result,
         ),
+        // Same slot as the parent's pendingTool: an error while this is set is treated as
+        // that call throwing. A settled call has to drop it or a later hook error paints
+        // as a false throw on a tool that already succeeded.
+        currentTool: undefined,
       };
     case "permission-denied":
       return {
         ...child,
         toolActivity: recordDenial(child.toolActivity, event.name, event.reason),
+        currentTool: undefined,
       };
-    case "error":
+    case "error": {
+      // Thrown execute is tool-call then error, no tool-result — same as the parent reducer.
+      // Attach the failure to the open group and drop currentTool so the live "current" line
+      // does not keep painting a call that has already settled as an anomaly.
+      const pending = child.currentTool;
+      if (pending !== undefined) {
+        return {
+          ...child,
+          toolActivity: recordThrow(child.toolActivity, pending.name, pending.args, event.error),
+          currentTool: undefined,
+          status: "error",
+        };
+      }
       return { ...child, status: "error" };
+    }
     case "done":
       return {
         ...flushChildStreaming(child),
@@ -553,6 +686,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
       return { ...state, session: action.session };
+    case "user-turn-committed":
+      return { ...state, session: { ...state.session, messages: action.messages } };
     // pushLine, not a bare append: this used to be harmless when transcript-append had no real
     // callers, but tuiPresenter.message, undoPlanLines/recoveryLines and quit()'s own "quitting -
     // cancelling..." line all go through this case now, and the last of those fires specifically
@@ -596,18 +731,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       // Merged into `state.session` (this reducer's own current session), not a caller-captured
       // one — see TuiAction's own comment on `pick`.
       //
-      // `route` is also updated optimistically here, not just `session` — otherwise the status
-      // bar (which reads `state.route`) stays on the OLD model until the next turn's
-      // `route-updated` dispatch (cli.ts's runTurn), one full turn after the pick that's visibly
-      // supposed to have already switched it. Only done when `keyConfigured` is true, though: that's
-      // the one case this reducer can resolve on its own (Rule 1 of `resolveRoute`, routing.ts — a
-      // provider with its own key always wins unrerouted). When it's false, the picked provider will
-      // be rerouted or gateway-served, but WHERE it lands is `resolveRoute`'s computation (it needs
-      // the catalog/configured-providers/plan this reducer doesn't have) — guessing `rerouted: false`
-      // here would render "your key" for a provider the user doesn't actually have a key for, exactly
-      // the fabricated-route claim `formatModeDetail`'s own comment says to avoid. `state.route` is
-      // left as-is (stale for the one turn until `route-updated` supplies the real answer) rather
-      // than asserting something false.
+      // `route` moves here too, not just `session`: the mode row and session banner read
+      // `state.route`, and the next `route-updated` dispatch (cli.ts's runTurn) is a whole turn
+      // away. Without `action.route` this reducer can only name a route for a pick whose own
+      // provider has a key (Rule 1 of `resolveRoute`, routing.ts — never rerouted); for a no-key
+      // pick it cannot know where the reroute or gateway hop lands, and claiming `credential:
+      // "key"` would render "your key" for a key the user lacks, so `state.route` stays as-is.
       if (action.pick === undefined) {
         return {
           ...state,
@@ -624,19 +753,28 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           model: action.pick.model,
           provider: action.pick.provider,
         },
-        route: action.pick.keyConfigured
-          ? {
-              model: action.pick.model,
-              provider: action.pick.provider,
-              rerouted: false,
-              credential: "key",
-            }
-          : state.route,
+        route:
+          action.route ??
+          (action.pick.keyConfigured
+            ? {
+                model: action.pick.model,
+                provider: action.pick.provider,
+                rerouted: false,
+                credential: "key",
+              }
+            : state.route),
       };
     case "input-prefill-consumed":
       return { ...state, pendingInputPrefill: undefined };
     case "setup-requested":
-      return { ...state, pendingSetup: { step: "list", rows: action.rows, selected: 0 } };
+      return {
+        ...state,
+        pendingSetup: {
+          step: "list",
+          rows: action.rows,
+          selected: firstSetupActionIndex(action.rows),
+        },
+      };
     case "setup-step":
       return { ...state, pendingSetup: action.state };
     case "setup-resolved":
@@ -707,6 +845,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       return {
         ...state,
         ...EMPTY_ROSTER,
+        reasoning: EMPTY_REASONING,
         turn: {
           startedAt: action.startedAt,
           tokens: {
@@ -721,10 +860,83 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         },
       };
     case "turn-ended":
-      // Flush first: loop.ts's mid-stream / streamText catch yields error then return with no
-      // done, so this is the only commit point for tools already recorded. After a real done
-      // the accumulator is already [], so the flush is a no-op.
-      return { ...flushToolActivity(state), turn: undefined };
+      // Commit a leftover thought and any parked assistant text (loop.ts can error-then-return
+      // with no done). The tool tree is display-only: clear it so it does not become history.
+      return {
+        ...flushToolActivity(flushStreaming(settleReasoning(state, Date.now()))),
+        turn: undefined,
+      };
+    case "reasoning-flushed":
+      return openOrAppendReasoning(state, action.text, action.startedAt);
+    case "reasoning-toggled":
+      return toggleReasoning(state);
+    case "queue-appended":
+      // `selected` and `editing` are carried through untouched, not reset: a message queued while
+      // the user is part-way through editing an earlier row must not move the band out from under
+      // them or close the editor. On an empty queue normalizeQueue pins the new row at 0 anyway.
+      return {
+        ...state,
+        queue: normalizeQueue(
+          [...state.queue.items, { id: action.id, text: action.text }],
+          state.queue.selected,
+          state.queue.editing,
+        ),
+      };
+    case "queue-selection-moved":
+      // The retargeting bug TuiAction's own comment above describes: while a row is open in the
+      // editor, the band must not move, because `selected` is what the commit writes into.
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return {
+        ...state,
+        queue: normalizeQueue(
+          state.queue.items,
+          state.queue.selected + action.delta,
+          state.queue.editing,
+        ),
+      };
+    case "queue-edit-started":
+      // Already editing: there is nothing to start, and returning `state` itself rather than an
+      // equal-but-fresh object means a mashed Ctrl+E cannot even re-render the mounted editor.
+      // Empty: `editing` with no items is precisely what the MessageQueue invariant rules out.
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return { ...state, queue: { ...state.queue, editing: true } };
+    case "queue-edit-committed": {
+      // A blank commit keeps the original text rather than emptying the row: InputBox submits on a
+      // bare Enter too, and an Enter on an editor the user has cleared reads as "never mind", not
+      // as "make this queued message the empty string". cli.ts's onSubmit already routes that case
+      // to `queue-edit-cancelled` before it gets here; this is the same answer stated where the
+      // text actually changes, so the reducer is correct on its own terms.
+      const items =
+        action.text.trim().length === 0
+          ? state.queue.items
+          : state.queue.items.map((item, index) =>
+              index === state.queue.selected ? { ...item, text: action.text } : item,
+            );
+      return { ...state, queue: normalizeQueue(items, state.queue.selected, false) };
+    }
+    case "queue-edit-cancelled":
+      return { ...state, queue: { ...state.queue, editing: false } };
+    case "queue-item-dropped": {
+      // No-op while editing, for the same family of reasons as the two cases above: the selected
+      // row is currently a mounted InputBox holding half-typed text, and dropping it would destroy
+      // that mount with no keypress of the user's that meant "throw this away".
+      if (state.queue.editing || state.queue.items.length === 0) return state;
+      return {
+        ...state,
+        queue: normalizeQueue(
+          state.queue.items.filter((_, index) => index !== state.queue.selected),
+          state.queue.selected,
+          false,
+        ),
+      };
+    }
+    case "queue-head-taken": {
+      // `selected - 1`, not `selected`: every remaining row just shifted up by one, so subtracting
+      // keeps the band on the SAME message rather than sliding it onto the next one down. When the
+      // head itself was selected, normalizeQueue clamps the -1 back to the new head.
+      const [, ...rest] = state.queue.items;
+      return { ...state, queue: normalizeQueue(rest, state.queue.selected - 1, false) };
+    }
     case "subagent-child-event":
       return applyChildEvent(state, action);
     case "subagent-panel-focus":
@@ -754,9 +966,6 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
 // entirely and leaves `state.streaming` untouched: not moved into `transcript` (still committed
 // later, whole, by whatever event finishes the turn) and not cleared either (clearing it would
 // silently drop the model's in-progress text instead of just deferring its commit).
-// A blank `{role: "system", text: ""}` separator is inserted immediately before `line` when it is
-// a new user turn (`role === "user"`) following existing content, so a user message reads as its
-// own visually distinct block rather than running straight into whatever came before it.
 function pushLine(
   state: TuiState,
   line: string,
@@ -765,34 +974,28 @@ function pushLine(
   muted = false,
   markdown = false,
 ): TuiState {
-  // Computed before the `flush` branch below, not inside the `flush: true` half of it: echoUserInput
-  // (cli.ts) — the only call site that ever dispatches `role: "user"` — always passes `flush: false`,
-  // so a separator that only existed on the `flush: true` path would never actually fire for a real
-  // user turn.
   const entry: TranscriptEntry = {
     role,
     text: line,
     ...(muted ? { muted: true } : {}),
     ...(markdown ? { markdown: true } : {}),
   };
-  const separator: TranscriptEntry[] =
-    role === "user" && state.transcript.length > 0 ? [{ role: "system", text: "" }] : [];
   if (!flush) {
-    return { ...state, transcript: [...state.transcript, ...separator, entry] };
+    return { ...state, transcript: [...state.transcript, entry] };
   }
   const flushedStreaming: TranscriptEntry[] =
     state.streaming.length > 0 ? [{ role: "assistant", text: state.streaming }] : [];
   return {
     ...state,
-    transcript: [...state.transcript, ...flushedStreaming, ...separator, entry],
+    transcript: [...state.transcript, ...flushedStreaming, entry],
     streaming: "",
   };
 }
 
 // Commits any pending streamed text as its own assistant transcript line without adding a
-// system line — tool-call/result/permission-denied no longer push their own transcript lines
-// (those flush at turn-end via toolActivity), but a mid-stream tool-call still has to park the
-// model's partial answer so later text-deltas don't concatenate onto it.
+// system line — tool-call/result/permission-denied never push transcript lines (the tree is
+// live-only), but a mid-stream tool-call still has to park the model's partial answer so
+// later text-deltas don't concatenate onto it.
 function flushStreaming(state: TuiState): TuiState {
   if (state.streaming.length === 0) return state;
   return {
@@ -803,11 +1006,13 @@ function flushStreaming(state: TuiState): TuiState {
 }
 
 function flushToolActivity(state: TuiState): TuiState {
-  let next = state;
-  for (const line of renderToolActivity(state.toolActivity)) {
-    next = pushLine(next, line, "system", true, true);
-  }
-  return { ...next, toolActivity: [] };
+  const summary = formatToolSummary(state.toolActivity);
+  if (summary === undefined) return { ...state, toolActivity: [] };
+  return {
+    ...state,
+    transcript: [...state.transcript, { role: "system", text: summary, muted: true }],
+    toolActivity: [],
+  };
 }
 
 // Folds one completed model call's real usage onto `progress`'s running totals — shared by the
@@ -848,40 +1053,111 @@ function reconcileUsage(progress: TokenProgress, usage: LanguageModelUsage): Tok
   };
 }
 
+function openOrAppendReasoning(state: TuiState, text: string, startedAt: number): TuiState {
+  if (text.length === 0) return state;
+  if (state.reasoning.live !== undefined) {
+    return {
+      ...state,
+      reasoning: {
+        ...state.reasoning,
+        live: { ...state.reasoning.live, text: state.reasoning.live.text + text },
+      },
+    };
+  }
+  return {
+    ...state,
+    reasoning: { ...state.reasoning, live: { text, startedAt } },
+  };
+}
+
+function settleReasoning(state: TuiState, now: number): TuiState {
+  const live = state.reasoning.live;
+  if (live === undefined) return state;
+  if (live.text.length === 0) {
+    return { ...state, reasoning: { ...state.reasoning, live: undefined } };
+  }
+  const expanded = state.reasoning.expanded;
+  const elapsedMs = now - live.startedAt;
+  const entry: TranscriptEntry = {
+    role: "system",
+    text: formatReasoningCaret(expanded, elapsedMs),
+    muted: true,
+    kind: "reasoning",
+    body: live.text,
+    expanded,
+    elapsedMs,
+  };
+  return {
+    ...state,
+    transcript: [...state.transcript, entry],
+    reasoning: { ...state.reasoning, live: undefined },
+  };
+}
+
+function toggleReasoning(state: TuiState): TuiState {
+  if (state.reasoning.live !== undefined) {
+    return { ...state, reasoning: { ...state.reasoning, expanded: !state.reasoning.expanded } };
+  }
+  let last = -1;
+  for (let i = state.transcript.length - 1; i >= 0; i--) {
+    if (state.transcript[i]?.kind === "reasoning") {
+      last = i;
+      break;
+    }
+  }
+  if (last < 0) return state;
+  const entry = state.transcript[last];
+  if (entry === undefined) return state;
+  const expanded = !entry.expanded;
+  const next = [...state.transcript];
+  next[last] = {
+    ...entry,
+    expanded,
+    text: formatReasoningCaret(expanded, entry.elapsedMs ?? 0),
+  };
+  return { ...state, transcript: next, reasoning: { ...state.reasoning, expanded } };
+}
+
 function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
   switch (event.type) {
     // `state.turn` is left untouched (not seeded here) when it's `undefined` — a `text-delta`
     // arriving without a preceding `turn-started` would only happen out of order, which nothing in
     // this file crashes on; see this switch's other cases for the same posture.
-    case "text-delta":
+    case "text-delta": {
+      const settled = settleReasoning(state, Date.now());
       return {
-        ...state,
-        streaming: state.streaming + event.text,
-        turn: state.turn && {
-          ...state.turn,
+        ...settled,
+        streaming: settled.streaming + event.text,
+        turn: settled.turn && {
+          ...settled.turn,
           tokens: {
-            ...state.turn.tokens,
-            liveOutputEstimate: state.turn.tokens.liveOutputEstimate + estimateTokens(event.text),
+            ...settled.turn.tokens,
+            liveOutputEstimate: settled.turn.tokens.liveOutputEstimate + estimateTokens(event.text),
             // A fresh live estimate has started for whichever call is now streaming — even
             // right after a `"usage"` event reconciled the PREVIOUS call and set this `true`.
             exact: false,
           },
         },
       };
+    }
+    case "reasoning-delta":
+      return openOrAppendReasoning(state, event.text, Date.now());
     // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
-    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and flush as muted
-    // compact lines on done (not error: loop.ts yields error and continues). pendingTool is set
+    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and discarded on
+    // done (not error: loop.ts yields error and continues). pendingTool is set
     // for every tool name so the live status slot (app.tsx) can show the in-flight call.
     // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
-    // has a settled line to flush.
-    case "tool-call":
+    // has a group for recordThrow to settle.
+    case "tool-call": {
+      const settled = settleReasoning(state, Date.now());
       return {
-        ...flushStreaming(state),
+        ...flushStreaming(settled),
         // dispatch_subagents' live surface is the child panel, not a footer raw-id string.
         status: event.name === "dispatch_subagents" ? "" : `Running ${event.name}…`,
         pendingTool: { name: event.name, args: event.args },
-        toolActivity: recordCall(state.toolActivity, event.name, event.args),
+        toolActivity: recordCall(settled.toolActivity, event.name, event.args),
       };
+    }
     case "tool-result":
       return {
         ...state,
@@ -941,11 +1217,12 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // effect watching `state.session`) what actually lands on disk.
     case "messages-updated":
       return { ...state, session: { ...state.session, messages: event.messages } };
-    case "done":
+    case "done": {
+      const settled = settleReasoning(state, Date.now());
       return {
         ...pushLine(
-          flushToolActivity(state),
-          formatDoneLine(event.reason, state.turn?.tokens),
+          flushToolActivity(settled),
+          formatDoneLine(event.reason, settled.turn?.tokens),
           "system",
           true,
           true,
@@ -953,16 +1230,30 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         status: "",
         pendingTool: undefined,
       };
+    }
     // `state.turn` is deliberately left untouched here — see `"turn-ended"`'s own comment
     // (TuiAction) for why only that action, not this event, ends a turn. toolActivity is
     // also left in place: an error is not turn-end, and flushing here would drop calls
-    // that arrive after the error and erase a thrown tool-call that never got a result.
-    case "error":
+    // that arrive after the error. A thrown execute (pendingTool set) settles that open
+    // group as an anomaly instead of dumping the loop's model-facing wrapper as a
+    // transcript peer of the assistant's prose. Other errors (compaction, unknown tool,
+    // a failed stream) still push a marked system line.
+    case "error": {
+      const pending = state.pendingTool;
+      if (pending !== undefined) {
+        return {
+          ...state,
+          toolActivity: recordThrow(state.toolActivity, pending.name, pending.args, event.error),
+          status: "",
+          pendingTool: undefined,
+        };
+      }
       return {
-        ...pushLine(state, event.error),
+        ...pushLine(state, `${ERROR_MARK}${event.error}`),
         status: "",
         pendingTool: undefined,
       };
+    }
     default: {
       const _unhandled: never = event;
       return state;

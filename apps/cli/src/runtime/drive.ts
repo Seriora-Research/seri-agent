@@ -6,6 +6,7 @@ import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output";
 import { loadConfig } from "../config/config";
+import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { createHookRunner } from "../hooks/gate";
@@ -20,6 +21,7 @@ import {
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
 import type { CostReport } from "../provider/cost";
+import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { configuredProviders } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
 import { resolveReasoningEffort } from "../provider/reasoning";
@@ -102,11 +104,11 @@ export type DriveLoopResult = {
   // user would otherwise watch a roster row appear and vanish with nothing to show for it.
   directSummary: string | undefined;
   // Always true from driveLoop's own return, below — reaching it means a turn ran, unconditionally.
-  // runTui's own resolveRunTui (quit(), further down) is the one caller that can genuinely produce
-  // `false` here: an idle TUI session the user quit without ever submitting a task never calls
-  // driveLoop at all, so its own closure copy of this flag stays at its initial `false`. Not
-  // optional — driveLoop setting it unconditionally is what makes `false` mean exactly one thing
-  // (nothing ever ran) instead of also being read as "the non-interactive caller didn't bother."
+  // `false` is produced only by callers that never invoke driveLoop: runTui's quit() when the user
+  // closed an idle TUI without submitting a task, and run()'s non-interactive skip of a bare
+  // `--continue`/`--resume` whose session no longer awaitsReply. Not optional — driveLoop setting
+  // it unconditionally is what makes `false` mean exactly one thing (nothing ever ran) instead of
+  // also being read as "the caller didn't bother to set the field."
   ranAnyTurn: boolean;
 };
 
@@ -214,6 +216,8 @@ export async function driveLoop(
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
   const reasoningEffort = resolveReasoningEffort(session, loadConfig(ctx.configDir));
+  const samplingConfig = loadSamplingConfig(ctx.configDir);
+  prepared.trajectory.setStepCeiling(maxTurns ?? 500);
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
   // the consumer is the only thing that knows what a Ctrl-C means. Direct CLI/TUI callers register
@@ -248,7 +252,9 @@ export async function driveLoop(
   // not the one that was asked for and silently rerouted away from.
   const system = joinTiers(
     session.systemPrompt,
-    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory),
+    buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory, {
+      family: catalogEntry?.family ?? null,
+    }),
   );
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
   // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
@@ -264,6 +270,7 @@ export async function driveLoop(
     contextWindowSize: number | undefined;
     reasoningEffort: string | undefined;
     inherited: boolean;
+    credential: typeof route.credential;
   };
   const roleOverlays = new Map<string, RoleOverlay>();
   function overlayKey(role: string, request: TaskRouteRequest | undefined): string {
@@ -287,8 +294,9 @@ export async function driveLoop(
       request,
       catalog,
       configured,
-      prepared.plan,
+      effectiveHostedPlan(ctx.configDir, prepared.plan),
       subscribedProviders(ctx.configDir),
+      hostedPlanUsable(ctx.configDir),
     );
     const samePair = intended.model === route.model && intended.provider === route.provider;
     let childModel = model;
@@ -326,6 +334,7 @@ export async function driveLoop(
         request?.effort,
       ),
       inherited: actual.inherited,
+      credential: actual.credential,
     };
     roleOverlays.set(key, overlay);
     return overlay;
@@ -351,6 +360,8 @@ export async function driveLoop(
     provider: route.provider,
     modelId: route.model,
     credential: route.credential,
+    temperature: samplingConfig.temperature,
+    seed: samplingConfig.seed,
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
     system,
@@ -505,6 +516,8 @@ export async function driveLoop(
           // math, not just which endpoint gets called (PreparedRun.catalogEntry's own comment).
           contextWindowSize: catalogEntry?.contextWindow,
           reasoningEffort,
+          temperature: samplingConfig.temperature,
+          seed: samplingConfig.seed,
         })) {
       // The archivist's entire view of this turn — its own module owns what each event means to
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this

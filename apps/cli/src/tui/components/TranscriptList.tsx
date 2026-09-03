@@ -1,25 +1,82 @@
 /** @jsxImportSource @opentui/react */
 import { getTreeSitterClient } from "@opentui/core";
 import { memo } from "react";
+import { useTranscriptWindow, type TranscriptWindowMetrics } from "../hooks/useTranscriptWindow";
+import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
-import type { TranscriptEntry } from "../util/format";
+import { formatReasoningCaret, type TranscriptEntry } from "../util/format";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
 // rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
 // streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
 // markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
+//
+// When App passes window metrics, only viewport+overscan rows mount; spacer boxes stand in for
+// the unmounted prefix/suffix so the scrollbox's `scrollHeight` stays the height of the full
+// array. Isolated mounts (tests, ChildTranscript) omit metrics and still map every entry.
+export function indentReasoningBody(body: string): string {
+  // Caret is already TOOL_INDENT + mark; the body sits one indent further so
+  // it hangs under the word, not under the arrow.
+  const pad = `${TOOL_INDENT}${TOOL_INDENT}`;
+  return body
+    .split("\n")
+    .map((line) => `${pad}${line}`)
+    .join("\n");
+}
+
 export const TranscriptList = memo(function TranscriptList({
   transcript,
+  scrollTop,
+  viewportHeight,
+  sticky,
+  columns,
 }: {
   transcript: TranscriptEntry[];
+  scrollTop?: number;
+  viewportHeight?: number;
+  sticky?: boolean;
+  columns?: number;
 }) {
+  const metrics: TranscriptWindowMetrics | undefined =
+    viewportHeight === undefined ||
+    sticky === undefined ||
+    scrollTop === undefined ||
+    columns === undefined
+      ? undefined
+      : { scrollTop, viewportHeight, sticky, columns };
+  const { start, end, topSpacer, bottomSpacer, onRowSizeChange } = useTranscriptWindow(
+    transcript.length,
+    metrics,
+  );
+
+  if (metrics === undefined) {
+    return (
+      <>
+        {transcript.map((entry, index) => (
+          <TranscriptRow
+            key={index}
+            entry={entry}
+            gap={gapBefore(transcript[index - 1]?.role, entry.role)}
+          />
+        ))}
+      </>
+    );
+  }
+
   return (
     <>
-      {transcript.map((entry, index) => (
-        <TranscriptRow key={index} entry={entry} />
-      ))}
+      {topSpacer > 0 && <box height={topSpacer} flexShrink={0} />}
+      {transcript.slice(start, end).map((entry, offset) => {
+        const index = start + offset;
+        return (
+          <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
+            <TranscriptRow entry={entry} gap={gapBefore(transcript[index - 1]?.role, entry.role)} />
+          </box>
+        );
+      })}
+      {bottomSpacer > 0 && <box height={bottomSpacer} flexShrink={0} />}
     </>
   );
 });
@@ -40,21 +97,31 @@ const BULLET_GUTTER = BULLET.length + 1;
 // to fit `<markdown>`'s wrapped content (reproduced live — that shape clipped every multi-line
 // assistant message to one row), so the bullet has to sit outside that flex flow entirely for the
 // block to size itself off `<markdown>` alone. `BULLET_GUTTER` reserves the column(s) the overlay
-// paints into. `role === "user"` gets `theme.userBg`'s background band, `alignSelf="flex-start"` so
-// the box shrinks to its own wrapped content's width instead of stretching to the transcript's full
-// width (Yoga's default cross-axis behavior for a column-flex parent's children, which a plain
-// `<text bg=...>` never hit since a text node's own background already stops at its own
-// characters). A muted system entry with `markdown` set (the archivist summary) is the one
-// exception among non-assistant rows: it reuses the same `<markdown>` path, `fg={theme.muted}`,
-// and no `●` / `BULLET_GUTTER` — a secondary note, not an answer. Everything else (tool
-// calls/results/errors/done markers, and the archivist stats line) stays plain text: none of
-// those are model prose, and a tool result can legitimately contain a literal `*`/`#`/backtick that
-// must render as-is, not get parsed as markdown syntax.
+// paints into. `role === "user"` gets `theme.userBg`'s background band, stretched to the
+// transcript's full width (Yoga's default cross-axis behavior for a column-flex parent's children,
+// which a plain `<text bg=...>` never gets since a text node's own background stops at its own
+// characters). No horizontal padding on it, unlike every other surface: a padding cell belongs to
+// the box rather than to any text node, so a drag beginning on one starts no selection at all —
+// and the left edge is where a reader starts a drag. Verified against
+// tests/tui/transcriptSelection.test.tsx, which went from selecting the row to reporting no
+// selection. The band still reads as a turn marker rather than a stray
+// smudge the width of its own text. A muted system entry with `markdown` set (the archivist
+// summary) is the one exception among non-assistant rows: it reuses the same `<markdown>` path,
+// `fg={theme.muted}`, and no `●` / `BULLET_GUTTER` — a secondary note, not an answer. Everything
+// else (tool calls/results/errors/done markers, and the archivist stats line) stays plain text:
+// none of those are model prose, and a tool result can legitimately contain a literal
+// `*`/`#`/backtick that must render as-is, not get parsed as markdown syntax.
 // Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
 // object reference is stable across renders (state/reducer.ts only appends, never replaces existing
 // entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant
 // rows re-parse and re-highlight markdown, the expensive case) and only render newly appended ones.
-const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: TranscriptEntry }) {
+const TranscriptRow = memo(function TranscriptRow({
+  entry,
+  gap,
+}: {
+  entry: TranscriptEntry;
+  gap: 0 | 1;
+}) {
   if (entry.role === "assistant") {
     return (
       // minHeight={1}: without an in-flow bullet sibling, this box's height comes from `<markdown>`
@@ -62,7 +129,7 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
       // state/reducer.ts, flushes on `state.streaming.length > 0`, which whitespace satisfies)
       // measures to zero rows and would otherwise make the whole entry, bullet included, disappear
       // instead of rendering a blank line the way the old row-flex layout did for free.
-      <box minHeight={1}>
+      <box minHeight={1} marginTop={gap}>
         <text fg={theme.text} position="absolute" top={0} left={0}>
           {BULLET}
         </text>
@@ -79,14 +146,29 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
   }
   if (entry.role === "user") {
     return (
-      <box backgroundColor={theme.userBg} alignSelf="flex-start">
+      <box backgroundColor={theme.userBg} marginTop={gap}>
         <text fg={theme.text}>{entry.text}</text>
+      </box>
+    );
+  }
+  if (entry.kind === "reasoning") {
+    const caret = formatReasoningCaret(entry.expanded === true, entry.elapsedMs ?? 0);
+    return (
+      <box marginTop={gap} flexDirection="column">
+        <text fg={theme.muted}>
+          {TOOL_INDENT}
+          {caret}
+        </text>
+        {entry.expanded === true && entry.body !== undefined && entry.body.length > 0 ? (
+          <text fg={theme.muted}>{indentReasoningBody(entry.body)}</text>
+        ) : null}
       </box>
     );
   }
   if (entry.role === "system" && entry.muted && entry.markdown) {
     return (
       <markdown
+        marginTop={gap}
         fg={theme.muted}
         content={entry.text}
         syntaxStyle={syntaxStyle}
@@ -95,5 +177,9 @@ const TranscriptRow = memo(function TranscriptRow({ entry }: { entry: Transcript
       />
     );
   }
-  return <text fg={entry.muted ? theme.muted : theme.text}>{entry.text}</text>;
+  return (
+    <text marginTop={gap} fg={entry.muted ? theme.muted : theme.text}>
+      {entry.text}
+    </text>
+  );
 });

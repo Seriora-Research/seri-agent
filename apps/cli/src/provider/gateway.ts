@@ -11,14 +11,29 @@ import { configuredProviders } from "./keys";
 // from auth/authStore.ts, not a provider API key from keys.ts — the whole point of the file is
 // that it talks to OUR OWN server, which forwards to the real provider on seri's own key.
 
-// Provisional: apps/server has no confirmed production domain yet. SERI_GATEWAY_URL overrides
-// this, so pointing the CLI at a local apps/server needs no rebuild.
-const DEFAULT_GATEWAY_URL = "https://gateway.seriora.ai/api/gateway";
+// Production apps/server. SERI_GATEWAY_URL overrides this, so pointing the CLI at a local
+// apps/server or a staging profile needs no rebuild.
+const DEFAULT_GATEWAY_URL = "https://api.seriora.ai/api/gateway";
 
-// Exported so accountStatus.ts can reach the same server without a second SERI_GATEWAY_URL
-// resolution — both files talk to the same apps/server deployment.
+const STALE_GATEWAY_HOSTS: Readonly<Record<string, string>> = {
+  "gateway-dev.seriora.ai": "api-dev.seriora.ai",
+  "gateway.seriora.ai": "api.seriora.ai",
+};
+
+function rewriteStaleGatewayUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const nextHost = STALE_GATEWAY_HOSTS[parsed.hostname];
+    if (nextHost === undefined) return url;
+    parsed.hostname = nextHost;
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return url;
+  }
+}
+
 export function gatewayBaseUrl(configDir: string): string {
-  return getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL;
+  return rewriteStaleGatewayUrl(getApiKey("SERI_GATEWAY_URL", configDir) ?? DEFAULT_GATEWAY_URL);
 }
 
 // Never used for real auth — authedFetch below overwrites the Authorization header on every

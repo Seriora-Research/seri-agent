@@ -4,11 +4,19 @@
 // rather than reconciling into (or tearing down) the previous one, which otherwise leaves whatever
 // `useKeyboard`/`usePaste` handlers the previous tree registered permanently attached alongside the
 // next tree's own (see runtime/renderer.ts's own comment for the full mechanism and the Ctrl-C bug
-// this originally surfaced as).
+// this originally surfaced as), and `runtime/renderOptions.ts`'s own `applyTuiBackground` — the
+// other thing `getTuiRenderer` does to a freshly created renderer before anything is mounted into
+// it.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { type CliRenderer, RGBA } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot, useKeyboard } from "@opentui/react";
+import { setConfigValue } from "../../src/config/config";
+import { applyTuiBackground } from "../../src/tui/runtime/renderOptions";
 import { unmountBeforeRender } from "../../src/tui/runtime/renderer";
 
 const mountedRenderers: TestRendererSetup[] = [];
@@ -74,5 +82,68 @@ describe("unmountBeforeRender", () => {
 
     setup.mockInput.pressKey("\x1b[5~"); // PageUp
     expect(fireCount).toBe(2);
+  });
+});
+
+describe("applyTuiBackground", () => {
+  let configDir: string;
+  // Env hygiene: `configValue` reads process.env before config.json, so a dev box or CI runner
+  // with SERI_TUI_BACKGROUND genuinely exported would otherwise decide both assertions below.
+  const originalBackground = process.env.SERI_TUI_BACKGROUND;
+
+  beforeEach(() => {
+    delete process.env.SERI_TUI_BACKGROUND;
+    configDir = mkdtempSync(join(tmpdir(), "seri-tui-background-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+    // Teardown must `delete`, never reassign `undefined` — Bun/Node coerce
+    // `process.env.X = undefined` to the literal string "undefined" (code-quality.md's own
+    // cross-platform env-var lesson).
+    if (originalBackground === undefined) delete process.env.SERI_TUI_BACKGROUND;
+    else process.env.SERI_TUI_BACKGROUND = originalBackground;
+  });
+
+  async function freshRenderer(): Promise<CliRenderer> {
+    const setup = await createTestRenderer({ width: 20, height: 4 });
+    mountedRenderers.push(setup);
+    return setup.renderer;
+  }
+
+  // Reads past `backgroundColor`'s `private` declaration on purpose: the claim is that the
+  // renderer's OWN ground moved, and a spy on `setBackgroundColor` would pass just as happily
+  // against `CliRendererConfig.backgroundColor`, which @opentui/core 0.5.6 accepts and then never
+  // reads (see runtime/renderOptions.ts).
+  function ground(renderer: CliRenderer): [number, number, number, number] {
+    return (renderer as unknown as { backgroundColor: RGBA }).backgroundColor.toInts();
+  }
+
+  test("paints the ground named by SERI_TUI_BACKGROUND", async () => {
+    setConfigValue("SERI_TUI_BACKGROUND", "#141413", configDir);
+    const renderer = await freshRenderer();
+
+    applyTuiBackground(renderer, configDir);
+
+    expect(ground(renderer)).toEqual(RGBA.fromHex("#141413").toInts());
+  });
+
+  test("paints paper when nothing is configured", async () => {
+    const renderer = await freshRenderer();
+
+    applyTuiBackground(renderer, configDir);
+
+    expect(ground(renderer)).toEqual(RGBA.fromHex("#141413").toInts());
+  });
+
+  test("leaves the terminal's own ground alone when SERI_TUI_BACKGROUND is terminal", async () => {
+    setConfigValue("SERI_TUI_BACKGROUND", "terminal", configDir);
+    const renderer = await freshRenderer();
+
+    applyTuiBackground(renderer, configDir);
+
+    // Fully transparent — the renderer's own untouched default, which is what lets a terminal's
+    // transparency and blur survive.
+    expect(ground(renderer)).toEqual([0, 0, 0, 0]);
   });
 });

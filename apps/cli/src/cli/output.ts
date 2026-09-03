@@ -261,6 +261,8 @@ export function printEvent(event: LoopEvent): void {
     case "text-delta":
       process.stdout.write(event.text);
       break;
+    case "reasoning-delta":
+      break;
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
@@ -371,6 +373,10 @@ export function printCost(cost: CostReport): void {
   // dollar figure forward from an earlier, more-certain turn while the combined status degrades to
   // "unknown" (a later turn contributed nothing costable) — printing that number bare would claim
   // more certainty than the total actually has, which is the exact bug VERIFY pass 2 caught.
+  if (cost.status === "included") {
+    console.log("(cost: included)");
+    return;
+  }
   if (cost.status === "unknown") {
     console.log(
       cost.amountUsd === undefined
@@ -394,6 +400,7 @@ export function printCost(cost: CostReport): void {
 // returns a defined amountUsd once a catalog entry has pricing, and undefined pricing on the
 // archivist's own model is exactly as reachable as it is for the main turn's cost line.
 function costFragment(cost: CostReport): string {
+  if (cost.status === "included") return "cost: included";
   if (cost.amountUsd === undefined) return "cost: unknown";
   const amount = `$${cost.amountUsd.toFixed(4)}`;
   return cost.status === "estimated" ? `cost: ~${amount} (estimated)` : `cost: ${amount}`;
@@ -470,5 +477,5 @@ export function pendingQueueNotice(memoryCount: number, skillCount: number): str
     memoryCount > 0 ? "/memory pending" : undefined,
     skillCount > 0 ? "/skills pending" : undefined,
   ].filter((c) => c !== undefined);
-  return `${parts.join(" and ")} waiting for review · ${review.join(", ")}`;
+  return `! ${parts.join(" and ")} waiting for review · ${review.join(", ")}`;
 }

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AUTH_FILENAME } from "../../src/auth/authStore";
+import { CODEX_SERI_AUTH_FILENAME } from "../../src/auth/codexAuthStore";
+import { CODEX_IGNORE_FILENAME } from "../../src/auth/codexIgnore";
 import { CONFIG_FILENAME } from "../../src/config/config";
 import {
   DAEMON_DESCRIPTOR_FILENAME,
@@ -25,6 +27,7 @@ import { PERMISSIONS_FILENAME } from "../../src/permissions/store";
 
 const originalPlatform = process.platform;
 const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
 const originalSeriProfile = process.env.SERI_PROFILE;
 
 function setPlatform(platform: string): void {
@@ -41,17 +44,30 @@ function restoreEnv(key: string, original: string | undefined): void {
 afterEach(() => {
   setPlatform(originalPlatform);
   restoreEnv("HOME", originalHome);
+  restoreEnv("USERPROFILE", originalUserProfile);
   restoreEnv("SERI_PROFILE", originalSeriProfile);
   setProfileOverride(undefined);
 });
 
 describe("getBaseConfigDir", () => {
-  // getBaseConfigDir() has no win32 branch — these pin platform-*independence* (win32 must
-  // resolve identically to posix), not a Windows-specific code path.
   test("win32 with HOME set returns joined path", () => {
     setPlatform("win32");
     process.env.HOME = "C:\\Users\\test";
     expect(getBaseConfigDir()).toBe(join("C:\\Users\\test", ".seri"));
+  });
+
+  test("win32 with a POSIX HOME uses USERPROFILE", () => {
+    setPlatform("win32");
+    process.env.HOME = "/c/Users/dest";
+    process.env.USERPROFILE = "C:\\Users\\dest";
+    expect(getBaseConfigDir()).toBe(join("C:\\Users\\dest", ".seri"));
+  });
+
+  test("win32 with HOME=/home/user uses USERPROFILE", () => {
+    setPlatform("win32");
+    process.env.HOME = "/home/user";
+    process.env.USERPROFILE = "C:\\Users\\dest";
+    expect(getBaseConfigDir()).toBe(join("C:\\Users\\dest", ".seri"));
   });
 
   // homedir() is read here, after HOME is deleted, not captured beforehand: Bun/Node's os.homedir()
@@ -60,6 +76,7 @@ describe("getBaseConfigDir", () => {
   test("win32 without HOME falls back to homedir()", () => {
     setPlatform("win32");
     delete process.env.HOME;
+    delete process.env.USERPROFILE;
     expect(getBaseConfigDir()).toBe(join(homedir(), ".seri"));
   });
 
@@ -199,8 +216,8 @@ describe("profileNameError", () => {
   });
 
   // Pinned against the literal expected membership, not derived from getReservedProfileNames()
-  // itself: the three file names are read from the module that actually writes each file, so a
-  // real desync between paths.ts's reserved set and what config.ts/authStore.ts/store.ts write
+  // itself: the file names are read from the module that actually writes each file, so a
+  // real desync between paths.ts's reserved set and what config.ts/authStore.ts/store.ts/codexIgnore.ts write
   // would fail here; the four directory names (no single owning file) are hardcoded literals, so
   // an accidental deletion from the reserved set — permissions.yaml or bin included — turns this
   // test red instead of silently shrinking the set the iteration test above checks.
@@ -209,6 +226,8 @@ describe("profileNameError", () => {
       CONFIG_FILENAME,
       AUTH_FILENAME,
       PERMISSIONS_FILENAME,
+      CODEX_IGNORE_FILENAME,
+      CODEX_SERI_AUTH_FILENAME,
       "sessions",
       "checkpoints",
       "rg",

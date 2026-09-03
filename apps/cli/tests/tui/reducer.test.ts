@@ -1,20 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { join } from "node:path";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { McpPanelRow } from "../../src/mcp/commands";
 import type { SessionState } from "../../src/session/session";
+import type { ChildEventPayload } from "../../src/subagents/dispatch";
+import { rosterModelSuffix } from "../../src/tui/components/SubagentPanel";
 import type {
   ConfigRow,
   ModelPickerEntry,
   PermissionRow,
   SetupProviderRow,
 } from "../../src/tui/state/commands";
-import type { ChildEventPayload } from "../../src/subagents/dispatch";
-import { rosterModelSuffix } from "../../src/tui/components/SubagentPanel";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
-import { TREE_BRANCH } from "../../src/tui/theme/theme";
+import { TOOL_INDENT } from "../../src/tui/theme/spacing";
+import { ERROR_MARK, TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -28,12 +30,19 @@ function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionSt
   };
 }
 
+const ROADMAP = join("docs", "ROADMAP.md");
+const READ_A = `→ Read(a.txt)\n${TOOL_INDENT}Read 1 file`;
+const READ_TWO = `→ Read(a.txt)\n${TOOL_INDENT}Read 2 files`;
+const RAN_ECHO_A = `→ Bash(echo a)\n${TOOL_INDENT}Ran 1 shell command`;
+const RAN_TWO = `→ Bash(echo a)\n${TOOL_INDENT}Ran 2 shell commands`;
+
 describe("initialTuiState", () => {
   test("starts with an empty transcript and the session's own permission mode", () => {
     const state = initialTuiState(session({ permissionMode: "read-only" }));
 
     expect(state.transcript).toEqual([]);
     expect(state.streaming).toBe("");
+    expect(state.reasoning).toEqual({ expanded: false });
     expect(state.session.permissionMode).toBe("read-only");
   });
 });
@@ -47,6 +56,35 @@ describe("tuiReducer: session-updated", () => {
     });
 
     expect(next.session.permissionMode).toBe("auto");
+  });
+});
+
+describe("tuiReducer: user-turn-committed", () => {
+  test("merges the messages into the current session, leaving the rest of it alone", () => {
+    const state = initialTuiState(session({ permissionMode: "read-only" }));
+    const next = tuiReducer(state, {
+      type: "user-turn-committed",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(next.session.messages).toEqual([{ role: "user", content: "hi" }]);
+    expect(next.session.permissionMode).toBe("read-only");
+  });
+
+  // The reason this is not a synthetic `messages-updated`: that event is also the transcript's own
+  // signal, and a committed user row must not disturb an answer already streaming into it.
+  test("leaves the transcript and the streaming buffer untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "loop-event",
+      event: { type: "text-delta", text: "partial" },
+    });
+    state = tuiReducer(state, {
+      type: "user-turn-committed",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(state.transcript).toEqual([]);
+    expect(state.streaming).toBe("partial");
   });
 });
 
@@ -192,7 +230,9 @@ describe("tuiReducer: transcript-cleared", () => {
 });
 
 describe("tuiReducer: transcript role tagging", () => {
-  test('a role: "user" append after existing content gets a leading blank system separator', () => {
+  // The blank row above a user message is a margin (gapBefore, theme/spacing.ts), not an entry, so
+  // `state.transcript` holds only what something actually said.
+  test('a role: "user" append after existing content lands with no spacer entry before it', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "first",
@@ -201,17 +241,15 @@ describe("tuiReducer: transcript role tagging", () => {
 
     expect(state.transcript).toEqual([
       { role: "system", text: "first" },
-      { role: "system", text: "" },
       { role: "user", text: "> hello" },
     ]);
   });
 
-  // Regression: echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`,
-  // and it always passes `flush: false` (deliberately, so a rejected/echoed submission never
-  // fragments an in-progress streamed answer — see pushLine's own comment). The separator used to
-  // be computed only on the `flush: true` branch, so this exact combination — the only one a real
-  // user turn ever produces — silently skipped the leading blank line.
-  test('role: "user", flush: false (the actual echoUserInput dispatch shape) still gets a leading blank separator', () => {
+  // echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`, and it always
+  // passes `flush: false` (deliberately, so a rejected/echoed submission never fragments an
+  // in-progress streamed answer — see pushLine's own comment). Asserted separately from the
+  // `flush: true` case above because that combination is the only one a real user turn produces.
+  test('role: "user", flush: false (the actual echoUserInput dispatch shape) appends only the echo', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "first",
@@ -225,12 +263,11 @@ describe("tuiReducer: transcript role tagging", () => {
 
     expect(state.transcript).toEqual([
       { role: "system", text: "first" },
-      { role: "system", text: "" },
       { role: "user", text: "> hello" },
     ]);
   });
 
-  test('the very first entry in a fresh session gets no leading separator, even with role: "user"', () => {
+  test('the very first entry in a fresh session stands alone, even with role: "user"', () => {
     const state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
       line: "> hello",
@@ -277,6 +314,7 @@ describe("tuiReducer: transcript role tagging", () => {
         type: "compacted",
         summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
         evictedCount: 3,
+        tokensBefore: 100,
         usage: {
           inputTokens: 12,
           inputTokenDetails: {
@@ -323,7 +361,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.streaming).toBe("");
     expect(state.status).toBe("Running read_file…");
     expect(state.pendingTool).toEqual({ name: "read_file", args: { path: "a.txt" } });
-    expect(state.transcript.some((e) => e.text.includes("→ read_file"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
   });
 
   test("a tool-result clears the running status without pushing a transcript line", () => {
@@ -334,46 +372,45 @@ describe("tuiReducer: loop-event", () => {
     expect(state.pendingTool).toBeUndefined();
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toHaveLength(1);
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
   });
 
-  test("a single successful tool-result followed by done produces one muted entry with no raw JSON", () => {
+  test("a single successful tool-result followed by done drops the live tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0]).toEqual({ role: "system", text: "Read a.txt", muted: true });
-    expect(toolLines[0].text).not.toContain("{");
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 1 file")).toHaveLength(1);
     expect(state.transcript.at(-1)).toEqual({ role: "system", text: "done", muted: true });
     expect(state.toolActivity).toEqual([]);
   });
 
-  test("two same-name successful results followed by done produce one aggregated-count entry", () => {
+  test("two same-name successful results followed by done drop the aggregated live tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_TWO]);
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toBe("Read 2 files");
-    expect(toolLines[0].muted).toBe(true);
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.filter((e) => e.muted && e.text === "Read 2 files")).toHaveLength(1);
+    expect(state.toolActivity).toEqual([]);
   });
 
   test("after two same-name results and before done, live render is one Read 2 files line", () => {
     let state = apply(undefined, { type: "tool-call", name: "read_file", args: { path: "a.txt" } });
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
 
     state = apply(state, { type: "tool-call", name: "read_file", args: { path: "b.txt" } });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read a.txt"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_A]);
 
     state = apply(state, { type: "tool-result", name: "read_file", result: "ok" });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Read 2 files"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([READ_TWO]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
@@ -388,14 +425,14 @@ describe("tuiReducer: loop-event", () => {
     };
     let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "echo a" } });
     state = apply(state, { type: "tool-result", name: "bash", result: ok });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran echo a"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([RAN_ECHO_A]);
     state = apply(state, { type: "tool-call", name: "bash", args: { command: "echo b" } });
     state = apply(state, { type: "tool-result", name: "bash", result: ok });
-    expect(renderLiveToolActivity(state.toolActivity)).toEqual(["Ran 2 shell commands"]);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([RAN_TWO]);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
   });
 
-  test("a failing bash result followed by done produces a TREE_BRANCH-prefixed anomaly line", () => {
+  test("a failing bash result is live-only; done drops the anomaly with the tree", () => {
     let state = apply(undefined, { type: "tool-call", name: "bash", args: { command: "false" } });
     state = apply(state, {
       type: "tool-result",
@@ -411,13 +448,13 @@ describe("tuiReducer: loop-event", () => {
     });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toContain(TREE_BRANCH);
-    expect(toolLines[0].text).toContain("exit 1");
+    expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("exit 1"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
-  test("a declined permission-denied followed by done produces an anomaly line and does not throw", () => {
+  test("a declined permission-denied does not throw; done drops the anomaly with the tree", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "write_file",
@@ -427,16 +464,16 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "permission-denied", name: "write_file", reason: "declined" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const toolLines = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(toolLines).toHaveLength(1);
-    expect(toolLines[0].text).toContain(TREE_BRANCH);
-    expect(toolLines[0].text).toContain("declined");
+    expect(state.transcript.some((e) => e.text.includes(TREE_BRANCH))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes("declined"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Wrote 1 file")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
   // HIGH 1: loop.ts yields `error` and continues (compaction catch, unknown tool, thrown
   // execute). Flushing toolActivity on error would split one turn's calls across two muted
   // groups and drop anything that arrives after the error.
-  test("a mid-turn error does not flush toolActivity; later tools still aggregate on done", () => {
+  test("a mid-turn error does not flush toolActivity; later tools still aggregate live, then drop on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "read_file",
@@ -447,7 +484,7 @@ describe("tuiReducer: loop-event", () => {
 
     expect(state.toolActivity).toHaveLength(1);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
-    expect(state.transcript.at(-1)?.text).toBe("compaction failed");
+    expect(state.transcript.at(-1)?.text).toBe(`${ERROR_MARK}compaction failed`);
 
     state = apply(state, {
       type: "tool-call",
@@ -457,35 +494,66 @@ describe("tuiReducer: loop-event", () => {
     state = apply(state, { type: "tool-result", name: "read_file", result: { content: "y" } });
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const muted = state.transcript.filter((e) => e.muted && !e.text.startsWith("done"));
-    expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe("Read 2 files");
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 2 files")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
   });
 
   // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
-  // live line vanishes and no settled line is ever committed.
-  test("a tool-call followed by error (no tool-result) still flushes a settled line on done", () => {
+  // live line vanishes and no settled line is ever committed. The error itself must not
+  // become a transcript peer of the assistant's prose — it settles the open group.
+  test("a tool-call followed by error (no tool-result) still paints live, then drops the tree on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "bash",
       args: { command: "explode" },
     });
-    state = apply(state, { type: "error", error: "tool threw" });
+    state = apply(state, {
+      type: "error",
+      error: 'Tool "bash" threw during execution: Error: boom',
+    });
 
     expect(state.toolActivity).toHaveLength(1);
-    expect(state.transcript.filter((e) => e.muted)).toEqual([]);
+    expect(state.pendingTool).toBeUndefined();
+    expect(state.transcript).toEqual([]);
+    expect(renderLiveToolActivity(state.toolActivity)[0]).toContain(
+      `${TOOL_INDENT}${TREE_BRANCH}boom`,
+    );
 
     state = apply(state, { type: "done", reason: "no-tool-call" });
 
-    const muted = state.transcript.filter((e) => e.muted);
-    expect(muted.length).toBeGreaterThanOrEqual(1);
-    expect(muted.some((e) => e.text.includes("explode"))).toBe(true);
+    expect(state.transcript.some((e) => e.text.includes("explode"))).toBe(false);
+    expect(state.transcript.some((e) => e.text.includes(`${TREE_BRANCH}boom`))).toBe(false);
+    expect(state.transcript.every((e) => !e.text.includes("threw during execution"))).toBe(true);
+    expect(state.transcript.some((e) => e.text === "Ran 1 shell command")).toBe(true);
+    expect(state.toolActivity).toEqual([]);
+  });
+
+  test("a thrown read_file is a file-not-found anomaly, not a raw error line", () => {
+    let state = apply(undefined, {
+      type: "tool-call",
+      name: "read_file",
+      args: { path: ROADMAP },
+    });
+    state = apply(state, {
+      type: "error",
+      error: `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+    });
+
+    expect(state.transcript).toEqual([]);
+    expect(state.pendingTool).toBeUndefined();
+    const live = renderLiveToolActivity(state.toolActivity);
+    expect(live).toHaveLength(1);
+    expect(live[0]).toContain(`→ Read(${ROADMAP})`);
+    expect(live[0]).toContain(`${TOOL_INDENT}${TREE_BRANCH}file not found`);
+    expect(live[0]).not.toContain("threw during execution");
+    expect(live[0]).not.toContain("ENOENT");
   });
 
   // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
   // correct (error itself must not flush, because some errors continue), but turn-ended is the
   // actual end of that turn and must commit whatever was already recorded.
-  test("error then turn-ended without done flushes accumulated toolActivity", () => {
+  test("error then turn-ended without done drops the live tree", () => {
     let state = apply(undefined, {
       type: "tool-call",
       name: "read_file",
@@ -499,9 +567,8 @@ describe("tuiReducer: loop-event", () => {
 
     state = tuiReducer(state, { type: "turn-ended" });
 
-    const muted = state.transcript.filter((e) => e.muted);
-    expect(muted).toHaveLength(1);
-    expect(muted[0]?.text).toBe("Read a.txt");
+    expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
+    expect(state.transcript.some((e) => e.text === "Read 1 file")).toBe(true);
     expect(state.toolActivity).toEqual([]);
   });
 
@@ -518,6 +585,7 @@ describe("tuiReducer: loop-event", () => {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 3,
+      tokensBefore: 100,
       usage: {
         inputTokens: 12,
         inputTokenDetails: {
@@ -709,6 +777,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     keyConfigured: true,
     alternatives: 0,
     gatewayReachable: false,
+    subscriptionCovered: false,
   };
 
   test("model-picker-requested sets pendingModelPicker", () => {
@@ -827,11 +896,64 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     // Consuming the prefill must not disturb the session the same dispatch already landed.
     expect(state.session.model).toBe(entry.id);
   });
+
+  test("model-picker-resolved uses a caller-supplied route even when keyConfigured is false", () => {
+    let state = tuiReducer(
+      initialTuiState(session(), {
+        route: {
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          rerouted: false,
+          credential: "gateway",
+        },
+      }),
+      { type: "model-picker-requested", entries: [row] },
+    );
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+      route: {
+        model: "minimax/minimax-m3:free",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      },
+    });
+
+    expect(state.route).toEqual({
+      model: "minimax/minimax-m3:free",
+      provider: "openrouter",
+      rerouted: false,
+      credential: "gateway",
+    });
+  });
+
+  test("model-picker-resolved without a supplied route leaves state.route alone when keyConfigured is false", () => {
+    const previous = {
+      model: "openai/gpt-oss-120b",
+      provider: "openrouter" as const,
+      rerouted: false,
+      credential: "gateway" as const,
+    };
+    let state = tuiReducer(initialTuiState(session(), { route: previous }), {
+      type: "model-picker-requested",
+      entries: [row],
+    });
+
+    state = tuiReducer(state, {
+      type: "model-picker-resolved",
+      pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+    });
+
+    expect(state.route).toEqual(previous);
+  });
 });
 
 describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
   const rows: SetupProviderRow[] = [
     {
+      kind: "key",
       provider: "groq",
       keyName: "GROQ_API_KEY",
       source: "unset",
@@ -890,6 +1012,22 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
 
     expect(state.pendingSetup).toEqual({ step: "list", rows, selected: 0 });
     expect(state.pendingModelPicker).toEqual({ entries: [] });
+  });
+
+  test("setup-requested skips heading rows when choosing the initial selection", () => {
+    const mixed: SetupProviderRow[] = [
+      { kind: "heading", label: "API keys" },
+      {
+        kind: "key",
+        provider: "groq",
+        keyName: "GROQ_API_KEY",
+        source: "unset",
+        masked: undefined,
+        removable: false,
+      },
+    ];
+    const state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows: mixed });
+    expect(state.pendingSetup).toEqual({ step: "list", rows: mixed, selected: 1 });
   });
 });
 
@@ -1197,6 +1335,10 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
 
   test("initialTuiState with showSplash: true sets pendingSplash to true", () => {
     expect(initialTuiState(session(), { showSplash: true }).pendingSplash).toBe(true);
+  });
+
+  test("initialTuiState with authOffer: true sets authOffer", () => {
+    expect(initialTuiState(session(), { authOffer: true }).authOffer).toBe(true);
   });
 
   test("splash-requested sets pendingSplash to true from a default-false state", () => {
@@ -1605,6 +1747,7 @@ describe("applyLoopEvent: compacted folds its own usage into turn.tokens", () =>
     type: "compacted",
     summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
     evictedCount: 3,
+    tokensBefore: 100,
     usage: usageOf(60, 15),
   };
 
@@ -1766,6 +1909,90 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(state.transcript).toEqual([]);
     expect(state.toolActivity).toEqual([]);
     expect(state.pendingTool).toBeUndefined();
+  });
+
+  test("a child tool-result clears currentTool so a later error is not a false throw", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-result",
+        name: "read_file",
+        result: "ok",
+      }),
+    );
+
+    const afterResult = panel(state).subagents[0];
+    expect(afterResult?.currentTool).toBeUndefined();
+
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "error",
+        error: "lint could not be run",
+      }),
+    );
+    const child = panel(state).subagents[0];
+    expect(child?.currentTool).toBeUndefined();
+    expect(child?.status).toBe("error");
+    expect(child?.toolActivity[0]?.anomalyLines).toEqual([]);
+  });
+
+  test("a child permission-denied clears currentTool", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "permission-denied",
+        name: "read_file",
+        reason: "hook",
+      }),
+    );
+    expect(panel(state).subagents[0]?.currentTool).toBeUndefined();
+  });
+
+  test("a child tool-call then error settles an anomaly and clears currentTool", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "tool-call",
+        name: "read_file",
+        args: { path: "foo.ts" },
+      }),
+    );
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "error",
+        error: 'Tool "read_file" threw during execution: Error: ENOENT: no such file or directory',
+      }),
+    );
+
+    const child = panel(state).subagents[0];
+    expect(child?.currentTool).toBeUndefined();
+    expect(child?.status).toBe("error");
+    expect(child?.toolActivity[0]?.anomalyLines).toEqual(["file not found"]);
+    expect(state.transcript).toEqual([]);
   });
 
   test("child-started copies the actual model pair when the child did not inherit", () => {
@@ -2049,6 +2276,7 @@ describe("tuiReducer: subagent-child-event", () => {
         type: "compacted",
         summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
         evictedCount: 2,
+        tokensBefore: 100,
         usage: usageOf(60, 15),
       }),
     );
@@ -2187,5 +2415,390 @@ describe("tuiReducer: a /name turn's synthetic dispatch events", () => {
     });
     expect(state.session.messages).toHaveLength(3);
     expect(state.session.messages[0]).toEqual({ role: "user", content: "grade the diff" });
+  });
+});
+
+describe("message queue", () => {
+  // Ids are cli.ts's to mint (state/reducer.ts's own note on the field), so the helper stands in
+  // for it. Assertions below read `texts()` rather than `items` directly: what the queue holds is
+  // the messages, and threading a synthetic id through every expectation would bury that.
+  function queued(...items: string[]): TuiState {
+    return items.reduce(
+      (state, text, index) => tuiReducer(state, { type: "queue-appended", id: `q${index}`, text }),
+      initialTuiState(session()),
+    );
+  }
+
+  function texts(state: TuiState): string[] {
+    return state.queue.items.map((item) => item.text);
+  }
+
+  // The invariant MessageQueue's own comment states, asserted as one function so every case below
+  // can end with it instead of restating three expectations each.
+  function expectInvariant(state: TuiState): void {
+    const { items, selected, editing } = state.queue;
+    if (items.length === 0) {
+      expect({ selected, editing }).toEqual({ selected: 0, editing: false });
+      return;
+    }
+    expect(selected).toBeGreaterThanOrEqual(0);
+    expect(selected).toBeLessThan(items.length);
+  }
+
+  test("a fresh session has an empty queue", () => {
+    const state = initialTuiState(session());
+    expect(state.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  test("the first append selects it, and a later one leaves the selection alone", () => {
+    const one = queued("first");
+    expect(texts(one)).toEqual(["first"]);
+    expect(one.queue.selected).toBe(0);
+
+    const moved = tuiReducer(queued("first", "second"), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    expect(moved.queue.selected).toBe(1);
+
+    const appended = tuiReducer(moved, { type: "queue-appended", id: "q2", text: "third" });
+    expect(appended.queue.selected).toBe(1);
+    expectInvariant(appended);
+  });
+
+  test("appended text is stored exactly as typed, not trimmed", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "queue-appended",
+      id: "q0",
+      text: "  indented on purpose  ",
+    });
+    expect(texts(state)).toEqual(["  indented on purpose  "]);
+  });
+
+  test("every queued message keeps a distinct id, which is what a row is keyed on", () => {
+    const state = queued("same", "same");
+    const ids = state.queue.items.map((item) => item.id);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("selection clamps at both ends instead of wrapping", () => {
+    const top = tuiReducer(queued("a", "b"), { type: "queue-selection-moved", delta: -1 });
+    expect(top.queue.selected).toBe(0);
+
+    const bottom = [1, 1, 1].reduce(
+      (state, delta) => tuiReducer(state, { type: "queue-selection-moved", delta }),
+      queued("a", "b"),
+    );
+    expect(bottom.queue.selected).toBe(1);
+    expectInvariant(bottom);
+  });
+
+  test("selection does not move on an empty queue", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    expect(state.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  // The retargeting bug the three no-ops exist for: without this, the band moves off the row the
+  // editor is mounted on and the commit writes the edited text into a different message.
+  test("selection does not move while a row is being edited", () => {
+    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-selection-moved", delta: 1 });
+    expect(after.queue.selected).toBe(0);
+    expect(after.queue.editing).toBe(true);
+  });
+
+  test("a drop is refused while a row is being edited", () => {
+    const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-item-dropped" });
+    expect(texts(after)).toEqual(["a", "b"]);
+    expect(after.queue.editing).toBe(true);
+  });
+
+  test("edit-started is refused on an empty queue and while already editing", () => {
+    const empty = tuiReducer(initialTuiState(session()), { type: "queue-edit-started" });
+    expect(empty.queue.editing).toBe(false);
+
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    expect(tuiReducer(editing, { type: "queue-edit-started" })).toBe(editing);
+  });
+
+  test("a commit replaces the selected row in place and ends the edit", () => {
+    const editing = tuiReducer(
+      tuiReducer(queued("a", "b"), { type: "queue-selection-moved", delta: 1 }),
+      { type: "queue-edit-started" },
+    );
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "b, revised" });
+    expect(texts(after)).toEqual(["a", "b, revised"]);
+    expect(after.queue.selected).toBe(1);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("an edited row keeps its id, so the editor is not remounted underneath the edit", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const before = editing.queue.items[0].id;
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "revised" });
+    expect(after.queue.items[0].id).toBe(before);
+  });
+
+  test("a blank commit keeps the original text and still ends the edit", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-edit-committed", text: "   " });
+    expect(texts(after)).toEqual(["a"]);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("a cancelled edit leaves the text untouched", () => {
+    const editing = tuiReducer(queued("a"), { type: "queue-edit-started" });
+    const after = tuiReducer(editing, { type: "queue-edit-cancelled" });
+    expect(texts(after)).toEqual(["a"]);
+    expect(after.queue.editing).toBe(false);
+  });
+
+  test("a drop renumbers the rest and clamps the selection to the new last row", () => {
+    const onLast = [1, 1].reduce(
+      (state, delta) => tuiReducer(state, { type: "queue-selection-moved", delta }),
+      queued("a", "b", "c"),
+    );
+    expect(onLast.queue.selected).toBe(2);
+
+    const after = tuiReducer(onLast, { type: "queue-item-dropped" });
+    expect(texts(after)).toEqual(["a", "b"]);
+    expect(after.queue.selected).toBe(1);
+    expectInvariant(after);
+  });
+
+  test("dropping the last row returns the empty shape rather than a stale selection", () => {
+    const after = tuiReducer(queued("only"), { type: "queue-item-dropped" });
+    expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  // `selected - 1` rather than `selected`: every remaining row shifted up by one, so the band has
+  // to follow the message it was on rather than slide onto the next one down.
+  test("taking the head keeps the band on the same message", () => {
+    const onSecond = tuiReducer(queued("a", "b", "c"), {
+      type: "queue-selection-moved",
+      delta: 1,
+    });
+    const after = tuiReducer(onSecond, { type: "queue-head-taken" });
+    expect(texts(after)).toEqual(["b", "c"]);
+    expect(after.queue.selected).toBe(0);
+    expectInvariant(after);
+  });
+
+  test("taking the head while it is selected clamps back to the new head", () => {
+    const after = tuiReducer(queued("a", "b"), { type: "queue-head-taken" });
+    expect(texts(after)).toEqual(["b"]);
+    expect(after.queue.selected).toBe(0);
+  });
+
+  test("taking the only queued message empties the queue", () => {
+    const after = tuiReducer(queued("only"), { type: "queue-head-taken" });
+    expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
+  });
+
+  test("the queue survives a turn ending, which is the whole point of it", () => {
+    const state = tuiReducer(queued("next up"), { type: "turn-ended" });
+    expect(texts(state)).toEqual(["next up"]);
+  });
+});
+
+describe("tuiReducer: reasoning spans", () => {
+  function withUser(state = initialTuiState(session())) {
+    return tuiReducer(state, {
+      type: "transcript-append",
+      line: "> check the spec",
+      role: "user",
+    });
+  }
+
+  test("a reasoning span settles on the first tool-call with span time only", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "start at ROADMAP" },
+    });
+    now.mockReturnValue(5_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+    });
+    now.mockRestore();
+
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      role: "system",
+      muted: true,
+      kind: "reasoning",
+      body: "start at ROADMAP",
+      text: "▸ thought · 4s",
+    });
+    expect(rows[0]?.text).not.toContain("↑");
+    expect(state.reasoning.live).toBeUndefined();
+  });
+
+  test("a reasoning span settles on done when there is no tool-call", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "no tools needed" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    expect(state.transcript.filter((entry) => entry.kind === "reasoning")).toHaveLength(1);
+    expect(state.transcript.find((entry) => entry.kind === "reasoning")?.text).toBe(
+      "▸ thought · 2s",
+    );
+  });
+
+  test("a second span after a tool is a second row", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.body).toBe("first");
+    expect(rows[1]?.body).toBe("second");
+    expect(rows[1]?.text).toBe("▸ thought · 3s");
+  });
+
+  test("a second think after a tool keeps two carets; done drops the tree", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: { path: "docs/ROADMAP.md" } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "052 shipped" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const kinds = state.transcript.map((entry) =>
+      entry.kind === "reasoning" ? `thought:${entry.body}` : `${entry.role}:${entry.text}`,
+    );
+    const thoughtIdx = kinds.findIndex((line) => line === "thought:first");
+    const thought2Idx = kinds.findIndex((line) => line === "thought:second");
+    const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
+    const doneIdx = kinds.findIndex(
+      (line) => line === "system:done" || line.startsWith("system:done ·"),
+    );
+    expect(thoughtIdx).toBeGreaterThanOrEqual(0);
+    expect(thought2Idx).toBeGreaterThan(thoughtIdx);
+    expect(answerIdx).toBeGreaterThan(thought2Idx);
+    expect(doneIdx).toBeGreaterThan(answerIdx);
+    expect(kinds.some((line) => line.includes("→ Read"))).toBe(false);
+    expect(kinds).toContain("system:Read 1 file");
+    expect(state.toolActivity).toEqual([]);
+  });
+
+  test("no reasoning-delta leaves today's transcript with no caret", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "just an answer" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+
+    expect(state.transcript.some((entry) => entry.kind === "reasoning")).toBe(false);
+    expect(state.transcript.some((entry) => entry.text.includes("thought"))).toBe(false);
+  });
+
+  test("opening a thought does not commit the answer buffer", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "thinking" },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "text-delta", text: "the secret answer" },
+    });
+    expect(state.streaming).toBe("the secret answer");
+    expect(state.transcript.some((entry) => entry.text.includes("the secret answer"))).toBe(false);
+
+    state = tuiReducer(state, { type: "reasoning-toggled" });
+    expect(state.streaming).toBe("the secret answer");
+    expect(state.transcript.some((entry) => entry.text.includes("the secret answer"))).toBe(false);
+    const thought = state.transcript.find((entry) => entry.kind === "reasoning");
+    expect(thought?.expanded).toBe(true);
+    expect(thought?.body).toBe("thinking");
+  });
+
+  test("transcript-cleared and turn-started drop a live span", () => {
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "ephemeral" },
+    });
+    expect(state.reasoning.live?.text).toBe("ephemeral");
+
+    const cleared = tuiReducer(state, { type: "transcript-cleared" });
+    expect(cleared.reasoning).toEqual({ expanded: false });
+    expect(cleared.transcript).toEqual([]);
+
+    const nextTurn = tuiReducer(state, { type: "turn-started", startedAt: 1, inputEstimate: 0 });
+    expect(nextTurn.reasoning).toEqual({ expanded: false });
   });
 });

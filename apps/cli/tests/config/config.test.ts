@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
+  CONFIG_FILENAME,
   getApiKey,
   loadConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   setConfigValue,
   setConfigValues,
+  tuiBackgroundColor,
 } from "../../src/config/config";
 
 const originalHome = process.env.HOME;
@@ -41,6 +43,31 @@ afterEach(() => {
 describe("loadConfig", () => {
   test("returns {} when config.json does not exist", () => {
     expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is empty", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "");
+    expect(loadConfig()).toEqual({});
+  });
+
+  // Bun's JSON.parse of `\0` prints `Unrecognized token ''` — the quotes look empty
+  // because the token is invisible. That is the Windows `--profile staging` crash.
+  test("returns {} when config.json is a NUL byte", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("returns {} when config.json is malformed UTF-8 JSON", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "{not valid json");
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("reads a UTF-16 LE config.json the way Windows editors write one", () => {
+    writeFileSync(
+      join(configDir, CONFIG_FILENAME),
+      Buffer.from(`\uFEFF${JSON.stringify({ GROQ_API_KEY: "gsk_from_notepad" })}`, "utf16le"),
+    );
+    expect(loadConfig()).toEqual({ GROQ_API_KEY: "gsk_from_notepad" });
   });
 });
 
@@ -194,5 +221,26 @@ describe("loadTrajectoryConfig", () => {
     delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
     expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
+});
+
+describe("tuiBackgroundColor", () => {
+  test("returns a #rrggbb value, in either case", () => {
+    expect(tuiBackgroundColor("#141413")).toBe("#141413");
+    expect(tuiBackgroundColor("#AABBCC")).toBe("#AABBCC");
+  });
+
+  // Every one of these means "leave the terminal's own ground alone" — the documented `terminal`
+  // spelling and a typo behave identically on purpose, because this is read while the renderer is
+  // being built and has no way to report an error.
+  test.each([
+    ["the documented off switch", "terminal"],
+    ["empty", ""],
+    ["unset", undefined],
+    ["too short", "#12345"],
+    ["a named color", "red"],
+    ["hex with no #", "141413"],
+  ])("returns undefined for %s", (_label, value) => {
+    expect(tuiBackgroundColor(value)).toBeUndefined();
   });
 });

@@ -4,6 +4,7 @@ import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import type { MemoryPanelRow } from "../../../memory/commands";
 import { useListWindow } from "../../hooks/useListWindow";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
 import { formatMemoryRow, MEMORY_PANEL_HEADER, singleLine } from "../../util/format";
@@ -91,10 +92,7 @@ export function MemoryPanel({
   const selectedRow = rows[selected];
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <text fg={theme.text} attributes={TextAttributes.BOLD}>
-        Memory
-      </text>
+    <PanelBox title="Memory">
       {rows.length === 0 ? (
         <text fg={theme.muted} truncate wrapMode="none">
           No staged memory writes.
@@ -129,7 +127,7 @@ export function MemoryPanel({
           ? "esc close"
           : "↑/↓ move · enter preview · a approve · r reject · esc close"}
       </text>
-    </box>
+    </PanelBox>
   );
 }
 
@@ -164,7 +162,7 @@ function MemoryDiffView({
   });
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <PanelBox title="Memory">
       <text fg={theme.text} attributes={TextAttributes.BOLD} truncate wrapMode="none">
         {`${row.action} ${row.file}`}
       </text>
@@ -185,6 +183,6 @@ function MemoryDiffView({
       <text fg={theme.muted} truncate wrapMode="none">
         ↑/↓ scroll · a approve · r reject · esc back
       </text>
-    </box>
+    </PanelBox>
   );
 }

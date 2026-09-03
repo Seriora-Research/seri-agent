@@ -11,8 +11,8 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactNode } from "react";
-import type { ModelPickerEntry } from "../../src/tui/state/commands";
 import { ModelPicker } from "../../src/tui/components/ModelPicker";
+import type { ModelPickerEntry } from "../../src/tui/state/commands";
 
 // Each `createTestRenderer()` call registers its own listener on the process-wide
 // `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
@@ -58,6 +58,7 @@ function entry(
     keyConfigured: true,
     alternatives: 0,
     gatewayReachable: false,
+    subscriptionCovered: false,
   };
 }
 
@@ -208,6 +209,33 @@ describe("ModelPicker (OpenTUI)", () => {
       expect(frame).toContain(">");
     });
   }
+
+  test("at 80 columns a row with +1 route still shows intact Context and Cost", async () => {
+    const rows: ModelPickerEntry[] = [
+      {
+        entry: {
+          id: "openai/gpt-oss-120b",
+          displayName: "GPT OSS 120B",
+          provider: "groq",
+          family: "gpt-oss",
+          contextWindow: 131_072,
+          maxOutputTokens: 32_768,
+          toolCall: true,
+          reasoning: false,
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+        },
+        keyConfigured: true,
+        alternatives: 1,
+        gatewayReachable: false,
+        subscriptionCovered: false,
+      },
+    ];
+    const setup = await createTestRenderer({ width: 80, height: 10 });
+    await mountPicker(setup, () => {}, undefined, rows);
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("128K");
+    expect(frame).toContain("$0.15/$0.60");
+  });
 
   // Re-test of ui/ListRow.tsx's own truncate-with-multiple-children bug (see that file's comment):
   // a selectable row whose label overflows the terminal width must still render, not go blank.

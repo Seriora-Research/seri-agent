@@ -1,24 +1,33 @@
 /** @jsxImportSource @opentui/react */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { parseColor, RGBA } from "@opentui/core";
+import { join } from "node:path";
+import { parseColor, RGBA, type Renderable, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
+import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { App, type AppProps } from "../../src/tui/app";
 import { childWindowOffset } from "../../src/tui/components/SubagentPanel";
-import type { ConfigRow, ModelPickerEntry, SetupProviderRow } from "../../src/tui/state/commands";
+import type {
+  ConfigRow,
+  ModelPickerEntry,
+  SetupKeyRow,
+  SetupProviderRow,
+} from "../../src/tui/state/commands";
 import type { Dispatch } from "../../src/tui/state/reducer";
-import { ARCHIVIST_MARK, theme } from "../../src/tui/theme/theme";
+import { ARCHIVIST_MARK, ERROR_MARK, TREE_BRANCH, theme } from "../../src/tui/theme/theme";
 import { ListRow } from "../../src/tui/ui/ListRow";
 import {
+  APP_CHROME_ROWS,
   DEFAULT_COLUMNS,
   formatContextWindow,
   formatCost,
+  formatModelPickerHeader,
   formatModelRow,
   formatRouteLabel,
   formatSetupRow,
@@ -27,16 +36,18 @@ import {
   MODE_HINT_COLS,
   MODE_LABEL,
   matchesFilter,
+  NAME_WIDTH,
+  pickerLabelWidth,
   singleLine,
   slideWindow,
 } from "../../src/tui/util/format";
+import { OVERSCAN_ROWS } from "../../src/tui/util/visibleTranscriptWindow";
 import { catalogEntry, catalogOf, flush, flushMarkdown, route, session } from "./helpers";
 
-// Wide enough that every formatModeDetail tier, including the route label (>=MODE_ROUTE_MIN_COLS,
-// 100 cols), is exercised by default,
+// Wide enough that leftover packing of the mode-row detail (model + route + effort) always fits,
 // tall enough (>=24 rows) that every panel's own list window sits at LIST_WINDOW_MAX (10) without
 // each test having to resize just to clear that floor (util/format.ts's own PANEL_CHROME_ROWS/
-// APP_CHROME_ROWS math: listWindowSize(height - 14), which reaches 10 at height >= 24). Deliberately
+// APP_CHROME_ROWS math: listWindowSize(height - 11), which reaches 10 at height >= 21). Deliberately
 // fixed rather than inherited from the real host terminal — a test's expected geometry should not
 // depend on the terminal it happens to run in.
 const DEFAULT_WIDTH = 100;
@@ -106,6 +117,21 @@ async function connect(
   return { setup, dispatch };
 }
 
+function findScrollBox(node: Renderable): ScrollBoxRenderable | undefined {
+  if (node instanceof ScrollBoxRenderable) return node;
+  for (const child of node.getChildren()) {
+    const found = findScrollBox(child);
+    if (found) return found;
+  }
+}
+
+// Row wrappers have children; spacer boxes do not. SplashBanner is not mounted in `connect()`.
+function mountedTranscriptRowCount(setup: TestRendererSetup): number {
+  const scrollBox = findScrollBox(setup.renderer.root);
+  if (scrollBox === undefined) throw new Error("no scrollbox");
+  return scrollBox.content.getChildren().filter((child) => child.getChildren().length > 0).length;
+}
+
 // Named-key sequences this file drives directly (not covered by mockInput's own named helpers) —
 // the exact bytes OpenTUI's keypress parser maps to "home"/"end"/"delete"/"pageup" (confirmed
 // against @opentui/core's own parser table), the same sequences the old ink-testing-library
@@ -135,11 +161,11 @@ describe("App", () => {
     expect(modeLineIndex).toBeGreaterThan(inputBottomBorderIndex);
   });
 
-  // `not.toContain("╭")` is what makes this non-vacuous across all 9 borderStyle sites at once —
-  // a stray "rounded" reintroduced anywhere would still leave a rounded corner present elsewhere on
-  // screen. `"─"`, not `"┌"`: InputBox (the only bordered element visible at this default state)
-  // borders top/bottom only now — `border={["top", "bottom"]}` drops its corner glyphs entirely,
-  // not just its side rules.
+  // `not.toContain("╭")` is what makes this non-vacuous: every bordered box in the TUI spreads the
+  // one FRAME (theme/spacing.ts), so a stray "rounded" reintroduced there or at a call site that
+  // overrides it still leaves a rounded corner somewhere on screen. `"─"` is the horizontal rule
+  // `borderStyle="single"` draws; `"╭"` is what rounded puts in its corners instead of the `"┌"`
+  // the test below pins.
   test("borders render with square corners, not rounded ones", async () => {
     const { setup } = await connect();
 
@@ -148,18 +174,20 @@ describe("App", () => {
     expect(frame).not.toContain("╭");
   });
 
-  // InputBox (components/InputBox.tsx) borders top/bottom only — `border={["top", "bottom"]}`
-  // drops both the vertical side rules and every corner glyph, not just the sides.
-  test("InputBox has a top/bottom horizontal rule only — no vertical sides, no corner glyphs", async () => {
+  // InputBox (components/InputBox.tsx) spreads FRAME (theme/spacing.ts), so it draws all
+  // four sides — both vertical rules and every corner glyph, not just the top/bottom rules it used
+  // to. It is the only bordered element visible at this default state, so the whole frame's glyph
+  // set is its own.
+  test("InputBox is a full four-side box — vertical rules and all four corner glyphs", async () => {
     const { setup } = await connect();
 
     const frame = setup.captureCharFrame();
     expect(frame).toContain("─");
-    expect(frame).not.toContain("│");
-    expect(frame).not.toContain("┌");
-    expect(frame).not.toContain("┐");
-    expect(frame).not.toContain("└");
-    expect(frame).not.toContain("┘");
+    expect(frame).toContain("│");
+    expect(frame).toContain("┌");
+    expect(frame).toContain("┐");
+    expect(frame).toContain("└");
+    expect(frame).toContain("┘");
   });
 
   // `onSubmit` is only wired once a session exists (runTui, cli.ts); the splash and guided-setup
@@ -296,6 +324,24 @@ describe("App", () => {
     expect(frame).toContain("─");
   });
 
+  // Caps the Yoga/React tree: 200 one-line entries is more than any 30-row test viewport, so a
+  // full `.map()` would mount 200 row wrappers. Spacers have no children; row wrappers do.
+  // Negative control: forcing TranscriptList to map the full array (no spacers) makes this
+  // count 200 and fails the bound — verified once before landing, not per-run.
+  test("a long transcript mounts O(viewport+overscan) rows, not every historical entry", async () => {
+    const { setup, dispatch } = await connect();
+    const n = 200;
+    for (let i = 0; i < n; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+
+    const mounted = mountedTranscriptRowCount(setup);
+    expect(mounted).toBeLessThan(n);
+    expect(mounted).toBeLessThanOrEqual(OVERSCAN_ROWS * 2 + DEFAULT_HEIGHT + 16);
+    expect(setup.captureCharFrame()).toContain("line 199");
+  });
+
   test("PageUp shows the scrolled indicator and reveals an older line; End clears it and returns to the newest", async () => {
     const { setup, dispatch } = await connect();
 
@@ -316,6 +362,32 @@ describe("App", () => {
     frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
+  });
+
+  // After mouse reporting is off, a real wheel notch arrives as Up/Down, not as an OpenTUI
+  // mouse-scroll event. `mockMouse.scroll` below still exercises the mouse path (useful if a
+  // future surface turns reporting on); this test is the one that matches what a terminal
+  // actually delivers today. Without an Up handler the banner stays off and the newest line stays
+  // on screen — that is the negative control, and it is how this case looked before the arrows
+  // were routed to the scrollbox.
+  test("Up arrow scrolls the transcript the way a wheel notch does once mouse reporting is off", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    expect(setup.captureCharFrame()).toContain("line 299");
+
+    for (let i = 0; i < 8; i++) {
+      setup.mockInput.pressArrow("up");
+      await flush(setup);
+    }
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
   });
 
   // Regression guard: the scrollbox's own mouse-wheel handling moves its real scroll position
@@ -397,6 +469,164 @@ describe("App", () => {
     const frame = setup.captureCharFrame();
     expect(frame).not.toContain("↑ scrolled");
     expect(frame).toContain("line 299");
+  });
+
+  // An approval is the one overlay the paging keys stay live behind, and the exception the gate
+  // above deliberately makes: reading back the command or the diff being approved is the whole
+  // point of that moment, and the wheel that used to scroll behind it is gone now that mouse
+  // reporting is off (runtime/renderOptions.ts). Both halves are asserted here, because un-gating
+  // the keys without also un-gating the banner would recreate exactly the confusion the gate above
+  // exists to prevent — a transcript that moved with nothing on screen saying so.
+  test("PageUp while an approval is pending scrolls the transcript and shows the banner", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("Write a.txt?");
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    // ApprovalBox ignores every non-printable key, so the scroll happens BEHIND the question rather
+    // than answering or dismissing it — assert that, since a paging key silently denying a write is
+    // the worst way this could go wrong.
+    expect(frame).toContain("Write a.txt?");
+
+    setup.mockInput.pressKey(END);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).not.toContain("↑ scrolled");
+    expect(frame).toContain("line 299");
+    expect(frame).toContain("Write a.txt?");
+  });
+
+  // The state that catches a gate reading `state` instead of the screen: panel commands stay legal
+  // mid-turn (cli.ts's own `tuiHandlers`), so an approval can arrive with /model still open and
+  // leave both fields set. app.tsx's render ternary checks `pendingApproval` first, so the
+  // ApprovalBox is what the user sees — asserted here first, because everything after it is only
+  // meaningful if the picker really is off screen.
+  test("PageUp behind an approval that arrived over an open panel still scrolls the transcript", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        {
+          entry: catalogEntry(),
+          keyConfigured: true,
+          alternatives: 0,
+          gatewayReachable: false,
+          subscriptionCovered: false,
+        },
+      ],
+    });
+    dispatch({
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    await flush(setup);
+    let frame = setup.captureCharFrame();
+    expect(frame).toContain("Write a.txt?");
+    expect(frame).not.toContain('Type to filter — try "included", "free" or "paid"…');
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    frame = setup.captureCharFrame();
+    expect(frame).toContain("↑ scrolled — End to follow");
+    expect(frame).not.toContain("line 299");
+    expect(frame).toContain("Write a.txt?");
+  });
+
+  // The negative control the exception above needs: it is carved out by naming ten OTHER panel
+  // fields, and a field dropped from that list would reopen the background-scroll bug the /config
+  // guard above closes, on that panel alone and silently. /config pins one branch of the list; this
+  // pins a second one.
+  test("PageUp while the model picker is open does not scroll the transcript in the background", async () => {
+    const { setup, dispatch } = await connect();
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    dispatch({
+      type: "model-picker-requested",
+      entries: [
+        {
+          entry: catalogEntry(),
+          keyConfigured: true,
+          alternatives: 0,
+          gatewayReachable: false,
+          subscriptionCovered: false,
+        },
+      ],
+    });
+    await flush(setup);
+
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+
+    dispatch({ type: "model-picker-resolved" });
+    await flush(setup);
+    const pickerClosed = setup.captureCharFrame();
+    expect(pickerClosed).not.toContain("↑ scrolled");
+    expect(pickerClosed).toContain("line 299");
+  });
+
+  // Regression guard: with mouse reporting off (runtime/renderOptions.ts) the scrollbox's scrollbar
+  // can be neither dragged nor clicked, and it does not merely sit there dead — its thumb paints
+  // block glyphs (█ ▀ ▄) into the frame's LAST column, which is exactly where a terminal-native drag
+  // across a full line finishes, and trailing-whitespace trimming does not strip a █. Asserted
+  // against the real frame instead of against the prop that hides it, because "the scrollbar is
+  // configured hidden" and "no glyph reaches the last column" are different claims and only the
+  // second one is the point. Verified non-vacuous: removing the prop puts a ▄ back on the
+  // transcript's bottom row here.
+  test("nothing paints the transcript's last column when the content overflows", async () => {
+    const { setup, dispatch } = await connect();
+
+    // Every frame row above InputBox's own top border — the transcript viewport — read down its
+    // last column. InputBox's border is the only thing that legitimately paints the last column at
+    // this default state (the "renders below the input box" test above pins that it is the only
+    // bordered element on screen), so it is the natural bottom edge for this.
+    const transcriptRightEdge = (frame: string) => {
+      const lines = frame.split("\n");
+      const inputBoxTop = lines.findIndex((l) => l.includes("─"));
+      return lines
+        .slice(0, inputBoxTop)
+        .map((l) => l.at(-1) ?? "")
+        .join("");
+    };
+
+    for (let i = 0; i < 300; i++) {
+      dispatch({ type: "transcript-append", line: `line ${i}` });
+    }
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).length).toBeGreaterThan(0);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    // A thumb sits at whatever row the scroll position puts it on, so one capture at the tail would
+    // only clear the row it happened to park on.
+    setup.mockInput.pressKey(PAGE_UP);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
+
+    setup.mockInput.pressKey(HOME);
+    await flush(setup);
+    expect(transcriptRightEdge(setup.captureCharFrame()).trim()).toBe("");
   });
 
   // Regression guard (found independently by two automated PR reviewers): `transcriptScrollOffset`
@@ -592,6 +822,33 @@ describe("App", () => {
     await flushMarkdown(setup, (frame) => frame.includes(full));
 
     expect(setup.captureCharFrame()).toContain(full);
+  });
+
+  test("N text-deltas without flush do not re-invoke getCompletionSources; done still concatenates every chunk", async () => {
+    let n = 0;
+    const { setup, dispatch } = await connect({
+      getCompletionSources: () => {
+        n++;
+        return [];
+      },
+    });
+    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+    await flush(setup);
+    const afterTurn = n;
+    for (let i = 0; i < 30; i++) {
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: `chunk ${i} ` } });
+    }
+    // OpenTUI's reconciler commits on a macrotask (helpers.ts `flush`). helpers.flush also
+    // calls renderOnce, which can re-invoke App with no pending React update — identical
+    // before and after gating text-delta. One timer tick lets a scheduled reducer commit
+    // run without forcing that paint.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(n).toBe(afterTurn);
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+    await flushMarkdown(setup, (frame) => frame.includes("chunk 0") && frame.includes("chunk 29"));
+    expect(setup.captureCharFrame()).toContain("chunk 0");
+    expect(setup.captureCharFrame()).toContain("chunk 29");
   });
 
   // Acceptance criterion: `TurnStatus` is mounted inside the transcript box (after the committed
@@ -864,7 +1121,10 @@ describe("App", () => {
       dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toMatch(/\d+s .*↑, .*↓/);
+      const frame = setup.captureCharFrame();
+      expect(frame).toMatch(/\d+s .*↑, .*↓/);
+      // Negative control: the floor hairline is the row that would have stolen this.
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
     });
   });
 
@@ -1259,7 +1519,9 @@ describe("App", () => {
     });
     await flush(setup);
     expect(setup.captureCharFrame()).not.toContain("Running read_file…");
-    expect(setup.captureCharFrame()).not.toContain("→ read_file");
+    // The settled group takes the running line's place, and its own call line names the same
+    // call — so what has to be gone is the live status, not the tool's name.
+    expect(setup.captureCharFrame()).toContain("→ Read(a.txt)");
   });
 
   test("session-updated refreshes the mode indicator shown", async () => {
@@ -1310,7 +1572,7 @@ describe("App", () => {
   // truncateArgsDisplay for the exact same reason (write_file's args carry a whole file body,
   // which can otherwise scroll the box itself out of view). pendingTool is set only for
   // write_file/edit, so those are the only tool-call names that populate it.
-  test("the pending-tool box truncates a long write_file body instead of rendering it in full", async () => {
+  test("the pending-tool box names the file, not a JSON dump of the body", async () => {
     const { setup, dispatch } = await connect();
 
     dispatch({
@@ -1323,12 +1585,10 @@ describe("App", () => {
     });
     await flush(setup);
 
-    // "…)" specifically, not a bare "…": the reducer's own status line ("Running write_file…")
-    // already contains an ellipsis unconditionally, on both the truncated and untruncated
-    // renders — that alone doesn't distinguish them. The truncated render's own trailing "…)" —
-    // the ellipsis immediately followed by the closing paren truncateArgsDisplay's own output sits
-    // inside — only exists once truncation actually ran.
-    expect(setup.captureCharFrame()).toContain("…)");
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Write a.txt");
+    expect(frame).not.toContain("x".repeat(40));
+    expect(frame).not.toContain("write_file(");
   });
 
   // The deliberate exception: a routine in-flight write_file/edit display is not an alert, so it
@@ -1344,7 +1604,8 @@ describe("App", () => {
     await flush(setup);
 
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("write_file(");
+    expect(frame).toContain("Write a.txt");
+    expect(frame).not.toContain("write_file(");
     expect(frame).not.toContain("! write_file");
   });
 
@@ -1398,14 +1659,19 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("Read a.txt");
+      expect(frame).toContain("→ Read(a.txt)");
+      expect(frame).toContain("Read 1 file");
       expect(frame).not.toContain("Running read_file…");
       expect(frame).not.toContain("(done:");
+      // Both rows of the group, not just one: the call line and the result line are separate
+      // text nodes now, and a group that paints one of them at prose weight reads as an answer.
       const spans = setup.captureSpans();
-      const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes("Read a.txt")));
-      const span = line?.spans.find((s) => s.text.includes("Read a.txt"));
-      expect(span, "no span found containing Read a.txt").toBeDefined();
-      expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
+      for (const text of ["→ Read(a.txt)", "Read 1 file"]) {
+        const line = spans.lines.find((l) => l.spans.some((s) => s.text.includes(text)));
+        const span = line?.spans.find((s) => s.text.includes(text));
+        expect(span, `no span found containing ${text}`).toBeDefined();
+        expect(span?.fg.equals(parseColor(theme.muted))).toBe(true);
+      }
     });
 
     test("two sequential same-name read_file results before done show one Read 2 files", async () => {
@@ -1481,7 +1747,7 @@ describe("App", () => {
         },
       });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("Searched TODO");
+      expect(setup.captureCharFrame()).toContain("→ Grep(TODO)");
 
       dispatch({
         type: "loop-event",
@@ -1494,12 +1760,12 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("Searched TODO");
-      expect(frame).toContain("Read a.txt");
+      expect(frame).toContain("→ Grep(TODO)");
+      expect(frame).toContain("→ Read(a.txt)");
       expect(frame).not.toContain("(done:");
     });
 
-    test("after done, Read 2 files appears once from the flushed transcript", async () => {
+    test("after done, the live tree collapses to one count line", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({
@@ -1526,6 +1792,7 @@ describe("App", () => {
 
       const frame = setup.captureCharFrame();
       expect(countNeedle(frame, "Read 2 files")).toBe(1);
+      expect(frame).not.toContain("→ Read");
       expect(frame).toContain("done");
     });
 
@@ -1547,9 +1814,34 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("Read a.txt");
+      expect(frame).toContain("→ Read(a.txt)");
+      expect(frame).toContain("Read 1 file");
       expect(frame).toContain("compaction failed");
+      expect(frame).toContain(ERROR_MARK.trim());
       expect(frame).not.toContain("(done:");
+    });
+
+    test("a thrown read_file paints as a file-not-found anomaly, not a raw dump", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-call", name: "read_file", args: { path: join("docs", "ROADMAP.md") } },
+      });
+      dispatch({
+        type: "loop-event",
+        event: {
+          type: "error",
+          error: `Tool "read_file" threw during execution: Error: ENOENT: no such file or directory, open 'C:\\\\Users\\\\x\\\\docs\\\\ROADMAP.md'`,
+        },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain(`→ Read(${join("docs", "ROADMAP.md")})`);
+      expect(frame).toContain(`${TREE_BRANCH}file not found`);
+      expect(frame).not.toContain("threw during execution");
+      expect(frame).not.toContain("ENOENT");
     });
   });
 
@@ -1570,7 +1862,7 @@ describe("App", () => {
   // signature... with zero change to loop.ts/gate.ts") that every earlier round of this branch
   // left unbuilt.
   describe("approval prompt", () => {
-    test("renders in place of the input box, matching makeApprovalPrompt's own prompt text", async () => {
+    test("renders in place of the input box as a prose question, not a JSON dump", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({
@@ -1582,15 +1874,12 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      // Split across two checks, not one long toContain: the box wraps this line across its own
-      // bordered rows, the same wrapping every other long-line assertion in this file already
-      // works around.
-      expect(frame).toContain(
-        `Approve write_file({"path":"a.txt","content":"x"})? [y]es / [a]lways (saved for this project) /`,
-      );
+      expect(frame).toContain("Write a.txt?");
+      expect(frame).toContain("[y]es");
+      expect(frame).toContain("[a]lways");
       expect(frame).toContain("[N]o");
-      // Pins both WARNING_MARK and that it sits immediately before the shared helper's own output.
-      expect(frame).toContain("! Approve write_file");
+      expect(frame).not.toContain("write_file(");
+      expect(frame).not.toContain("! Approve");
     });
 
     test("y answers 'once', a answers 'always' when offered, and anything else (n, Enter, an unoffered a) answers 'no'", async () => {
@@ -1759,6 +2048,32 @@ describe("App", () => {
   });
 
   describe("welcome splash", () => {
+    // App used to mount from `initialTuiState(session)` with `pendingSplash: false`, so the first
+    // committed frame was session chrome (`starting session…`) until `connectDispatch` fired
+    // `splash-requested`. This mount passes the seeds and does not dispatch either action, so a
+    // pass cannot be the effect catching up.
+    test("a splash mount's first frame is the welcome splash, not session chrome", async () => {
+      const { setup } = await connect({
+        showSplash: true,
+        authOffer: true,
+        onSubmit: undefined,
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "groq",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Log in");
+      expect(frame).toContain("Sign up");
+      expect(frame).toContain("Continue without logging in");
+      expect(frame).not.toContain("starting session");
+      expect(frame).not.toContain("approve-each mode on");
+    });
+
     // ListRow always applies `truncate`: before this, WelcomeSplash's own row carried no wrap prop
     // at all, so a label wider than the terminal soft-wrapped onto a second row instead of
     // truncating — this pins both halves, the marker at a normal width and the truncation at a
@@ -1832,6 +2147,7 @@ describe("App", () => {
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
+        route: route({ model: "openai/gpt-oss-120b", provider: "groq" }),
       });
 
       dispatch({ type: "transcript-append", role: "system", line: "Session s1 created." });
@@ -1841,8 +2157,110 @@ describe("App", () => {
       const bannerIndex = lines.findIndex((l) => l.includes("seri v0.4.2"));
       const createdIndex = lines.findIndex((l) => l.includes("Session s1 created."));
       expect(bannerIndex).toBeGreaterThanOrEqual(0);
-      expect(lines[bannerIndex + 2]).toContain("~/code/seri");
+      expect(lines[bannerIndex]).toContain("~/code/seri");
+      expect(lines[bannerIndex]).toContain("openai/gpt-oss-120b · groq");
       expect(bannerIndex).toBeLessThan(createdIndex);
+    });
+
+    // The session header used to keep the mount-time `splashBanner` pair after a live /model
+    // switch, so the top of the transcript named a different model than the mode row and the turn.
+    test("the session banner reflects a route-updated dispatch without remounting", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({ model: "openai/gpt-oss-120b", provider: "openrouter" }),
+      });
+
+      const bannerBefore = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(bannerBefore).toContain("openai/gpt-oss-120b · openrouter");
+
+      dispatch({
+        type: "route-updated",
+        route: route({ model: "minimax/minimax-m3:free", provider: "openrouter" }),
+      });
+      await flush(setup);
+
+      const bannerAfter = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(bannerAfter).toContain("minimax/minimax-m3:free · openrouter");
+      expect(bannerAfter).not.toContain("openai/gpt-oss-120b");
+    });
+
+    // `model-picker-resolved` must move the header the moment the pick lands, not wait for
+    // the next turn's `route-updated`.
+    test("the session banner updates immediately from a /model pick", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({ model: "openai/gpt-oss-120b", provider: "openrouter" }),
+      });
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: true },
+      });
+      await flush(setup);
+
+      const banner = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).not.toContain("openai/gpt-oss-120b");
+    });
+
+    // A hosted-plan pick has no provider key (keyConfigured false), so only the caller-supplied
+    // `route` can move the chrome before the next turn's route-updated.
+    test("a seri-plan /model pick updates the banner and mode row before any turn", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({
+          model: "openai/gpt-oss-120b",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+
+      dispatch({
+        type: "model-picker-resolved",
+        pick: { model: "minimax/minimax-m3:free", provider: "openrouter", keyConfigured: false },
+        route: route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const banner = frame.split("\n").find((l) => l.includes("seri v0.4.2"));
+      const mode = frame.split("\n").find((l) => l.includes(MODE_LABEL["approve-each"]));
+      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).not.toContain("openai/gpt-oss-120b");
+      expect(mode).toContain("minimax/minimax-m3:fr");
+      expect(mode).toContain("seri");
+      expect(mode).not.toContain("openai/gpt-oss-120b");
     });
 
     // The pre-session window used to render a dead placeholder, so a task typed while
@@ -1889,9 +2307,8 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("second");
     });
 
-    // The splash mount's own first frame lands before `connectDispatch` fires `splash-requested`,
-    // so `pendingSplash` is false there too. Without the `splashDone` latch that frame offered a
-    // live input box, and a fast typist could queue a task before answering the login gate.
+    // A mount that omits `showSplash` still has `pendingSplash` false on the first frame.
+    // `splashDone` is what keeps that frame from offering a live input box.
     test("no input box before the login choice is answered", async () => {
       const taken: string[] = [];
       const { setup } = await connect({
@@ -1967,6 +2384,7 @@ describe("App", () => {
         keyConfigured: true,
         alternatives: 0,
         gatewayReachable: false,
+        subscriptionCovered: false,
       };
     }
 
@@ -1985,12 +2403,16 @@ describe("App", () => {
       dispatch({ type: "model-picker-requested", entries: [row()] });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).toContain(
+        'Type to filter — try "included", "free" or "paid"…',
+      );
 
       await setup.mockInput.typeText("8b");
       await flush(setup);
 
-      expect(setup.captureCharFrame()).not.toContain('Type to filter — try "free" or "paid"…');
+      expect(setup.captureCharFrame()).not.toContain(
+        'Type to filter — try "included", "free" or "paid"…',
+      );
     });
 
     // Pins the fix for a real regression, not a test-harness bug (confirmed against a direct mount
@@ -2224,6 +2646,7 @@ describe("App", () => {
     function setupRows(): SetupProviderRow[] {
       return [
         {
+          kind: "key",
           provider: "groq",
           keyName: "GROQ_API_KEY",
           source: "unset",
@@ -2231,6 +2654,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openrouter",
           keyName: "OPENROUTER_API_KEY",
           source: "config",
@@ -2238,6 +2662,7 @@ describe("App", () => {
           removable: true,
         },
         {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "env",
@@ -2245,6 +2670,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "openai",
           keyName: "OPENAI_API_KEY",
           source: "unset",
@@ -2252,6 +2678,7 @@ describe("App", () => {
           removable: false,
         },
         {
+          kind: "key",
           provider: "google",
           keyName: "GOOGLE_GENERATIVE_AI_API_KEY",
           source: "unset",
@@ -2266,8 +2693,9 @@ describe("App", () => {
     // env-sourced row regardless of `removable`, telling a user with a real, removable config.json
     // entry underneath that removal was impossible when it was not.
     describe("formatSetupRow", () => {
-      function row(overrides: Partial<SetupProviderRow> = {}): SetupProviderRow {
+      function row(overrides: Partial<SetupKeyRow> = {}): SetupKeyRow {
         return {
+          kind: "key",
           provider: "anthropic",
           keyName: "ANTHROPIC_API_KEY",
           source: "unset",
@@ -2279,6 +2707,37 @@ describe("App", () => {
 
       test("unset: just the provider name and 'not set'", () => {
         expect(formatSetupRow(row())).toContain("not set");
+      });
+
+      test("seri subscription names the plan type", () => {
+        expect(
+          formatSetupRow({
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "connected", planType: "pro" },
+          }),
+        ).toContain("connected — pro");
+        expect(
+          formatSetupRow({
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "ignored" },
+          }),
+        ).toContain("ignored — using your keys");
+      });
+
+      test("a leftover OpenRouter key under a seri plan is marked unused", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "openrouter",
+            source: "config",
+            masked: "sk-o...own1",
+            removable: true,
+            unusedBecause: "unused because a seri plan is connected",
+          }),
+        );
+        expect(text).toContain("sk-o...own1");
+        expect(text).toContain("unused because a seri plan is connected");
       });
 
       test("config: the masked value, labeled (config)", () => {
@@ -2302,6 +2761,78 @@ describe("App", () => {
         expect(text).not.toContain("unset it in your shell");
         expect(text).toContain("removable");
         expect(text).toContain("sk-a...wxyz");
+      });
+
+      test("subscription: grok connected / not connected", () => {
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: false }),
+        ).toContain("not connected");
+        expect(
+          formatSetupRow({ kind: "subscription", provider: "xai", connected: true }),
+        ).toContain("connected");
+      });
+
+      test("xai key unused because a subscription is connected", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "xai",
+            keyName: "XAI_API_KEY",
+            source: "config",
+            masked: "xai-...key1",
+            unusedBecause: "unused because a Grok subscription is connected",
+          }),
+        );
+        expect(text).toContain("unused");
+        expect(text).toContain("Grok subscription is connected");
+      });
+
+      test("a Codex subscription row names chatgpt, not an API key", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "connected" },
+          removable: true,
+        });
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("connected");
+        expect(text).not.toContain("codex");
+        expect(text).not.toContain("openai");
+      });
+
+      test("an ignored Codex row names the ignore, not connected", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "ignored" },
+          removable: false,
+        });
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("ignored");
+        expect(text).not.toContain("connected");
+      });
+
+      test("a Codex connected row surfaces planType when known", () => {
+        const text = formatSetupRow({
+          kind: "subscription",
+          provider: "openai",
+          status: { status: "connected", planType: "free" },
+          removable: true,
+        });
+        expect(text).toContain("chatgpt");
+        expect(text).toContain("connected — free");
+      });
+
+      test("an unused openai key names the ChatGPT plan as the reason", () => {
+        const text = formatSetupRow(
+          row({
+            provider: "openai",
+            keyName: "OPENAI_API_KEY",
+            source: "config",
+            masked: "sk-o...abcd",
+            unusedBecause: "unused because a ChatGPT plan is connected",
+          }),
+        );
+        expect(text).toContain("unused because a ChatGPT plan is connected");
       });
     });
 
@@ -2327,9 +2858,9 @@ describe("App", () => {
     // `"\r"`, not `"a"`, is the whole point of this test, per the panel's own hint text
     // ("Enter/a add or replace") promising both work.
     test("the list step: Enter (not the 'a' shortcut) selects the highlighted row via onSetupSelect", async () => {
-      const selected: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
+        onSetupSelect: (row) => selected.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2341,15 +2872,16 @@ describe("App", () => {
       setup.mockInput.pressEnter();
       await flush(setup);
 
-      expect(selected).toEqual(["openrouter"]);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // Same bug, the Delete branch: OpenTUI's Delete key (`\x1b[3~`) is a DIFFERENT sequence from
     // backspace's — distinct enough that fixing Enter alone would not have proven this branch too.
     test("the list step: Delete (not the 'r' shortcut) requests removal via onSetupRemove, when the row is removable", async () => {
-      const removeRequested: ModelProvider[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       dispatch({ type: "setup-requested", rows: setupRows() });
@@ -2361,18 +2893,19 @@ describe("App", () => {
       setup.mockInput.pressKey(DELETE_KEY);
       await flush(setup);
 
-      expect(removeRequested).toEqual(["openrouter"]);
+      expect(removeRequested).toHaveLength(1);
+      expect(removeRequested[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // The negative control this pair rests on: a non-removable row's Delete must still be a no-op,
     // the same guard the 'r' shortcut already had — proving the fix didn't drop that check while
     // moving the branch earlier.
     test("the list step: Delete on a non-removable row calls neither onSetupSelect nor onSetupRemove", async () => {
-      const selected: ModelProvider[] = [];
-      const removeRequested: ModelProvider[] = [];
+      const selected: SetupProviderRow[] = [];
+      const removeRequested: SetupProviderRow[] = [];
       const { setup, dispatch } = await connect({
-        onSetupSelect: (provider) => selected.push(provider),
-        onSetupRemove: (provider) => removeRequested.push(provider),
+        onSetupSelect: (row) => selected.push(row),
+        onSetupRemove: (row) => removeRequested.push(row),
       });
 
       // groq (index 0, the default selection) is source: "unset", removable: false.
@@ -2383,6 +2916,37 @@ describe("App", () => {
       await flush(setup);
 
       expect(selected).toEqual([]);
+      expect(removeRequested).toEqual([]);
+    });
+
+    test("a connected seri row offers disconnect and ignores r on a non-removable key", async () => {
+      const selected: SetupProviderRow[] = [];
+      const removeRequested: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupSelect: (row) => selected.push(row),
+        onSetupRemove: (row) => removeRequested.push(row),
+      });
+
+      dispatch({
+        type: "setup-requested",
+        rows: [
+          {
+            kind: "subscription",
+            provider: "seri",
+            status: { status: "connected", planType: "max" },
+          },
+        ],
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("connected — max");
+      expect(frame).toContain("Enter/r disconnect");
+
+      setup.mockInput.pressKey("r");
+      await flush(setup);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject({ kind: "subscription", provider: "seri" });
       expect(removeRequested).toEqual([]);
     });
 
@@ -2443,6 +3007,26 @@ describe("App", () => {
       expect(entered).toEqual([{ provider: "openai", value: "sk-my-key" }]);
     });
 
+    test("the enter-key step shows a note when one is on the step", async () => {
+      const { setup, dispatch } = await connect();
+
+      dispatch({
+        type: "setup-step",
+        state: {
+          step: "enter-key",
+          provider: "openrouter",
+          keyName: "OPENROUTER_API_KEY",
+          busy: false,
+          note: "Unused while a seri plan is connected.",
+        },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("OPENROUTER_API_KEY for openrouter");
+      expect(frame).toContain("Unused while a seri plan is connected.");
+    });
+
     test("while busy, the panel renders Validating… and ignores input", async () => {
       const entered: Array<{ provider: ModelProvider; value: string }> = [];
       const { setup, dispatch } = await connect({
@@ -2489,10 +3073,10 @@ describe("App", () => {
     });
 
     test("confirm-remove: 'y' confirms via onSetupRemove, anything else cancels back via onSetupBack", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2505,7 +3089,7 @@ describe("App", () => {
         },
       });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("! Remove OPENROUTER_API_KEY");
+      expect(setup.captureCharFrame()).toContain("Remove OPENROUTER_API_KEY");
       setup.mockInput.pressKey("n");
       await flush(setup);
 
@@ -2524,7 +3108,8 @@ describe("App", () => {
       setup.mockInput.pressKey("y");
       await flush(setup);
 
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
     });
 
     // ConfirmPrompt's own guards (ui/ConfirmPrompt.tsx): `key.ctrl || key.meta` and
@@ -2533,10 +3118,10 @@ describe("App", () => {
     // destructive prompt — the same class of bug ApprovalBox's own arrow/backspace test above
     // exists for.
     test("confirm-remove: an arrow key is a no-op, not an implicit cancel", async () => {
-      const removed: ModelProvider[] = [];
+      const removed: SetupProviderRow[] = [];
       const backCalls: number[] = [];
       const { setup, dispatch } = await connect({
-        onSetupRemove: (provider) => removed.push(provider),
+        onSetupRemove: (row) => removed.push(row),
         onSetupBack: () => backCalls.push(backCalls.length),
       });
 
@@ -2558,7 +3143,123 @@ describe("App", () => {
       // Still live, not silently cancelled: an actual "y" still confirms.
       setup.mockInput.pressKey("y");
       await flush(setup);
-      expect(removed).toEqual(["openrouter"]);
+      expect(removed).toHaveLength(1);
+      expect(removed[0]).toMatchObject({ kind: "key", provider: "openrouter" });
+    });
+
+    test("confirm-connect shows the borrowed-client warning before any connect action", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Grok Build's OAuth client id");
+      expect(frame).toContain("Shown before the browser opens");
+      expect(GROK_BORROWED_CLIENT_WARNING).toContain("Grok Build's OAuth client id");
+      expect(confirmed).toEqual([]);
+
+      setup.mockInput.pressKey("n");
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+    });
+
+    test("confirm-connect: 'y' confirms via onSetupRemove, Enter cancels", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const backCalls: number[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+        onSetupBack: () => backCalls.push(backCalls.length),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
+      await flush(setup);
+      setup.mockInput.pressEnter();
+      await flush(setup);
+      expect(confirmed).toEqual([]);
+      expect(backCalls).toEqual([0]);
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "xai" } });
+      await flush(setup);
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed).toHaveLength(1);
+      expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "xai" });
+    });
+
+    test("confirm-disconnect for Codex names the local ignore, not Grok's client id", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-disconnect", provider: "openai" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("local credential only");
+      expect(frame).toContain("~/.codex/auth.json is not touched");
+      expect(frame).not.toContain("Grok Build");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed).toHaveLength(1);
+      expect(confirmed[0]).toMatchObject({ kind: "subscription", provider: "openai" });
+    });
+
+    test("confirm-connect for Codex connect shows the borrowed-client warning", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({
+        type: "setup-step",
+        state: { step: "confirm-connect", provider: "openai", action: "connect" },
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Codex CLI's OAuth client id");
+      expect(frame).toContain("Shown before the browser opens");
+      expect(frame).not.toContain("Grok Build's OAuth client id");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed[0]).toMatchObject({
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "not-connected" },
+      });
+    });
+
+    test("confirm-connect for Codex re-enables without the Grok warning", async () => {
+      const confirmed: SetupProviderRow[] = [];
+      const { setup, dispatch } = await connect({
+        onSetupRemove: (row) => confirmed.push(row),
+      });
+
+      dispatch({ type: "setup-step", state: { step: "confirm-connect", provider: "openai" } });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Re-enable ChatGPT plan");
+      expect(frame).toContain("local ignore");
+      expect(frame).not.toContain("Grok Build's OAuth client id");
+
+      setup.mockInput.pressKey("y");
+      await flush(setup);
+      expect(confirmed[0]).toMatchObject({
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "ignored" },
+      });
     });
 
     // Render precedence (app.tsx's own render ternary): pendingApproval beats pendingModelPicker
@@ -2606,6 +3307,7 @@ describe("App", () => {
         keyConfigured: true,
         alternatives: 0,
         gatewayReachable: false,
+        subscriptionCovered: false,
         ...overrides,
       };
     }
@@ -2684,6 +3386,73 @@ describe("App", () => {
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
 
+    // Unbounded form: five columns (74) plus ` +1 route` is what ListRow middle-truncates at 80.
+    test("formatModelRow unbounded with +1 route is longer than 74 and still carries cost", () => {
+      const row = formatModelRow(
+        pickerRow({
+          alternatives: 1,
+          entry: entry({
+            pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+            contextWindow: 131_072,
+          }),
+        }),
+      );
+      expect(row.length).toBeGreaterThan(74);
+      expect(row).toContain("+1 route");
+      expect(row).toContain("$0.15/$0.60");
+    });
+
+    test("pickerLabelWidth at 80 is 74, and 0 falls back the same as 80", () => {
+      expect(pickerLabelWidth(80)).toBe(74);
+      expect(pickerLabelWidth(0)).toBe(pickerLabelWidth(80));
+    });
+
+    test("formatModelRow at pickerLabelWidth(80) drops the suffix but keeps Context and Cost", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(80));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("+1 route");
+      expect(row.length).toBeLessThanOrEqual(74);
+    });
+
+    test("formatModelRow at pickerLabelWidth(100) keeps the +1 route suffix", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      expect(formatModelRow(priced, pickerLabelWidth(100))).toContain("+1 route");
+      expect(formatModelRow(priced)).toContain("+1 route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(80) still contains Route", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(80))).toContain("Route");
+    });
+
+    test("formatModelPickerHeader at pickerLabelWidth(70) drops Route; the row keeps Context and Cost", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(70))).not.toContain("Route");
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(70));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("your key");
+    });
+
     // A $0 model whose id/displayName never says "free" (the OpenRouter free-tier naming
     // convention this mirrors, e.g. "stealth/ox-alpha") is still discoverable by typing "free"
     // because matchesFilter also checks pricing, not just the name.
@@ -2722,6 +3491,69 @@ describe("App", () => {
       expect(matchesFilter(unknownPrice, "free")).toBe(false);
     });
 
+    test("a subscription-covered row costs 'included' and names the plan source", () => {
+      const row = pickerRow({
+        keyConfigured: false,
+        subscriptionCovered: true,
+        entry: entry({ provider: "openai", pricing: undefined }),
+      });
+      const rendered = formatModelRow(row);
+      expect(rendered).toContain("included");
+      expect(rendered).toContain("chatgpt");
+      expect(rendered).not.toContain("codex");
+      expect(rendered).not.toContain("no key");
+      expect(rendered).not.toContain("$");
+      expect(
+        formatRouteLabel({
+          keyConfigured: false,
+          subscriptionCovered: true,
+          provider: "openai",
+        }),
+      ).toBe("chatgpt");
+    });
+
+    test("subscriptionCovered beats keyConfigured in the Route column", () => {
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          subscriptionCovered: true,
+          provider: "xai",
+        }),
+      ).toBe("grok");
+    });
+
+    test("matchesFilter matches a subscription-covered row with 'included' and 'plan', not 'free'", () => {
+      const covered = pickerRow({
+        subscriptionCovered: true,
+        entry: entry({ provider: "openai", pricing: undefined }),
+      });
+      expect(matchesFilter(covered, "included")).toBe(true);
+      expect(matchesFilter(covered, "plan")).toBe(true);
+      expect(matchesFilter(covered, "chatgpt")).toBe(true);
+      expect(matchesFilter(covered, "free")).toBe(false);
+      const leftover = pickerRow({
+        subscriptionCovered: false,
+        entry: entry({
+          id: "gpt-5.6",
+          displayName: "GPT-5.6",
+          provider: "openai",
+          family: "gpt",
+          pricing: { inputPerMTok: 4, outputPerMTok: 20 },
+        }),
+      });
+      expect(matchesFilter(leftover, "chatgpt")).toBe(false);
+      const zeroPrice = pickerRow({
+        subscriptionCovered: false,
+        entry: entry({
+          id: "stealth/ox-alpha",
+          displayName: "Ox Alpha",
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+        }),
+      });
+      expect(matchesFilter(zeroPrice, "included")).toBe(false);
+      expect(matchesFilter(zeroPrice, "free")).toBe(true);
+    });
+
     test("matchesFilter still matches a model whose displayName literally contains 'free', regardless of price", () => {
       const namedFree = pickerRow({
         entry: entry({
@@ -2746,7 +3578,7 @@ describe("App", () => {
 
   // D1 (byok-open3-route-indicator feature-plan.md): formatModelRow's own tests above exercise
   // this indirectly through the picker's Route column; these test the vocabulary function itself,
-  // all 4 branches, so the persistent indicator below (which calls it directly, not through a
+  // all 5 branches, so the persistent indicator below (which calls it directly, not through a
   // ModelPickerEntry) has its own direct coverage too.
   describe("formatRouteLabel", () => {
     test("keyConfigured wins outright: 'your key'", () => {
@@ -2761,8 +3593,29 @@ describe("App", () => {
 
     // D7: unreachable in production today (decideModelPickerOpen's own `planCoverage` default is
     // always-false) — exercised here only as a direct unit test of the vocabulary function itself.
-    test("a keyless, no-reroute row with gatewayReachable: 'provided'", () => {
-      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("provided");
+    test("a keyless, no-reroute row with gatewayReachable: 'seri'", () => {
+      expect(formatRouteLabel({ keyConfigured: false, gatewayReachable: true })).toBe("seri");
+    });
+
+    test("subscriptionCovered names the vendor; omitted provider stays 'plan'", () => {
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          subscriptionCovered: true,
+          provider: "openai",
+        }),
+      ).toBe("chatgpt");
+      expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
+    });
+
+    test("a leftover OpenRouter key under gateway coverage still reads 'seri'", () => {
+      expect(
+        formatRouteLabel({
+          keyConfigured: true,
+          gatewayReachable: true,
+          provider: "openrouter",
+        }),
+      ).toBe("seri");
     });
 
     test("the true dead end — no key, no reroute, no gateway: 'no key'", () => {
@@ -2800,7 +3653,18 @@ describe("App", () => {
     });
   });
 
+  test("a live input has no full-width hairline above the box", async () => {
+    const { setup } = await connect();
+    const frame = setup.captureCharFrame();
+    expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
+    expect(frame).toContain("describe a task");
+  });
+
   describe("listWindowSize", () => {
+    test("APP_CHROME_ROWS is one row each for mode and commandError", () => {
+      expect(APP_CHROME_ROWS).toBe(2);
+    });
+
     // listWindowSize is a pure function of `rows`, tested here at hand-picked inputs.
     test("a tall terminal clamps to LIST_WINDOW_MAX (10)", () => {
       expect(listWindowSize(24)).toBe(10);
@@ -2811,8 +3675,8 @@ describe("App", () => {
     });
 
     test("a terminal in between returns rows minus the panel chrome budget", () => {
-      expect(listWindowSize(18)).toBe(9);
-      expect(listWindowSize(15)).toBe(6);
+      expect(listWindowSize(18)).toBe(10);
+      expect(listWindowSize(15)).toBe(7);
     });
   });
 
@@ -2821,11 +3685,13 @@ describe("App", () => {
     // (format.test.ts) already cover the tier DECISION logic as a pure function, so this is the
     // one mounted-level smoke test needed to confirm a real resize actually reaches the rendered
     // row end-to-end.
-    test("renders the model+route label at the default width, and drops it after a resize below MODE_MODEL_MIN_COLS", async () => {
+    test("renders the model+route label at the default width, and drops it after a resize too narrow for the model", async () => {
       const { setup } = await connect();
       expect(setup.captureCharFrame()).toContain("your key");
 
-      await resize(setup, 40, DEFAULT_HEIGHT);
+      // 30: approve-each (22) + `  claude-sonnet-5` (17) = 39, which cannot fit. 40 would now
+      // show the model (22 + 17 = 39 <= 40).
+      await resize(setup, 30, DEFAULT_HEIGHT);
 
       expect(setup.captureCharFrame()).not.toContain("claude-sonnet-5");
     });
@@ -2877,12 +3743,8 @@ describe("App", () => {
       expect(frame).not.toContain("claude-sonnet-5");
     });
 
-    // Picking a provider with no configured key means the picker itself doesn't know where
-    // resolveRoute will actually route it (a sibling reroute or the gateway) — only the NEXT
-    // turn's route-updated dispatch does. Optimistically claiming `rerouted: false` here would
-    // render "your key" for a provider the user doesn't have a key for: a fabricated route,
-    // exactly what formatModeDetail's own comment says to avoid. The bar should stay on the OLD
-    // route rather than assert a wrong one.
+    // A no-key pick without a resolved route must not claim "your key". The caller that
+    // has catalog/plan supplies `route` on the same action; without it the bar stays put.
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
       expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
@@ -2987,7 +3849,7 @@ describe("App", () => {
     });
 
     // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
-    // for the bug it left uncovered: App's OWN `useReducer(tuiReducer, initialTuiState(session, {
+    // for the bug it left uncovered: App's OWN `useState(() => initialTuiState(session, {
     // route, config }))` call (app.tsx) must seed `state.config` from the `config` PROP at mount,
     // not only ever receive it via a later `config-updated` dispatch — every other case in this
     // describe block dispatches that action first, so none of them can tell a real mount-time seed
@@ -3090,7 +3952,9 @@ describe("App", () => {
     });
 
     test("the shift+tab hint is present at MODE_HINT_COLS and absent below it", async () => {
-      const { setup } = await connect();
+      // Empty detail (`route: undefined`) so this asserts the 52-col floor itself, not leftover
+      // packing: with a route present the hint yields whenever indicator + hint + detail overflow.
+      const { setup } = await connect({ route: undefined });
       expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
 
       await resize(setup, MODE_HINT_COLS, DEFAULT_HEIGHT);
@@ -3100,9 +3964,53 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
     });
 
-    // Even with a route present, the row's own arithmetic (indicator + hint + the model-only
-    // detail the width ladder allows at this width) must actually fit 80 columns in the RENDERED
-    // row, not just in formatModeDetail's own return value.
+    test("at 80 columns, the idle mode row keeps the route suffix without wrapping", async () => {
+      const { setup } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        route: route(),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(MODE_LABEL["approve-each"]));
+      expect(modeLine).toBeDefined();
+      expect(modeLine).toContain("your key");
+      expect(modeLine).toContain("(shift+tab to cycle)");
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    test("at 80 columns, a worst-case left side drops the hint before the route", async () => {
+      const longModel = "n".repeat(NAME_WIDTH);
+      const { setup } = await connect({
+        session: session({ permissionMode: "auto", reasoningEffort: "high" }),
+        route: route({
+          model: longModel,
+          provider: "openrouter",
+          rerouted: true,
+          reason: "ANTHROPIC_API_KEY",
+        }),
+        catalog: catalogOf([
+          catalogEntry({
+            id: longModel,
+            provider: "openrouter",
+            reasoningOptions: [{ type: "effort", values: ["low", "medium", "high"] }],
+          }),
+        ]),
+      });
+      await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
+
+      const lines = setup.captureCharFrame().split("\n");
+      const modeLine = lines.find((l) => l.includes(MODE_LABEL.auto));
+      expect(modeLine).toBeDefined();
+      expect(modeLine).toContain("→ openrouter");
+      expect(modeLine).not.toContain("(shift+tab to cycle)");
+      expect(modeLine).toContain("high");
+      expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
+    });
+
+    // Even with a route present, the row's own arithmetic (indicator + hint + leftover-packed
+    // model+route) must actually fit 80 columns in the RENDERED row, not just in formatModeDetail's
+    // own return value.
     test("at 80 columns, the longest label with a route present fits the row and does not wrap", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "auto" }),
@@ -3110,7 +4018,7 @@ describe("App", () => {
       });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
 
-      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5`;
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · your key`;
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(expectedRow));
       expect(modeLine).toBeDefined();
@@ -3145,12 +4053,10 @@ describe("App", () => {
 
     // Regression (found live via tests/tui/tuiPty.test.ts's real-pty PageUp assertion, which
     // started failing once the label grew a glyph + persistent hint): the mode row and the
-    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`, but
-    // formatModeDetail's own width tiers only ever accounted for the row's LEFT-hand content. At 80
-    // columns with a route present, the model name showing on the left plus the banner on the
-    // right together exceed 80 cells, and OpenTUI wraps the row across two lines — splitting the
-    // banner's own text mid-word, so "sawLine" style assertions (and a real user) never see it
-    // intact.
+    // "↑ scrolled — End to follow" banner share one row via `justifyContent="space-between"`. The
+    // right side's width has to come out of leftover packing's remaining budget, or OpenTUI wraps
+    // the row across two lines — splitting the banner's own text mid-word, so "sawLine" style
+    // assertions (and a real user) never see it intact.
     test("the scroll banner and the mode row's model name coexist at 80 columns without wrapping", async () => {
       const { setup, dispatch } = await connect({ route: route() });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
@@ -3169,12 +4075,10 @@ describe("App", () => {
       expect(bannerLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
     });
 
-    // Regression: the fix above only reserved the right-side banner's width in the call to
-    // formatModeDetail (which gates the model/route detail), not in the hint's own visibility check
-    // a few lines below — so at a width narrower than 80 (no room for the model anyway, so the
-    // first fix's own test never exercised this), the hint alone could still collide with the
-    // banner. 60 columns: "⏸ approve-each mode on" (22) + hint (21) = 43, well under 52
-    // (MODE_HINT_COLS against the raw width) even though 43 + the banner's 26 = 69 > 60.
+    // Regression: leftover packing and the hint-yield check both see remaining width after the
+    // right-side banner is reserved. At 60 columns the banner (26) plus approve-each (22) plus
+    // hint (21) would wrap; the hint must yield (remaining 34 is also below MODE_HINT_COLS) so
+    // OpenTUI does not split the banner mid-word.
     test("the scroll banner and the hint coexist at a narrow width without wrapping", async () => {
       const { setup, dispatch } = await connect();
       await resize(setup, 60, DEFAULT_HEIGHT);
@@ -3396,7 +4300,10 @@ describe("App", () => {
   // state directly (auth-offer/auth-step/config-step/permissions-step) to prove the render wiring
   // itself is correct ahead of Stages C-D's dispatchers.
   describe("auth banner", () => {
-    test("show: true renders the offer alongside InputBox, not in place of it", async () => {
+    // Login / signup live on the welcome splash. authOffer still drives that menu's
+    // authenticated vs unsigned-in items; it must not also paint a persistent banner
+    // above the main TUI once the user has continued (or logged in).
+    test("auth-offer: true does not render the sign-in banner above InputBox", async () => {
       const submitted: string[] = [];
       const { setup, dispatch } = await connect({ onSubmit: (v) => submitted.push(v) });
 
@@ -3404,10 +4311,7 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("/login");
-      expect(frame).toContain("/signup");
-      // Non-blocking proof: InputBox is still mounted (not replaced) — typing still reaches
-      // onSubmit, exactly as it would with the banner absent.
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
       await setup.mockInput.typeText("still typing");
       setup.mockInput.pressEnter();
       await flush(setup);
@@ -3424,11 +4328,7 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toBe(before);
     });
 
-    // The banner sits ABOVE the render ternary (app.tsx's own comment) rather than as one
-    // of its branches — the zeroKeys x noAuth "both at once" cell, component level: a first run
-    // with no provider key opens /setup's own panel, and the banner must still render alongside it
-    // rather than being replaced the way ApprovalBox/ModelPicker/SetupPanel replace each other.
-    test("renders alongside a pendingSetup panel, not replaced by it", async () => {
+    test("a pendingSetup panel does not bring the sign-in banner back", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
@@ -3436,24 +4336,18 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
-      expect(frame).toContain("/login");
+      expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
       expect(frame).toContain("/setup — provider API keys");
     });
 
-    // Bug fix (thermo-nuclear + code-review, round 4 — the root-cause fix): three earlier rounds
-    // all patched a new place that forgot to dispatch `auth-offer: false` the moment a login
-    // attempt opened; the actual fix is deriving the banner from `pendingAuth` (app.tsx's own
-    // `state.authOffer && state.pendingAuth === undefined`) instead of commanding it. This test
-    // dispatches ONLY `auth-requested` — no manual `auth-offer` dispatch at all, unlike the old
-    // version of this test — and the banner still hides, because `authOffer` itself is
-    // deliberately left `true` here: the derivation is what's doing the work, not a stale flag
-    // that happens to already be false.
-    test("hides while AuthPanel is showing, purely from pendingAuth being set — authOffer itself stays true", async () => {
+    test("hides while AuthPanel is showing, even if authOffer stays true", async () => {
       const { setup, dispatch } = await connect();
 
       dispatch({ type: "auth-offer", show: true });
       await flush(setup);
-      expect(setup.captureCharFrame()).toContain("/login");
+      expect(setup.captureCharFrame()).not.toContain(
+        "Sign in with /login, or create an account with /signup",
+      );
 
       dispatch({ type: "auth-requested", mode: "login" });
       await flush(setup);
@@ -3463,13 +4357,6 @@ describe("App", () => {
       expect(frame).not.toContain("Sign in with /login, or create an account with /signup");
     });
 
-    // Bug fix (this same round): the derivation above only covers "hide while the panel is open"
-    // — the instant a successful login's own `auth-resolved` clears `pendingAuth` again, the
-    // derivation reduces to bare `authOffer`, which was never updated to reflect the session that
-    // just got saved. createAuthHandlers.onLogin's own success path (tui/state/handlers.ts)
-    // recomputes it fresh right after, exactly like onLogout's `show: true` and the mount/
-    // onAuthResolved recomputes already do for their own real state changes — this reproduces that
-    // exact three-dispatch sequence and checks the banner does NOT flash back on.
     test("stays hidden after a successful login, not just while the panel is open", async () => {
       const { setup, dispatch } = await connect();
 
@@ -3896,7 +4783,7 @@ describe("App", () => {
       expect(frame).toContain("[y]es");
       expect(frame).toContain("[N]o");
       expect(frame).toContain("Verify command (SERI_VERIFY_COMMAND)");
-      expect(frame).toContain("! Unset");
+      expect(frame).toContain("Unset");
 
       setup.mockInput.pressKey("z"); // unrecognised key
       await flush(setup);
@@ -4090,14 +4977,13 @@ describe("App", () => {
 
     // Regression guard: useListWindow's row budget used to reserve only the root box's own spare
     // row and the unconditional mode-indicator row (APP_CHROME_ROWS, util/format.ts) — not
-    // commandError or AuthBanner, both of which can be showing at the same time as a panel. On a
-    // 20-row terminal that overflowed the alt-screen viewport, unrecoverable until the panel closed
-    // or the terminal resized (no scrollback on the alt screen).
-    test("a panel opened under an auth banner and a command error still fits the viewport", async () => {
+    // commandError, which can be showing at the same time as a panel. On a 20-row terminal that
+    // overflowed the alt-screen viewport, unrecoverable until the panel closed or the terminal
+    // resized (no scrollback on the alt screen).
+    test("a panel opened under a command error still fits the viewport", async () => {
       const { setup, dispatch } = await connect();
       await resize(setup, DEFAULT_WIDTH, 20);
 
-      dispatch({ type: "auth-offer", show: true });
       dispatch({ type: "command-error", message: "boom" });
       // Row 0 is a known key (configKeyInfo has a description for it) so the selected row's
       // description line renders too, matching ConfigPanel's own tallest real case — a bare
@@ -4116,10 +5002,10 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("─".repeat(DEFAULT_WIDTH));
       // Content that doesn't fit the fixed-height root box doesn't grow the frame taller — an
       // under-reserved budget would either overlap two rows' worth of text or clip the panel's own
-      // header line; both must render intact once the reservation accounts for AuthBanner and
-      // commandError.
+      // header line; both must render intact once the reservation accounts for commandError.
       expect(frame).toContain("⏸ approve-each mode on");
       expect(frame).toContain("/config — settings");
       expect(frame).toContain("Esc/Ctrl-D close");
@@ -4201,7 +5087,7 @@ describe("App", () => {
       });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toContain("! Remove write_file");
+      expect(setup.captureCharFrame()).toContain("Remove write_file");
 
       setup.mockInput.pressKey("y");
       await flush(setup);
@@ -4531,6 +5417,26 @@ describe("App", () => {
       expect(panelBand(frame).band).not.toContain("explore");
     });
 
+    test("empty InputBox Down while scrolled up moves the transcript, not the roster", async () => {
+      const { setup, dispatch } = await connect();
+      startExplore(dispatch, "t1:0", "find a");
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      await flush(setup);
+
+      setup.mockInput.pressKey(HOME);
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("↑ scrolled");
+      expect(panelBand(setup.captureCharFrame()).band).not.toContain("> ");
+
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      const afterDown = setup.captureCharFrame();
+      expect(panelBand(afterDown).band).not.toContain("> ");
+      expect(afterDown).toContain("↑ scrolled");
+    });
+
     test("empty InputBox Down focuses the panel; Esc blurs", async () => {
       const { setup, dispatch } = await connect();
       startExplore(dispatch, "t1:0", "find a");
@@ -4725,6 +5631,174 @@ describe("App", () => {
       setup.mockInput.pressArrow("down");
       await flush(setup);
       expect(panelBand(setup.captureCharFrame()).band).toContain("> ");
+    });
+  });
+  // The queue is the only surface between the transcript and the input box, so most of what matters
+  // here is position and what a keypress reaches — both only observable against a real frame.
+  describe("message queue", () => {
+    async function withQueue(...items: string[]) {
+      const connected = await connect();
+      for (const text of items) {
+        connected.dispatch({ type: "queue-appended", id: text, text });
+      }
+      await flush(connected.setup);
+      return connected;
+    }
+
+    // Row index of the first line containing `needle`, so ordering can be asserted rather than mere
+    // containment: "the queue is on screen" and "the queue is above the input box" are different
+    // claims and only the second one is the design.
+    function rowOf(frame: string, needle: string): number {
+      return frame.split(String.fromCharCode(10)).findIndex((line) => line.includes(needle));
+    }
+
+    test("an empty queue draws nothing at all", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).not.toContain("queued");
+    });
+
+    test("a queued message renders above the input box and below the transcript", async () => {
+      const { setup, dispatch } = await withQueue("then open a PR");
+      dispatch({ type: "transcript-append", line: "> earlier task", role: "user" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      const transcript = rowOf(frame, "earlier task");
+      const header = rowOf(frame, "1 queued");
+      const row = rowOf(frame, "then open a PR");
+      const inputBox = rowOf(frame, "⏸ approve-each mode on");
+
+      expect(transcript).toBeGreaterThanOrEqual(0);
+      expect(transcript).toBeLessThan(header);
+      expect(header).toBeLessThan(row);
+      expect(row).toBeLessThan(inputBox);
+    });
+
+    test("the depth label counts, and the key legend names the keys that are live", async () => {
+      const { setup } = await withQueue("a", "b");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("2 queued");
+      expect(frame).toContain("ctrl+e edit");
+      expect(frame).toContain("ctrl+x drop");
+    });
+
+    // The mode row's own rule, applied to this row: when both halves of a space-between row do not
+    // fit, the hint loses rather than the row wrapping onto a line the block has not budgeted.
+    test("the key legend is dropped on a terminal too narrow for both halves", async () => {
+      const { setup } = await withQueue("a");
+      await resize(setup, 40, DEFAULT_HEIGHT);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1 queued");
+      expect(frame).not.toContain("ctrl+x drop");
+    });
+
+    test("ctrl+down and ctrl+n both move the band, and ctrl+up moves it back", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      const banded = (frame: string) =>
+        frame.split(String.fromCharCode(10)).find((line) => line.includes("second one"));
+
+      setup.mockInput.pressArrow("down", { ctrl: true });
+      await flush(setup);
+      expect(rowOf(setup.captureCharFrame(), "second one")).toBeGreaterThanOrEqual(0);
+      expect(banded(setup.captureCharFrame())).toBeDefined();
+
+      setup.mockInput.pressArrow("up", { ctrl: true });
+      await flush(setup);
+      setup.mockInput.pressKey("n", { ctrl: true });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("second one");
+    });
+
+    test("a plain arrow key does not move the band, so typing is unaffected", async () => {
+      const { setup } = await withQueue("a", "b");
+      setup.mockInput.pressArrow("down");
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("2 queued");
+    });
+
+    test("ctrl+x drops the selected row and renumbers the rest", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      setup.mockInput.pressKey("x", { ctrl: true });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1 queued");
+      expect(frame).toContain("second one");
+      expect(frame).not.toContain("first one");
+    });
+
+    // Ctrl-D keeps the one meaning AGENTS.md and spec 038 give it, in the queue and out of it —
+    // which is why drop is ctrl+x and not the ctrl+d the issue's simulation proposed.
+    test("ctrl+d still quits while the queue is non-empty", async () => {
+      const quits: number[] = [];
+      const { setup, dispatch } = await connect({ onQuit: () => quits.push(1) });
+      dispatch({ type: "queue-appended", id: "q0", text: "still queued" });
+      await flush(setup);
+
+      setup.mockInput.pressKey("d", { ctrl: true });
+      await flush(setup);
+
+      expect(quits).toEqual([1]);
+      expect(setup.captureCharFrame()).toContain("1 queued");
+    });
+
+    test("ctrl+e opens the row for editing and the main input box keeps its own draft", async () => {
+      const { setup } = await withQueue("queued text");
+      await setup.mockInput.typeText("half typed");
+      // InputBox coalesces a burst behind its own 50ms throttle and paints only the leading-edge
+      // character until it fires, so a frame captured before then shows "> h" and proves nothing
+      // about whether the draft survived.
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      await flush(setup);
+
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("queued text");
+      expect(frame).toContain("half typed");
+    });
+
+    test("a keystroke during an edit reaches the row, not the main input box", async () => {
+      const { setup } = await withQueue("queued");
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+
+      await setup.mockInput.typeText("!");
+      await flush(setup);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("queued!");
+      expect(frame).not.toContain("> !");
+    });
+
+    test("the band does not move while a row is being edited", async () => {
+      const { setup } = await withQueue("first one", "second one");
+      setup.mockInput.pressKey("e", { ctrl: true });
+      await flush(setup);
+      setup.mockInput.pressArrow("down", { ctrl: true });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain("first one");
+    });
+
+    test("six queued messages paint five rows and a +1", async () => {
+      const { setup } = await withQueue("m1", "m2", "m3", "m4", "m5", "m6");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("6 queued");
+      expect(frame).toContain("+1");
+      expect(frame).not.toContain("m6");
+    });
+
+    // A multi-line paste queues its first line and leaves the rest in the box, so a queued message
+    // really can carry a newline — and one row per queued message is what the window budget counts.
+    test("a queued message containing a newline still renders as one row", async () => {
+      const { setup } = await withQueue(`line one${String.fromCharCode(10)}line two`);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("line one line two");
+      expect(rowOf(frame, "line one")).toBe(rowOf(frame, "line two"));
     });
   });
 });

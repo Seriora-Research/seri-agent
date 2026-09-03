@@ -1,7 +1,9 @@
+import { clearCachedAccountPlan } from "../provider/accountStatus";
+import { clearUsageSnapshot } from "../usage/snapshot";
 import { clearAuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { openBrowser } from "./browser";
 import { pollForToken, requestDeviceCode } from "./deviceFlow";
-import { clearUsageSnapshot } from "../usage/snapshot";
+import { clearSeriIgnore } from "./seriIgnore";
 
 export async function login(
   mode: "login" | "signup",
@@ -80,6 +82,8 @@ export async function login(
     },
     configDir,
   );
+  // A leftover ignore from a previous session would otherwise keep the new login unused.
+  clearSeriIgnore(configDir);
 
   onMessage(
     mode === "signup"
@@ -95,5 +99,6 @@ export function logout(
   const existing = loadAuthSession(configDir);
   clearAuthSession(configDir);
   clearUsageSnapshot(configDir);
+  clearCachedAccountPlan(configDir);
   onMessage(existing ? "Logged out." : "Not logged in.");
 }

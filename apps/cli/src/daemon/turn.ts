@@ -26,6 +26,7 @@ export function createAttendedExecuteTurn(opts: {
       permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
       cwd: input.cwd,
+      database: opts.database,
     };
     const prepared = await prepareSession(ctx, opts.deps, false, false);
     if (typeof prepared === "number") return { exitCode: 1 };
@@ -62,7 +63,7 @@ export function createAttendedExecuteTurn(opts: {
       undefined,
       (event) => input.emitLoop(event),
       () => input.permissionMode,
-      (session) => saveSession(session, ctx.sessionsDir),
+      (session) => saveSession(session, ctx.sessionsDir, opts.database),
       approvalPrompt,
       archivistState,
       undefined,

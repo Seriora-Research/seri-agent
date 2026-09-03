@@ -1,4 +1,5 @@
 import { parseResponseBody } from "./deviceGrant";
+import type { RefreshSubscription, SubscriptionCredential } from "./subscription";
 import {
   loadXaiSubscription,
   saveXaiSubscription,
@@ -10,7 +11,6 @@ import { discoverXaiEndpoints, readXaiTokens, xaiClientId, xaiIssuer } from "./x
 export type XaiRefreshResult =
   | { status: "ok"; subscription: XaiSubscription }
   | { status: "not-connected" }
-  | { status: "not-configured" }
   // Terminal. A 403 means the account's plan tier is not allowed, which no retry and no
   // re-consent fixes. Kept distinct from "error" so a caller cannot fold it into a retry loop.
   | { status: "tier-denied"; message: string }
@@ -48,8 +48,6 @@ async function refreshXaiSubscriptionOnce(
   fetchFn: typeof fetch,
 ): Promise<XaiRefreshResult> {
   const clientId = xaiClientId(configDir);
-  if (clientId === undefined) return { status: "not-configured" };
-
   const current = loadXaiSubscription(configDir);
   if (current === undefined) return { status: "not-connected" };
 
@@ -87,7 +85,10 @@ async function refreshXaiSubscriptionOnce(
 
     // readXaiTokens throws unless BOTH tokens came back. Persisting a partial pair here is the one
     // failure that cannot be recovered from: the old refresh token is already dead server-side.
-    const updated = subscriptionFromTokens(readXaiTokens(payload));
+    const updated = subscriptionFromTokens({
+      ...readXaiTokens(payload),
+      accountId: current.accountId,
+    });
     saveXaiSubscription(updated, configDir);
     return { status: "ok", subscription: updated };
   } catch (err) {
@@ -122,3 +123,41 @@ export function xaiAuthedFetch(configDir: string, fetchFn: typeof fetch = fetch)
     return attempt(refreshed.subscription.accessToken);
   }) as typeof fetch;
 }
+
+export function subscriptionCredentialFromXai(
+  subscription: XaiSubscription,
+): SubscriptionCredential | undefined {
+  if (subscription.accountId === undefined || subscription.accountId.length === 0) return undefined;
+  const expiresAt =
+    subscription.expiresAt !== undefined ? Date.parse(subscription.expiresAt) : Number.NaN;
+  return {
+    provider: "xai",
+    accessToken: subscription.accessToken,
+    accountId: subscription.accountId,
+    expiresAt: Number.isFinite(expiresAt) ? expiresAt : 0,
+  };
+}
+
+export const refreshGrokSubscription: RefreshSubscription = async (configDir) => {
+  const result = await refreshXaiSubscription(configDir);
+  if (result.status !== "ok") return undefined;
+  return subscriptionCredentialFromXai(result.subscription);
+};
+
+export const refreshXaiCredential: RefreshSubscription = async (configDir) => {
+  const result = await refreshXaiSubscription(configDir);
+  if (result.status !== "ok") {
+    const message =
+      result.status === "error" ||
+      result.status === "tier-denied" ||
+      result.status === "reconnect-required"
+        ? result.message
+        : result.status;
+    throw new Error(message);
+  }
+  const credential = subscriptionCredentialFromXai(result.subscription);
+  if (credential === undefined) {
+    throw new Error("Grok subscription is missing accountId");
+  }
+  return credential;
+};

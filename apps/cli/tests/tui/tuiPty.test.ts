@@ -13,12 +13,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
 import { configDirForStore, DATABASE_FILENAME } from "../../src/session/database";
 import { listSessionIds, loadSession, saveSession } from "../../src/session/session";
-import { childScriptInput } from "./helpers";
+import { childScriptInput, SPLASH_MARK } from "./helpers";
 
 function requireSessionId(sessionsDir: string): string {
   const id = listSessionIds(sessionsDir)[0];
@@ -26,23 +27,49 @@ function requireSessionId(sessionsDir: string): string {
   return id;
 }
 
-function sessionDbPaths(sessionsDir: string): string[] {
-  const configDir = configDirForStore(sessionsDir, "sessions");
-  return [DATABASE_FILENAME, `${DATABASE_FILENAME}-wal`, `${DATABASE_FILENAME}-shm`].map((name) =>
-    join(configDir, name),
-  );
-}
+const exclusiveLocks = new Map<string, Database>();
 
-function makeSessionStoreReadOnly(sessionsDir: string): void {
-  for (const path of sessionDbPaths(sessionsDir)) {
-    if (existsSync(path)) chmodSync(path, 0o400);
+function lockSessionStore(sessionsDir: string): void {
+  // chmod of seri.db does not fail a write on a connection that already has the file
+  // open — the kernel checks access at open, not at write. The child holds one
+  // SessionDatabase for the process, so the parent takes an exclusive lock instead:
+  // the child's next save hits SQLITE_BUSY and surfaces as "could not save the session".
+  restoreSessionStore(sessionsDir);
+  const path = join(configDirForStore(sessionsDir, "sessions"), DATABASE_FILENAME);
+  const lock = new Database(path);
+  lock.exec("PRAGMA busy_timeout = 0");
+  // RUNLOOP_READY can fire while the child's first save is still in a write
+  // transaction. busy_timeout=0 then fails this BEGIN, not the child's later /mode
+  // save. Retry until the first save commits, then hold the lock.
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    try {
+      lock.exec("BEGIN EXCLUSIVE");
+      exclusiveLocks.set(sessionsDir, lock);
+      return;
+    } catch (err) {
+      const busy =
+        err instanceof Error &&
+        ((err as { code?: string }).code === "SQLITE_BUSY" || /locked/i.test(err.message));
+      if (!busy || Date.now() >= deadline) {
+        lock.close();
+        throw err;
+      }
+      Bun.sleepSync(20);
+    }
   }
 }
 
 function restoreSessionStore(sessionsDir: string): void {
-  for (const path of sessionDbPaths(sessionsDir)) {
-    if (existsSync(path)) chmodSync(path, 0o600);
+  const lock = exclusiveLocks.get(sessionsDir);
+  if (lock === undefined) return;
+  exclusiveLocks.delete(sessionsDir);
+  try {
+    lock.exec("ROLLBACK");
+  } catch {
+    // already rolled back or connection closed
   }
+  lock.close();
 }
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
@@ -303,6 +330,45 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
+// childScriptMultiTurn's own shape with one turn cancelled. Role initials rather than a bare
+// length, so a count that happens to match cannot pass for the right shape. The cancelled turn
+// yields no `messages-updated`, matching loop.ts's own stream catch — a fake that answered where
+// the real loop stays silent would prove nothing.
+function childScriptCancelledTurnContext(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  const roles = opts.messages.map((m) => m.role[0]).join("");`,
+    `  const kept = opts.messages.some((m) => JSON.stringify(m.content).includes("task two"));`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " roles=" + roles + " kept=" + kept);`,
+    `  if (calls === 2) {`,
+    `    console.log("\\nRUNLOOP_PARKED");`,
+    `    await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `    console.log("\\nRUNLOOP_ABORTED");`,
+    `    yield { type: "done", reason: "aborted" };`,
+    `    return opts.messages;`,
+    `  }`,
+    `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
+    `  console.log("\\nRUNLOOP_DONE " + calls);`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+  ].join("\n");
+}
+
 // A logged-in session's account-status fetch (prepareSession's own fetchAccountPlan call, feeding
 // resolveRoute/decideModelPickerOpen's plan-coverage predicate) must happen once at session start,
 // not once per turn — the same "reused across turns" guarantee childScriptMultiTurn's own sibling
@@ -367,7 +433,7 @@ function childScriptAccountStatusOnce(dir: string): string {
 // /logout left the previous (possibly paid) plan in place, so
 // resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
 // logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
-// key, shows "provided"), then logs out and re-opens /model to prove that same entry's row drops
+// key, shows "seri"), then logs out and re-opens /model to prove that same entry's row drops
 // back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
 // leaving it stale.
 function childScriptPlanClearedOnLogout(dir: string): string {
@@ -1316,6 +1382,47 @@ function childScriptGuidedSetup(dir: string): string {
   ].join("\n");
 }
 
+// The hosted-login counterpart of childScriptGuidedSetup: still zero local keys (every
+// provider env var deleted), but prepareSession can resolve via the gateway because this
+// script mocks /account-status and injects getGatewayModel. Used with a host-side auth.json
+// (seedAuth) so the first-run gate sees a real session and must skip /setup.
+function childScriptLoggedInZeroKeys(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
+    `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
+    `delete process.env.GROQ_API_KEY;`,
+    `delete process.env.OPENROUTER_API_KEY;`,
+    `delete process.env.ANTHROPIC_API_KEY;`,
+    `delete process.env.OPENAI_API_KEY;`,
+    `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
+    `delete process.env.XAI_API_KEY;`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const realFetch = globalThis.fetch;`,
+    `globalThis.fetch = (url, opts) => {`,
+    `  if (typeof url === "string" && url.includes("/account-status")) {`,
+    `    return Promise.resolve(new Response(JSON.stringify({ plan: "pro" }), { status: 200 }));`,
+    `  }`,
+    `  return realFetch(url, opts);`,
+    `};`,
+    `async function* runLoopFake(opts) {`,
+    `  console.log("\\nRUNLOOP_READY");`,
+    `  yield { type: "done", reason: "no-tool-call" };`,
+    `  return opts.messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGatewayModel: (id) => ({ id, via: "gateway" }),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
 // Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
 // SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
 // against the bundled manifest), which would make this script incapable of ever observing the bug
@@ -1807,12 +1914,13 @@ const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 // window size on the pty `pty.spawn` allocates — confirmed live (an `@opentui/core`
 // `createCliRenderer` probe run over the identical harness): a fresh pty with no winsize ioctl ever
 // applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
-// for "no real size available," not a real terminal's dimensions. `formatModeDetail` (util/format.ts)
-// gates the mode row's route/effort-tier suffix behind `MODE_ROUTE_MIN_COLS` (100) — strictly wider
-// than that 80-column default — so no test using the plain `target` can ever observe that suffix,
-// regardless of what it asserts. `terminalSize`, below, is this file's only opt-in past that: it
-// prefixes an `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before
-// exec'ing the real one. Every other call site omits it and keeps the exact behavior it always had.
+// for "no real size available," not a real terminal's dimensions. `formatModeDetail` leftover-packs
+// the mode row's model/route/effort suffix into whatever columns remain after the indicator, so a
+// typical model name's ` · your key` suffix IS visible at that 80-column default. `terminalSize`,
+// below, still widens the pty when a test needs a guaranteed-wide row (a NAME_WIDTH model plus
+// reroute plus effort, or an assertion that must not depend on leftover packing): it prefixes an
+// `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before exec'ing
+// the real one. Every other call site omits it and keeps the exact behavior it always had.
 async function startChild(
   scriptPath: string,
   cwd: string,
@@ -1930,22 +2038,25 @@ async function startChild(
   // that fails, since it re-walks the full capture from scratch on every call.
   //
   // The adjacent-row-pair check (not just single rows) exists because a long transcript line
-  // word-wraps at Ink's column width, and where it wraps depends on how long the content BEFORE
+  // word-wraps at the column width, and where it wraps depends on how long the content BEFORE
   // the checked fragment is (a profile/tmp-dir path, e.g.) — not something a test can pin down
   // in advance. Measured live on macOS CI: a fragment picked to sit safely inside one wrapped
   // half still landed exactly on a longer path's wrap point. Trimming each row's trailing padding
-  // and rejoining pairs with a single space reconstructs the original word-wrapped sentence
-  // (OpenTUI wraps on word boundaries, never mid-word), so a fragment straddling any one wrap
-  // point still matches regardless of where that point falls.
-  const seenLine = (line: string): boolean => {
-    if (stdout.includes(line)) return true;
+  // and rejoining pairs, both with a space and without, reconstructs a wrap on a word boundary
+  // and a CUP split that landed mid-token, so a fragment straddling any one wrap point still
+  // matches regardless of where that point falls.
+  const gridContains = (line: string): boolean => {
     const rows = reconstructRows(stdout);
     if (rows.some((row) => row.includes(line))) return true;
-    return rows.some(
-      (row, i) =>
-        i + 1 < rows.length && `${row.trimEnd()} ${rows[i + 1].trimStart()}`.includes(line),
-    );
+    return rows.some((row, i) => {
+      if (i + 1 >= rows.length) return false;
+      const spaced = `${row.trimEnd()} ${rows[i + 1].trimStart()}`;
+      const glued = `${row.trimEnd()}${rows[i + 1].trimStart()}`;
+      return spaced.includes(line) || glued.includes(line);
+    });
   };
+
+  const seenLine = (line: string): boolean => stdout.includes(line) || gridContains(line);
 
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 20_000;
@@ -1990,29 +2101,52 @@ async function startChild(
       );
   };
 
-  // "SERI" (WelcomeSplash's own wordmark) is the earliest text the splash's first frame prints —
+  // SPLASH_MARK is the earliest text the splash's first frame prints —
   // waiting for it before writing Escape is the same "raw mode is set by the time the readiness
   // marker prints" reasoning childScriptCancel's own comment (below) already relies on for
   // RUNLOOP_READY. Awaited here, before this function returns, rather than fired in the background:
-  // several callers below wait on the mode indicator line (present on the splash's own first frame
-  // too, unlike RUNLOOP_READY) as their own first sync point, and writing their own input before
-  // Escape has actually been queued would deliver it to the splash instead of the panel they meant
-  // to reach. Swallowed on failure: a script that genuinely never reaches a TTY (none in this file)
-  // degrades to leaving the splash undismissed for that one test's own assertions to fail on.
+  // several callers below wait on the mode indicator line as their own first sync point, and
+  // writing their own input before Escape has actually been queued would deliver it to the splash
+  // instead of the panel they meant to reach. Not swallowed: a wait on text the splash no longer
+  // prints leaves it undismissed for every later assertion, which reads as every test in this file
+  // timing out rather than as one wrong handle here.
   if (opts.dismissSplash ?? true) {
-    try {
-      await sawLine("SERI");
-      child.stdin?.write("\x1b");
-      // wait100ms's own 100ms (this file's own convention for "the pause every keypress that swaps
-      // InputBox for a different mounted component already requires," defined below): without it, a
-      // caller that writes its own first input immediately after this function returns can combine
-      // with Escape in the same still-canonical-mode line buffer — the terminal only flushes a line
-      // on a newline/mode-switch boundary, so two writes issued back to back can arrive as ONE read
-      // chunk on the child's side. Measured live, this misdelivered "\x1b/max-turns 1" as one
-      // swallowed chunk instead of Escape-then-text, leaving the splash undismissed for the rest of
-      // the test.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    } catch {}
+    await sawLine(SPLASH_MARK);
+    // The banner can paint before the menu that owns Escape. Waiting for the hint means the
+    // splash's keyboard handler is mounted, so the write below is the dismiss and not a no-op.
+    await sawLine("Esc continue");
+    child.stdin?.write("\x1b");
+    // `sawLine` is cumulative. Waiting on the mode line is not a dismiss signal: that text can
+    // appear in a later frame while leftover splash input is still being dropped. A flat 100ms
+    // sleep after Escape is the same race under load: the next write lands on the splash and is
+    // dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can clear the
+    // overlay (a blank grid) before the next surface is interactive. Two consecutive non-blank
+    // polls with the splash hint gone are the signal that whatever replaced it (idle input,
+    // /setup, an approval prompt) will see the next stdin write. Frames are not compared for
+    // equality: a live elapsed-time row changes every second. A child that already exited has
+    // nothing left to type into.
+    const dismissed = Date.now() + 20_000;
+    let sawHint = false;
+    let hintGone = false;
+    let idlePolls = 0;
+    const frameIsBlank = (frame: string): boolean =>
+      !frame.split("\n").some((row) => row.trim().length > 0);
+    while (spawnError === undefined && child.exitCode === null && Date.now() < dismissed) {
+      const frame = lastFrame();
+      if (gridContains("Esc continue")) sawHint = true;
+      if (sawHint && !gridContains("Esc continue")) hintGone = true;
+      if (hintGone && !frameIsBlank(frame)) {
+        idlePolls++;
+        if (idlePolls >= 2) break;
+      } else {
+        idlePolls = 0;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    if (spawnError !== undefined)
+      throw new Error(`could not spawn python3 (pty allocator): ${spawnError.message}`);
+    if (child.exitCode === null && idlePolls < 2)
+      throw new Error(`splash never dismissed\n--- lastFrame ---\n${lastFrame()}`);
   }
 
   return {
@@ -2026,6 +2160,84 @@ async function startChild(
     frameOccurrences,
     sawInFrameTimes,
   };
+}
+
+type PtyChild = Awaited<ReturnType<typeof startChild>>;
+
+// The picker's header can paint (and `sawLine("Route")` resolve) before the filter
+// input's useKeyboard subscription is live. A write in that window is dropped, the
+// placeholder stays, and waiting for the typed id times out. Wait for the empty-filter
+// chrome in lastFrame, then type; re-type only while that placeholder is still on
+// screen so a landed first write is not doubled into the query.
+async function typePickerFilter(pty: PtyChild, text: string): Promise<void> {
+  await pty.sawInFrameTimes("Type to filter", 1);
+  pty.child.stdin?.write(text);
+  const start = Date.now();
+  const deadline = start + 20_000;
+  let retried = false;
+  while (Date.now() < deadline) {
+    if (pty.lastFrame().includes(text) || pty.stdoutSoFar().includes(text)) return;
+    if (!retried && Date.now() - start > 400 && pty.lastFrame().includes("Type to filter")) {
+      pty.child.stdin?.write(text);
+      retried = true;
+    }
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  throw new Error(
+    `child never printed ${JSON.stringify(text)}; got ${JSON.stringify(pty.stdoutSoFar())}`,
+  );
+}
+
+// The message queue's own fake, and it differs from childScriptCancel above in the two ways that
+// matter for what the queue has to prove.
+//
+// It COUNTS its calls (RUNLOOP_CALL n), because every assertion here is about whether a SECOND turn
+// started — and "the fake said READY again" is the only signal that distinguishes a drained queue
+// from a queue that sat still.
+//
+// It yields a messages-updated whose last entry is a `role: "user"` message BEFORE awaiting the
+// abort, mirroring what runLoop itself does with the matched glob-scoped rules at the end of a tool
+// phase (loop.ts's own onToolPhaseEnd push). Without it, an aborted turn persists nothing at all
+// (drive.ts writes only on that event), and the adjacent-user-message assertion below would pass
+// over a session with one message in it no matter what cli.ts did — a green light wired to nothing.
+//
+// The assistant row in front of it is not padding. loop.ts pushes the rules message only after the
+// assistant message and the tool-result row for that phase are already in the array, so `user`
+// directly after `user` is a shape runLoop cannot produce. Appending the rules row straight onto
+// `opts.messages` — which always ends with the turn's own user message — manufactured that pair
+// inside the loop's own array, where cli.ts never gets a say, and left the adjacent-user assertion
+// below unsatisfiable no matter what the queue did.
+function childScriptQueue(dir: string): string {
+  return [
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  const n = calls;`,
+    `  const messages = [`,
+    `    ...opts.messages,`,
+    `    { role: "assistant", content: [{ type: "text", text: "working on turn " + n }] },`,
+    `    { role: "user", content: [{ type: "text", text: "rules for turn " + n }] },`,
+    `  ];`,
+    `  yield { type: "messages-updated", messages };`,
+    `  console.log("\\nRUNLOOP_CALL " + n);`,
+    `  await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `  console.log("\\nRUNLOOP_ABORTED " + n);`,
+    `  yield { type: "done", reason: "aborted" };`,
+    `  return messages;`,
+    `}`,
+    `const code = await cli.run(["do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
+    `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
 }
 
 // Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
@@ -2202,10 +2414,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   // session" tests, elsewhere) while the identical failure from Shift+Tab became an unhandled
   // rejection instead. `runtime/renderer.ts`'s own `process.on("unhandledRejection", ...)` handler
   // calls `process.exit(1)` — the whole TUI would crash from a keypress that, via /mode, degrades
-  // gracefully. Sabotages `sessionsDir` the same way the /clear persist-failure test above does, so
-  // Shift+Tab's own save fails, and confirms both the error surfaces AND the process is still
-  // alive afterward (answers a second, unrelated keypress) — a crash would fail the second half
-  // silently, not loudly, since `sawLine` would just hang until the test's own timeout.
+  // gracefully. Takes an exclusive SQLite lock so Shift+Tab's save hits SQLITE_BUSY (chmod does
+  // not fail a write on a connection the child already holds), and confirms both the error
+  // surfaces AND the process is still alive afterward (answers a second, unrelated keypress) — a
+  // crash would fail the second half silently, not loudly, since `sawLine` would just hang until
+  // the test's own timeout.
   test("shift+tab shows an error instead of crashing the TUI when its own persist fails", async () => {
     const scriptPath = join(dir, "child-input-cycle-persist-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -2216,8 +2429,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("approve-each mode on");
 
-      // Read-only database files: the next saveSession write cannot land.
-      makeSessionStoreReadOnly(sessionsDir);
+      // Exclusive lock: the child's held connection would still write after chmod.
+      lockSessionStore(sessionsDir);
 
       child.stdin?.write("\x1b[Z");
       await sawLine("could not save the session");
@@ -2463,6 +2676,49 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
+  // A cancelled turn used to take its own prompt down with it, so a follow-up like "the last two"
+  // reached the model with nothing to resolve against — runTurn's own commit-before-the-call
+  // dispatch (cli.ts) carries the mechanism.
+  //
+  // Turn 3's own line is the assertion, not the transcript: what broke was what the model is
+  // handed, and the transcript kept showing the typed line throughout.
+  test("a cancelled turn leaves its own prompt in the session the next turn is built from", async () => {
+    const scriptPath = join(dir, "child-cancelled-turn-context.mjs");
+    writeFileSync(scriptPath, childScriptCancelledTurnContext(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      // The argv task, prepareSession's own single starting message.
+      await sawLine("RUNLOOP_CALL 1 roles=u kept=false");
+      await sawLine("RUNLOOP_DONE 1");
+
+      // Waited on before the Enter for the reason the sibling multi-turn test documents.
+      child.stdin?.write("task two");
+      await sawLine("task two");
+      child.stdin?.write("\r");
+      // The argv task, turn 1's assistant reply, and this turn's own prompt.
+      await sawLine("RUNLOOP_CALL 2 roles=uau kept=true");
+      await sawLine("RUNLOOP_PARKED");
+
+      child.stdin?.write("\x03");
+      // The rendered line, not just the child's own RUNLOOP_ABORTED marker: that marker fires
+      // before the `done` yield, and the sibling multi-turn test's own comment records why the
+      // rendered line is what actually proves turnInFlight has cleared — without it the next
+      // submission below can land inside the still-in-flight window and be rejected by the gate.
+      await sawLine("RUNLOOP_ABORTED");
+      await sawLine("done: aborted");
+
+      child.stdin?.write("task three");
+      await sawLine("task three");
+      child.stdin?.write("\r");
+      // The regression: `roles=uau kept=false` before the fix, because "task two" died with its
+      // turn. The extra `a` is the `[interrupted]` row withUserTurn inserts.
+      await sawLine("RUNLOOP_CALL 3 roles=uauau kept=true");
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   test("a logged-in session's account-status fetch happens once at session start, reused across turns", async () => {
     const scriptPath = join(dir, "child-account-status-once.mjs");
     writeFileSync(scriptPath, childScriptAccountStatusOnce(dir));
@@ -2508,7 +2764,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
-      expect(lastFrame()).toContain("provided");
+      expect(lastFrame()).toContain("seri");
 
       child.stdin?.write("\x1b"); // Escape: cancels the picker without selecting
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -2521,16 +2777,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // A real wait, not sawLine("GPT OSS 120B"): that line already appeared during the FIRST
-      // picker open above, so the cumulative check would resolve instantly here too, racing the
-      // actual component mount the same way childScriptModelSwitch's own comment documents for
-      // the InputBox->ModelPicker transition.
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // A real wait on the picker's own chrome in `lastFrame`, not sawLine("GPT OSS 120B")
+      // and not a flat 100ms sleep: that line already appeared during the FIRST picker open,
+      // so the cumulative check would resolve instantly here too, and 100ms under macOS CI
+      // load is not always enough for the filter's useKeyboard to be mounted. Typing before
+      // that commit drops the filter text.
+      await sawInFrameTimes("Type to filter", 1);
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
-      // still read "provided" here, from the plan a session that no longer exists once had.
-      expect(lastFrame()).not.toContain("provided");
+      // still read as a seri-plan route here, from the plan a session that no longer exists once had.
       expect(lastFrame()).toContain("no key");
     } finally {
       child.kill("SIGKILL");
@@ -2548,12 +2804,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL model=~openai/gpt-latest provider=openrouter");
-      // Split the same way childScriptReroute's own test does: measured on a real pty, Ink can
-      // wrap this line across the terminal's own column width, landing "configured" on the
-      // following line.
-      const noticePrefix = "↻ routing ~openai/gpt-latest via openrouter on your seri plan — no";
+      const noticePrefix = "↻ routing ~openai/gpt-latest on your seri plan";
       await sawLine(noticePrefix);
-      await sawLine("configured");
       await sawLine("done ·");
 
       // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
@@ -3549,11 +3801,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // onSessionChange used to call saveSession bare, with nothing to catch a throw. The session
-  // database is made read-only AFTER prepareSession's own initial save has already succeeded —
-  // deterministic and cross-platform, unlike trying to fill a real disk. A bare throw escaped the
-  // React effect entirely and Ink's own renderer dumped a raw stack trace across the terminal;
-  // "could not save the session" never appeared and the pending `/mode` never completed.
+  // onSessionChange used to call saveSession bare, with nothing to catch a throw. After
+  // prepareSession's own initial save has succeeded, the parent takes an exclusive SQLite lock so
+  // the child's held connection hits SQLITE_BUSY — chmod would not, because the kernel checks
+  // access at open, not at write. A bare throw escaped the React effect entirely and Ink's own
+  // renderer dumped a raw stack trace across the terminal; "could not save the session" never
+  // appeared and the pending `/mode` never completed.
   test("a session-save failure surfaces as a command error instead of hanging forever (finding 1)", async () => {
     const scriptPath = join(dir, "child-save-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -3563,9 +3816,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_READY");
 
-      // Sabotage AFTER the initial save succeeds — prepareSession's own unconditional saveSession
+      // Lock AFTER the initial save succeeds — prepareSession's own unconditional saveSession
       // call, unrelated to the bug under test, must be given a real chance to land first.
-      makeSessionStoreReadOnly(sessionsDir);
+      lockSessionStore(sessionsDir);
 
       child.stdin?.write("/mode");
       await sawLine("/mode");
@@ -3622,10 +3875,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      // The TUI's own ApprovalBox rendering the SAME prompt text makeApprovalPrompt uses — split
-      // across two checks, not one long toContain, since Ink wraps this line across the box's own
-      // bordered rows (measured, same as App.test.tsx's own version of this same assertion).
-      await sawLine(`Approve write_file({"path":"a.txt","content":"hi"})? [y]es / [a]lways`);
+      // TUI prose (approvalCopy), not the JSON readline the non-interactive path still uses.
+      await sawLine(`Write a.txt?`);
       await sawLine("[N]o");
 
       child.stdin?.write("y");
@@ -3749,12 +4000,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/setup", () => {
-    test("lists all five providers with correct source, masked values, and disabled removal for an env row", async () => {
+    test("lists every BYOK provider with correct source, masked values, and disabled removal for an env row", async () => {
       seedConfig(dir, { ANTHROPIC_API_KEY: "sk-ant-fake-config-key-abcdefgh" });
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      // 100 columns, not the default 80: this test is about what /setup lists, not about how a
+      // row degrades when it runs out of room. `envShadowReason`'s text used every one of the 80
+      // default columns before panels took their `PAD_X` interior padding (theme/spacing.ts), so
+      // at 80 the row now middle-truncates and the phrase below never appears whole. The
+      // truncation is pinned by its own test further down rather than left to break this one.
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -3766,6 +4024,41 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("sk-a...efgh");
         await sawLine("set by $GROQ_API_KEY in your environment");
+        await sawLine("openrouter");
+        await sawLine("not set");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The cost of the panel padding, pinned rather than left as a surprise. `envShadowReason`'s
+    // row ended flush against the right border at the classic 80-column default; `PAD_X` on each
+    // side (theme/spacing.ts) takes two columns it did not have, so the row middle-truncates.
+    // Both ends survive and the meaning with them, but the phrase is no longer whole. If the hint
+    // is ever shortened, this test is the one that says so.
+    test("at 80 columns the env-shadow hint middle-truncates rather than reaching the border", async () => {
+      const scriptPath = join(dir, "child-setup-narrow.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, sawInFrameTimes, frameOccurrences } = await startChild(
+        scriptPath,
+        dir,
+        { terminalSize: { cols: 80, rows: 30 } },
+      );
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        // Polled, not sampled: `lastFrame()` read directly can land on a redraw before the panel
+        // has finished painting, which is the flake this file's own helper comments describe.
+        await sawInFrameTimes("environment — unset it in your shell", 1);
+
+        expect(frameOccurrences("set by $GROQ_API_KEY in ")).toBe(1);
+        expect(frameOccurrences("set by $GROQ_API_KEY in your environment")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -3785,27 +4078,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — one Down
-        // reaches openrouter, unset at this point (only GROQ_API_KEY is set, as an env var).
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
-        const secret = "sk-or-added-secret-key";
+        const secret = "sk-ant-added-secret-key";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
         // caught elsewhere in this file (waitForConfig's own comment).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secret,
+          (c) => c.ANTHROPIC_API_KEY === secret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secret);
 
         // The negative control at the process level: the raw key must never have reached stdout,
         // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
@@ -4010,7 +4304,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      // 100 columns, for the reason the sibling test above gives: `$OPENAI_API_KEY` is two
+      // characters longer than `$GROQ_API_KEY`, so at the default 80 the padded row clips inside
+      // this prefix and leaves `set by $OPENAI_API_KEY i`.
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -4020,13 +4319,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
         // Not the full "...in your environment — unset it in your shell" text: ListRow.tsx's own
-        // `truncate` (its own comment) genuinely clips this row's label at this terminal width,
-        // same as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
+        // `truncate` (its own comment) genuinely clips this row's label even at 100 columns, same
+        // as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
         // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
-        // anthropic=2, openai=3).
+        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4073,8 +4371,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("config entry underneath — removable");
         expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
-        // Down to openrouter, anthropic, openai — three Downs (groq=0, openrouter=1,
-        // anthropic=2, openai=3).
+        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4101,31 +4398,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Code-review finding (PR #73, round 2, item #1): round 1 only guarded the /setup-OPEN
-    // interceptor (cli.ts's onSubmit) against a malformed config.json — this exercises the two
-    // remaining call sites reached only AFTER the panel is already open, which round 1 missed:
-    // onSetupRemove's own request branch (providerKeyState), and onSetupBack (setupListState via
-    // the new dispatchSetupList wrapper). onSetupSelect is deliberately NOT exercised for a crash
-    // here — this round's fix made it a pure PROVIDER_API_KEY_NAMES lookup with no I/O at all, so
-    // it has nothing left to throw on; the "a" step below instead proves exactly that, by using it
-    // successfully while config.json is still malformed.
-    //
-    // Title says "a clean command-error", not "instead of crashing the TUI": measured directly
-    // (temporarily reverting both guards and re-running this test) — on this Bun/Ink combination, an
-    // unguarded synchronous throw out of a `useInput` callback does NOT actually kill the process
-    // (`emitInput`, ink/build/components/App.js's own `internal_eventEmitter.current.emit('input',
-    // ...)`, survives it and the TUI keeps accepting input either way), so "still alive after"
-    // cannot be this test's own discriminator. What the guard actually changes, confirmed by that
-    // same revert: without it, Bun's own uncaught-exception printer dumps a multi-line, ANSI-colored
-    // stack trace (a source excerpt plus "at providerKeyState (...)"/"at onSetupRemove (...)"
-    // frames) straight into the pty, smeared across Ink's own managed screen redraw — which is what
-    // the final assertion below checks is absent.
-    test("a config.json that becomes malformed while /setup is already open degrades to a clean command-error, not a raw stack-trace dump", async () => {
+    // A throw out of a key handler does not kill this TUI, but Bun's uncaught-exception
+    // printer dumps a stack into the pty. The assertions below check that dump is absent.
+    test("a config.json that becomes malformed while /setup is already open does not dump a stack trace", async () => {
       seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-value" });
       const scriptPath = join(dir, "child-setup-malformed-config.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine, sawLineTimes, rawOccurrences } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
 
@@ -4140,50 +4420,90 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // is a SECOND read, from a call site reached only once /setup is already open.
         writeFileSync(configPath, "{not valid json");
 
-        // openrouter (index 1) was removable while config.json was still valid — onSetupRemove's
-        // own request branch (providerKeyState) is what actually hits the malformed file now.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("r");
-        await sawLine("JSON Parse error");
+        await wait100ms();
 
-        // Still on the list step (the failed read never reached a dispatch that would move it) —
-        // "a" on the same row exercises onSetupSelect, which does no I/O after this round's fix and
-        // so must succeed even with config.json still malformed.
         child.stdin?.write("a");
         await wait100ms();
         await sawLine("OPENROUTER_API_KEY for openrouter");
 
-        // Escape from enter-key exercises onSetupBack -> dispatchSetupList -> decideSetupOpen, the
-        // remaining full-scan read — same malformed file, same degrade. sawLineTimes, not sawLine:
-        // the first "JSON Parse error" already satisfies a bare substring check instantly.
         child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLineTimes("JSON Parse error", 2);
+        await sawLine("/setup — provider API keys");
 
-        // dispatchSetupList's own catch (the throw just above went through it, unlike onSetupRemove's
-        // own inline one) dispatches setup-resolved alongside the command-error — the panel is
-        // already closed by this point, not sitting on the list step waiting for a retry. A second
-        // bare Escape here has no panel left to act on. Restoring valid JSON and retrying proves the
-        // TUI actually recovered — /setup opens again cleanly — rather than counting on however many
-        // times the still-open panel's own title row happened to get repainted, which a
-        // cell-diffing renderer makes an unreliable count (confirmed live: this used to assert
-        // `sawLineTimes(2)` off two bare Escapes with no second `/setup`, and passed or failed
-        // depending only on incidental repaint counts, not on anything actually reopening).
-        writeFileSync(configPath, JSON.stringify({ OPENROUTER_API_KEY: "sk-or-value" }));
+        expect(rawOccurrences("JSON Parse error")).toBe(0);
+        expect(rawOccurrences("provider/keys.ts")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a logged-in /setup lists seri as a subscription and OpenRouter as a key", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-seri.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+        await sawLine("done ·");
+
         child.stdin?.write("/setup");
         await sawLine("/setup");
         child.stdin?.write("\r");
-        await sawLineTimes("/setup — provider API keys", 2);
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("Subscriptions");
+        await sawLine("seri");
+        await sawLine("connected");
+        await sawLine("openrouter");
+        expect(lastFrame()).toContain("not set");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
 
-        // The actual negative control this test rests on (this comment block's own top note): both
-        // throws above are caught before either ever reaches a raw stack trace in the captured pty
-        // output. Not "at providerKeyState" — Bun's own colorized frame renderer interleaves ANSI
-        // codes INSIDE function names (confirmed by inspecting the raw, unguarded dump byte-for-byte:
-        // "at " and "providerKeyState" are not contiguous), which would make that substring check
-        // pass vacuously either way. A stack frame's file path is not interleaved the same way
-        // (confirmed the same way), so this checks for that instead.
-        expect(rawOccurrences("provider/keys.ts")).toBe(0);
+    test("a logged-in user can paste an OpenRouter key; it is unused while the seri plan is connected", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-setup-hosted-own-key.mjs");
+      writeFileSync(scriptPath, childScriptSetup(dir));
+
+      const { child, sawLine, lastFrame } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("RUNLOOP_READY");
+
+        child.stdin?.write("/setup");
+        await sawLine("/setup");
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("/setup — provider API keys");
+        await sawLine("seri");
+
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
+        child.stdin?.write("\r");
+        await wait100ms();
+        await sawLine("OPENROUTER_API_KEY for openrouter");
+
+        const secret = "sk-or-hosted-own-override";
+        child.stdin?.write(secret);
+        await wait100ms();
+        child.stdin?.write("\r");
+        await sawLine("Saved OPENROUTER_API_KEY.");
+
+        const config = await waitForConfig(
+          join(dir, ".seri", "config.json"),
+          (c) => c.OPENROUTER_API_KEY === secret,
+        );
+        expect(config.OPENROUTER_API_KEY).toBe(secret);
+        await sawLine("unused because a seri plan is connected");
+        expect(lastFrame()).toContain("seri");
       } finally {
         child.kill("SIGKILL");
       }
@@ -4210,33 +4530,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   }
 
   describe("/login, /signup, /logout", () => {
-    test("the banner appears at mount when no auth.json exists, alongside the ordinary input box", async () => {
+    test("the sign-in banner does not appear at mount when no auth.json exists", async () => {
       const scriptPath = join(dir, "child-auth-banner.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
-        // Non-blocking proof: the ordinary input box still accepts a task, exactly as it would
-        // with the banner absent — the pty counterpart of App.test.tsx's own "still typing" test.
+        // Non-blocking proof: the ordinary input box still accepts a task — the pty counterpart
+        // of App.test.tsx's own "still typing" test.
         child.stdin?.write("still typing");
         await sawLine("still typing");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // "The banner is gone from the newest frame" (App.test.tsx's own "clears the panel entirely,
-    // restoring InputBox" test) is asserted there, at the component level, via lastFrame() — this
-    // harness's own `lastFrame()`/`frameOccurrences` could check the same thing, but `sawLine`/
-    // `rawOccurrences` are what every other "X disappeared" case in this file already uses, and
-    // they see the WHOLE accumulated pty stdout, which still contains the banner's original bytes
-    // from mount even after Ink redraws without it (every other such case — /setup's own cancel
-    // test — checks a FILE, not stdout, for the same reason). This test's own job is end to end:
-    // the real login()/logout() deps seam, the real reducer dispatches, and auth.json actually
-    // landing on disk.
+    // This test's own job is end to end: the real login()/logout() deps seam, the real reducer
+    // dispatches, and auth.json actually landing on disk. The sign-in chrome lives on the splash
+    // (and on `/login` itself), not as a persistent main-TUI banner.
     test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
@@ -4244,13 +4559,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine, exited } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         await sawLine("Logged in as fake@example.com");
@@ -4288,10 +4601,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         await sawLine("Authorization was denied.");
@@ -4321,10 +4633,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         child.stdin?.write("\x1b"); // Escape
@@ -4358,10 +4669,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
 
         child.stdin?.write("/login");
-        await sawLine("/login");
+        await sawLine("> /login");
         child.stdin?.write("\r");
         await wait100ms();
-        await sawLine("https://example.com/device");
         await sawLine("ABCD-1234");
 
         child.stdin?.write("\x1b"); // Escape — well before the fake's own 1000ms delay resolves
@@ -4391,16 +4701,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the banner returns", async () => {
+    test("/logout signs out: 'Logged out.' lands in the transcript, auth.json is cleared, and the sign-in banner does not return", async () => {
       seedAuth(dir);
       const scriptPath = join(dir, "child-auth-logout.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        // seedAuth already wrote auth.json before spawn — decideAuthOffer is false at mount, so no
-        // banner line is expected yet here.
 
         child.stdin?.write("/logout");
         await sawLine("/logout");
@@ -4409,7 +4717,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Logged out.");
 
         expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4419,14 +4727,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // reuses childScriptGuidedSetup (no key, no auth.json — the same script the "genuinely blank
     // first run" describe block below already uses) rather than a new script, since the scenario
     // is identical; only the assertions differ.
-    test("gate composition: zero keys and no auth.json show both /setup and the auth banner; adding a key falls through to the main view with the banner still showing", async () => {
+    test("gate composition: zero keys and no auth.json show /setup without the sign-in banner; adding a key falls through to the main view still without it", async () => {
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = pty;
       try {
         await sawLine("/setup — provider API keys");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
         child.stdin?.write("a");
         await wait100ms();
@@ -4439,18 +4748,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved GROQ_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
         // The fall-through to the main view (prepareSession -> runTui), same sync point
-        // childScriptGuidedSetup's own describe block below uses — and the banner is still
-        // showing there too, since no /login has happened in this run.
+        // childScriptGuidedSetup's own describe block below uses — login stays on the splash
+        // and on /login, not as a persistent banner after Continue.
         await sawLine("RUNLOOP_READY");
-        await sawLine("Sign in with /login, or create an account with /signup");
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -4473,7 +4778,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine } = pty;
       try {
         // No "/setup" keystroke sent — this must appear on its own, unlike every other /setup test
         // in this file, which types the command first.
@@ -4500,16 +4806,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
         // same close path the existing "cancel" /setup test above already exercises. Unlike
         // pre-fix, this does NOT fall straight through: a key is now configured, so onSetupClose
-        // opens the mandatory model picker instead.
+        // opens the mandatory model picker instead. typePickerFilter waits for the filter chrome
+        // (not just the Route header) so the query is not dropped before useKeyboard is live.
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
         // Narrows to exactly one entry across the whole catalog (groq and openrouter both) —
         // verified directly against the bundled catalog-manifest.json (the /model multi-route
         // pty test's own comment, above, has the full story on why this exact string).
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
         // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
@@ -4635,28 +4938,30 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // If the picker silently replaced this mid-typing (the bug), the rest of this input would
-        // land in ModelPicker's own filter box instead, and "Saved OPENROUTER_API_KEY." would
+        // land in ModelPicker's own filter box instead, and "Saved ANTHROPIC_API_KEY." would
         // never print — sawLine's own bounded poll is what turns that into a real test failure
         // rather than a hang.
         const secondSecret = "sk-guided-setup-second-key-secret";
         child.stdin?.write(secondSecret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
-          (c) => c.OPENROUTER_API_KEY === secondSecret,
+          (c) => c.ANTHROPIC_API_KEY === secondSecret,
         );
-        expect(config.OPENROUTER_API_KEY).toBe(secondSecret);
+        expect(config.ANTHROPIC_API_KEY).toBe(secondSecret);
         expect(config.GROQ_API_KEY).toBe(secret);
 
         // The flow still completes normally afterward: back at the list step, a fresh Escape opens
@@ -4747,12 +5052,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Loading available models…");
 
         // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
-        // resolves.
+        // resolves. groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
         // is still true.
@@ -4771,12 +5078,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine, rawOccurrences } = pty;
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, anthropic, openai, google — two Downs
-        // reach anthropic (same navigation the /setup "remove" pty tests above already use).
+        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4792,16 +5099,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
-
         // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (the /model
         // multi-route pty test's own comment, above, verified this directly against
         // catalog-manifest.json). byRoutePriority (D2) sorts native before aggregator within a
         // route group, so the native anthropic row is already the top/default-selected one for
         // this filtered query — no Down press needed.
-        child.stdin?.write("claude-sonnet-5");
-        await sawLine("claude-sonnet-5");
+        await typePickerFilter(pty, "claude-sonnet-5");
         child.stdin?.write("\r");
 
         await sawLine("> do a task");
@@ -4828,7 +5131,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir);
+      const pty = await startChild(scriptPath, dir);
+      const { child, sawLine } = pty;
       try {
         await sawLine("/setup — provider API keys");
 
@@ -4843,8 +5147,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved GROQ_API_KEY.");
 
         child.stdin?.write("\x1b");
-        await new Promise((resolve) => setTimeout(resolve, 30));
-        await sawLine("Route");
+        await pty.sawInFrameTimes("Type to filter", 1);
 
         // Escape at the picker: must re-prompt, not resolve.
         child.stdin?.write("\x1b");
@@ -4854,8 +5157,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // The picker is still up: a subsequent filter keystroke still narrows it, and config.json
         // still has no SERI_MODEL — proof Escape neither closed the picker nor let the run
         // continue on a keys-but-no-model session.
-        child.stdin?.write("70b-versatile");
-        await sawLine("70b-versatile");
+        await typePickerFilter(pty, "70b-versatile");
         const configDuringEscape = JSON.parse(
           readFileSync(join(dir, ".seri", "config.json"), "utf8"),
         );
@@ -4955,18 +5257,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // CATALOG_PROVIDERS order is groq, openrouter, ... — one Down reaches openrouter.
+        // groq → openrouter → anthropic
+        child.stdin?.write("\x1b[B");
+        await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
-        await sawLine("OPENROUTER_API_KEY for openrouter");
+        await sawLine("ANTHROPIC_API_KEY for anthropic");
 
         const secret = "sk-guided-setup-catalog-missing-provider-secret";
         child.stdin?.write(secret);
         await wait100ms();
         child.stdin?.write("\r");
-        await sawLine("Saved OPENROUTER_API_KEY.");
+        await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
         await wait100ms();
@@ -5308,8 +5612,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
     // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
     // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
-    // `terminalSize` widens the pty past `MODE_ROUTE_MIN_COLS` (`startChild`'s own comment has the
-    // full account of why every other test in this file can't observe this suffix at all).
+    // `terminalSize` widens the pty so leftover packing of the effort-tier suffix is not tight
+    // against the default 80-column fallback (`startChild`'s own comment has the full account).
     test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any turn runs", async () => {
       seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
       const scriptPath = join(dir, "child-effort-default-mount.mjs");
@@ -5530,9 +5834,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-existing-key.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
 
         // Down twice from the default-selected "Log in" to "Continue without logging in", then
@@ -5546,6 +5852,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         // Falls through into the ordinary flow rather than replacing it.
         await sawLine("RUNLOOP_READY");
+        // Continue without logging in is the login choice. The splash already offered
+        // Log in / Sign up; the main TUI must not re-offer them as a persistent banner.
+        expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -5560,7 +5869,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         dismissSplash: false,
       });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("> Continue");
         await wait100ms();
 
@@ -5577,17 +5886,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
-        // Deliberately no `wait100ms()` between the keypress and these two checks (unlike its
-        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve (this file's own comment,
-        // below) already races the device-code panel's own on-screen lifetime — a fixed 100ms
-        // sleep here reliably lost that race, letting login succeed and the main TUI mount and
-        // redraw this exact row (`> do a task`) before either check ever ran. `sawLine`'s own poll
-        // loop already waits for the render with no help needed from a fixed delay.
-        await sawLine("https://example.com/device");
+        // Deliberately no `wait100ms()` between the keypress and this check (unlike its
+        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve already races the
+        // device-code panel's on-screen lifetime — a fixed 100ms sleep here reliably lost that
+        // race, letting login succeed and the main TUI mount and redraw this exact row
+        // (`> do a task`) before the check ever ran. `sawLine`'s own poll loop already waits
+        // for the render with no help needed from a fixed delay. The user code is the wait,
+        // not the verification URI: OpenTUI cell-diff splits that URL across two CUP writes,
+        // so a contiguous `https://example.com/device` substring is not a reliable sync point.
         await sawLine("ABCD-1234");
 
         // childScriptAuth's own loginFake resolves on its own ~50ms later — no further keypress.
@@ -5601,9 +5911,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-zero-key.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
 
-      const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
       try {
-        await sawLine("SERI");
+        await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
 
         child.stdin?.write("\x1b[B");
@@ -5613,8 +5925,34 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
 
         // The regression guard: Continue falls through into the existing mandatory-/setup gate
-        // rather than bypassing it.
+        // rather than bypassing it. OpenRouter is a normal BYOK row here, unset.
         await sawLine("/setup — provider API keys");
+        await sawLine("openrouter");
+        await sawLine("not set");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The hosted-login cell of the same gate: auth.json is already on disk (seedAuth), zero
+    // local keys, splash dismissed via Continue. Before the gate treated a hosted session as
+    // blank, this path mounted /setup and never reached RUNLOOP_READY. Reverting
+    // needsGuidedSetup's loadAuthSession check against this script reproduces that.
+    test("a logged-in user with zero local keys continues past splash into the main TUI, not /setup", async () => {
+      seedAuth(dir);
+      const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
+      writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
+
+      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+        dismissSplash: false,
+      });
+      try {
+        await sawLine(SPLASH_MARK);
+        await sawLine("> Continue");
+        child.stdin?.write("\r");
+
+        await sawLine("RUNLOOP_READY");
+        expect(rawOccurrences("/setup — provider API keys")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
@@ -5989,8 +6327,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     // throws when the persist promise rejects, but `dispatch({ type: "session-updated", ... })`
     // (tuiPresenter's own sessionUpdated) already ran synchronously before that rejection — so
     // `liveState.session.id` has already changed by the time onSubmit's `finally` runs, regardless
-    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Makes
-    // the session database read-only so the NEW session's `saveSession` call fails, and confirms
+    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Takes an
+    // exclusive SQLite lock so the NEW session's `saveSession` call fails, and confirms
     // the checkpointer still moved off the old session's ref despite that failure — this is what
     // would go red if the rebind were still living in the `try` block it used to (onSubmit's own
     // comment explains why).
@@ -6018,8 +6356,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(oldCommitBeforeClear).toBeDefined();
         const refsBeforeClear = listSessionRefs(gitDir);
 
-        // Read-only database files: the next saveSession write cannot land.
-        makeSessionStoreReadOnly(sessionsDir);
+        // Exclusive lock: the child's held connection would still write after chmod.
+        lockSessionStore(sessionsDir);
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
@@ -6216,5 +6554,167 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         }
       }, 60_000);
     });
+  });
+  // The message queue, end to end against the real cli.ts — the reducer and App tests cover the
+  // shape and the keys, but whether a submission is DEFERRED rather than rejected, and whether a
+  // cancel actually promotes the next one, are properties of runTurn's own lifecycle and only
+  // observable here. childScriptQueue's own comment explains what its fake does differently.
+  describe("message queue", () => {
+    async function queueOneBehindTurn() {
+      const scriptPath = join(dir, "queue.mjs");
+      writeFileSync(scriptPath, childScriptQueue(dir));
+      const started = await startChild(scriptPath, dir);
+      await started.sawLine("RUNLOOP_CALL 1");
+      started.child.stdin?.write("second message");
+      await started.sawInFrameTimes("second message", 1);
+      started.child.stdin?.write("\r");
+      await started.sawInFrameTimes("1 queued", 1);
+      return { ...started, scriptPath };
+    }
+
+    // Two rows, not one, and that is the whole point: a one-row queue drains through a path that
+    // never reads the tail, so every single-row test here stayed green while a two-row queue
+    // rotated in place and started nothing. `queue-head-taken` leaves the tail behind, and cli.ts's
+    // FIFO gate used to read that tail as "something is ahead of this" and re-append the very head
+    // it had just been handed.
+    async function queueTwoBehindTurn() {
+      const started = await queueOneBehindTurn();
+      started.child.stdin?.write("third message");
+      await started.sawInFrameTimes("third message", 1);
+      started.child.stdin?.write("\r");
+      await started.sawInFrameTimes("2 queued", 1);
+      return started;
+    }
+
+    test("Enter during a turn queues the message instead of echoing and dropping it", async () => {
+      const { child, lastFrame, frameOccurrences } = await queueOneBehindTurn();
+      try {
+        const frame = lastFrame();
+        expect(frame).toContain("1 queued");
+        expect(frame).toContain("second message");
+        // The half that today gets wrong: the old path echoed "> second message" into the
+        // transcript and THEN rejected it, so the message read as accepted and was unrecoverable.
+        // A queued message has not been sent, so it is not in the transcript at all.
+        expect(frameOccurrences("> second message")).toBe(0);
+        expect(frame).not.toContain("A turn is already running");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("Escape cancels the turn and the queue head starts on its own", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_ABORTED 1");
+        // The whole feature in one line: a second turn exists, and nothing but the drain could
+        // have started it — no key was pressed after the Escape.
+        await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("a two-row queue advances one row per cancel instead of rotating", async () => {
+      const { child, sawLine, sawInFrameTimes } = await queueTwoBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+        // The row that was second is now the only one left. Rotation looked identical to a drain
+        // on the count alone — it kept saying "2 queued" — so the count is what pins it.
+        await sawInFrameTimes("1 queued", 1);
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 3");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // The claim research.md is built on, and the reason this file's fake yields a messages-updated
+    // ending on a user message at all. runLoop really can leave a session that way (its own
+    // onToolPhaseEnd push), and appending the queue head beside it would put two user messages in
+    // front of a provider we ship no model for.
+    test("promoting the queue head never leaves two adjacent user messages", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+
+        const sessionsDir = join(dir, "sessions");
+        const sessionId = requireSessionId(sessionsDir);
+        const deadline = Date.now() + 5_000;
+        let messages: { role: string }[] = [];
+        do {
+          messages = loadSession(sessionId, sessionsDir).messages as { role: string }[];
+        } while (messages.length < 5 && Date.now() < deadline);
+
+        const adjacent = messages.filter(
+          (message, index) =>
+            index > 0 && message.role === "user" && messages[index - 1].role === "user",
+        );
+        expect(adjacent).toEqual([]);
+        // Not a vacuous pass, and 5 rather than 3 is what makes that true. Turn 1 alone reaches
+        // disk as three rows ending on the fake's own trailing user message, and a run that stopped
+        // there would satisfy the assertion above without the promoted head ever being appended —
+        // the pair it exists to rule out would not have had a chance to form. Five is turn 1's three
+        // plus the separator and the head.
+        expect(messages.length).toBeGreaterThanOrEqual(5);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // Cancelling means "I am done with this one, move on", whichever key said so. Ctrl-C used to
+    // discard the whole queue and Esc used to advance it, which made the same visible action —
+    // stopping the turn on screen — do opposite things to work the user could see queued.
+    test("Ctrl-C cancels and the queue head starts, the same as Escape", async () => {
+      const { child, sawLine, lastFrame } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("\x03");
+        await sawLine("RUNLOOP_ABORTED 1");
+        await sawLine("RUNLOOP_CALL 2");
+        expect(lastFrame()).not.toContain("discarded");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    test("quitting with something queued says so and does not start it", async () => {
+      const { child, exited, sawLine, rawOccurrences } = await queueOneBehindTurn();
+      try {
+        child.stdin?.write("/exit\r");
+        await sawLine("1 queued message discarded");
+        await sawLine("RUNLOOP_ABORTED 1");
+        await exited;
+        expect(rawOccurrences("RUNLOOP_CALL 2")).toBe(0);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
+    // signals.ts clears its one cancel slot as it invokes it, so an ungated second Escape would
+    // find it empty and take the fatal path — process death by signal, mid-unwind, with the queue
+    // and the session going with it. The latch is what keeps Escape from inheriting a contract
+    // that only ever belonged to Ctrl-C.
+    //
+    // The first press has to be observed before the extras are written. Three ESC bytes in one
+    // burst are not three Escape keypresses: the tty CSI parser holds the first byte to see
+    // whether a sequence follows, and the rest are consumed as that sequence. The turn then
+    // never cancels, which is a different bug than the latch this test names.
+    test("a second Escape during the unwind is inert, not fatal", async () => {
+      const { child, sawLine } = await queueOneBehindTurn();
+      try {
+        // One Escape per tick, not a burst: three ESC bytes in one read become a CSI
+        // prefix and never reach InputBox as Escape, which is what a full-frame
+        // repaint (paper ground + hairline) makes more likely.
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_ABORTED 1");
+        child.stdin?.write("\x1b");
+        child.stdin?.write("\x1b");
+        await sawLine("RUNLOOP_CALL 2");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
   });
 });

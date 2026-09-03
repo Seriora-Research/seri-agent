@@ -5,9 +5,11 @@
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useState } from "react";
+import { useClipboardPaste } from "../../hooks/useClipboardPaste";
 import { useListWindow } from "../../hooks/useListWindow";
 import { type ConfigRow, configKeyInfo } from "../../state/commands";
 import type { ConfigPanelState } from "../../state/reducer";
+import { PanelBox } from "../../ui/PanelBox";
 import { theme } from "../../theme/theme";
 import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ErrorLine } from "../../ui/ErrorLine";
@@ -118,8 +120,7 @@ function ConfigList({
     selectedRow === undefined ? undefined : configKeyInfo(selectedRow.key).description;
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
-      <text fg={theme.muted}>/config — settings</text>
+    <PanelBox title="/config — settings">
       {visible.map(({ row, isSelected }) => (
         <ListRow key={row.key} selected={isSelected} label={formatConfigRow(row)} />
       ))}
@@ -137,7 +138,7 @@ function ConfigList({
       <text
         fg={theme.muted}
       >{`↑/↓ move · Enter/a ${actionHint} · r/Delete unset · Esc/Ctrl-D close`}</text>
-    </box>
+    </PanelBox>
   );
 }
 
@@ -198,14 +199,19 @@ function ConfigEnterValue({
   // components/InputBox.tsx's own comment. A pasted config value (an API key is the common case)
   // is appended the same way typed text is, newlines stripped; unlike InputBox/ModelPicker, a
   // paste here never submits on a terminator — this step only ever submits on Enter.
-  usePaste((event) => {
+  function insertPastedText(text: string) {
     if (busy) return;
-    const text = decodePasteBytes(event.bytes).replace(/[\r\n]/g, "");
-    setValue((current) => current + text);
-  });
+    setValue((current) => current + text.replace(/[\r\n]/g, ""));
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
+  // `insertPastedText` so a key pasted either way is stripped of newlines the same.
+  useClipboardPaste(insertPastedText);
 
   return (
-    <box borderStyle="single" borderColor={theme.muted} flexDirection="column">
+    <PanelBox title="/config">
       <text fg={theme.muted}>{`Set ${label} (${key})`}</text>
       <text fg={theme.muted}>{description}</text>
       <text>{"*".repeat(value.length)}</text>
@@ -215,6 +221,6 @@ function ConfigEnterValue({
       ) : (
         <text fg={theme.muted}>Enter submit · Esc back · Ctrl-D close</text>
       )}
-    </box>
+    </PanelBox>
   );
 }

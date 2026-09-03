@@ -9,11 +9,19 @@ import type { LanguageModelUsage, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
-import { saveAuthSession } from "../../src/auth/authStore";
+import { AUTH_FILENAME, saveAuthSession } from "../../src/auth/authStore";
+import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
-import { addCost, chooseInterfaceOutput, run, SLASH_COMMANDS, tuiPresenter } from "../../src/cli";
+import {
+  addCost,
+  chooseInterfaceOutput,
+  needsGuidedSetup,
+  run,
+  SLASH_COMMANDS,
+  tuiPresenter,
+} from "../../src/cli";
 import { printUsage, recoveryLines, USAGE, undoPlanLines } from "../../src/cli/output";
 import { loadConfig, setConfigValue } from "../../src/config/config";
 import { getConfigDir, getTrajectoriesDir } from "../../src/config/paths";
@@ -378,22 +386,15 @@ describe("run (task invocation)", () => {
     expect(capture()?.provider).toBe("openrouter");
     expect(capture()?.modelId).toBe("openai/gpt-oss-120b");
     expect(
-      errors.some(
-        (line) =>
-          line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("on your seri plan"),
-      ),
+      errors.some((line) => line.includes("routing openai/gpt-oss-120b on your seri plan")),
     ).toBe(true);
+    expect(errors.some((line) => /openrouter/i.test(line))).toBe(false);
     // The regression: session.provider was never set on this blank first run, so the notice must
     // not blame DEFAULT_PROVIDER ("Groq") for a provider the user never requested.
     expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
-  // The defined-provider sibling of the test above: a resumed session that explicitly pinned
-  // "openrouter" (mirroring "a resumed session's reroute notice blames its own persisted
-  // provider" above) DID name a provider, and that provider genuinely has no key — so this time
-  // the notice must include the blame clause, naming the provider the session actually requested.
-  test("routes via the gateway on a resumed session, and blames the session's own persisted provider", async () => {
+  test("routes via the gateway on a resumed session without blaming OpenRouter", async () => {
     delete process.env.GROQ_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     process.env.SERI_GATEWAY_URL = "http://localhost:9/api/gateway";
@@ -451,13 +452,10 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
     expect(capture()?.provider).toBe("openrouter");
     expect(
-      errors.some(
-        (line) =>
-          line.includes("routing openai/gpt-oss-120b via openrouter") &&
-          line.includes("on your seri plan") &&
-          line.includes("no OpenRouter key configured"),
-      ),
+      errors.some((line) => line.includes("routing openai/gpt-oss-120b on your seri plan")),
     ).toBe(true);
+    expect(errors.some((line) => /openrouter/i.test(line))).toBe(false);
+    expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
   test("`--continue` with no task resumes the most recent session without appending a message", async () => {
@@ -496,6 +494,47 @@ describe("run (task invocation)", () => {
 
     expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
     expect(listSessionIds(sessionsDir)).toHaveLength(2);
+  });
+
+  // Non-interactive counterpart of tuiPty.test.ts's "--continue mount" pair: connectDispatch already
+  // skips a turn when the resumed session's last message is a finished assistant reply; the piped
+  // path used to call driveLoop anyway and burn a model turn the user did not ask for. The
+  // unanswered-user case just above is the positive control — this one is the skip.
+  test("non-interactive --continue does not start a turn when the resumed session already has an assistant reply", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const messages: ModelMessage[] = [
+      { role: "user", content: "already done" },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+    ];
+    saveSession(
+      {
+        id: "answered",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages,
+      },
+      sessionsDir,
+    );
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--continue"], {
+        isTTY: false,
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()).toBeUndefined();
+    expect(loadSession("answered", sessionsDir).messages).toEqual(messages);
   });
 
   // The negative control that splitting --resume into --resume <id> / --continue did not break the
@@ -945,9 +984,11 @@ describe("run (task invocation)", () => {
     const createdId = listSessionIds(sessionsDir)[0]!;
     expect("allowedTools" in loadSession(createdId, sessionsDir)).toBe(false);
 
+    // First run ended on an assistant reply (answeredTurn), so a bare `--continue` would skip
+    // the turn. New task text is what actually starts the next one — the seed under test.
     const { fake: secondRun, capture } = fakeRunLoop();
     await captureLogs(() =>
-      run(["--continue"], {
+      run(["--continue", "next"], {
         runLoop: secondRun,
         loadAgentsFile: () => "",
         loadExtensions: () => ({
@@ -3119,6 +3160,85 @@ describe("guided setup gate", () => {
     process.env.OPENROUTER_API_KEY = "fake-test-key";
     expect(configuredProviders(configDir).size === 0).toBe(false);
   });
+
+  test("an ignored seri plan with zero keys still needs guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      expect(needsGuidedSetup(configDir)).toBe(false);
+      ignoreSeriPlan(configDir);
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a hosted login with zero keys does not need guided setup", () => {
+    // Isolates Codex's ambient ~/.codex/auth.json so this assertion is about auth.json
+    // only, not a ChatGPT plan the machine happens to have connected.
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      expect(needsGuidedSetup(configDir)).toBe(true);
+      saveAuthSession(
+        {
+          accessToken: "at-1",
+          refreshToken: "rt-1",
+          userId: "user_1",
+          email: "a@example.com",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a corrupted auth.json is still a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      writeFileSync(join(configDir, AUTH_FILENAME), "{not valid json");
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a Codex-shaped auth.json is still a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = mkdtempSync(join(tmpdir(), "seri-cli-test-codex-home-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      writeFileSync(
+        join(configDir, AUTH_FILENAME),
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: { access_token: "tok", account_id: "acct" },
+        }),
+      );
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("run (permanent permissions)", () => {
@@ -3893,6 +4013,8 @@ describe("run (/clear)", () => {
     const compact = SLASH_COMMANDS.get("/compact");
     if (compact === undefined) throw new Error("/compact is not registered");
     expect(compact.mutatesRunState).toBe(true);
+    expect(compact.accepts([])).toBe(true);
+    expect(compact.accepts(["focus", "on", "the", "auth", "bug"])).toBe(true);
   });
 
   // Mirrors "`/mode is broken, fix it` stays a task", above: /clear's own accepts() form is the
@@ -4224,6 +4346,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     });
     snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
     writeFileSync(join(workTree, "a.txt"), "after\n");
@@ -4320,7 +4443,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       | { op: string }
       | undefined;
     expect(checkpoint?.op).toBe("pre-undo");
-  });
+  }, 15_000);
 
   test("the recovery command /undo prints puts back exactly the state it replaced", async () => {
     // The case the printed git incantation got wrong. `read-tree` + `checkout-index -a -f` is
@@ -4334,6 +4457,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
     // The agent's own write_file call, not a second checkpoint: recordWrite is what write_file's
     // onAfterMutation populates on every successful write, independent of whether a new snapshot
@@ -4449,6 +4573,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         worktree: workTree2,
         sessionId: SESSION_ID,
         onWarning: () => {},
+        cwd: workTree2,
       });
       snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
       writeFileSync(join(workTree2, "a.txt"), "after\n");
@@ -4482,6 +4607,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       worktree: workTree,
       sessionId: SESSION_ID,
       onWarning: () => {},
+      cwd: workTree,
     })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
     saveSession(
       {
@@ -4652,12 +4778,14 @@ describe("run (/compact)", () => {
   });
 
   function longMessages(count: number): ModelMessage[] {
+    // ~1000 tokens each so a 20-message tail is the 20_000-token keep.
+    const pad = "x".repeat(4000);
     const out: ModelMessage[] = [];
     for (let i = 0; i < count; i++) {
       out.push(
         i % 2 === 0
-          ? { role: "user", content: `message ${i}` }
-          : { role: "assistant", content: [{ type: "text", text: `reply ${i}` }] },
+          ? { role: "user", content: `message ${i} ${pad}` }
+          : { role: "assistant", content: [{ type: "text", text: `reply ${i} ${pad}` }] },
       );
     }
     return out;
@@ -4735,7 +4863,7 @@ describe("run (/compact)", () => {
     }
 
     expect(doGenerateCalls).toBe(1);
-    // findSafeEvictionBoundary(30 plain messages, preserve=20) = 10, min-evictable-clear.
+    // 30 padded messages at ~1000 tokens each: keep 20_000 tokens ≈ last 20, evict 10.
     expect(logs).toContain("⚙ compacted 10 messages");
     expect(logs).toContain("\n(tokens: 20 in, 10 out)");
 
@@ -4744,6 +4872,73 @@ describe("run (/compact)", () => {
     expect(saved.messages.slice(1)).toEqual(session.messages.slice(10));
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "compaction-barrier")).toBe(true);
+
+    const firstUser = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+    const sent =
+      firstUser && "content" in firstUser
+        ? typeof firstUser.content === "string"
+          ? firstUser.content
+          : Array.isArray(firstUser.content)
+            ? firstUser.content
+                .map((part) =>
+                  part && typeof part === "object" && "text" in part ? String(part.text) : "",
+                )
+                .join("")
+            : ""
+        : "";
+    expect(sent).not.toContain("Additional focus");
+  });
+
+  test("optional instructions are appended to the summarizer prompt", async () => {
+    seedCheckpointLog();
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ goal: "g", progress: "p", blockers: "b", nextSteps: "n" }),
+          },
+        ],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await getCompact().run(
+        session,
+        ["focus", "on", "the", "auth", "bug"],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    const firstUser = model.doGenerateCalls[0]?.prompt.find((part) => part.role === "user");
+    const sent =
+      firstUser && "content" in firstUser
+        ? typeof firstUser.content === "string"
+          ? firstUser.content
+          : Array.isArray(firstUser.content)
+            ? firstUser.content
+                .map((part) =>
+                  part && typeof part === "object" && "text" in part ? String(part.text) : "",
+                )
+                .join("")
+            : ""
+        : "";
+    expect(sent).toContain("Additional focus: focus on the auth bug");
   });
 
   test("no-op below the eviction boundary: leaves the session byte-identical, prints the no-op message, and never calls the model", async () => {

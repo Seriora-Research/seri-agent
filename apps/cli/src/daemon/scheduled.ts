@@ -14,6 +14,7 @@ import { resolveDefaultModel } from "../provider/defaults";
 import { createRulesState } from "../rules/match";
 import { driveLoop } from "../runtime/drive";
 import { createSessionTrajectory, type RunSession, resolveModelRoute } from "../runtime/prepare";
+import type { SessionDatabase } from "../session/database";
 import { saveSession } from "../session/session";
 import { builtinRegistry } from "../subagents/registry";
 import { assertScheduledToolset, type RunScheduled } from "./scheduler";
@@ -22,6 +23,7 @@ export function createRunScheduled(opts: {
   configDir: string;
   sessionsDir: string;
   deps: CliDeps;
+  database: SessionDatabase;
 }): RunScheduled {
   return async (input) => {
     assertScheduledToolset(input.tools);
@@ -90,7 +92,8 @@ export function createRunScheduled(opts: {
       // adds nothing to the ToolSet for a registry with no cataloged tool.
       mcp: new Map(),
       mcpClients: createMcpClients(createSessionDial(opts.configDir)),
-      trajectory: createSessionTrajectory(session, opts.configDir, onWarning),
+      trajectory: createSessionTrajectory(session, opts.configDir, onWarning, opts.database),
+      database: opts.database,
       preMountMessages: [],
     };
     const ctx: RunContext = {
@@ -102,6 +105,7 @@ export function createRunScheduled(opts: {
       permissionsDir: opts.configDir,
       configDir: opts.configDir,
       cwd: session.cwd,
+      database: opts.database,
     };
 
     let response = "";
@@ -119,7 +123,7 @@ export function createRunScheduled(opts: {
         () => input.policy.permissionMode,
         (next) => {
           input.session.messages = next.messages;
-          saveSession(next, opts.sessionsDir);
+          saveSession(next, opts.sessionsDir, opts.database);
         },
         async () => "no",
         createArchivistState(session),

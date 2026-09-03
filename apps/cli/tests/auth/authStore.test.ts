@@ -7,6 +7,7 @@ import {
   type AuthSession,
   clearAuthSession,
   expiresAtFrom,
+  hasHostedAuth,
   loadAuthSession,
   saveAuthSession,
 } from "../../src/auth/authStore";
@@ -40,15 +41,30 @@ describe("authStore", () => {
     expect(loadAuthSession(configDir)).toBeUndefined();
   });
 
-  // Thermo-nuclear review + code-review, PR #94: this file's own deliberate exception to
-  // loadConfig's (config/config.ts) "let it throw, every caller wraps its own try/catch"
-  // convention — a corrupted auth.json degrades to the exact same "not authenticated" state as no
-  // file at all, in the one place that reads it, rather than a fourth call site somewhere
-  // upstream needing its own guard against this exact throw.
   test("loadAuthSession returns undefined, not a throw, when auth.json is corrupted", () => {
     writeFileSync(join(configDir, AUTH_FILENAME), "{not valid json");
 
     expect(loadAuthSession(configDir)).toBeUndefined();
+  });
+
+  test("hasHostedAuth is true only for a session that actually has an access token", () => {
+    expect(hasHostedAuth(configDir)).toBe(false);
+    writeFileSync(
+      join(configDir, AUTH_FILENAME),
+      JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "tok" } }),
+    );
+    expect(hasHostedAuth(configDir)).toBe(false);
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-08-02T00:00:00.000Z",
+      },
+      configDir,
+    );
+    expect(hasHostedAuth(configDir)).toBe(true);
   });
 
   test("clearAuthSession on a fresh dir with no session is a no-op", () => {

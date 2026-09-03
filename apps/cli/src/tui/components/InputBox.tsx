@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/react */
 import { decodePasteBytes, TextAttributes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
-import { useEffect, useRef, useState } from "react";
+import { type MutableRefObject, useEffect, useRef, useState } from "react";
+import { useClipboardPaste } from "../hooks/useClipboardPaste";
+import { FRAME } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
-import { slideWindow } from "../util/format";
+import { INPUT_PLACEHOLDER, slideWindow } from "../util/format";
 import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 import { COMPLETION_POPUP_ROWS, CompletionPopup } from "./CompletionPopup";
 
@@ -34,11 +36,14 @@ const EMPTY_SOURCES: readonly CompletionSource[] = [];
 export function InputBox({
   onSubmit,
   onQuit,
+  onEscape,
   prefill,
   onPrefillConsumed,
   onEmptyDown,
   inert,
+  bare,
   completionSources,
+  arrowsReservedRef,
 }: {
   // Required, not optional. App renders this component only when a submitted line has somewhere to
   // go (see its own render ternary): the pre-session mounts — the welcome splash and the guided
@@ -46,6 +51,17 @@ export function InputBox({
   // render a box that echoes a typed task and then drops it on Enter.
   onSubmit: (value: string) => void;
   onQuit?: () => void;
+  // Escape, once the completion popup below has had its say. Handling it HERE rather than in an
+  // App-level useKeyboard is the whole of this feature's Escape precedence, and it is not a style
+  // choice: OpenTUI delivers every keypress to every mounted handler and there is no focus system,
+  // so an App-level handler cannot see whether this box's popup is open — that state is local
+  // (`dismissedFor`/`liveCompletion`) — and would cancel the in-flight turn while the user was
+  // only dismissing a completion list. Every other rule then falls out of gates that already
+  // exist: roster focus and a mid-edit row are covered because `inert` returns before this branch,
+  // and panels and ApprovalBox are covered because they replace this component in App's own render
+  // ternary. The two mounts pass different meanings — the main box cancels the turn, the queue
+  // row's editor abandons the edit.
+  onEscape?: () => void;
   // Leftover text from a combined-chunk terminator in a just-closed ModelPicker (see
   // reducer.ts's `pendingInputPrefill`) — read once, as this mount's own starting value, never
   // re-applied on a later mount because `onPrefillConsumed` clears it in the same tick.
@@ -57,9 +73,19 @@ export function InputBox({
   // When true, printable keys, paste, Enter, and Ctrl-D no-op. Empty Down still calls
   // onEmptyDown so a child view can focus the roster.
   inert?: boolean;
+  // Drops this component's own chrome — the top/bottom bordered box and the "> " marker — leaving
+  // the value and its block cursor. For the mount inside a queue row (components/QueueBlock.tsx),
+  // which supplies its own index prefix and reverse-video band and has one terminal row to do it
+  // in: the bordered form would make an edited row three rows tall and replace its index with a
+  // second "> " prompt. Default false, so no existing call site changes.
+  bare?: boolean;
   // Every source a typed trigger could open (util/completion.ts). Empty by default so the
   // pre-session mounts, which have no registry behind them, render exactly as before.
   completionSources?: readonly CompletionSource[];
+  // App reads this on the same keypress it might otherwise treat as a transcript scroll (a wheel
+  // notch is Up/Down once mouse reporting is off). Set for as long as the completion popup owns
+  // those arrows, cleared on unmount so a remount cannot leave the flag stuck.
+  arrowsReservedRef?: MutableRefObject<boolean>;
 }) {
   const sources = completionSources ?? EMPTY_SOURCES;
   const [value, setValue] = useState(prefill ?? "");
@@ -93,12 +119,15 @@ export function InputBox({
   }, [prefill, onPrefillConsumed]);
 
   // InputBox remounts fresh on every panel swap (see above), so a timer left running past unmount
-  // would fire into a NEW mount's setValue — clear it rather than let that happen.
+  // would fire into a NEW mount's setValue — clear it rather than let that happen. The reserved
+  // flag is the same shape: a remount that forgot to clear it would keep App from scrolling until
+  // some later keystroke rewrote it.
   useEffect(() => {
     return () => {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
+      if (arrowsReservedRef !== undefined) arrowsReservedRef.current = false;
     };
-  }, []);
+  }, [arrowsReservedRef]);
 
   function flush() {
     timerRef.current = null;
@@ -113,6 +142,10 @@ export function InputBox({
     const current = pendingValueRef.current;
     if (inert || sources.length === 0 || current === dismissedFor) return undefined;
     return resolveCompletion(sources, current);
+  }
+
+  if (arrowsReservedRef !== undefined) {
+    arrowsReservedRef.current = liveCompletion() !== undefined;
   }
 
   // Every value change opens a fresh list, so the selection goes back to the top and any earlier
@@ -186,6 +219,13 @@ export function InputBox({
       onEmptyDown?.();
       return;
     }
+    // Below the popup block above, which returns on its own Escape, and above everything else: an
+    // Escape that reaches here is one the popup did not want. See `onEscape`'s own comment for why
+    // this branch lives in this component rather than in an App-level handler.
+    if (key.name === "escape") {
+      onEscape?.();
+      return;
+    }
     if (isEnter(key)) {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current);
@@ -230,9 +270,8 @@ export function InputBox({
   // substance: everything before the first `\r`/`\n` submits now, same as pressing Enter right
   // there; everything after becomes the new input value, awaiting its own Enter rather than being
   // silently swallowed or further auto-split.
-  usePaste((event) => {
+  function insertPastedText(text: string) {
     if (inert) return;
-    const text = decodePasteBytes(event.bytes);
     const split = splitAtTerminator(text);
     if (split === null) {
       scheduleUpdate(pendingValueRef.current + text);
@@ -240,7 +279,14 @@ export function InputBox({
     }
     onSubmit(pendingValueRef.current + split.before);
     scheduleUpdate(split.after);
-  });
+  }
+
+  usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
+
+  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. It
+  // lands on the same `insertPastedText`, so a bare Ctrl-V and the terminal's own paste chord
+  // cannot come to disagree about what a pasted newline does.
+  useClipboardPaste(insertPastedText);
 
   // Derived from the throttled `value`, not the ref: this is the render path, and rendering from a
   // ref would not repaint on its own anyway.
@@ -248,6 +294,28 @@ export function InputBox({
     inert || sources.length === 0 || value === dismissedFor
       ? undefined
       : resolveCompletion(sources, value);
+
+  // The value and its caret, shared by both forms below so the two can never disagree on how a
+  // block cursor is drawn. INVERSE on a single space is exactly a solid caret (theme/theme.ts's own
+  // note on where that attribute survives), and there is no cursor-position tracking here — the
+  // handlers above only append to and delete from the end — so it always trails the text.
+  // `flexShrink={0}` on both: OpenTUI's own default is 1, so a narrow terminal would otherwise
+  // squeeze the marker and the cursor to make room for the placeholder below instead of clipping
+  // the placeholder, which is the only one of the three that can afford to lose characters.
+  const field = (
+    <>
+      <text fg={theme.text} flexShrink={0}>
+        {bare ? value : `> ${value}`}
+      </text>
+      <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+        {" "}
+      </text>
+    </>
+  );
+
+  if (bare === true) {
+    return <box flexDirection="row">{field}</box>;
+  }
 
   return (
     <>
@@ -258,18 +326,15 @@ export function InputBox({
           offset={completionWindow.offset}
         />
       )}
-      <box
-        flexDirection="row"
-        borderStyle="single"
-        borderColor={theme.muted}
-        border={["top", "bottom"]}
-      >
+      <box flexDirection="row" {...FRAME}>
         {/* "> " matches the same marker the transcript's own user-turn echo uses (cli.ts's
-      echoUserInput), so it's visually clear where typed text goes. There is no cursor-position
-      tracking here — the keyboard/paste handlers above only append to/delete from the end of
-      `value` — so a block cursor always trails the text rather than needing its own coordinate. */}
-        <text fg={theme.text}>{`> ${value}`}</text>
-        <text attributes={TextAttributes.INVERSE}> </text>
+      echoUserInput), so it's visually clear where typed text goes. */}
+        {field}
+        {value.length === 0 && (
+          <text fg={theme.muted} marginLeft={1} truncate wrapMode="none" flexGrow={1}>
+            {INPUT_PLACEHOLDER}
+          </text>
+        )}
       </box>
     </>
   );

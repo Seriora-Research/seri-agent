@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog, ModelCatalogEntry } from "@seri/model-catalog";
+import { clearCodexSubscriptionIgnore, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { getModel } from "../../src/provider/model";
 import {
   resolveLegalReasoningTiers,
@@ -201,6 +202,53 @@ describe("resolveRoute", () => {
       expect(route.credential).toBe("key");
     });
 
+    // A logged-in session whose /account-status fetch failed (or never ran) used to
+    // fall through to missingKeyError for OPENROUTER_API_KEY — the wrong refusal:
+    // the WorkOS session is the credential, and the server is the quota authority.
+    test("a usable hosted login with plan: null still routes via the gateway", () => {
+      const viaGroq = resolveRoute(
+        catalog,
+        { model: "shared-model", provider: "groq" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(viaGroq).toEqual({
+        model: "groq/shared-model",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+
+      const viaOpenRouter = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(viaOpenRouter).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+    });
+
+    test("a usable hosted login does not invent a gateway route for a model with no OpenRouter sibling", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "solo-model", provider: "groq" },
+        new Set(),
+        null,
+        undefined,
+        true,
+      );
+      expect(route.credential).toBe("key");
+    });
+
     // A provider-exclusive model (no OpenRouter-catalog sibling at all) never shows a gateway credential,
     // even under a covering plan — correct, not a regression: the gateway only ever forwards to
     // GATEWAY_PROVIDER, so it structurally cannot serve a model that provider doesn't list.
@@ -299,6 +347,36 @@ describe("resolveRoute", () => {
       });
     });
 
+    test("a leftover OpenRouter key is unused when a seri plan covers the same provider", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "gateway",
+      });
+    });
+
+    test("a leftover OpenRouter key is used when no seri plan is active", () => {
+      const route = resolveRoute(
+        catalog,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter"]),
+        null,
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+
     // Regression: a configured sibling still wins over gateway coverage — when both a sibling key
     // AND planCoverage are available, the reroute-to-sibling outcome is returned, never
     // credential: "gateway".
@@ -364,6 +442,34 @@ describe("resolveLegalReasoningTiers", () => {
 // triplet (session.model ?? resolveDefaultModel fallback, session.provider ?? DEFAULT_PROVIDER,
 // then resolveRoute) was independently copy-pasted at four call sites in cli.ts.
 describe("resolveSessionRoute", () => {
+  test("a logged-in profile with no keys and no fetched plan uses the gateway, not a missing OpenRouter key", () => {
+    writeFileSync(
+      join(tmpRoot, "auth.json"),
+      JSON.stringify({
+        accessToken: "at",
+        refreshToken: "rt",
+        userId: "user-0",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const route = resolveSessionRoute(
+      { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+      catalog,
+      new Set(),
+      null,
+      tmpRoot,
+    );
+
+    expect(route).toEqual({
+      model: "anthropic/claude-sonnet-5",
+      provider: "openrouter",
+      rerouted: false,
+      credential: "gateway",
+    });
+  });
+
   test("a session with model/provider both set resolves exactly like a direct resolveRoute call", () => {
     process.env.ANTHROPIC_API_KEY = "fake-test-key";
 
@@ -495,6 +601,23 @@ describe("a connected subscription as a credential", () => {
     expect(viaSubscription.credential).toBe("subscription");
   });
 
+  test("an openai ChatGPT-plan subscription satisfies rule 1 with no API key", () => {
+    const openaiCatalog: ModelCatalog = {
+      fetchedAt: "",
+      entries: [entry({ id: "gpt-5.6-terra", provider: "openai" })],
+    };
+    const route = resolveRoute(
+      openaiCatalog,
+      { model: "gpt-5.6-terra", provider: "openai" },
+      new Set(),
+      null,
+      new Set(["openai"]),
+    );
+    expect(route.rerouted).toBe(false);
+    expect(route.provider).toBe("openai");
+    expect(route.credential).toBe("subscription");
+  });
+
   test("an empty subscription set leaves every existing route unchanged", () => {
     const route = resolveRoute(
       grokCatalog,
@@ -504,5 +627,64 @@ describe("a connected subscription as a credential", () => {
       new Set(),
     );
     expect(route.credential).toBe("key");
+  });
+});
+
+describe("Codex profile ignore vs an OpenAI key", () => {
+  const openaiCatalog: ModelCatalog = {
+    fetchedAt: "",
+    entries: [entry({ id: "gpt-5.6-terra", provider: "openai" })],
+  };
+  let codexHome: string;
+  const originalCodexHome = process.env.CODEX_HOME;
+
+  beforeEach(() => {
+    codexHome = mkdtempSync(join(tmpdir(), "seri-routing-codex-"));
+    process.env.CODEX_HOME = codexHome;
+    writeFileSync(
+      join(codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: { access_token: "tok", account_id: "acct" },
+      }),
+    );
+  });
+
+  afterEach(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    rmSync(codexHome, { recursive: true, force: true });
+  });
+
+  test("a ChatGPT plan plus an OpenAI key uses the subscription", () => {
+    const route = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(route.credential).toBe("subscription");
+  });
+
+  test("ignoring the plan falls back to the OpenAI key", () => {
+    ignoreCodexSubscription(tmpRoot);
+    const ignored = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(ignored.credential).toBe("key");
+    clearCodexSubscriptionIgnore(tmpRoot);
+    const restored = resolveSessionRoute(
+      { model: "gpt-5.6-terra", provider: "openai" },
+      openaiCatalog,
+      new Set(["openai"]),
+      null,
+      tmpRoot,
+    );
+    expect(restored.credential).toBe("subscription");
   });
 });

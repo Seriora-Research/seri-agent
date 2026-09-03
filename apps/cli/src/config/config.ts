@@ -9,10 +9,27 @@ function configPath(configDir: string): string {
   return join(configDir, CONFIG_FILENAME);
 }
 
+function readConfigText(path: string): string {
+  const buf = readFileSync(path);
+  // UTF-16 LE BOM (FF FE): PowerShell 5 `Out-File` and Notepad "Unicode" write this.
+  // Read as utf8, those files are NULs, and Bun's JSON.parse reports
+  // `Unrecognized token ''` because the token is the invisible `\0`.
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return buf.subarray(2).toString("utf16le");
+  }
+  return buf.toString("utf8");
+}
+
 export function loadConfig(configDir: string = getConfigDir()): Record<string, string> {
   const path = configPath(configDir);
   if (!existsSync(path)) return {};
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readConfigText(path));
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (typeof value === "string") result[key] = value;
@@ -20,12 +37,8 @@ export function loadConfig(configDir: string = getConfigDir()): Record<string, s
   return result;
 }
 
-// config.json holds provider API keys, so it gets the same owner-only treatment as
-// auth.json (see auth/authStore.ts). atomicWriteFile.ts's shared helper: write-then-rename means
-// a truncating in-place write that is interrupted leaves a partial config.json, which makes every
-// later command throw from JSON.parse — including `seri config` itself, since it reads before
-// writing; the non-colliding tmp name (that module's own comment) is what /memory approval on|off
-// and /memory archivist on|off now need too, as new concurrent writers to this same file.
+// Owner-only, write-then-rename: config.json holds API keys, and a colliding tmp name
+// races two writers (atomicWriteFile.ts). /memory approval and archivist toggles write here too.
 function writeConfig(config: Record<string, string>, configDir: string): void {
   atomicWriteFile(configPath(configDir), JSON.stringify(config, null, 2));
 }
@@ -84,6 +97,16 @@ export function unsetConfigValue(key: string, configDir: string = getConfigDir()
 // by one of these flags.
 export function configBoolean(value: string | undefined): boolean {
   return value !== "false";
+}
+
+// The ground the TUI paints, or nothing. `#rrggbb` only — `#rgb`, `rgb()` and named colors each
+// cost a validator no caller needs. Everything else, the documented `terminal` spelling included,
+// resolves to undefined and leaves the terminal's own background alone: this runs while the
+// renderer is being built (tui/runtime/renderOptions.ts), where a throw would take the whole TUI
+// down and a warning would have nowhere to print, so a mistyped color reads as no preference at
+// all rather than as an error.
+export function tuiBackgroundColor(value: string | undefined): string | undefined {
+  return value !== undefined && /^#[0-9a-fA-F]{6}$/.test(value) ? value : undefined;
 }
 
 // env-then-file precedence, falsy-skip: an env var set to "" is treated the same as unset, so it

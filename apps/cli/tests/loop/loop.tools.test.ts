@@ -13,6 +13,7 @@ import {
   baseMessages,
   collect,
   makeTools,
+  multiToolCallChunks,
   repeatedWriteCalls,
   streamResult,
   textOnlyChunks,
@@ -583,7 +584,7 @@ describe("runLoop", () => {
           maxIterations: totalIterations,
           contextWindowSize: 10_000,
           compactionThreshold: 0.5,
-          preserveRecentMessages: 6,
+          preserveRecentTokens: 80,
           signal: controller.signal,
         }),
       );
@@ -605,7 +606,10 @@ describe("runLoop", () => {
     // command does — nothing inside it cooperates — so the only thing that can stop it is the kill
     // spawnCollect performs on being handed the signal. Guarded on bash's availability the same way
     // tests/tools/bash.test.ts's tree-kill case is.
-    test.skipIf(!isBashAvailable())(
+    // spawnCollect.test.ts skips the kill-on-signal / cancelled-command cases on win32: Git Bash
+    // does not reliably deliver abort to the tree, and `sleep 30` then runs to completion (~30s)
+    // instead of being killed. This test is that same primitive through runLoop.
+    test.skipIf(!isBashAvailable() || process.platform === "win32")(
       "a cancel does not wait for a bash command that ignores it",
       async () => {
         const controller = new AbortController();
@@ -1383,6 +1387,304 @@ describe("runLoop", () => {
       expect(model.doStreamCalls).toHaveLength(2);
       expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
       expect(events.find((e) => e.type === "error")).toBeUndefined();
+    });
+  });
+
+  describe("parallel read-only tools", () => {
+    const DELAY_MS = 80;
+
+    function sleep(ms: number): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function threeReadCalls(): LanguageModelV4StreamPart[] {
+      return multiToolCallChunks([
+        { toolCallId: "call-1", toolName: "read_file", input: { path: "a.txt" } },
+        { toolCallId: "call-2", toolName: "grep", input: { pattern: "x", path: "." } },
+        { toolCallId: "call-3", toolName: "glob", input: { pattern: "*.ts", path: "." } },
+      ]);
+    }
+
+    function delayedReadTools(onStart: (name: string) => void): ToolSet {
+      const delay = async (name: string) => {
+        onStart(name);
+        await sleep(DELAY_MS);
+        return `${name}-ok`;
+      };
+      return {
+        read_file: tool({
+          description: "read",
+          inputSchema: z.object({ path: z.string() }),
+          execute: async () => delay("read_file"),
+        }),
+        grep: tool({
+          description: "grep",
+          inputSchema: z.object({ pattern: z.string(), path: z.string() }),
+          execute: async () => delay("grep"),
+        }),
+        glob: tool({
+          description: "glob",
+          inputSchema: z.object({ pattern: z.string(), path: z.string() }),
+          execute: async () => delay("glob"),
+        }),
+      };
+    }
+
+    function toolMessageOutputs(events: LoopEvent[]): { type: string; reason?: string }[] {
+      const toolMessage = events
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+            e.type === "messages-updated",
+        )
+        .map((e) => e.messages.at(-1))
+        .find((message) => message?.role === "tool");
+      const content = (toolMessage?.content ?? []) as {
+        output: { type: string; reason?: string };
+      }[];
+      return content.map((part) => part.output);
+    }
+
+    test("three delayed read-only tools in one step overlap instead of summing wall time", async () => {
+      const startedAt: number[] = [];
+      const tools = delayedReadTools(() => startedAt.push(performance.now()));
+      const model = new MockLanguageModelV4({
+        doStream: [streamResult(threeReadCalls()), streamResult(textOnlyChunks("Done"))],
+      });
+
+      const t0 = performance.now();
+      const events = await collect(
+        runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+      );
+      const elapsed = performance.now() - t0;
+
+      expect(startedAt).toHaveLength(3);
+      expect(Math.max(...startedAt) - Math.min(...startedAt)).toBeLessThan(40);
+      // Sequential would be ~240ms of sleeps plus loop overhead. Negative control: this
+      // assertion fails on the serial for-await execute loop (measured before the batching
+      // change). Mutation that turns it red: await each execute before starting the next.
+      expect(elapsed).toBeLessThan(160);
+      expect(events.filter((e) => e.type === "tool-result")).toHaveLength(3);
+      expect(toolMessageOutputs(events)).toHaveLength(3);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    });
+
+    test("two write_file calls in one step still do not overlap", async () => {
+      const intervals: { start: number; end: number }[] = [];
+      const tools = makeTools(async () => {
+        const start = performance.now();
+        await sleep(30);
+        intervals.push({ start, end: performance.now() });
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            multiToolCallChunks([
+              { toolCallId: "call-1", toolName: "write_file", input: { path: "a.txt" } },
+              { toolCallId: "call-2", toolName: "write_file", input: { path: "b.txt" } },
+            ]),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+      expect(intervals).toHaveLength(2);
+      const first = intervals[0];
+      const second = intervals[1];
+      if (first === undefined || second === undefined) {
+        throw new Error("expected two write intervals");
+      }
+      expect(second.start).toBeGreaterThanOrEqual(first.end);
+    });
+
+    test("a write_file between two reads is a barrier", async () => {
+      const marks: { name: string; at: "start" | "end"; t: number }[] = [];
+      const stamp = (name: string, at: "start" | "end") => {
+        marks.push({ name, at, t: performance.now() });
+      };
+      const tools: ToolSet = {
+        read_file: tool({
+          description: "read",
+          inputSchema: z.object({ path: z.string() }),
+          execute: async () => {
+            stamp("read_file", "start");
+            await sleep(DELAY_MS);
+            stamp("read_file", "end");
+            return "r";
+          },
+        }),
+        write_file: tool({
+          description: "write",
+          inputSchema: z.object({ path: z.string() }),
+          execute: async () => {
+            stamp("write_file", "start");
+            await sleep(10);
+            stamp("write_file", "end");
+            return "w";
+          },
+        }),
+        grep: tool({
+          description: "grep",
+          inputSchema: z.object({ pattern: z.string(), path: z.string() }),
+          execute: async () => {
+            stamp("grep", "start");
+            await sleep(DELAY_MS);
+            stamp("grep", "end");
+            return "g";
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            multiToolCallChunks([
+              { toolCallId: "call-1", toolName: "read_file", input: { path: "a.txt" } },
+              { toolCallId: "call-2", toolName: "write_file", input: { path: "b.txt" } },
+              { toolCallId: "call-3", toolName: "grep", input: { pattern: "x", path: "." } },
+            ]),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+      function timeAt(name: string, at: "start" | "end"): number {
+        const mark = marks.find((m) => m.name === name && m.at === at);
+        if (mark === undefined) throw new Error(`missing ${name} ${at}`);
+        return mark.t;
+      }
+      expect(timeAt("write_file", "start")).toBeGreaterThanOrEqual(timeAt("read_file", "end"));
+      expect(timeAt("grep", "start")).toBeGreaterThanOrEqual(timeAt("write_file", "end"));
+    });
+
+    test("a cancel on the first read tool-call does not start the rest and still pairs every row", async () => {
+      const controller = new AbortController();
+      const started: string[] = [];
+      const abortingExecute = (name: string) =>
+        tool({
+          description: name,
+          inputSchema: z.object({ path: z.string().optional(), pattern: z.string().optional() }),
+          execute: async (_input, options) => {
+            started.push(name);
+            return await new Promise<string>((_resolve, reject) => {
+              const cancel = (): void => reject(new Error("cancelled"));
+              options.abortSignal?.addEventListener("abort", cancel, { once: true });
+              if (options.abortSignal?.aborted === true) cancel();
+            });
+          },
+        });
+      const tools: ToolSet = {
+        read_file: abortingExecute("read_file"),
+        grep: abortingExecute("grep"),
+        glob: abortingExecute("glob"),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(threeReadCalls()),
+      });
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "tool-call") controller.abort();
+      }
+      expect(started).toEqual(["read_file"]);
+      expect(toolMessageOutputs(events)).toHaveLength(3);
+      expect(toolMessageOutputs(events).every((output) => output.type === "execution-denied")).toBe(
+        true,
+      );
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a PreToolUse block on the middle read never executes it and still runs the others", async () => {
+      const started: string[] = [];
+      const tools = delayedReadTools((name) => started.push(name));
+      const model = new MockLanguageModelV4({
+        doStream: [streamResult(threeReadCalls()), streamResult(textOnlyChunks("Done"))],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async (subject) => (subject === "grep" ? { block: "nope" } : {}),
+        }),
+      );
+      expect(started.sort()).toEqual(["glob", "read_file"]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "grep",
+        reason: "hook",
+      });
+      expect(events.filter((e) => e.type === "tool-result")).toHaveLength(2);
+      expect(toolMessageOutputs(events)).toHaveLength(3);
+    });
+
+    // read_file's execute is sync and throws (readFileSync). Promise.resolve(execute())
+    // does not catch a throw that happens while evaluating the argument — it never
+    // builds the promise. The serial write path already has try/catch; this batch
+    // must too, or a missing file kills the TUI with the raw ENOENT.
+    test("a sync throw from read_file is an error event, not a crash of the generator", async () => {
+      const tools: ToolSet = {
+        read_file: tool({
+          description: "read",
+          inputSchema: z.object({ path: z.string() }),
+          execute: ({ path }): string => {
+            throw new Error(`ENOENT: no such file or directory, open '${path}'`);
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "read_file", { path: "docs/ROADMAP.md" })),
+          streamResult(textOnlyChunks("missing")),
+        ],
+      });
+
+      let events: LoopEvent[] = [];
+      let threw: unknown;
+      try {
+        events = await collect(
+          runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+        );
+      } catch (err) {
+        threw = err;
+      }
+
+      expect(threw).toBeUndefined();
+      expect(events.find((e) => e.type === "error")?.error).toContain(
+        'Tool "read_file" threw during execution',
+      );
+      expect(events.find((e) => e.type === "error")?.error).toContain("ENOENT");
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    });
+
+    test("tool-call events stay paired: no second tool-call before the first result", async () => {
+      const tools = delayedReadTools(() => {});
+      const model = new MockLanguageModelV4({
+        doStream: [streamResult(threeReadCalls()), streamResult(textOnlyChunks("Done"))],
+      });
+      const events = await collect(
+        runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+      );
+      const names = events
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "tool-call" | "tool-result" }> =>
+            e.type === "tool-call" || e.type === "tool-result",
+        )
+        .map((e) => e.type);
+      expect(names).toEqual([
+        "tool-call",
+        "tool-result",
+        "tool-call",
+        "tool-result",
+        "tool-call",
+        "tool-result",
+      ]);
     });
   });
 });

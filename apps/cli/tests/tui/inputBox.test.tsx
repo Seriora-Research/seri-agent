@@ -12,6 +12,7 @@ import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
 import { InputBox } from "../../src/tui/components/InputBox";
+import { INPUT_PLACEHOLDER } from "../../src/tui/util/format";
 
 const THROTTLE_MS = 50;
 
@@ -56,6 +57,7 @@ describe("InputBox (OpenTUI)", () => {
     await setup.mockInput.typeText("hello");
     await settle(setup);
     await sleep(THROTTLE_MS + 20); // only the leading-edge character flushes immediately
+    await settle(setup); // paint the trailing-edge flush; captureCharFrame reads the last render
 
     expect(setup.captureCharFrame()).toContain("> hello");
   });
@@ -195,5 +197,108 @@ describe("InputBox (OpenTUI)", () => {
 
     expect(setup.captureCharFrame()).toContain("> ");
     expect(setup.captureCharFrame()).not.toContain("> x");
+  });
+
+  // The whole of this feature's Escape precedence, asserted where it is implemented. An App-level
+  // handler cannot see the popup — that state is local to this component — so it would cancel the
+  // in-flight turn while the user was only closing a completion list.
+  test("Escape with the completion popup open dismisses the popup and does not call onEscape", async () => {
+    const escapes: number[] = [];
+    const setup = await createTestRenderer({ width: 40, height: 12 });
+    await mount(
+      setup,
+      <InputBox
+        onSubmit={() => {}}
+        onEscape={() => escapes.push(1)}
+        completionSources={[
+          {
+            id: "test",
+            trigger: "/",
+            lineStartOnly: true,
+            items: [{ value: "/model", description: "switch model" }],
+          },
+        ]}
+      />,
+    );
+
+    await setup.mockInput.typeText("/");
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+    expect(setup.captureCharFrame()).toContain("/model");
+
+    setup.mockInput.pressEscape();
+    await sleep(30);
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(escapes).toEqual([]);
+    expect(setup.captureCharFrame()).not.toContain("/model");
+  });
+
+  test("Escape with no popup open calls onEscape once", async () => {
+    const escapes: number[] = [];
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox onSubmit={() => {}} onEscape={() => escapes.push(1)} />);
+
+    setup.mockInput.pressEscape();
+    // A bare Escape byte is ambiguous with the start of a longer ANSI sequence, so OpenTUI's parser
+    // holds it for a short disambiguation window before delivering it — longer than the plain
+    // macrotask tick `settle` waits. App.test.tsx's own picker-cancel test records the same.
+    await sleep(30);
+    await settle(setup);
+
+    expect(escapes).toEqual([1]);
+  });
+
+  test("Escape is inert while the box is, so a mid-edit row keeps the keypress", async () => {
+    const escapes: number[] = [];
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox inert onSubmit={() => {}} onEscape={() => escapes.push(1)} />);
+
+    setup.mockInput.pressEscape();
+    await sleep(30);
+    await settle(setup);
+
+    expect(escapes).toEqual([]);
+  });
+
+  // `bare` is what lets a queued row hold an editor without the row becoming three rows tall and
+  // growing a second "> " prompt where its ordinal should be.
+  test("bare renders the value with no border and no marker", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox bare prefill="already typed" onSubmit={() => {}} />);
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("already typed");
+    expect(frame).not.toContain("> already typed");
+    expect(frame).not.toContain("▁");
+  });
+
+  test("the default form still renders the marker", async () => {
+    const setup = await createTestRenderer({ width: 40, height: 5 });
+    await mount(setup, <InputBox prefill="already typed" onSubmit={() => {}} />);
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(setup.captureCharFrame()).toContain("> already typed");
+  });
+
+  // 60 columns, not this file's usual 40: the placeholder renders with `truncate`, so a narrower
+  // box would clip it and `toContain` on the whole string would fail for a reason the test does
+  // not mean to assert.
+  test("the placeholder renders on an empty input and is gone after one character", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 5 });
+    await mount(setup, <InputBox onSubmit={() => {}} />);
+
+    expect(setup.captureCharFrame()).toContain(INPUT_PLACEHOLDER);
+
+    await setup.mockInput.typeText("h");
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    expect(setup.captureCharFrame()).toContain("> h");
+    expect(setup.captureCharFrame()).not.toContain(INPUT_PLACEHOLDER);
   });
 });
