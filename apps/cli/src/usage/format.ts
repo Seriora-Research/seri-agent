@@ -1,118 +1,122 @@
 import type { UsageReport } from "./report";
 
-export type CachePrice = { inputPerMTok: number; cacheReadPerMTok: number };
-
 export type FormatUsageOpts = {
   detail?: boolean;
   staleFrom?: string;
-  cachePriceByModel?: ReadonlyMap<string, CachePrice>;
 };
 
-function usd(amount: number): string {
+export function usd(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
-function pct(share: number): string {
+export function formatShare(share: number): string {
   return `${Math.round(share * 100)}%`;
+}
+
+export function quotaUsedShare(used: number, included: number): number {
+  if (included <= 0) return 0;
+  return Math.min(1, Math.max(0, used / included));
+}
+
+export function meterBar(share: number, width = 24): string {
+  const w = Math.max(8, Math.min(40, Math.floor(width)));
+  const fill = Math.round(quotaUsedShare(share, 1) * w);
+  return `[${"█".repeat(fill)}${"-".repeat(w - fill)}]`;
+}
+
+export function formatTokenCount(n: number): string {
+  if (n >= 1000) return `${Math.round(n / 1000)}k`;
+  return String(n);
 }
 
 function dateOnly(iso: string): string {
   return iso.slice(0, 10);
 }
 
-function estimatedCacheSavedUsd(
-  report: UsageReport,
-  prices: ReadonlyMap<string, CachePrice> | undefined,
-): number | undefined {
-  if (prices === undefined || prices.size === 0) return undefined;
-  let saved = 0;
-  let priced = false;
-  for (const model of report.models) {
-    const price = prices.get(model.modelId);
-    if (price === undefined) continue;
-    priced = true;
-    saved += (model.cacheReadTokens * (price.inputPerMTok - price.cacheReadPerMTok)) / 1_000_000;
-  }
-  return priced ? saved : undefined;
+function resetLabel(iso: string): string {
+  const d = new Date(iso);
+  const day = d.toLocaleDateString("en-GB", { day: "numeric", timeZone: "UTC" });
+  const month = d.toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" });
+  const year = d.toLocaleDateString("en-GB", { year: "numeric", timeZone: "UTC" });
+  return `${day} ${month} ${year} UTC`;
+}
+
+function paceLine(report: UsageReport): string {
+  if (report.quota.used <= 0) return "Pace  Nothing recorded this window.";
+  if (report.quota.remaining <= 0) return "Pace  Allowance already exhausted this window.";
+  if (report.hitAt === null) return "Pace  At this rate you stay under the cap.";
+  return `Pace  At this pace you hit the cap on ${dateOnly(report.hitAt)}.`;
+}
+
+function modelLine(
+  model: UsageReport["models"][number],
+  detail: boolean,
+): string {
+  const route = detail ? `  ${model.upstreamRoute}` : "";
+  return `  ${model.modelId}  ${formatTokenCount(model.inputTokens)} in  ${formatTokenCount(model.outputTokens)} out  ${formatTokenCount(model.cacheReadTokens)} cache read  ${formatTokenCount(model.cacheWriteTokens)} cache write  ${formatShare(model.share)}${route}`;
 }
 
 export const LOGGED_OUT_USAGE = `Not signed in. /usage shows hosted-gateway spend for a seri account.
 Sign in with /login.
 BYOK provider-key spend is in your provider console, not here.`;
 
-export function formatUsageReport(report: UsageReport, opts: FormatUsageOpts = {}): string {
+export function usagePanelLines(report: UsageReport, opts: FormatUsageOpts = {}): string[] {
   const lines: string[] = [];
   if (opts.staleFrom !== undefined) {
-    lines.push(
-      `Showing a snapshot from ${opts.staleFrom}. Figures may be stale. Retry: /usage`,
-      "",
-    );
+    lines.push(`Showing a snapshot from ${opts.staleFrom}. Figures may be stale.`);
+    lines.push("");
   }
 
   if (report.plan === null) {
     lines.push("No hosted plan yet. The first gateway request provisions Free.");
-    return lines.join("\n");
+    return lines;
   }
 
   const planLabel = report.plan[0]?.toUpperCase() + report.plan.slice(1);
-  lines.push(`Hosted gateway  (${planLabel})`);
-  lines.push(`Window  ${dateOnly(report.window.start)} → ${dateOnly(report.window.end)} UTC`);
+  lines.push(`Hosted  ${planLabel}`);
+  lines.push("");
 
+  const share = quotaUsedShare(report.quota.used, report.quota.included);
   if (report.quota.metric === "usd") {
+    lines.push("Included this month");
+    lines.push(`${meterBar(share)}  ${formatShare(share)} used`);
     lines.push(
-      `Spend   ${usd(report.quota.used)} / ${usd(report.quota.included)}  remaining ${usd(report.quota.remaining)}`,
+      `${usd(report.quota.used)} of ${usd(report.quota.included)}  resets ${resetLabel(report.window.end)}`,
+    );
+    lines.push(paceLine(report));
+    lines.push("");
+    lines.push("Requests today");
+    lines.push(
+      `${meterBar(quotaUsedShare(report.requestsToday, report.dailyRequestCap))}  ${report.requestsToday} / ${report.dailyRequestCap}`,
     );
   } else {
+    lines.push("Requests today");
+    lines.push(`${meterBar(share)}  ${formatShare(share)} used`);
     lines.push(
-      `Requests  ${report.quota.used} / ${report.quota.included}  remaining ${report.quota.remaining}`,
+      `${report.quota.used} of ${report.quota.included}  resets ${resetLabel(report.window.end)}`,
     );
-  }
-  lines.push(`Reset   ${dateOnly(report.window.end)}`);
-
-  if (report.quota.used <= 0) {
-    lines.push("Pace    Nothing recorded this window.");
-  } else if (report.quota.remaining <= 0) {
-    lines.push("Pace    Allowance already exhausted this window.");
-  } else if (report.hitAt === null) {
-    lines.push("Pace    At this pace you stay under the cap this period.");
-  } else {
-    lines.push(`Pace    At this pace you hit the cap on ${dateOnly(report.hitAt)}.`);
-  }
-
-  if (report.quota.metric === "usd") {
-    lines.push(`Requests today  ${report.requestsToday} / ${report.dailyRequestCap}`);
+    lines.push(paceLine(report));
   }
 
   if (report.models.length > 0) {
-    lines.push("", "Models");
+    lines.push("");
+    lines.push("By model");
     for (const model of report.models) {
-      const route = opts.detail === true ? `  ${model.upstreamRoute}` : "";
-      const amount = report.quota.metric === "usd" ? usd(model.costUsd) : `${model.requests} req`;
-      lines.push(`  ${model.modelId}  ${amount}  (${pct(model.share)})${route}`);
+      lines.push(modelLine(model, opts.detail === true));
     }
   }
 
   if (report.cache.inputTokens > 0) {
-    const hit = pct(report.cache.hitRate);
-    const saved = estimatedCacheSavedUsd(report, opts.cachePriceByModel);
-    const savedBit = saved === undefined ? "" : `  (est. ${usd(saved)} saved)`;
-    lines.push("", `Cache   ${hit} hit${savedBit}`);
+    lines.push("");
+    lines.push("Cache");
+    lines.push(
+      `  ${formatShare(report.cache.hitRate)} of input from cache  ·  ${formatTokenCount(report.cache.cacheReadTokens)} read  ·  ${formatTokenCount(report.cache.cacheWriteTokens)} written`,
+    );
   }
 
-  if (report.days.length > 0) {
-    lines.push("", "Days");
-    for (const day of report.days) {
-      lines.push(`  ${day.date}  ${usd(day.costUsd)}  ${day.requests} req`);
-    }
-  }
+  return lines;
+}
 
-  if (report.sessions.length > 0) {
-    lines.push("", "Sessions");
-    for (const session of report.sessions) {
-      const id = session.sessionId ?? "(unknown)";
-      lines.push(`  ${id}  ${usd(session.costUsd)}  ${session.requests} req`);
-    }
-  }
-
-  return lines.join("\n");
+export function formatUsageReport(report: UsageReport, opts: FormatUsageOpts = {}): string {
+  return usagePanelLines(report, opts).join("\n");
 }

@@ -20,11 +20,24 @@ export type UsageReport = {
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
+    cacheWriteTokens: number;
     upstreamRoute: string;
     share: number;
   }>;
-  cache: { inputTokens: number; cacheReadTokens: number; hitRate: number };
-  days: Array<{ date: string; requests: number; costUsd: number }>;
+  cache: {
+    inputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    hitRate: number;
+    writeRate: number;
+  };
+  days: Array<{
+    date: string;
+    requests: number;
+    costUsd: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  }>;
   sessions: Array<{ sessionId: string | null; requests: number; costUsd: number }>;
 };
 
@@ -49,6 +62,7 @@ function isModel(value: unknown): value is UsageReport["models"][number] {
     isFiniteNumber(value.inputTokens) &&
     isFiniteNumber(value.outputTokens) &&
     isFiniteNumber(value.cacheReadTokens) &&
+    isFiniteNumber(value.cacheWriteTokens) &&
     typeof value.upstreamRoute === "string" &&
     isFiniteNumber(value.share)
   );
@@ -78,7 +92,9 @@ function isCache(value: unknown): value is UsageReport["cache"] {
   return (
     isFiniteNumber(value.inputTokens) &&
     isFiniteNumber(value.cacheReadTokens) &&
-    isFiniteNumber(value.hitRate)
+    isFiniteNumber(value.cacheWriteTokens) &&
+    isFiniteNumber(value.hitRate) &&
+    isFiniteNumber(value.writeRate)
   );
 }
 
@@ -87,7 +103,9 @@ function isDay(value: unknown): value is UsageReport["days"][number] {
   return (
     typeof value.date === "string" &&
     isFiniteNumber(value.requests) &&
-    isFiniteNumber(value.costUsd)
+    isFiniteNumber(value.costUsd) &&
+    isFiniteNumber(value.cacheReadTokens) &&
+    isFiniteNumber(value.cacheWriteTokens)
   );
 }
 
