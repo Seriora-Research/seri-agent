@@ -486,14 +486,12 @@ function childScriptPlanClearedOnLogout(dir: string): string {
   ].join("\n");
 }
 
-// Regression: runTui's own runTurn appended a transcript notice for `route.rerouted` but had no
-// counterpart for `route.credential` — so a live TUI turn served through the gateway printed no
-// per-turn indication it was billing the user's seri plan, unlike a BYOK reroute (childScriptReroute's
-// own test proves that one already gets a "↻ routing…" line every turn). Same pinned pair as
-// childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter, no groq sibling to reroute to,
-// GROQ_API_KEY only a decoy past the guided-setup gate), but this script actually lets turn 1 run
-// (childScriptPlanClearedOnLogout's own runLoopFake never resolves) and injects `getGatewayModel` so
-// dispatchModel never attempts a real request to the fake SERI_GATEWAY_URL.
+// Same pinned pair as childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter,
+// no groq sibling to reroute to, GROQ_API_KEY only a decoy past the guided-setup gate), but
+// this script actually lets turn 1 run (childScriptPlanClearedOnLogout's own runLoopFake
+// never resolves) and injects `getGatewayModel` so dispatchModel never attempts a real
+// request to the fake SERI_GATEWAY_URL. The test below asserts the same-route hosted
+// turn does NOT print a per-turn `↻ routing` line.
 function childScriptGatewayNoticeTui(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -564,7 +562,8 @@ function childScriptModelSwitch(dir: string): string {
     `let calls = 0;`,
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
-    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
+    `  const named = (opts.system.match(/You are powered by the model named ([^\\n]+)\\./) || [])[1];`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " identity=" + named + " hasExactId=" + /exact model ID/i.test(opts.system));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
     // rendered done line, is the reliable per-turn completion signal.
@@ -2793,26 +2792,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Regression: a live turn served through the gateway must announce itself in the transcript
-  // exactly like a BYOK reroute already does (childScriptReroute's own "a routing-priority reroute
-  // active from session start..." test, above) — a user reading the transcript otherwise has no
-  // per-turn indication their own seri plan, not a key they brought, is what answered.
-  test("a live turn served through the gateway announces itself in the transcript, once", async () => {
+  // Same-route hosted billing is already visible on the header and the mode-row "seri"
+  // label; repeating it every turn leaked the catalog id. Negative control: the turn
+  // still runs (RUNLOOP_CALL still fires).
+  test("a live turn served through the gateway does not append a same-route routing line", async () => {
     const scriptPath = join(dir, "child-gateway-notice.mjs");
     writeFileSync(scriptPath, childScriptGatewayNoticeTui(dir));
 
-    const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL model=~openai/gpt-latest provider=openrouter");
-      const noticePrefix = "↻ routing ~openai/gpt-latest on your seri plan";
-      await sawLine(noticePrefix);
       await sawLine("done ·");
 
-      // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
-      // (prepareSession's own !isTTY-gated notice, dead on a real pty) — the same pair of checks
-      // childScriptReroute's own test makes for the BYOK-reroute case.
-      expect(frameOccurrences(noticePrefix)).toBe(1);
-      expect(rawOccurrences("⚠ routing")).toBe(0);
+      expect(rawOccurrences("↻ routing")).toBe(0);
+      expect(rawOccurrences("on your seri plan")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }
@@ -2828,27 +2821,23 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false");
       await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // The picker replaces the input box (App.tsx's own three-way mutual exclusion) — the bundled
-      // fallback manifest's own default model is one of the 6 groq entries, always inside the
-      // picker's default (unfiltered) top-10 window regardless of catalog ordering, so this is a
-      // reliable sync point proving the picker actually mounted before typing a filter.
-      await sawLine("GPT OSS 120B");
-
-      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) — verified
-      // directly against the bundled catalog-manifest.json before writing this string; "3.3-70b"
-      // alone also matches an OpenRouter entry, "70b-versatile" does not.
-      child.stdin?.write("70b-versatile");
-      await sawLine("70b-versatile");
+      // RUNLOOP_CALL 1 now logs identity=GPT OSS 120B, so sawLine on that name is already
+      // true before the picker mounts. Wait on the picker's empty-filter chrome, then type.
+      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) —
+      // verified directly against the bundled catalog-manifest.json before writing this string;
+      // "3.3-70b" alone also matches an OpenRouter entry, "70b-versatile" does not.
+      await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
       // The Enter keypress resolves synchronously (App.tsx's own dispatch wrapper updates
       // `liveState` in the same tick), but the actual React unmount of ModelPicker and mount of
@@ -2865,11 +2854,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
       // message) — the switch changed WHICH model answers, not what it was handed. The trailing
-      // systemHasModelId=true proves the system prompt sent for THIS call names the NEW model
-      // (llama-3.3-70b-versatile) — not the one the session started on — i.e. the identity line is
-      // recomputed every driveLoop call rather than captured once at session start.
+      // identity=Llama 3.3 70B hasExactId=false proves the system prompt sent for THIS call
+      // names the NEW model's displayName — not the one the session started on — i.e. the
+      // identity line is recomputed every driveLoop call rather than captured once at session start.
       await sawLine(
-        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
 
       // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
@@ -3218,9 +3207,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false");
       await sawLine("done ·");
 
       // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
@@ -3239,10 +3229,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      await sawLine("GPT OSS 120B");
-
-      child.stdin?.write("70b-versatile");
-      await sawLine("70b-versatile");
+      // Same poison as the live-switch test: identity=GPT OSS 120B is already in stdout.
+      await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
       await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -3253,7 +3241,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // The switch DID take effect live, and the turn itself succeeded — this failure is
       // entirely in the persist attempt behind it, not in the model call.
       await sawLine(
-        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
       await sawLine("could not save the default model:");
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
@@ -3267,7 +3255,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine(
-        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
+        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 identity=Llama 3.3 70B hasExactId=false",
       );
       // RUNLOOP_DONE, not a count of the rendered done line — see
       // childScriptMultiTurn's own comment for why.

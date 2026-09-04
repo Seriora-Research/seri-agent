@@ -2024,14 +2024,19 @@ async function runTui(
     // A `/name` direct dispatch passes its session through unchanged (driveLoop appends the user
     // row itself there), so this merges an identical array and changes nothing for it.
     dispatch({ type: "user-turn-committed", messages: session.messages });
-    // A rerouted OR gateway-served pair is never silent on the TUI path either — see
-    // prepareSession's own identical notice for the piped/non-interactive path, above.
+    // Same-route gateway is already shown by the header model id and the mode-row
+    // "seri" route label; a per-turn transcript line is duplicate chrome and recites
+    // the catalog id.
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${rerouteNotice(route, requestedProvider)}`,
       });
-    } else if (route.credential === "gateway") {
+    } else if (
+      route.credential === "gateway" &&
+      requestedProvider !== undefined &&
+      requestedProvider !== route.provider
+    ) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${gatewayNotice(route, requestedProvider)}`,
