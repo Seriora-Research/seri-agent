@@ -152,9 +152,7 @@ export function ModelPicker({
       </box>
       {/* The 2-space indent and the header text are separate `<text>` siblings, not one string —
       ui/ListRow.tsx's own comment explains why: a single truncated `<text>` whose content spans
-      more than one child renders BLANK once it overflows. The five columns are 74 chars; at 80
-      they fit inside FRAME + the ListRow marker. `truncate` stays as a last-resort clip once
-      Route is already dropped on a narrower-than-80 terminal. */}
+      more than one child renders BLANK once it overflows. */}
       <box flexDirection="row">
         <text fg={theme.muted}>{"  "}</text>
         <text fg={theme.muted} truncate>

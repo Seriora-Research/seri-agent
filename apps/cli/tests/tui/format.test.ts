@@ -10,6 +10,7 @@ import {
   formatHomePath,
   formatMcpRow,
   formatModeDetail,
+  formatRouteLabelFromResolved,
   formatTokenProgress,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
@@ -249,8 +250,8 @@ describe("formatModeDetail", () => {
   const nonRerouted = route();
   const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
   const modelOnly = "  claude-sonnet-5";
-  const withRoute = "  claude-sonnet-5 · your key";
-  const withEffort = "  claude-sonnet-5 · your key · high";
+  const withRoute = "  claude-sonnet-5 · anthropic";
+  const withEffort = "  claude-sonnet-5 · anthropic · high";
   const reroutedSuffix = "  claude-sonnet-5 · → openrouter";
   const gatewaySuffix = "  claude-sonnet-5 · seri";
 
@@ -266,7 +267,7 @@ describe("formatModeDetail", () => {
 
   // DEFAULT_COLUMNS is the typical terminal width, not the caller's detail budget — passing it
   // here is a generous leftover. The regression this guards is that a budget of 80 must include
-  // the route suffix (length of `  claude-sonnet-5 · your key`), not drop it.
+  // the route suffix (length of `  claude-sonnet-5 · anthropic`), not drop it.
   test("at 80 columns (DEFAULT_COLUMNS): model name and route suffix", () => {
     expect(formatModeDetail(nonRerouted, DEFAULT_COLUMNS, undefined)).toBe(withRoute);
   });
@@ -278,7 +279,7 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(nonRerouted, modelOnly.length - 1, "high")).toBe("");
   });
 
-  test("budget that fits model+route: 'your key'", () => {
+  test("budget that fits model+route: the provider name", () => {
     expect(formatModeDetail(nonRerouted, withRoute.length, undefined)).toBe(withRoute);
   });
 
@@ -323,7 +324,7 @@ describe("formatModeDetail", () => {
   test("long model id is truncated to NAME_WIDTH in both the model-only and full leftovers", () => {
     const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
     const longModelOnly = "  openrouter/deepseek/d…";
-    const longWithRoute = "  openrouter/deepseek/d… · your key";
+    const longWithRoute = "  openrouter/deepseek/d… · anthropic";
     expect(formatModeDetail(longModel, longModelOnly.length, undefined)).toBe(longModelOnly);
     expect(formatModeDetail(longModel, longWithRoute.length, undefined)).toBe(longWithRoute);
   });
@@ -347,7 +348,7 @@ describe("formatModeDetail", () => {
   });
 
   test("an effortTier longer than EFFORT_WIDTH is truncated with a trailing ellipsis", () => {
-    const truncated = "  claude-sonnet-5 · your key · extra-t…";
+    const truncated = "  claude-sonnet-5 · anthropic · extra-t…";
     expect(formatModeDetail(nonRerouted, truncated.length, "extra-thinky")).toBe(truncated);
   });
 
@@ -358,13 +359,31 @@ describe("formatModeDetail", () => {
   });
 });
 
+describe("formatRouteLabelFromResolved", () => {
+  test("a gateway credential reads seri, never the listing provider", () => {
+    expect(
+      formatRouteLabelFromResolved(
+        route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      ),
+    ).toBe("seri");
+  });
+
+  test("a keyed BYOK route names the provider", () => {
+    expect(formatRouteLabelFromResolved(route())).toBe("anthropic");
+  });
+});
+
 describe("modeRowHintVisible", () => {
   test("hint at MODE_HINT_COLS with empty detail", () => {
     expect(modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, 0)).toBe(true);
   });
 
   test("hint hidden when detail+hint overflow even if remaining >= MODE_HINT_COLS", () => {
-    const detail = "  claude-sonnet-5 · your key";
+    const detail = "  claude-sonnet-5 · anthropic";
     expect(
       modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, detail.length),
     ).toBe(false);

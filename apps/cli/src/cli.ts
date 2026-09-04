@@ -215,7 +215,7 @@ import {
   createSetupHandlers,
 } from "./tui/state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
-import { estimateTokens } from "./tui/util/format";
+import { estimateTokens, formatRouteLabelFromResolved } from "./tui/util/format";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -3008,6 +3008,7 @@ async function runTui(
         version: pkg.version,
         model: prepared.route.model,
         provider: prepared.route.provider,
+        via: formatRouteLabelFromResolved(prepared.route),
         cwd: prepared.session.cwd,
         home: resolveUserHome(),
       },

@@ -345,32 +345,12 @@ export function formatDoneLine(
   return tokens === undefined ? head : `${head} · ${formatTokenProgress(tokens)}`;
 }
 
-// One row's worth of columns (name, provider, context, cost, route), space-joined — the picker's
+// One row's worth of columns (name, context, cost, route), space-joined — the picker's
 // own selection marker ("> "/"  ") is prepended at the call site, not here, matching how the
 // un-columned version already separated "which row is highlighted" from "what the row says".
 // Factored out and exported specifically so column formatting is unit-testable without mounting
 // Ink at all — this file had no pure formatting function of its own before the picker's columns
 // needed one.
-//
-// The trailing Route column names whether THIS row's own provider has a
-// key ("your key" — the same fact routing-priority resolution would act on). A row with no key of
-// its own names the specific sibling provider it would actually reroute to ("→ openrouter"),
-// rather than a bare "no key" plus an alternatives count that used to overstate reachability: the
-// PROVIDER_WIDTH-adjacent `Provider` column already shows what "your key" belongs to, so repeating
-// it there would be redundant, but a REROUTE target is a different provider than this row's own
-// and is exactly the thing "no key" alone left the user to guess at. Only a row with no key AND no
-// configured sibling reads as the true dead end, "no key" with nothing after it. The "+N route(s)"
-// suffix survives only for a row that already works on its own (`keyConfigured`): once a no-key
-// row names its reroute target directly, restating a raw sibling count next to it would double up
-// on the same information, or — when none of those siblings has a key either — repeat the original
-// bug of promising a fallback that does not exist.
-// Extracted out of formatModelRow's own inline ternary so the picker's Route column and the
-// persistent mode-indicator's route label (App.tsx's own JSX) share ONE vocabulary function —
-// they can never independently drift on what "your key"/"grok"/"chatgpt"/"seri"/"→ provider"/"no key"
-// means for the same inputs. `gatewayReachable` is `true` only when `decideModelPickerOpen`/
-// `formatModeDetail`'s caller passed a real plan-coverage predicate/route. `subscriptionCovered`
-// is a vendor plan overlay, not an API key, and wins over keyConfigured so a plan-plus-key
-// row still reads as included.
 function subscriptionRouteLabel(provider?: ModelProvider): string {
   if (provider === "xai") return "grok";
   if (provider === "openai") return "chatgpt";
@@ -385,13 +365,22 @@ export function formatRouteLabel(input: {
   provider?: ModelProvider;
 }): string {
   if (input.subscriptionCovered) return subscriptionRouteLabel(input.provider);
-  // Leftover OpenRouter key under an active seri plan: the plan pays, same as Grok/Codex.
-  if (input.keyConfigured && !(input.gatewayReachable && input.provider === "openrouter")) {
-    return "your key";
+  if (input.keyConfigured && !input.gatewayReachable) {
+    return input.provider ?? "your key";
   }
   if (input.rerouteTo) return `→ ${input.rerouteTo}`;
   if (input.gatewayReachable) return "seri";
   return "no key";
+}
+
+export function formatRouteLabelFromResolved(route: ResolvedRoute): string {
+  return formatRouteLabel({
+    keyConfigured: !route.rerouted && route.credential === "key",
+    subscriptionCovered: !route.rerouted && route.credential === "subscription",
+    rerouteTo: route.rerouted ? route.provider : undefined,
+    gatewayReachable: route.credential === "gateway",
+    provider: route.provider,
+  });
 }
 
 // The persistent mode-indicator row's own model/route suffix, factored out as a pure function for
@@ -427,13 +416,7 @@ export function formatModeDetail(
 ): string {
   if (route === undefined) return "";
   const model = `  ${truncate(route.model, NAME_WIDTH)}`;
-  const routeLabel = formatRouteLabel({
-    keyConfigured: !route.rerouted && route.credential === "key",
-    subscriptionCovered: !route.rerouted && route.credential === "subscription",
-    rerouteTo: route.rerouted ? route.provider : undefined,
-    gatewayReachable: route.credential === "gateway",
-    provider: route.provider,
-  });
+  const routeLabel = formatRouteLabelFromResolved(route);
   const withRoute = `${model} · ${routeLabel}`;
   const withEffort =
     effortTier === undefined ? withRoute : `${withRoute} · ${truncate(effortTier, EFFORT_WIDTH)}`;
@@ -466,8 +449,7 @@ export function pickerLabelWidth(terminalCols: number): number {
 }
 
 // Optional `labelWidth` is the columns ListRow has for this string (pickerLabelWidth). Omitted
-// returns the full five columns plus suffix. When the full string overflows, drop the suffix
-// first; if still over, drop the Route column. Context and Cost stay.
+// is unbounded. Overflow drops the suffix, then Route.
 export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): string {
   const { entry, keyConfigured, alternatives, rerouteTo, gatewayReachable, subscriptionCovered } =
     row;
@@ -484,7 +466,6 @@ export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): stri
       : "";
   const columns = [
     truncatePad(entry.displayName, NAME_WIDTH),
-    truncatePad(entry.provider, PROVIDER_WIDTH),
     formatContextWindow(entry.contextWindow).padStart(CONTEXT_WIDTH),
     truncatePad(subscriptionCovered ? "included" : formatCost(entry.pricing), COST_WIDTH),
     truncatePad(route, ROUTE_WIDTH),
@@ -493,22 +474,20 @@ export function formatModelRow(row: ModelPickerEntry, labelWidth?: number): stri
   if (labelWidth === undefined || full.length <= labelWidth) return full;
   const withoutSuffix = columns.join(" ");
   if (withoutSuffix.length <= labelWidth) return withoutSuffix;
-  return columns.slice(0, 4).join(" ");
+  return columns.slice(0, 3).join(" ");
 }
 
-// Same five header cells as the unbounded MODEL_PICKER_HEADER. Omitted width, or a width the
-// five-column string already fits, keeps Route; otherwise drop Route in lockstep with formatModelRow.
+// Same cells as unbounded MODEL_PICKER_HEADER. Overflow drops Route in lockstep with formatModelRow.
 export function formatModelPickerHeader(labelWidth?: number): string {
   const columns = [
     truncatePad("Name", NAME_WIDTH),
-    truncatePad("Provider", PROVIDER_WIDTH),
     "Context".padStart(CONTEXT_WIDTH),
     truncatePad("Cost", COST_WIDTH),
     truncatePad("Route", ROUTE_WIDTH),
   ];
   const full = columns.join(" ");
   if (labelWidth === undefined || full.length <= labelWidth) return full;
-  return columns.slice(0, 4).join(" ");
+  return columns.slice(0, 3).join(" ");
 }
 
 export const MODEL_PICKER_HEADER = formatModelPickerHeader();
@@ -534,7 +513,14 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     .split(/\s+/)
     .filter((term) => term.length > 0);
   if (terms.length === 0) return true;
-  const { entry, subscriptionCovered, gatewayReachable } = row;
+  const { entry, subscriptionCovered, gatewayReachable, keyConfigured, rerouteTo } = row;
+  const routeLabel = formatRouteLabel({
+    keyConfigured,
+    rerouteTo,
+    gatewayReachable,
+    subscriptionCovered,
+    provider: entry.provider,
+  });
   const haystacks = [
     entry.id.toLowerCase(),
     entry.displayName.toLowerCase(),
@@ -543,7 +529,8 @@ export function matchesFilter(row: ModelPickerEntry, query: string): boolean {
     // rather than an empty string, so this cannot assume it is always safe to call
     // `.toLowerCase()` on directly.
     (entry.family ?? "").toLowerCase(),
-    entry.provider.toLowerCase(),
+    ...(routeLabel === "seri" ? [] : [entry.provider.toLowerCase()]),
+    routeLabel.toLowerCase(),
     priceLabel(entry),
     ...(subscriptionCovered ? ["included", "plan", subscriptionRouteLabel(entry.provider)] : []),
     ...(gatewayReachable ? ["seri", "plan"] : []),

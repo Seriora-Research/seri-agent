@@ -2061,6 +2061,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2118,6 +2119,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2144,6 +2146,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2170,6 +2173,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2204,6 +2208,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2232,6 +2237,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2256,11 +2262,58 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       const banner = frame.split("\n").find((l) => l.includes("seri v0.4.2"));
       const mode = frame.split("\n").find((l) => l.includes(MODE_LABEL["approve-each"]));
-      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).toContain("minimax/minimax-m3:free · seri");
       expect(banner).not.toContain("openai/gpt-oss-120b");
+      expect(banner).not.toContain("openrouter");
       expect(mode).toContain("minimax/minimax-m3:fr");
       expect(mode).toContain("seri");
       expect(mode).not.toContain("openai/gpt-oss-120b");
+    });
+
+    test("a hosted session banner names seri, never the gateway listing", async () => {
+      const { setup } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          via: "seri",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+
+      const banner = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(banner).toContain("minimax/minimax-m3:free · seri");
+      expect(banner).not.toContain("openrouter");
+    });
+
+    test("a hosted splash banner names seri even before a route exists", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          via: "seri",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("minimax/minimax-m3:free · seri");
+      expect(frame).not.toContain("openrouter");
     });
 
     // The pre-session window used to render a dead placeholder, so a task typed while
@@ -3323,22 +3376,23 @@ describe("App", () => {
       expect(formatCost(undefined)).toBe("—");
     });
 
-    test("formatModelRow includes name, provider, context and cost, in that order", () => {
+    test("formatModelRow includes name, context, cost and route, in that order", () => {
       const row = formatModelRow(pickerRow());
       const nameIndex = row.indexOf("Llama 3.3 70B");
-      const providerIndex = row.indexOf("groq");
       const contextIndex = row.indexOf("128K");
       const costIndex = row.indexOf("$0.59/$0.79");
+      const routeIndex = row.indexOf("groq");
       expect(nameIndex).toBeGreaterThanOrEqual(0);
-      expect(providerIndex).toBeGreaterThan(nameIndex);
-      expect(contextIndex).toBeGreaterThan(providerIndex);
+      expect(contextIndex).toBeGreaterThan(nameIndex);
       expect(costIndex).toBeGreaterThan(contextIndex);
+      expect(routeIndex).toBeGreaterThan(costIndex);
+      expect(row).not.toContain("your key");
     });
 
-    // D1/D2 (feature-plan.md): the trailing Route column.
-    test("formatModelRow renders 'your key' or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
+    test("formatModelRow renders the provider as Route for a keyed row, or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
       const configured = formatModelRow(pickerRow({ keyConfigured: true, alternatives: 0 }));
-      expect(configured).toContain("your key");
+      expect(configured).toContain("groq");
+      expect(configured).not.toContain("your key");
       expect(configured).not.toContain("no key");
       expect(configured).not.toContain("route");
 
@@ -3386,8 +3440,7 @@ describe("App", () => {
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
 
-    // Unbounded form: five columns (74) plus ` +1 route` is what ListRow middle-truncates at 80.
-    test("formatModelRow unbounded with +1 route is longer than 74 and still carries cost", () => {
+    test("formatModelRow unbounded with +1 route is longer than the four columns and still carries cost", () => {
       const row = formatModelRow(
         pickerRow({
           alternatives: 1,
@@ -3397,7 +3450,7 @@ describe("App", () => {
           }),
         }),
       );
-      expect(row.length).toBeGreaterThan(74);
+      expect(row.length).toBeGreaterThan(63);
       expect(row).toContain("+1 route");
       expect(row).toContain("$0.15/$0.60");
     });
@@ -3407,7 +3460,7 @@ describe("App", () => {
       expect(pickerLabelWidth(0)).toBe(pickerLabelWidth(80));
     });
 
-    test("formatModelRow at pickerLabelWidth(80) drops the suffix but keeps Context and Cost", () => {
+    test("formatModelRow at pickerLabelWidth(80) keeps Context, Cost, Route and the +1 route suffix", () => {
       const priced = pickerRow({
         alternatives: 1,
         entry: entry({
@@ -3418,8 +3471,22 @@ describe("App", () => {
       const row = formatModelRow(priced, pickerLabelWidth(80));
       expect(row).toContain("128K");
       expect(row).toContain("$0.15/$0.60");
-      expect(row).not.toContain("+1 route");
+      expect(row).toContain("+1 route");
       expect(row.length).toBeLessThanOrEqual(74);
+    });
+
+    test("formatModelRow at pickerLabelWidth(70) drops the suffix but keeps Route", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(70));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("+1 route");
     });
 
     test("formatModelRow at pickerLabelWidth(100) keeps the +1 route suffix", () => {
@@ -3438,8 +3505,8 @@ describe("App", () => {
       expect(formatModelPickerHeader(pickerLabelWidth(80))).toContain("Route");
     });
 
-    test("formatModelPickerHeader at pickerLabelWidth(70) drops Route; the row keeps Context and Cost", () => {
-      expect(formatModelPickerHeader(pickerLabelWidth(70))).not.toContain("Route");
+    test("formatModelPickerHeader at pickerLabelWidth(60) drops Route; the row keeps Context and Cost", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(60))).not.toContain("Route");
       const priced = pickerRow({
         alternatives: 1,
         entry: entry({
@@ -3447,7 +3514,7 @@ describe("App", () => {
           contextWindow: 131_072,
         }),
       });
-      const row = formatModelRow(priced, pickerLabelWidth(70));
+      const row = formatModelRow(priced, pickerLabelWidth(60));
       expect(row).toContain("128K");
       expect(row).toContain("$0.15/$0.60");
       expect(row).not.toContain("your key");
@@ -3581,7 +3648,10 @@ describe("App", () => {
   // all 5 branches, so the persistent indicator below (which calls it directly, not through a
   // ModelPickerEntry) has its own direct coverage too.
   describe("formatRouteLabel", () => {
-    test("keyConfigured wins outright: 'your key'", () => {
+    test("keyConfigured names the provider, not 'your key'", () => {
+      expect(formatRouteLabel({ keyConfigured: true, provider: "anthropic", rerouteTo: "openrouter" })).toBe(
+        "anthropic",
+      );
       expect(formatRouteLabel({ keyConfigured: true, rerouteTo: "openrouter" })).toBe("your key");
     });
 
@@ -3608,7 +3678,7 @@ describe("App", () => {
       expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
     });
 
-    test("a leftover OpenRouter key under gateway coverage still reads 'seri'", () => {
+    test("a leftover gateway listing key under coverage still reads 'seri'", () => {
       expect(
         formatRouteLabel({
           keyConfigured: true,
@@ -3687,7 +3757,7 @@ describe("App", () => {
     // row end-to-end.
     test("renders the model+route label at the default width, and drops it after a resize too narrow for the model", async () => {
       const { setup } = await connect();
-      expect(setup.captureCharFrame()).toContain("your key");
+      expect(setup.captureCharFrame()).toContain("anthropic");
 
       // 30: approve-each (22) + `  claude-sonnet-5` (17) = 39, which cannot fit. 40 would now
       // show the model (22 + 17 = 39 <= 40).
@@ -3748,7 +3818,7 @@ describe("App", () => {
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
       expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
-      expect(setup.captureCharFrame()).toContain("your key");
+      expect(setup.captureCharFrame()).toContain("anthropic");
 
       dispatch({
         type: "model-picker-resolved",
@@ -3783,7 +3853,7 @@ describe("App", () => {
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     test("/effort auto (a session-updated dispatch clearing reasoningEffort) removes the tier from the mode row", async () => {
@@ -3802,7 +3872,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // A tier surviving a model switch onto a model with no reasoningOptions at all (the reducer
@@ -3819,7 +3889,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
 
       dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
       await flush(setup);
@@ -3827,7 +3897,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // Fresh session (no `effort-resolved` ever dispatched) with a config default present: the
@@ -3845,7 +3915,7 @@ describe("App", () => {
       dispatch({ type: "config-updated", config: { SERI_REASONING_EFFORT: "high" } });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
@@ -3865,7 +3935,7 @@ describe("App", () => {
         config: { SERI_REASONING_EFFORT: "high" },
       });
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     // Fresh session, no config default dispatched either: confirms the existing no-tier behavior
@@ -3881,7 +3951,7 @@ describe("App", () => {
       });
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // A session override (`/effort`) must keep winning outright over a config default present at
@@ -3901,7 +3971,7 @@ describe("App", () => {
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
       expect(modeRow(setup)).not.toContain("· low");
     });
 
@@ -3914,7 +3984,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
   });
 
@@ -3974,7 +4044,7 @@ describe("App", () => {
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(MODE_LABEL["approve-each"]));
       expect(modeLine).toBeDefined();
-      expect(modeLine).toContain("your key");
+      expect(modeLine).toContain("anthropic");
       expect(modeLine).toContain("(shift+tab to cycle)");
       expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
     });
@@ -4018,7 +4088,7 @@ describe("App", () => {
       });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
 
-      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · your key`;
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · anthropic`;
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(expectedRow));
       expect(modeLine).toBeDefined();

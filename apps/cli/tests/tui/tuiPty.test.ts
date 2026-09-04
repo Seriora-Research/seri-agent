@@ -1916,7 +1916,7 @@ const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 // applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
 // for "no real size available," not a real terminal's dimensions. `formatModeDetail` leftover-packs
 // the mode row's model/route/effort suffix into whatever columns remain after the indicator, so a
-// typical model name's ` · your key` suffix IS visible at that 80-column default. `terminalSize`,
+// typical model name's ` · groq` suffix IS visible at that 80-column default. `terminalSize`,
 // below, still widens the pty when a test needs a guaranteed-wide row (a NAME_WIDTH model plus
 // reroute plus effort, or an assertion that must not depend on leftover packing): it prefixes an
 // `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before exec'ing
@@ -3037,7 +3037,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=low");
       await sawLine("RUNLOOP_DONE 1");
-      await sawLine("reasoning-model · your key · low");
+      await sawLine("reasoning-model · groq · low");
 
       child.stdin?.write("/effort high");
       await sawLine("/effort high");
@@ -3068,7 +3068,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // own dispatch, the header falls back to `state.config`'s STALE mount-time value ("low"),
       // not what config.json now actually holds ("high").
       await sawInFrameTimes("Reasoning effort: auto (falls back to the config default).", 1);
-      expect(lastFrame()).toContain("reasoning-model · your key · high");
+      expect(lastFrame()).toContain("reasoning-model · groq · high");
       expect(lastFrame()).not.toContain("· low");
     } finally {
       child.kill("SIGKILL");
@@ -5623,7 +5623,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         terminalSize: { cols: 100, rows: 30 },
       });
       try {
-        await sawLine("reasoning-model · your key · medium");
+        await sawLine("reasoning-model · groq · medium");
         // Negative control: this is the mount-time seed, not a turn-triggered one.
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
@@ -5943,16 +5943,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
       writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
+      const { child, sawLine, rawOccurrences, lastFrame } = await startChild(scriptPath, dir, {
         dismissSplash: false,
       });
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("> Continue");
+        await sawLine(" · seri");
+        expect(rawOccurrences("openrouter")).toBe(0);
         child.stdin?.write("\r");
 
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("/setup — provider API keys")).toBe(0);
+        expect(lastFrame()).toContain(" · seri");
+        expect(lastFrame()).not.toContain("openrouter");
       } finally {
         child.kill("SIGKILL");
       }
