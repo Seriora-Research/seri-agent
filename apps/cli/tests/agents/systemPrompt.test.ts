@@ -182,7 +182,10 @@ describe("buildVolatileTier", () => {
     );
 
     expect(line).toContain("GPT OSS 120B");
-    expect(line).toContain("groq/openai/gpt-oss-120b");
+    expect(line).toMatch(/^You are powered by the model named GPT OSS 120B\./m);
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
+    expect(line).not.toContain("openai/gpt-oss-120b");
   });
 
   test("an uncataloged model (no displayName) still gets an identity line, using the raw id", () => {
@@ -190,6 +193,8 @@ describe("buildVolatileTier", () => {
 
     expect(line.length).toBeGreaterThan(0);
     expect(line).toContain("some-raw-id");
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
   });
 
   // code-review finding on PR #66: a catalog entry whose `name` came back "" (present but empty,
@@ -199,6 +204,21 @@ describe("buildVolatileTier", () => {
 
     expect(line).not.toContain("named . ");
     expect(line).toContain("some-raw-id");
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
+  });
+
+  test("an uncataloged slashed id uses the last path segment, not a provider prefix", () => {
+    const line = buildVolatileTier(
+      "minimax/minimax-m3:free",
+      "openrouter",
+      undefined,
+      loadMemory(emptyMemoryCtx()),
+    );
+
+    expect(line).toContain("minimax-m3:free");
+    expect(line).not.toContain("openrouter");
+    expect(line).not.toContain("minimax/minimax-m3:free");
   });
 
   // B2: an all-empty LoadedMemory must render no visible memory section at all — this is what

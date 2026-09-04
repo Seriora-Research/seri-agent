@@ -132,7 +132,9 @@ export async function runWelcomeSplash(
     keyConfigured: configured.has(provider),
     subscriptionCovered: subscribed.has(provider),
     gatewayReachable:
-      hosted && !subscribed.has(provider) && (!configured.has(provider) || provider === GATEWAY_PROVIDER),
+      hosted &&
+      !subscribed.has(provider) &&
+      (!configured.has(provider) || provider === GATEWAY_PROVIDER),
     provider,
   });
 
