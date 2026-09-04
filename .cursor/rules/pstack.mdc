@@ -5,8 +5,6 @@ alwaysApply: true
 
 # pstack is the conductor
 
-[`docs/decisions/0010-pstack-is-the-conductor.md`](../../docs/decisions/0010-pstack-is-the-conductor.md),
-overlay removed by [`0014`](../../docs/decisions/0014-pstack-only-no-engineering-loop.md).
 The pstack plugin stays a plugin. This repo does not vendor `poteto-mode`.
 
 One conductor: `/poteto-mode`. Do not run a second orchestrator on the same work.
