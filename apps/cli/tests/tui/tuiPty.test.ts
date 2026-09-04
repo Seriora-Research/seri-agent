@@ -2817,7 +2817,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false");
+      await sawLine(
+        "RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false",
+      );
       await sawLine("done ·");
 
       child.stdin?.write("/model");
@@ -3196,7 +3198,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const pty = await startChild(scriptPath, dir);
     const { child, sawLine } = pty;
     try {
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false");
+      await sawLine(
+        "RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false",
+      );
       await sawLine("done ·");
 
       // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared

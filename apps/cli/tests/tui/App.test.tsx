@@ -3649,9 +3649,9 @@ describe("App", () => {
   // ModelPickerEntry) has its own direct coverage too.
   describe("formatRouteLabel", () => {
     test("keyConfigured names the provider, not 'your key'", () => {
-      expect(formatRouteLabel({ keyConfigured: true, provider: "anthropic", rerouteTo: "openrouter" })).toBe(
-        "anthropic",
-      );
+      expect(
+        formatRouteLabel({ keyConfigured: true, provider: "anthropic", rerouteTo: "openrouter" }),
+      ).toBe("anthropic");
       expect(formatRouteLabel({ keyConfigured: true, rerouteTo: "openrouter" })).toBe("your key");
     });
 
