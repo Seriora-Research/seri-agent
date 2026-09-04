@@ -96,6 +96,7 @@ import {
   DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
   formatModeDetail,
+  formatRouteLabelFromResolved,
   MODE_CYCLE_HINT,
   MODE_LABEL,
   modeRowHintVisible,
@@ -376,7 +377,12 @@ export function App({
   const sessionBanner =
     splashBanner === undefined || state.route === undefined
       ? splashBanner
-      : { ...splashBanner, model: state.route.model, provider: state.route.provider };
+      : {
+          ...splashBanner,
+          model: state.route.model,
+          provider: state.route.provider,
+          via: formatRouteLabelFromResolved(state.route),
+        };
   const [pendingReasoning, setPendingReasoning] = useState("");
   useEffect(
     () => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())),
@@ -720,9 +726,6 @@ export function App({
         >
           {state.pendingChildView === undefined ? (
             <>
-              {/* Session header inside the scrollbox so it holds the top of an empty
-              transcript and scrolls away once conversation accumulates. Model and
-              provider follow `state.route`, the same source as the mode row. */}
               {sessionBanner !== undefined && <SplashBanner info={sessionBanner} />}
               <TranscriptList
                 transcript={state.transcript}
