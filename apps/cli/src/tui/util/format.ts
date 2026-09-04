@@ -11,7 +11,7 @@ import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
-import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
+import { ERROR_MARK, theme, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
 // useListWindow.ts — the most any of their windows ever shows at once, regardless of how many
@@ -70,7 +70,7 @@ export type TranscriptEntry = {
   // Settled thought caret. Not a fourth role: the gap table already treats this as
   // system (same exchange as the answer). `body` is the raw trace; `expanded` is
   // the open/closed caret. Absent unless a reasoning span actually settled.
-  kind?: "reasoning";
+  kind?: "reasoning" | "quota-exhausted";
   body?: string;
   expanded?: boolean;
   elapsedMs?: number;
@@ -78,6 +78,11 @@ export type TranscriptEntry = {
 
 export const REASONING_MARK_CLOSED = "▸";
 export const REASONING_MARK_OPEN = "▾";
+
+export function systemEntryFg(entry: TranscriptEntry): string {
+  if (entry.kind === "quota-exhausted") return theme.quotaExhausted;
+  return entry.muted ? theme.muted : theme.text;
+}
 
 export function formatReasoningCaret(expanded: boolean, elapsedMs: number): string {
   const mark = expanded ? REASONING_MARK_OPEN : REASONING_MARK_CLOSED;

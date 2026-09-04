@@ -22,6 +22,7 @@ import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provid
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
+import { streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
   compactMessages,
@@ -474,7 +475,7 @@ export async function* runLoop(opts: {
                 continue streamAttempt;
               }
             }
-            yield { type: "error", error: errorText(part.error) };
+            yield { type: "error", error: streamErrorText(part.error, errorText) };
             // A call that streamed text and then failed was billed for the text it streamed, and
             // this is the exit that used to drop it. Measured against ai@7.0.48: consuming this
             // part and then awaiting result.usage resolves — with the provider's real numbers
@@ -577,7 +578,7 @@ export async function* runLoop(opts: {
             continue;
           }
         }
-        yield { type: "error", error: errorText(err) };
+        yield { type: "error", error: streamErrorText(err, errorText) };
         return;
       }
 

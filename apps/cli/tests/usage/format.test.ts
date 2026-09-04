@@ -125,4 +125,18 @@ describe("formatUsageReport", () => {
     expect(text).not.toContain("$5.00 of $15.00");
     expect(text).not.toContain("in credits");
   });
+
+  test("exhausted paid spend repeats the hard-stop sentence", () => {
+    const text = formatUsageReport({
+      ...paid,
+      quota: { metric: "usd", used: 15, included: 15, remaining: 0 },
+    });
+    expect(text).toContain(
+      "Included spend this month is used up. Hosted routes will not run until 1 Sep 2026 UTC.",
+    );
+  });
+
+  test("under the cap does not print the hard-stop sentence", () => {
+    expect(formatUsageReport(paid)).not.toContain("Hosted routes will not run");
+  });
 });

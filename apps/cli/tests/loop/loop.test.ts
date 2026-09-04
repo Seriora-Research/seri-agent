@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { APICallError } from "@ai-sdk/provider";
 import { MockLanguageModelV4 } from "ai/test";
 import { type LoopEvent, runLoop } from "../../src/loop/loop";
+import { quotaExhaustedLine } from "../../src/usage/quotaNotice";
 import {
   baseMessages,
   collect,
@@ -277,6 +278,49 @@ describe("runLoop", () => {
     expect(attempts).toBe(1);
     expect(events.find((e) => e.type === "retry")).toBeUndefined();
     expect(events.find((e) => e.type === "error")?.error).toContain("invalid request");
+  });
+
+  test("a hosted quota 402 yields the hard-stop sentence, not the raw API error", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "Payment Required",
+          url: "https://api.seriora.ai/api/gateway/chat/completions",
+          requestBodyValues: {},
+          statusCode: 402,
+          responseBody: JSON.stringify({ code: "allowance_exhausted" }),
+        });
+      },
+    });
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    expect(events.find((e) => e.type === "error")?.error).toBe(
+      quotaExhaustedLine("included_spend"),
+    );
+    expect(events.some((e) => e.type === "error" && e.error.includes("AI_APICallError"))).toBe(
+      false,
+    );
+  });
+
+  test("a 402 that is not a hosted cap stays the provider error", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "Payment Required",
+          url: "https://api.seriora.ai/api/gateway/chat/completions",
+          requestBodyValues: {},
+          statusCode: 402,
+          responseBody: JSON.stringify({ code: "unknown_plan" }),
+        });
+      },
+    });
+    const events = await collect(
+      runLoop({ model, tools: {}, messages: baseMessages, permissionMode: "auto" }),
+    );
+    const error = events.find((e) => e.type === "error")?.error;
+    expect(error).toContain("Payment Required");
+    expect(error).not.toContain("Hosted routes will not run");
   });
 
   test("emits the token usage of each completed model call", async () => {

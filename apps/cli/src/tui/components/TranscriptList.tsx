@@ -5,7 +5,7 @@ import { useTranscriptWindow, type TranscriptWindowMetrics } from "../hooks/useT
 import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
-import { formatReasoningCaret, type TranscriptEntry } from "../util/format";
+import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
@@ -178,7 +178,7 @@ const TranscriptRow = memo(function TranscriptRow({
     );
   }
   return (
-    <text marginTop={gap} fg={entry.muted ? theme.muted : theme.text}>
+    <text marginTop={gap} fg={systemEntryFg(entry)}>
       {entry.text}
     </text>
   );

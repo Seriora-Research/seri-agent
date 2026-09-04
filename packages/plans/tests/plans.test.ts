@@ -5,10 +5,12 @@ import {
   PLAN_MONTHLY_USD,
   SUBSCRIPTION_STATUSES,
   isPaidPlan,
+  isQuotaExhaustedNotice,
   isUpgrade,
   missingProductVars,
   planForProductId,
   productIdForPlan,
+  quotaExhaustedNotice,
   toPlan,
   toSubscriptionStatus,
 } from "../src/index";
@@ -139,5 +141,31 @@ describe("missingProductVars", () => {
 
   test("is empty when the deployment is fully configured", () => {
     expect(missingProductVars(ENV)).toEqual([]);
+  });
+});
+
+describe("quotaExhaustedNotice", () => {
+  test("names the spend cap and the reset instant", () => {
+    expect(quotaExhaustedNotice("included_spend", "1 Oct 2026 UTC")).toBe(
+      "Included spend this month is used up. Hosted routes will not run until 1 Oct 2026 UTC.",
+    );
+  });
+
+  test("names the daily request cap and the reset instant", () => {
+    expect(quotaExhaustedNotice("requests_today", "5 Sep 2026 UTC")).toBe(
+      "Requests today are used up. Hosted routes will not run until 5 Sep 2026 UTC.",
+    );
+  });
+
+  test("isQuotaExhaustedNotice accepts only those two sentences", () => {
+    const spend = quotaExhaustedNotice("included_spend", "1 Oct 2026 UTC");
+    expect(isQuotaExhaustedNotice(spend)).toBe(true);
+    expect(
+      isQuotaExhaustedNotice(
+        "Requests today are used up. Hosted routes will not run until 5 Sep 2026 UTC.",
+      ),
+    ).toBe(true);
+    expect(isQuotaExhaustedNotice("At the cap this period. Resets 1 Oct 2026 UTC.")).toBe(false);
+    expect(isQuotaExhaustedNotice("AI_APICallError: Payment Required")).toBe(false);
   });
 });

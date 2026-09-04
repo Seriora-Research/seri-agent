@@ -485,6 +485,7 @@ describe("tuiReducer: loop-event", () => {
     expect(state.toolActivity).toHaveLength(1);
     expect(state.transcript.filter((e) => e.muted)).toEqual([]);
     expect(state.transcript.at(-1)?.text).toBe(`${ERROR_MARK}compaction failed`);
+    expect(state.transcript.at(-1)?.kind).toBeUndefined();
 
     state = apply(state, {
       type: "tool-call",
@@ -497,6 +498,15 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
     expect(state.transcript.some((e) => e.text === "Read 2 files")).toBe(true);
     expect(state.toolActivity).toEqual([]);
+  });
+
+  test("a hosted quota hard-stop stays unmarked and tagged, not an ERROR_MARK line", () => {
+    const notice =
+      "Included spend this month is used up. Hosted routes will not run until 1 Oct 2026 UTC.";
+    const state = apply(undefined, { type: "error", error: notice });
+    expect(state.transcript.at(-1)?.text).toBe(notice);
+    expect(state.transcript.at(-1)?.kind).toBe("quota-exhausted");
+    expect(state.transcript.at(-1)?.text.startsWith(ERROR_MARK)).toBe(false);
   });
 
   // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the

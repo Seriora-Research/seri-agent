@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { useKeyboard } from "@opentui/react";
+import { isQuotaExhaustedNotice } from "@seri/plans";
 import { usagePanelLines, LOGGED_OUT_USAGE } from "../../../usage/format";
 import type { FetchUsageResult } from "../../../usage/fetch";
 import { CHROME_TABS, nextChromeTab, type ChromeTabId } from "../../chrome/tabs";
@@ -45,7 +46,16 @@ function UsageBody({ load, detail }: { load: ChromePanelState["load"]; detail: b
   return (
     <box flexDirection="column">
       {lines.map((line, index) => (
-        <text key={`${index}:${line}`} fg={line.length === 0 ? theme.muted : theme.text}>
+        <text
+          key={`${index}:${line}`}
+          fg={
+            line.length === 0
+              ? theme.muted
+              : isQuotaExhaustedNotice(line)
+                ? theme.quotaExhausted
+                : theme.text
+          }
+        >
           {line.length === 0 ? " " : line}
         </text>
       ))}

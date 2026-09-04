@@ -1,6 +1,7 @@
 // The shared-state home the research spec's Constraint 4 requires: driveLoop and all four slash
 // commands dispatch into this one reducer rather than each holding a separate copy. Zero Ink/React
 // import — a plain, standalone reducer, testable without a terminal.
+import { isQuotaExhaustedNotice } from "@seri/plans";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
@@ -1019,12 +1020,14 @@ function pushLine(
   flush = true,
   muted = false,
   markdown = false,
+  kind?: TranscriptEntry["kind"],
 ): TuiState {
   const entry: TranscriptEntry = {
     role,
     text: line,
     ...(muted ? { muted: true } : {}),
     ...(markdown ? { markdown: true } : {}),
+    ...(kind !== undefined ? { kind } : {}),
   };
   if (!flush) {
     return { ...state, transcript: [...state.transcript, entry] };
@@ -1283,13 +1286,21 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // that arrive after the error. A thrown execute (pendingTool set) settles that open
     // group as an anomaly instead of dumping the loop's model-facing wrapper as a
     // transcript peer of the assistant's prose. Other errors (compaction, unknown tool,
-    // a failed stream) still push a marked system line.
+    // a failed stream) still push a marked system line. A hosted quota notice is
+    // the same event without the mark.
     case "error": {
       const pending = state.pendingTool;
       if (pending !== undefined) {
         return {
           ...state,
           toolActivity: recordThrow(state.toolActivity, pending.name, pending.args, event.error),
+          status: "",
+          pendingTool: undefined,
+        };
+      }
+      if (isQuotaExhaustedNotice(event.error)) {
+        return {
+          ...pushLine(state, event.error, "system", true, false, false, "quota-exhausted"),
           status: "",
           pendingTool: undefined,
         };

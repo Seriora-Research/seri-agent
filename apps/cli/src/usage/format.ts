@@ -1,5 +1,6 @@
 import { isPaidPlan, PLAN_MONTHLY_USD } from "@seri/plans";
 
+import { quotaExhaustedLineFromReport, utcResetLabel } from "./quotaNotice";
 import type { UsageReport } from "./report";
 
 export type FormatUsageOpts = {
@@ -33,26 +34,6 @@ export function formatTokenCount(n: number): string {
 
 function dateOnly(iso: string): string {
   return iso.slice(0, 10);
-}
-
-const UTC_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-] as const;
-
-function resetLabel(iso: string): string {
-  const d = new Date(iso);
-  return `${d.getUTCDate()} ${UTC_MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} UTC`;
 }
 
 function paceLine(report: UsageReport): string {
@@ -96,7 +77,7 @@ export function usagePanelLines(report: UsageReport, opts: FormatUsageOpts = {})
     lines.push("Included this month");
     lines.push(`${meterBar(share)}  ${formatShare(share)} used`);
     lines.push(
-      `${usd(report.quota.used)} of $${credits} in credits  resets ${resetLabel(report.window.end)}`,
+      `${usd(report.quota.used)} of $${credits} in credits  resets ${utcResetLabel(report.window.end)}`,
     );
     lines.push(paceLine(report));
     lines.push("");
@@ -108,9 +89,15 @@ export function usagePanelLines(report: UsageReport, opts: FormatUsageOpts = {})
     lines.push("Requests today");
     lines.push(`${meterBar(share)}  ${formatShare(share)} used`);
     lines.push(
-      `${report.quota.used} of ${report.quota.included}  resets ${resetLabel(report.window.end)}`,
+      `${report.quota.used} of ${report.quota.included}  resets ${utcResetLabel(report.window.end)}`,
     );
     lines.push(paceLine(report));
+  }
+
+  const notice = quotaExhaustedLineFromReport(report);
+  if (notice !== null) {
+    lines.push("");
+    lines.push(notice);
   }
 
   if (report.models.length > 0) {

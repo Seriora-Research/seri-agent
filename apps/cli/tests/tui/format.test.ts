@@ -15,9 +15,25 @@ import {
   MODE_HINT_COLS,
   MODE_LABEL,
   modeRowHintVisible,
+  systemEntryFg,
   type TokenProgress,
 } from "../../src/tui/util/format";
+import { theme } from "../../src/tui/theme/theme";
 import { route } from "./helpers";
+
+describe("systemEntryFg", () => {
+  test("quota hard-stop uses the red token; other system lines do not", () => {
+    expect(
+      systemEntryFg({
+        role: "system",
+        text: "Included spend this month is used up. Hosted routes will not run until 1 Oct 2026 UTC.",
+        kind: "quota-exhausted",
+      }),
+    ).toBe(theme.quotaExhausted);
+    expect(systemEntryFg({ role: "system", text: "✕ boom" })).toBe(theme.text);
+    expect(systemEntryFg({ role: "system", text: "hint", muted: true })).toBe(theme.muted);
+  });
+});
 
 describe("formatElapsed", () => {
   test("under a minute renders as seconds", () => {
