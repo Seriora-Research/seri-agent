@@ -2024,9 +2024,6 @@ async function runTui(
     // A `/name` direct dispatch passes its session through unchanged (driveLoop appends the user
     // row itself there), so this merges an identical array and changes nothing for it.
     dispatch({ type: "user-turn-committed", messages: session.messages });
-    // Same-route gateway is already shown by the header model id and the mode-row
-    // "seri" route label; a per-turn transcript line is duplicate chrome and recites
-    // the catalog id.
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",

@@ -160,23 +160,9 @@ function buildContextTier(
   return joinTiers(agentsContent, renderRulesTier(rules), renderSkillsTier(skills));
 }
 
-// Per turn: tells the model the display name it is running as this turn, so a live
-// `/model` switch is reflected instead of confabulated. The catalog coordinate is not
-// in this string. Composed outside buildSystemPrompt, at the driveLoop call site in
-// runtime/drive.ts, where the resolved route and the catalog's own lookup for this
-// turn are already in scope — kept last-in-string there too, so this is the only tier
-// that invalidates a cached prefix. The machine line and family overlay live here for
-// the same reason: platform is a process fact, not a session-frozen one, and a /model
-// switch must be able to add or drop the llama narration overlay without rewriting
-// the stable prefix.
-//
 // Takes already-resolved `displayName` and `family` rather than a catalog to look up itself: the
 // caller (driveLoop) needs the same catalog entry for the loop's own contextWindowSize, so it does
 // that lookup once and hands this function the fields instead of each doing an identical scan.
-// `displayName ||` the last `/`-segment of `modelId`, not `??`: a catalog entry whose `name`
-// came back `""` (present but empty) must still fall back — `??` only catches null/undefined,
-// not empty string. The segment is the model name. `provider` is the route and is not
-// interpolated.
 // `memory` is required: the one production call site always has one. Composed through joinTiers,
 // not string-concatenated, so an all-empty LoadedMemory renders "" (renderMemoryTier's own empty
 // guarantee) and joinTiers' filter(Boolean) drops it — a session with no memory yet gets identity

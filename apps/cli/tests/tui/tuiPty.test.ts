@@ -486,12 +486,6 @@ function childScriptPlanClearedOnLogout(dir: string): string {
   ].join("\n");
 }
 
-// Same pinned pair as childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter,
-// no groq sibling to reroute to, GROQ_API_KEY only a decoy past the guided-setup gate), but
-// this script actually lets turn 1 run (childScriptPlanClearedOnLogout's own runLoopFake
-// never resolves) and injects `getGatewayModel` so dispatchModel never attempts a real
-// request to the fake SERI_GATEWAY_URL. The test below asserts the same-route hosted
-// turn does NOT print a per-turn `↻ routing` line.
 function childScriptGatewayNoticeTui(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -2792,9 +2786,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Same-route hosted billing is already visible on the header and the mode-row "seri"
-  // label; repeating it every turn leaked the catalog id. Negative control: the turn
-  // still runs (RUNLOOP_CALL still fires).
   test("a live turn served through the gateway does not append a same-route routing line", async () => {
     const scriptPath = join(dir, "child-gateway-notice.mjs");
     writeFileSync(scriptPath, childScriptGatewayNoticeTui(dir));
@@ -2832,8 +2823,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // RUNLOOP_CALL 1 now logs identity=GPT OSS 120B, so sawLine on that name is already
-      // true before the picker mounts. Wait on the picker's empty-filter chrome, then type.
       // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) —
       // verified directly against the bundled catalog-manifest.json before writing this string;
       // "3.3-70b" alone also matches an OpenRouter entry, "70b-versatile" does not.
@@ -2853,10 +2842,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
-      // message) — the switch changed WHICH model answers, not what it was handed. The trailing
-      // identity=Llama 3.3 70B hasExactId=false proves the system prompt sent for THIS call
-      // names the NEW model's displayName — not the one the session started on — i.e. the
-      // identity line is recomputed every driveLoop call rather than captured once at session start.
+      // message) — the switch changed WHICH model answers, not what it was handed.
       await sawLine(
         "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
@@ -3229,7 +3215,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // Same poison as the live-switch test: identity=GPT OSS 120B is already in stdout.
       await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
       await new Promise((resolve) => setTimeout(resolve, 100));
