@@ -5,33 +5,19 @@ alwaysApply: true
 
 # Git workflow
 
-## Feature branches + PRs, not direct pushes to main
-Starting 2026-08-02 (user directive): new work lands via a feature branch and a pull
-request, not a direct push to `main`. When an implementer's work is verified and ready
-to land, push that branch to `origin` and open a PR instead of fast-forward-merging
-into local `main` and pushing `main` directly.
+New work lands via a feature branch and a pull request, not a direct push to `main`.
+When the work is verified, push the branch and open a PR. Do not fast-forward local
+`main` and push it.
 
-**Why:** `main` already has a GitHub branch-protection rule requiring PRs
-("Changes must be made through a pull request") — the direct push that landed Stage 3's
-12 commits only succeeded because it silently bypassed that rule (owner-level bypass
-permission). Confirmed with the user afterward this shouldn't be the normal path going
-forward.
+Feature and bugfix work is pstack (`/poteto-mode`), including Opening a PR. Gates
+still run. Default review is `/interrogate` + `/no-comments`, plus `/blast-radius`
+before the PR. Thermo-nuclear is on-demand.
 
-**How to apply:** Feature/bugfix work is pstack (`/poteto-mode`), including Opening a
-PR. Gates still run. Default review is `/interrogate` + `/no-comments`, plus
-`/blast-radius` before the PR. Thermo-nuclear stays on-demand (user-triggered).
-Push the branch and open the PR; do not merge locally. Naming: a descriptive
-branch name derived from the work (e.g. `feat/<slug>`) is reasonable.
+Do not merge the PR. Hand off after it is open.
+
+Branch names: a descriptive slug (e.g. `feat/<slug>`).
 
 ## PR review
-The official Claude GitHub App's managed "Code Review" product is not installed
-(user directive, 2026-08-02).
 
 Default in-session review is pstack `/interrogate` (and `/no-comments` before the PR).
-`/code-review` remains available as a user-triggered pass.
-Thermo-nuclear is user-triggered, not dispatched by default.
-
-**Open, not yet resolved:** whether the conductor merges a PR itself once gates +
-pstack review pass, or always leaves GitHub merge for the human. Default until told
-otherwise: do NOT merge PRs yourself — open them, then stop and hand off. Check this
-file for whether that's been settled explicitly before assuming otherwise.
+`/code-review` is user-triggered. Thermo-nuclear is user-triggered.

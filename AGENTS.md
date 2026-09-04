@@ -4,12 +4,9 @@ Guidance for AI agents working in this repository.
 
 ## What this is
 
-seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. This tree is the harness only.
-
-Roadmap, specs, architecture, constitution, and ADRs live in the personal
-`lzvxck/seri-agent` repo. Hosted accounts, billing, and the product sites live
-there too. Do not paste those contents here.
+This repository is the seri CLI harness. It ships as the `seri` binary, written in
+TypeScript on Bun. Work here is `apps/cli` and the packages that binary needs
+(`packages/daemon-client`, `packages/model-catalog`, `packages/plans`).
 
 ## Scope: code-first, not code-only
 
@@ -89,8 +86,7 @@ free; if a Ctrl-C already spent it (the paragraph above), quitting has nothing l
 with and escalates straight to the fatal path instead, the same as a second Ctrl-C would — no
 summary, no unwind, the process dies by signal.
 
-**`--max-turns` means something different in the TUI (finding 8, thermo-nuclear structural
-review, round 6): a per-task budget, not a per-session one.** `driveLoop` is called fresh for
+**`--max-turns` in the TUI is a per-task budget, not a per-session one.** `driveLoop` is called fresh for
 every submitted task in an interactive session (`runTui`'s own `runTurn`), each call getting the
 same `maxIterations: maxTurns` passed at startup — so a session that submits five tasks gets up to
 `maxTurns` model turns for EACH of them, not `maxTurns` total across the whole session, unlike the
@@ -130,11 +126,11 @@ gets a real PowerShell; bash is opt-in via Git Bash detection). `edit` is a 3-ti
 match cascade (exact → line-trimmed → whitespace-normalized) with a
 disproportionate-match guard against replacing far more than was asked for.
 
-**Provider**: Vercel AI SDK, five providers — Groq (`apps/cli/src/provider/groq.ts`,
-`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement behind that
-default lives in `lzvxck/seri-agent`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
-`compatibility: "strict"`), and native Anthropic/OpenAI/Google
-(`apps/cli/src/provider/{anthropic,openai,google}.ts`) — `SERI_PROVIDER` (default `groq`) names
+**Provider**: Vercel AI SDK, six providers — Groq (`apps/cli/src/provider/groq.ts`,
+`openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`), OpenRouter
+(`apps/cli/src/provider/openrouter.ts`, `compatibility: "strict"`), native
+Anthropic/OpenAI/Google (`apps/cli/src/provider/{anthropic,openai,google}.ts`), and xAI
+(`apps/cli/src/provider/xai.ts`). `SERI_PROVIDER` (default `groq`) names
 which one `SERI_MODEL` is read against. A new session starts on whichever (model, provider) pair
 was last confirmed by a real turn — the built-in Groq default the first time, or a persisted
 `/model` pick after that. Switching, mid-session, is the in-TUI `/model` picker
@@ -156,13 +152,13 @@ provider has a key, and a reroute is announced once per turn in the transcript. 
 shows every route one model is reachable through, adjacently, with a `your key`/`no key` column.
 `/setup` (inside the TUI) lists, adds, replaces and removes a BYOK key per provider, with one lightweight `generateText` probe rejecting a key
 only on a 401/403; everything else stores it anyway with a warning, since an unverifiable-but-wrong
-key still fails loudly on first real use, same as before this existed. All five providers' model metadata (context
+key still fails loudly on first real use, same as before this existed. All six providers' model metadata (context
 window, pricing, tool-call/reasoning support) comes from a models.dev-sourced catalog
 (`packages/model-catalog`, wrapped for the CLI in `apps/cli/src/provider/catalog.ts`), fetched
 live with a bundled fallback manifest (`catalog-manifest.json`) for a failed fetch or
 `SERI_DISABLE_MODELS_FETCH`. A run's dollar cost is reported with its provenance
 (`apps/cli/src/provider/cost.ts`'s `CostReport`) — provider-reported `actual` for OpenRouter,
-catalog-computed `estimated` for the other four (`reportFromCatalogPricing`), printed with a
+catalog-computed `estimated` for the other five (`reportFromCatalogPricing`), printed with a
 visibly different line for each. API keys resolve from env var first, then
 `~/.seri/config.json` — see
 `apps/cli/src/config/paths.ts` / `apps/cli/src/config/config.ts`. A non-default profile
@@ -197,9 +193,8 @@ evaluate, and improve autonomous software engineering agents.
 ## Notes for agents
 
 - Conductor is pstack (`/poteto-mode`): Feature or Bug fix, including Opening a PR.
-  See `.cursor/rules/pstack.mdc`. Overlay removed (ADR 0014). Specs and ADRs live
-  in `lzvxck/seri-agent`.
+  See `.cursor/rules/pstack.mdc`.
 - `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
-- Feature work lands via a branch + PR (`main` has branch protection), not direct
-  pushes — see `.claude/rules/git-workflow.md` if present.
+- Feature work lands via a branch + PR (`main` has branch protection), not a
+  direct push. Do not merge the PR.
