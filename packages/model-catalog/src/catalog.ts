@@ -23,6 +23,8 @@ export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
   "xai",
 ];
 
+export const GATEWAY_PROVIDER: ModelProvider = "openrouter";
+
 type RawModel = {
   id: string;
   name: string;

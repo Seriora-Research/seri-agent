@@ -1,6 +1,7 @@
 export {
   CATALOG_PROVIDERS,
   findCatalogEntry,
+  GATEWAY_PROVIDER,
   isZeroPriceEntry,
   loadCatalog,
   resetCatalogCache,

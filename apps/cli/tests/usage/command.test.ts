@@ -80,6 +80,8 @@ describe("runUsageCommand", () => {
     });
     expect(lines.join("\n")).toContain("Hosted  Pro");
     expect(lines.join("\n")).toContain("Included this month");
+    expect(lines.join("\n")).toContain("$1.00 of $20 in credits");
+    expect(lines.join("\n")).not.toContain("$15.00");
   });
 });
 

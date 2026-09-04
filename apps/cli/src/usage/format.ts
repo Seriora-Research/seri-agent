@@ -1,3 +1,5 @@
+import { isPaidPlan, PLAN_MONTHLY_USD } from "@seri/plans";
+
 import type { UsageReport } from "./report";
 
 export type FormatUsageOpts = {
@@ -85,12 +87,16 @@ export function usagePanelLines(report: UsageReport, opts: FormatUsageOpts = {})
   lines.push(`Hosted  ${planLabel}`);
   lines.push("");
 
-  const share = quotaUsedShare(report.quota.used, report.quota.included);
+  const credits = isPaidPlan(report.plan) ? PLAN_MONTHLY_USD[report.plan] : 0;
+  const share =
+    report.quota.metric === "usd"
+      ? quotaUsedShare(report.quota.used, credits)
+      : quotaUsedShare(report.quota.used, report.quota.included);
   if (report.quota.metric === "usd") {
     lines.push("Included this month");
     lines.push(`${meterBar(share)}  ${formatShare(share)} used`);
     lines.push(
-      `${usd(report.quota.used)} of ${usd(report.quota.included)}  resets ${resetLabel(report.window.end)}`,
+      `${usd(report.quota.used)} of $${credits} in credits  resets ${resetLabel(report.window.end)}`,
     );
     lines.push(paceLine(report));
     lines.push("");

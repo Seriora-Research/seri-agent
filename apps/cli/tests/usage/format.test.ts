@@ -65,8 +65,9 @@ describe("formatUsageReport", () => {
     const text = formatUsageReport(paid);
     expect(text).toContain("Hosted  Pro");
     expect(text).toContain("Included this month");
-    expect(text).toContain("33% used");
-    expect(text).toContain("$5.00 of $15.00");
+    expect(text).toContain("25% used");
+    expect(text).toContain("$5.00 of $20 in credits");
+    expect(text).not.toContain("$15.00");
     expect(text).toContain("resets 1 Sep 2026 UTC");
     expect(text).toContain("At this pace you hit the cap on 2026-08-29.");
     expect(text).toContain("openai/gpt-4o");
@@ -122,5 +123,6 @@ describe("formatUsageReport", () => {
     expect(text).toContain("resets 17 Aug 2026 UTC");
     expect(text).not.toContain("Included this month");
     expect(text).not.toContain("$5.00 of $15.00");
+    expect(text).not.toContain("in credits");
   });
 });
