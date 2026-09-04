@@ -3059,7 +3059,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-multiroute.mjs");
     writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const { child, sawLine, lastFrame } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("done ·");
@@ -3076,10 +3076,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // which also contains this substring).
       child.stdin?.write("claude-sonnet-5");
       await sawLine("claude-sonnet-5");
-      // Both routes visible — the actual proof decideModelPickerOpen's own unit tests can't give:
-      // a real picker, on a real pty, showing both rows for one filtered query.
-      await sawLine("anthropic");
-      await sawLine("openrouter");
+      // This fixture has GROQ_API_KEY only, so both rows are keyless. formatRouteLabel paints
+      // those as "no key", not the provider name.
+      await sawLine("no key");
+      expect(lastFrame().split("Claude Sonnet 5").length - 1).toBeGreaterThanOrEqual(2);
 
       // byRoutePriority (D2) sorts native before aggregator WITHIN a route group, so the
       // Anthropic row is already the top/default-selected one for this filtered query — no Down
@@ -3403,7 +3403,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // so it is already the highlighted row this Enter picks, same as that test's own comment explains.
       child.stdin?.write("claude-sonnet-5");
       await sawLine("claude-sonnet-5");
-      await sawLine("anthropic");
+      await sawLine("no key");
       child.stdin?.write("\r");
       // The mandatory wait after any keypress that swaps the mounted component (picker -> input
       // box) — childScriptModelSwitch's own test has the full measured story for this.
