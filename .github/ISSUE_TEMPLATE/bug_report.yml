@@ -7,7 +7,7 @@ body:
       value: |
         If the bug has security impact — the permission gate, API keys, checkpoints
         writing outside the shadow repo, the installers — **stop and read
-        [SECURITY.md](https://github.com/lzvxck/seri-agent/blob/main/SECURITY.md)**
+        [SECURITY.md](https://github.com/Seriora-Research/seri-agent/blob/main/SECURITY.md)**
         instead. Don't file it here.
 
   - type: input

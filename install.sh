@@ -4,7 +4,7 @@
 # Set SERI_VERSION=v0.1.0 to install a specific release instead of the latest one.
 set -euo pipefail
 
-REPO="lzvxck/seri-agent"
+REPO="Seriora-Research/seri-agent"
 INSTALL_DIR="$HOME/.local/bin"
 
 os="$(uname -s)"

@@ -8,7 +8,7 @@ change needs to clear before it can land.
 You need [Bun](https://bun.com) 1.3.14 or later. Nothing else — no Node, no global tooling.
 
 ```sh
-git clone https://github.com/lzvxck/seri-agent.git
+git clone https://github.com/Seriora-Research/seri-agent.git
 cd seri-agent
 bun install
 ```

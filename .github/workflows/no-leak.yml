@@ -1,0 +1,27 @@
+name: no-leak
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fail if a forbidden path is in HEAD or the worktree
+        run: |
+          set -euo pipefail
+          leaked="$(git ls-tree -r HEAD --name-only | grep -E '^(docs/|apps/server/|apps/portal/|apps/web/|apps/lab/|apps/docs/|packages/provisioning/|packages/ui/|packages/copy-policy/|supabase/)' || true)"
+          if [ -n "$leaked" ]; then
+            echo "$leaked"
+            exit 1
+          fi
+          test ! -e docs
+          test ! -e apps/server
+          test ! -e supabase

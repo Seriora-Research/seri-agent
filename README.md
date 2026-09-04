@@ -1,7 +1,7 @@
 # seri
 
-[![CI](https://github.com/lzvxck/seri-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/lzvxck/seri-agent/actions/workflows/ci.yml)
-[![License](https://img.shields.io/github/license/lzvxck/seri-agent)](./LICENSE)
+[![CI](https://github.com/Seriora-Research/seri-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Seriora-Research/seri-agent/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/Seriora-Research/seri-agent)](./LICENSE)
 
 seri is a cross-platform coding-agent CLI. It ships as a single `seri` binary — no runtime to
 install — written in TypeScript on [Bun](https://bun.com), and runs natively on Windows, macOS,
@@ -114,7 +114,7 @@ required. Open a new terminal afterwards so the `PATH` change takes effect.
 ### Without piping to a shell
 
 If you'd rather not run a script straight from the internet, download the binary for your
-platform from [Releases](https://github.com/lzvxck/seri-agent/releases), make it
+platform from [Releases](https://github.com/Seriora-Research/seri-agent/releases), make it
 executable, and put it somewhere on your `PATH`. Both install scripts are short enough to
 read first, and both verify the download against the `SHA256SUMS` file published with each
 release — that catches a truncated or corrupted download, not a compromised release.

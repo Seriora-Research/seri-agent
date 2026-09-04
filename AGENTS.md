@@ -5,34 +5,25 @@ Guidance for AI agents working in this repository.
 ## What this is
 
 seri is a cross-platform coding-agent CLI (ships as the `seri` binary), written in
-TypeScript on Bun. `docs/README.md` is the map; the short version:
+TypeScript on Bun. This tree is the harness only.
 
-- `docs/ROADMAP.md` — **the single source of stage state.** What is built, what is next.
-  Nothing else records status.
-- `docs/specs/<NNN>-<slug>/` — one directory per unit of work: the reasoning, the scope
-  and the acceptance criteria. Cite these by `#anchor`, never by line number.
-- `docs/ARCHITECTURE.md` — what the system is, present tense.
-- `docs/CONSTITUTION.md` — what no design may violate. Read before proposing one.
-- `docs/decisions/` — why a mechanism beat its alternative, one ADR per file.
-
-Hosted accounts and billing sit on top of the BYOK-only core: auth shipped first, then the
-hosted gateway (`docs/specs/022-hosted-gateway/`).
+Roadmap, specs, architecture, constitution, and ADRs live in the personal
+`lzvxck/seri-agent` repo. Hosted accounts, billing, and the product sites live
+there too. Do not paste those contents here.
 
 ## Scope: code-first, not code-only
 
 Coding is the primary use and the only one this release ships for, but it is not the
-boundary of the product — seri is intended to extend into general assistant work
-(constraint #3, `docs/CONSTITUTION.md`). It constrains what you may assume, not what
-you may build: don't reject a design for being assistant-shaped (a design only
-coherent inside a repository is what's actually ruled out — there's no `AGENTS.md`
-outside one). Don't broaden v1 either — assistant surfaces start at the daemon,
-`docs/specs/018-daemon/` (post-release); everything up to the release gate
-(`docs/specs/017-distribution/`) stays a coding agent.
+boundary of the product — seri is intended to extend into general assistant work.
+It constrains what you may assume, not what you may build: don't reject a design for
+being assistant-shaped (a design only coherent inside a repository is what's actually
+ruled out — there's no `AGENTS.md` outside one). Don't broaden v1 either — assistant
+surfaces start at the daemon (post-release); everything up to the release gate stays
+a coding agent.
 
 ## Commands
 
-- `bun run dev -- <args>` — run the CLI from source (CLI only; `bun run dev:server`
-  for `apps/server`)
+- `bun run dev -- <args>` — run the CLI from source
 - `bun test` — run the test suite (bun's built-in runner)
 - `bun test path/to/file.test.ts` — run a single test file
 - `bun run typecheck` (alias `lint`) — `tsc --noEmit`
@@ -141,7 +132,7 @@ disproportionate-match guard against replacing far more than was asked for.
 
 **Provider**: Vercel AI SDK, five providers — Groq (`apps/cli/src/provider/groq.ts`,
 `openai/gpt-oss-120b` default, any Groq model id via `SERI_MODEL`; the measurement behind that
-default is in `docs/research/2026-08-prompt-routing.md`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
+default lives in `lzvxck/seri-agent`), OpenRouter (`apps/cli/src/provider/openrouter.ts`,
 `compatibility: "strict"`), and native Anthropic/OpenAI/Google
 (`apps/cli/src/provider/{anthropic,openai,google}.ts`) — `SERI_PROVIDER` (default `groq`) names
 which one `SERI_MODEL` is read against. A new session starts on whichever (model, provider) pair
@@ -206,8 +197,8 @@ evaluate, and improve autonomous software engineering agents.
 ## Notes for agents
 
 - Conductor is pstack (`/poteto-mode`): Feature or Bug fix, including Opening a PR.
-  See `.cursor/rules/pstack.mdc` and `docs/decisions/0010-pstack-is-the-conductor.md`
-  (overlay removed by `docs/decisions/0014-pstack-only-no-engineering-loop.md`).
+  See `.cursor/rules/pstack.mdc`. Overlay removed (ADR 0014). Specs and ADRs live
+  in `lzvxck/seri-agent`.
 - `apps/cli/src/tools/rg-vendored.bin` is a vendored ripgrep binary fetched by
   `postinstall`/`vendorRipgrep.ts`; don't hand-edit it.
 - Feature work lands via a branch + PR (`main` has branch protection), not direct

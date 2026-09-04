@@ -5,7 +5,7 @@
 **Do not open a public issue for a security report.**
 
 Report privately through
-[GitHub's private vulnerability reporting](https://github.com/lzvxck/seri-agent/security/advisories/new),
+[GitHub's private vulnerability reporting](https://github.com/Seriora-Research/seri-agent/security/advisories/new),
 or by email to **larce@seriora.ai**.
 
 Please include the version (`seri --version`), your OS, what an attacker can achieve,

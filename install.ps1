@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 # Windows PowerShell renders a progress bar per chunk, which dominates a 100 MB download.
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = 'lzvxck/seri-agent'
+$repo = 'Seriora-Research/seri-agent'
 $asset = 'seri-windows-x64.exe'
 
 # PROCESSOR_ARCHITEW6432 is set when a 32-bit or x64 process runs under emulation, so it is
