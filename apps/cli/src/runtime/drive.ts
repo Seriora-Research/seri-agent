@@ -131,6 +131,8 @@ export type DriveLoopOptions = {
   // fatal). The daemon sets this false so a Ctrl-C at `seri serve` is not stolen by an in-flight
   // turn's slot.
   bindProcessCancel?: boolean;
+  // Default true: wrap tools with dispatch_subagents and the parent-only `todo` checklist.
+  // Scheduled runs pass false so neither tool exists on the unattended path.
   composeSubagents?: boolean;
   // Scheduled runs omit this child. maybeRunArchivist's only tool is memory_write, which is
   // not in the read-only scheduled toolset. Default remains true for attended CLI and TUI.

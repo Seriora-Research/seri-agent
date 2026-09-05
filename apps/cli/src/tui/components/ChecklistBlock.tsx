@@ -1,4 +1,6 @@
 /** @jsxImportSource @opentui/react */
+// Last successful parent `todo` snapshot. Draws nothing when empty, so the flexGrow transcript
+// above does not shrink for a header with no rows. No keyboard: this is paint, not an editor.
 import { formatTodoLines, type TodoList } from "../../todo/list";
 import { theme } from "../theme/theme";
 

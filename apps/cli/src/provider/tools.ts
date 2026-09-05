@@ -177,11 +177,10 @@ export type ToolClass = "read" | "write";
 // the gate must not block them under the plan-mode read-only getter, but they must run sequentially
 // rather than in the concurrent-read batch.
 //
-// `skill` is the literal rather than an import of SKILL_TOOL_NAME (skills/tool.ts) because
-// `provider/` sits below `skills/` in the module graph, and the foundational modules here do not
+// `skill` and `todo` are literals rather than imports of SKILL_TOOL_NAME / TODO_TOOL_NAME because
+// `provider/` sits below those modules in the graph, and the foundational modules here do not
 // import the extension modules layered on top of them. The drift a literal invites is guarded in
-// tests/provider/tools.test.ts, which imports the constant and asserts the two still agree — a
-// cross-module import that costs nothing in a test.
+// tests/provider/tools.test.ts, which imports the constants and asserts they still agree.
 const READ_CLASS_TOOL_NAMES = new Set<string>([
   ...READ_ONLY_TOOL_NAMES,
   DISPATCH_TOOL_NAME,

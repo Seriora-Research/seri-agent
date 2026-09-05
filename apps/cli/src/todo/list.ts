@@ -58,6 +58,8 @@ function jsonToolResultValue(part: unknown): unknown {
   return payload.value;
 }
 
+// Successful `todo` tool-result JSON, not tool-call input. A denied or thrown call still stores a
+// tool-call whose args parse; using those would paint a list that never landed.
 export function todoListFromMessages(messages: readonly ModelMessage[]): TodoList {
   let list: TodoList = [];
   for (const message of messages) {
