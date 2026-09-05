@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
 import { isBashAvailable, runBash } from "../tools/bash";
@@ -11,9 +11,12 @@ import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { writeFile } from "../tools/writeFile";
 
 // Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
-// sessions and never calls chdir, so each toolset has to carry its own directory.
-function resolveAgainstCwd(cwd: string, path: string): string {
-  return isAbsolute(path) ? path : resolve(cwd, path);
+// sessions and never calls chdir, so each toolset has to carry its own directory. Always
+// `resolve`, including for an absolute input: `isAbsolute ? path : resolve(cwd, path)` would
+// leave `/abs/other/../secret` un-normalized, and the permission matcher has to judge the
+// same string the tool will probe.
+export function resolveAgainstCwd(cwd: string, path: string): string {
+  return resolve(cwd, path);
 }
 
 export function createToolDefinitions(cwd: string) {

@@ -555,7 +555,7 @@ describe("driveLoop directDispatch", () => {
   test("a child's runLoop receives the prepared path denials and cwd", async () => {
     const prepared = preparedStub();
     prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
-    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] };
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
     await driveLoop(
       prepared,
       unusedCtx(prepared.session.cwd),
@@ -575,14 +575,16 @@ describe("driveLoop directDispatch", () => {
       undefined,
       { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
     );
-    expect(received.pathDenials).toEqual([{ tool: "glob", pattern: "/secret/**" }]);
-    expect(received.cwd).toBe(prepared.worktree);
+    expect(received).toEqual({
+      pathDenials: [{ tool: "glob", pattern: "/secret/**" }],
+      cwd: prepared.worktree,
+    });
   });
 
   test("the parent runLoop receives session cwd with the path denials", async () => {
     const prepared = preparedStub();
     prepared.pathDenials = [{ tool: "read_file", pattern: ".env" }];
-    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] };
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
     await driveLoop(
       prepared,
       unusedCtx(prepared.session.cwd),
@@ -600,8 +602,10 @@ describe("driveLoop directDispatch", () => {
       async () => "no",
       createArchivistState(prepared.session),
     );
-    expect(received.pathDenials).toEqual([{ tool: "read_file", pattern: ".env" }]);
-    expect(received.cwd).toBe(prepared.session.cwd);
+    expect(received).toEqual({
+      pathDenials: [{ tool: "read_file", pattern: ".env" }],
+      cwd: prepared.session.cwd,
+    });
   });
 });
 

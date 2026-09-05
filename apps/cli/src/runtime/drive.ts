@@ -512,6 +512,7 @@ export async function driveLoop(
           // below.
           allowedTools,
           pathDenials,
+          cwd: session.cwd,
           // The `mcp` tool composed above is one ToolSet key standing in for every tool on every
           // configured server — mcpCallSubject is what tells the gate, the approval prompt and
           // every rendered event which one a given call actually means, resolving to the umbrella

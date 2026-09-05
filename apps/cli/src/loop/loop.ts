@@ -9,7 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
-import { checkPermission, type PathDenial, type PermissionMode } from "../gate/gate";
+import { checkPermission, denialBlocks, type PathDenial, type PermissionMode } from "../gate/gate";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
@@ -205,10 +205,12 @@ async function decidePermission(
   approvalPrompt: ApprovalPrompt | undefined,
   signal: AbortSignal | undefined,
   denials: readonly PathDenial[] | undefined,
+  cwd: string | undefined,
 ): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
   const permission = checkPermission(toolName, mode, allowedTools, undefined, {
     input,
     denials,
+    cwd,
   });
   if (permission === "allow") return "allow";
   if (permission === "block") return "deny-blocked";
@@ -249,16 +251,17 @@ export async function* runLoop(opts: {
     executed: readonly { toolName: string; input: unknown }[],
   ) => string | undefined;
   /**
-   * Consulted before the gate, per call, with the resolved `subject` rather than `call.toolName` —
-   * the rule this file already states for every string a model or a human reads applies to a
-   * consumer's matcher too, and one reading the raw ToolSet key would see every MCP call as the
-   * literal "mcp".
+   * Consulted after a path deny and before the rest of the gate, per call, with the resolved
+   * `subject` rather than `call.toolName` — the rule this file already states for every string a
+   * model or a human reads applies to a consumer's matcher too, and one reading the raw ToolSet
+   * key would see every MCP call as the literal "mcp".
    *
-   * Ahead of the gate, and that ordering is load-bearing rather than incidental: it is the argument
-   * the unknown-tool guard's own comment makes one branch further down. A human must never be asked
-   * to approve a call that is about to be refused anyway, and a block reached only after the prompt
-   * could be answered "always" and never asked about again — which is the whole determinism claim
-   * gone.
+   * A path deny is a refusal. A PreToolUse script that stats `tool_input.path` would be the same
+   * existence leak this gate exists to stop, one layer up, so denials run first. Ahead of the
+   * approval prompt, and that ordering is load-bearing rather than incidental: a human must never
+   * be asked to approve a call that is about to be refused anyway, and a block reached only after
+   * the prompt could be answered "always" and never asked about again — which is the whole
+   * determinism claim gone.
    *
    * Asynchronous, where onToolPhaseEnd above is deliberately synchronous, and it leans on the same
    * mitigation that one relies on: a consumer with nothing to say returns undefined from its own
@@ -750,6 +753,24 @@ export async function* runLoop(opts: {
       // can disagree; telling the model a tool has two different names within one turn is an
       // invitation to retry under the wrong one.
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
+      const pathDenied = denialBlocks(opts.pathDenials, subject, call.input, opts.cwd);
+
+      if (pathDenied) {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        yield { type: "permission-denied", name: subject, reason: "blocked" };
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: {
+            type: "execution-denied",
+            reason:
+              `Tool "${subject}" was not permitted to run because the path matched a deny rule. ` +
+              `Do not retry this call, including with another read tool on the same path.`,
+          },
+        });
+        continue;
+      }
 
       if (opts.onBeforeTool !== undefined) {
         let hook: { readonly block?: string; readonly errors?: readonly string[] };
@@ -801,6 +822,7 @@ export async function* runLoop(opts: {
         opts.approvalPrompt,
         opts.signal,
         opts.pathDenials,
+        opts.cwd,
       );
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
