@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -13,7 +14,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
@@ -5585,11 +5585,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Doubles as the liveState-desync guard: empty `/plan` reads `liveState.plan` (cli.ts's own
-    // dispatch funnel), the same state Ctrl+O's `onTogglePlan` just advanced — this can only pass
-    // if the keypress reached `liveState`, not just this component's own render. A local
-    // `plan-on` would leave `liveState.plan.kind === "off"`, so the following empty `/plan`
-    // would turn the overlay ON again instead of off.
     test("ctrl+o and empty /plan share one overlay, keeping liveState in step with the indicator", async () => {
       const scriptPath = join(dir, "child-plan-toggle.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));

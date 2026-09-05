@@ -283,10 +283,6 @@ export type AppProps = {
   // mode while this component's own state (and the indicator it renders) already showed the new
   // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
   onCycleMode?: () => void;
-  // Empty `/plan`'s own resolution — a prop for the same liveState reason `onCycleMode` states
-  // above. App dispatching `plan-on`/`plan-off` through React's reducer would leave cli.ts's
-  // synchronous `liveState.plan` stale, and `getPermissionMode()` would keep allowing writes
-  // while the indicator already read plan mode on.
   onTogglePlan?: () => void;
   // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
   // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
@@ -609,15 +605,17 @@ export function App({
     effortTier,
   );
   const modeHint = planOn ? PLAN_MODE_LEAVE_HINT : MODE_CYCLE_HINT;
-  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
+  const showModeHint = modeRowHintVisible(
+    remaining,
+    indicatorText.length,
+    modeDetail.length,
+    modeHint.length,
+  );
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
   // independent registration is the idiomatic way to keep two unrelated concerns from having to
   // reason about each other's ordering/guards, the same shape InputBox's own handler already uses.
-  // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is pinned
-  // to bypass regardless of what a cycle would compute, so a functioning binding here would
-  // silently mutate and persist a session field the gate is already ignoring.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
     if (isShiftTabModeCycle(key) && skipPermissions !== true && !planOn) onCycleMode?.();
@@ -1028,9 +1026,6 @@ export function App({
         />
       )}
       <box flexDirection="row" justifyContent="space-between">
-        {/* No `gap` — all spacing between these three is carried inside the strings themselves
-        (each hint's own leading space, `modeDetail`'s own leading two spaces), so the mode
-        hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
           {showModeHint && <text fg={theme.muted}>{modeHint}</text>}

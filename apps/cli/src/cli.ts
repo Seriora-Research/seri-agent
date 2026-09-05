@@ -2777,9 +2777,6 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
-  // Empty `/plan`. App.tsx's own comment on `onTogglePlan` explains why this is a prop, not a
-  // dispatch app.tsx makes itself: `getPermissionMode()` reads `liveState.plan`, and only this
-  // file's dispatch funnel advances `liveState`.
   function onTogglePlan(): void {
     tuiHandlers["/plan"]([]);
   }
