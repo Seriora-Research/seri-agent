@@ -46,7 +46,7 @@ CLI-facing knob for `runLoop`'s own `maxIterations` option; the CLI also sets a 
 `runLoop` options that carry routing/cost/reasoning context rather than user-facing flags
 (`provider`, `modelId`, `catalog`, `reasoningEffort`) — see `runLoop`'s own opts type
 (`apps/cli/src/loop/loop.ts`) for the full list. After `--help`/`--version`/`--selftest`, argv
-only launches: `seri serve`, `seri exec`, and a task (or a TTY idle TUI). `login`/`signup`/`logout`,
+only launches: `seri serve`, `seri exec`, `seri doctor`, `seri update`, and a task (or a TTY idle TUI). `login`/`signup`/`logout`,
 `config`, `permissions`, `usage`, and any `seri /slash` are not verbs. A positional `/foo` is
 prompt text. `--continue`, `--resume`, `--max-turns`, `--profile`,
 `--dangerously-skip-permissions`, and `--` stay.

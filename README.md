@@ -42,7 +42,8 @@ repository; general assistant work is a planned direction.
   messages so the conversation fits the context window. Local trajectory recording
   (`/trajectory`) is on by default — the research substrate, not an evolution loop.
 - **A local daemon.** `seri serve` starts a loopback daemon for the profile; `seri exec <task>`
-  runs one task through it.
+  runs one task through it. `seri doctor` prints a local health report. `seri update` replaces an
+  installed binary from GitHub Releases.
 
 ## Providers and how you pay
 
@@ -110,6 +111,10 @@ irm https://seri-agent.seriora.ai/install.ps1 | iex
 
 Installs to `~\.seri\bin` and adds it to your user `PATH`. No admin rights
 required. Open a new terminal afterwards so the `PATH` change takes effect.
+
+Refresh an existing install with `seri update`. That talks to GitHub Releases for this
+repo, verifies `SHA256SUMS`, and replaces the binary you ran. It refuses a source checkout
+(`bun run dev`). Pin a tag with `SERI_VERSION=v0.1.0` the same way the install scripts do.
 
 ### Without piping to a shell
 

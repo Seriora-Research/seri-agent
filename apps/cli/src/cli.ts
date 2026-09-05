@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -77,6 +75,9 @@ import {
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
 import type { RunScheduled } from "./daemon/scheduler";
+import { runDoctorChecks } from "./doctor/checks";
+import { doctorExitCode, printDoctorReport } from "./doctor/report";
+import { runUpdate } from "./update/run";
 import {
   type ExecuteTurn,
   type StartedDaemon,
@@ -161,7 +162,7 @@ import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
 import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
 import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
-import { resolveRg, rgVersion } from "./tools/runRipgrep";
+import { probeRipgrep } from "./tools/selftest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
@@ -273,6 +274,8 @@ export type CliDeps = {
   // and TUI `/config`. Same shape as sessionsDir/checkpointsDir, defaulting to getConfigDir().
   permissionsDir?: string;
   grep?: typeof grepReal;
+  execPath?: string;
+  smokeUpdate?: (binaryPath: string) => Promise<void>;
   createInterface?: () => Interface;
   // Whether to mount the Ink TUI instead of the piped/non-interactive path — read from a real
   // process.stdout.isTTY in exactly one place, the import.meta.main entrypoint at the bottom of
@@ -1017,20 +1020,9 @@ function handleInfoFlags(values: ParsedArgs["values"]): number | undefined {
 // runs this on every platform. Greps a throwaway file rather than the cwd so the result
 // never depends on what happens to be in the directory seri was launched from.
 async function runSelftest(deps: CliDeps): Promise<number> {
-  const grepFn = deps.grep ?? grepReal;
   try {
-    const dir = mkdtempSync(join(tmpdir(), "seri-selftest-"));
-    try {
-      writeFileSync(join(dir, "probe.txt"), "seri selftest probe\n");
-      const { matches = [] } = await grepFn("selftest probe", { path: dir, mode: "content" });
-      if (matches.length !== 1)
-        throw new Error(`ripgrep returned ${matches.length} matches, expected 1`);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-    // Names the version, because "it worked" leaves the one thing a cross-compiled artifact can
-    // get wrong — which rg was actually vendored for this target — unsaid.
-    console.log(`selftest ok: ripgrep ${rgVersion(resolveRg())}`);
+    const version = await probeRipgrep(deps.grep ?? grepReal);
+    console.log(`selftest ok: ripgrep ${version}`);
     return 0;
   } catch (err) {
     console.error(messageOf(err));
@@ -1132,6 +1124,52 @@ async function handleExecCommand(
     unregisterCancel();
   }
   return exitCode;
+}
+
+async function handleDoctorCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "doctor") return undefined;
+  if (positionals.length !== 1) {
+    return usageError("seri doctor takes no arguments");
+  }
+  const checks = await runDoctorChecks({
+    grep: deps.grep ?? grepReal,
+    fetch: deps.fetch ?? fetch,
+    execPath: deps.execPath ?? process.execPath,
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    cwd: process.cwd(),
+    configDir: deps.authConfigDir ?? getConfigDir(),
+  });
+  printDoctorReport(checks);
+  return doctorExitCode(checks);
+}
+
+async function handleUpdateCommand(
+  positionals: string[],
+  deps: CliDeps,
+): Promise<number | undefined> {
+  if (positionals[0] !== "update") return undefined;
+  if (positionals.length !== 1) {
+    return usageError("seri update takes no arguments");
+  }
+  const result = await runUpdate({
+    fetch: deps.fetch ?? fetch,
+    execPath: deps.execPath ?? process.execPath,
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    version: pkg.version,
+    smoke: deps.smokeUpdate,
+  });
+  for (const line of result.lines) {
+    if (result.code === 0) console.log(line);
+    else console.error(line);
+  }
+  return result.code;
 }
 
 // What the task path needs after serve/exec have had their say. It extends CommandDirs, so it
@@ -3192,6 +3230,12 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
   if (exec !== undefined) return exec;
+
+  const doctor = verbEscaped ? undefined : await handleDoctorCommand(positionals, deps);
+  if (doctor !== undefined) return doctor;
+
+  const updated = verbEscaped ? undefined : await handleUpdateCommand(positionals, deps);
+  if (updated !== undefined) return updated;
 
   const database = new SessionDatabase(configDirForStore(ctx.sessionsDir, "sessions"));
   ctx.database = database;

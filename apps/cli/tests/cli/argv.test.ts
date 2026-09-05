@@ -139,6 +139,8 @@ describe("run (argv and usage errors)", () => {
       expect(usage).toContain("Usage:");
       expect(usage).toContain("seri serve");
       expect(usage).toContain("seri exec");
+      expect(usage).toContain("seri doctor");
+      expect(usage).toContain("seri update");
       expect(usage).not.toContain("seri config");
       expect(usage).not.toContain("seri login");
       expect(usage).not.toContain("seri usage");
@@ -254,7 +256,7 @@ describe("run (argv and usage errors)", () => {
   // The verb-dispatch counterpart of the flag-escaping tests above: `--` has to shield "serve" and
   // "exec" themselves, not just flag-shaped words after them, or `seri -- serve` starts the daemon
   // instead of sending "serve" as task text — the bug this pins (round 1/2 of PR 210's review).
-  test.each(["serve", "exec"])(
+  test.each(["serve", "exec", "doctor", "update"])(
     "`seri -- %s` sends the verb as task text instead of dispatching it",
     async (verb) => {
       process.env.GROQ_API_KEY = "fake-test-key";
@@ -471,6 +473,8 @@ describe("run (argv and usage errors)", () => {
     const text = logs.join("\n");
     expect(text).toContain("seri serve");
     expect(text).toContain("seri exec");
+    expect(text).toContain("seri doctor");
+    expect(text).toContain("seri update");
     expect(text).not.toContain("seri config");
     expect(text).not.toContain("seri login");
     expect(text).not.toContain("seri usage");
@@ -495,7 +499,90 @@ describe("run (argv and usage errors)", () => {
 
     expect(code).toBe(0);
     expect(called).toBe(0);
-    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "usage" });
+    expect(capture()?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "usage",
+    });
+  });
+
+  test("`seri doctor` does not create a session or call the model", async () => {
+    delete process.env.GROQ_API_KEY;
+    const { fake, capture } = fakeRunLoop();
+    const grepFn = async () => ({
+      mode: "content" as const,
+      matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+      truncated: false,
+    });
+
+    const { code, logs } = await captureLogs(() =>
+      run(["doctor"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        grep: grepFn,
+        fetch: async () => {
+          throw new Error("doctor must not fetch");
+        },
+      }),
+    );
+
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(logs.join("\n")).toMatch(/\b(ok|fail|warn|info)\b/);
+    expect(code === 0 || code === 1).toBe(true);
+  });
+
+  test("`seri doctor extra` is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const { code } = await captureLogs(() =>
+      run(["doctor", "extra"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`seri update extra` is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const { code } = await captureLogs(() =>
+      run(["update", "extra"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`seri update` does not create a session or call the model", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["update"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        fetch: async () => {
+          throw new Error("update from source must not fetch");
+        },
+      });
+    } finally {
+      console.error = originalError;
+    }
+    expect(code).toBe(1);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(errors.join("\n")).toContain("running from source");
   });
 
   test("`--detail` is an unknown option", async () => {
