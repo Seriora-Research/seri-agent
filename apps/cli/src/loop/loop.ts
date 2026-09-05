@@ -54,7 +54,11 @@ export type LoopEvent =
   // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
   // times, and there is no human anywhere in a hook's path to answer even once. "containment" is
   // the same kind of rail: the harness refused the call, so a human did not say no.
-  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" | "containment" }
+  | {
+      type: "permission-denied";
+      name: string;
+      reason: "blocked" | "declined" | "hook" | "containment";
+    }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
       type: "compacted";
