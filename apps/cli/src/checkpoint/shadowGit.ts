@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { gitArgv } from "./gitArgv";
 
 // spawnSync buffers the child's entire stdout and kills it the moment the buffer fills, and the
 // overflow arrives as `status: null` with an empty stderr — indistinguishable from a crashed git.
@@ -75,7 +76,7 @@ function childEnv(): NodeJS.ProcessEnv {
 type GitResult = { status: number | null; stdout: string; stderr: string };
 
 function spawnGit(args: string[], cwd: string | undefined): GitResult {
-  const result = spawnSync("git", args, {
+  const result = spawnSync("git", gitArgv(args), {
     encoding: "utf8",
     cwd,
     env: childEnv(),
@@ -159,7 +160,7 @@ export function isGitAvailable(): boolean {
 
 function probeGit(): boolean {
   try {
-    return spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true }).status === 0;
+    return spawnGit(["--version"], undefined).status === 0;
   } catch {
     return false;
   }
