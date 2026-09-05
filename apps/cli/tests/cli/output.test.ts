@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  approvalPromptText,
   archivistLine,
   archivistStagedLines,
   archivistStatsLine,
@@ -239,5 +240,27 @@ describe("toolResultLine", () => {
       },
     });
     expect(line).toBe("✓ Dispatched subagents done (1 of 2 tasks)");
+  });
+});
+
+describe("approvalPromptText", () => {
+  test("is the question alone when there is no classifier reason", () => {
+    expect(approvalPromptText("bash", { command: "ls" }, false)).toBe(
+      'Approve bash({"command":"ls"})? [y]es / [N]o ',
+    );
+  });
+
+  test("prefixes a classifier reason on its own line", () => {
+    expect(
+      approvalPromptText("bash", { command: "git push" }, false, "tag push publishes the package"),
+    ).toBe(
+      'Classifier: tag push publishes the package\nApprove bash({"command":"git push"})? [y]es / [N]o ',
+    );
+  });
+
+  test("an empty reason is omitted", () => {
+    expect(approvalPromptText("bash", { command: "ls" }, false, "")).toBe(
+      'Approve bash({"command":"ls"})? [y]es / [N]o ',
+    );
   });
 });

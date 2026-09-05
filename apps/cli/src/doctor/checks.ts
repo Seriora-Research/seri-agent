@@ -12,6 +12,7 @@ import { loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
+import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import {
   formatSandboxDoctorDetail,
   idleSandboxTier,
@@ -33,6 +34,7 @@ export type DoctorDeps = {
   arch: string;
   cwd: string;
   configDir?: string;
+  probeIoUring?: () => IoUringProbe;
 };
 
 export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> {
@@ -51,6 +53,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     sandboxCheck(configDir, deps.cwd, deps.platform),
     sessionStoreCheck(configDir),
     await daemonCheck(configDir, deps.fetch),
+    ioUringDoctorCheck((deps.probeIoUring ?? probeIoUringSetup)(), deps.platform),
   ];
 }
 
@@ -212,6 +215,51 @@ function bashCheck(): CheckResult {
         detail: "bash is not on PATH",
         fix: "install bash or Git Bash to use the bash tool",
       };
+}
+
+function sessionStoreCheck(configDir: string): CheckResult {
+  const path = join(configDir, DATABASE_FILENAME);
+  if (!existsSync(path)) {
+    return { name: "sessions", status: "info", detail: "seri.db is absent" };
+  }
+  let database: SessionDatabase | undefined;
+  try {
+    database = new SessionDatabase(configDir);
+    const count = database.listSessionIds().length;
+    return { name: "sessions", status: "ok", detail: `${count} in ${path}` };
+  } catch (error) {
+    return {
+      name: "sessions",
+      status: "fail",
+      detail: error instanceof Error ? error.message : String(error),
+      fix: "move seri.db aside if it is corrupt",
+    };
+  } finally {
+    database?.close();
+  }
+}
+
+async function daemonCheck(configDir: string, fetchFn: typeof fetch): Promise<CheckResult> {
+  const descriptor = readDaemonDescriptorFile(configDir);
+  if (descriptor === undefined) {
+    return { name: "daemon", status: "info", detail: "not running" };
+  }
+  try {
+    const client = new DaemonClient({
+      endpoint: descriptor.endpoint,
+      token: descriptor.token,
+      fetch: fetchFn,
+    });
+    const health = await client.health();
+    return { name: "daemon", status: "ok", detail: `pid ${health.pid} ${descriptor.endpoint}` };
+  } catch (error) {
+    return {
+      name: "daemon",
+      status: "warn",
+      detail: error instanceof Error ? error.message : String(error),
+      fix: "remove the stale daemon.json or start a new one with seri serve",
+    };
+  }
 }
 
 function sandboxCheck(configDir: string, cwd: string, platform: NodeJS.Platform): CheckResult {

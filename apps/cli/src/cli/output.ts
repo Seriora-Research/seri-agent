@@ -93,10 +93,17 @@ export function truncateArgsDisplay(args: unknown): string {
 // toolResultLine/toolAllowedLine (below) already exist to prevent elsewhere. One shared function
 // instead, used by both. `offersAlways` gates the "[a]lways" option — PERSISTABLE_TOOLS decides
 // it at each call site, not here, so this file stays free of a permissions/store.ts import.
-export function approvalPromptText(toolName: string, args: unknown, offersAlways: boolean): string {
-  return `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
+export function approvalPromptText(
+  toolName: string,
+  args: unknown,
+  offersAlways: boolean,
+  classifierReason?: string,
+): string {
+  const question = `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
     offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"
   } `;
+  if (classifierReason === undefined || classifierReason.length === 0) return question;
+  return `Classifier: ${escapeControlChars(classifierReason)}\n${question}`;
 }
 
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning

@@ -476,6 +476,22 @@ describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/
     });
   });
 
+  test("toggling the standing-deny key from unset writes true, not false", () => {
+    const { actions, dispatch } = actionsCollector();
+    const { onConfigSelect } = createConfigHandlers({
+      dispatch,
+      getPendingConfig: () => undefined,
+      configDir,
+    });
+
+    onConfigSelect("SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES");
+
+    expect(actions).toContainEqual({
+      type: "config-updated",
+      config: { SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES: "true" },
+    });
+  });
+
   test("saving a config value dispatches config-updated with the fresh record", () => {
     const { actions, dispatch } = actionsCollector();
     const { onConfigValueEntered } = createConfigHandlers({

@@ -14,7 +14,6 @@ function asFetch(fn: () => Promise<never>): typeof fetch {
 const originalHome = process.env.HOME;
 const originalGroq = process.env.GROQ_API_KEY;
 const originalDisableFetch = process.env.SERI_DISABLE_MODELS_FETCH;
-const originalAllowUnsandboxed = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
 
 function restoreEnv(key: string, original: string | undefined): void {
   if (original === undefined) delete process.env[key];
@@ -28,7 +27,6 @@ afterEach(() => {
   restoreEnv("HOME", originalHome);
   restoreEnv("GROQ_API_KEY", originalGroq);
   restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableFetch);
-  restoreEnv("SERI_ALLOW_UNSANDBOXED_COMMANDS", originalAllowUnsandboxed);
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
 });
@@ -146,6 +144,84 @@ describe("runDoctorChecks", () => {
     });
     expect(checks.find((check) => check.name === "credentials")?.status).toBe("ok");
     expect(checks.find((check) => check.name === "credentials")?.detail).toContain("groq=env:");
+  });
+
+  test("warns on Linux when the io_uring probe reports allow", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: "linux",
+      arch: "x64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    const ioUring = checks.find((check) => check.name === "io_uring");
+    expect(ioUring).toBeDefined();
+    if (ioUring === undefined) return;
+    expect(ioUring.status).toBe("warn");
+    expect(ioUring.detail).toContain("io_uring_setup");
+    expect(ioUring.detail).toContain("io_uring_enter");
+    expect(ioUring.detail).toContain("io_uring_register");
+    expect(doctorExitCode([ioUring])).toBe(0);
+  });
+
+  test("reports io_uring as info on darwin", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    expect(checks.find((check) => check.name === "io_uring")?.status).toBe("info");
+  });
+
+  test("fails on Linux when the io_uring probe errors", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: "linux",
+      arch: "x64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "error", message: "dlopen failed" }),
+    });
+    const ioUring = checks.find((check) => check.name === "io_uring");
+    expect(ioUring).toBeDefined();
+    if (ioUring === undefined) return;
+    expect(ioUring.status).toBe("fail");
+    expect(ioUring.detail).toBe("dlopen failed");
+    expect(doctorExitCode([ioUring])).toBe(1);
   });
 
   test("includes a sandbox row that names the declared bang tier", async () => {

@@ -111,6 +111,15 @@ export function configBoolean(value: string | undefined): boolean {
   return value !== "false";
 }
 
+export const BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY =
+  "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES";
+
+// Unset and every spelling other than the exact string "true" stay off.
+// configBoolean is value !== "false", so unset would become a standing deny.
+export function standingDenyReadsOutside(value: string | undefined): boolean {
+  return value === "true";
+}
+
 // The ground the TUI paints, or nothing. `#rrggbb` only — `#rgb`, `rgb()` and named colors each
 // cost a validator no caller needs. Everything else, the documented `terminal` spelling included,
 // resolves to undefined and leaves the terminal's own background alone: this runs while the
