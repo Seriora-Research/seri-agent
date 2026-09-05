@@ -482,6 +482,15 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       takesEffectNextRun: true,
     },
   ],
+  [
+    "SERI_ALLOW_UNSANDBOXED_COMMANDS",
+    {
+      label: "Unsandboxed bang",
+      description: "Allow ! shell to leave the OS sandbox. Off refuses it when unsandboxed.",
+      kind: "boolean",
+      takesEffectNextRun: false,
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 

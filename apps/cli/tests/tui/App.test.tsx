@@ -4036,6 +4036,40 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
     });
 
+    test("the mode row does not claim an OS sandbox when confinement was not passed in", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).not.toContain("os sandbox");
+      expect(setup.captureCharFrame()).not.toContain("unsandboxed");
+    });
+
+    test("the mode row names unsandboxed when bang may leave a real OS sandbox", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      try {
+        const { setup } = await connect({ confinementAvailable: true });
+        expect(setup.captureCharFrame()).toContain(" · unsandboxed");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
+    test("the mode row names os sandbox when the strict floor is on and confinement exists", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "false";
+      try {
+        const { setup } = await connect({
+          confinementAvailable: true,
+          config: { SERI_ALLOW_UNSANDBOXED_COMMANDS: "false" },
+        });
+        expect(setup.captureCharFrame()).toContain(" · os sandbox");
+        expect(setup.captureCharFrame()).not.toContain("unsandboxed");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
     test("at 80 columns, the idle mode row keeps the route suffix without wrapping", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "approve-each" }),

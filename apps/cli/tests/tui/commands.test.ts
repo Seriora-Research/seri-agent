@@ -1418,6 +1418,7 @@ describe("decideConfigOpen", () => {
     "SERI_SEED",
     "SERI_OPENROUTER_PROVIDER",
     "SERI_TUI_BACKGROUND",
+    "SERI_ALLOW_UNSANDBOXED_COMMANDS",
   ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -1448,6 +1449,7 @@ describe("decideConfigOpen", () => {
       "SERI_SEED",
       "SERI_OPENROUTER_PROVIDER",
       "SERI_TUI_BACKGROUND",
+      "SERI_ALLOW_UNSANDBOXED_COMMANDS",
     ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });

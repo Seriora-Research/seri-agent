@@ -8,6 +8,7 @@ import {
   getApiKey,
   inspectConfig,
   loadConfig,
+  loadSandboxConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   setConfigValue,
@@ -205,6 +206,31 @@ describe("loadVerifyConfig", () => {
   test("any other value leaves it on, so a typo cannot silently disable the check", () => {
     process.env.SERI_VERIFY_ENABLED = "no";
     expect(loadVerifyConfig().enabled).toBe(true);
+  });
+});
+
+describe("loadSandboxConfig", () => {
+  const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+
+  afterEach(() => {
+    restoreEnv("SERI_ALLOW_UNSANDBOXED_COMMANDS", original);
+  });
+
+  test("allows unsandboxed bang when nothing is configured", () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(true);
+  });
+
+  test('turns off on exactly "false"', () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "false";
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(false);
+  });
+
+  test("any other value leaves it on, so a typo cannot silently disable the floor", () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "no";
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(true);
   });
 });
 

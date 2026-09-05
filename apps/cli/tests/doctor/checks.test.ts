@@ -14,6 +14,7 @@ function asFetch(fn: () => Promise<never>): typeof fetch {
 const originalHome = process.env.HOME;
 const originalGroq = process.env.GROQ_API_KEY;
 const originalDisableFetch = process.env.SERI_DISABLE_MODELS_FETCH;
+const originalAllowUnsandboxed = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
 
 function restoreEnv(key: string, original: string | undefined): void {
   if (original === undefined) delete process.env[key];
@@ -27,6 +28,7 @@ afterEach(() => {
   restoreEnv("HOME", originalHome);
   restoreEnv("GROQ_API_KEY", originalGroq);
   restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableFetch);
+  restoreEnv("SERI_ALLOW_UNSANDBOXED_COMMANDS", originalAllowUnsandboxed);
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs.length = 0;
 });
@@ -144,5 +146,30 @@ describe("runDoctorChecks", () => {
     });
     expect(checks.find((check) => check.name === "credentials")?.status).toBe("ok");
     expect(checks.find((check) => check.name === "credentials")?.detail).toContain("groq=env:");
+  });
+
+  test("includes a sandbox row that names the declared bang tier", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd(),
+    });
+    const sandbox = checks.find((check) => check.name === "sandbox");
+    expect(sandbox).toBeDefined();
+    expect(sandbox?.detail).toMatch(/base|os|unsandboxed/);
+    expect(sandbox?.detail).toContain("bang");
   });
 });

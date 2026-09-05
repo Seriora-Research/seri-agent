@@ -55,6 +55,7 @@ import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/m
 import type { ModelMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isCtrlOPlanToggle, isShiftTabModeCycle } from "../cli/commandCatalog";
+import { ALLOW_UNSANDBOXED_COMMANDS_KEY, configBoolean, configValue } from "../config/config";
 import type { HumanReply } from "../ask-user/types";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
@@ -68,6 +69,7 @@ import {
 } from "../plan/mode";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
+import { formatSandboxIndicator, idleSandboxTier } from "../sandbox/policy";
 import type { SessionState } from "../session/session";
 import type { ChromeTabId } from "./chrome/tabs";
 import { ApprovalBox } from "./components/ApprovalBox";
@@ -297,6 +299,7 @@ export type AppProps = {
   // caller to remember: a functioning binding would silently mutate and persist a session field
   // the gate is ignoring, with zero visible feedback.
   skipPermissions?: boolean;
+  confinementAvailable?: boolean;
 };
 
 // A pty can genuinely report a terminal width as a real but unusable `0` for the first render or
@@ -387,6 +390,7 @@ export function App({
   onCycleMode,
   onTogglePlan,
   skipPermissions,
+  confinementAvailable = false,
   showSplash,
   authOffer,
 }: AppProps) {
@@ -418,7 +422,14 @@ export function App({
     : skipPermissions === true
       ? "auto"
       : state.session.permissionMode;
-  const indicatorText = planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode];
+  const allowUnsandboxedCommands = configBoolean(
+    configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, state.config),
+  );
+  const indicatorText =
+    (planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode]) +
+    formatSandboxIndicator(
+      idleSandboxTier({ available: confinementAvailable }, allowUnsandboxedCommands),
+    );
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over

@@ -4,13 +4,19 @@ import { join } from "node:path";
 import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
 import { isGitAvailable } from "../checkpoint/shadowGit";
-import { inspectConfig } from "../config/config";
+import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
 import { loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
+import { probeConfinement } from "../sandbox/confine";
+import {
+  formatSandboxDoctorDetail,
+  idleSandboxTier,
+  resolveShellLaunch,
+} from "../sandbox/policy";
 import { SessionDatabase } from "../session/database";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
@@ -42,6 +48,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     catalogCheck(deps.env),
     gitCheck(),
     bashCheck(),
+    sandboxCheck(configDir, deps.cwd, deps.platform),
     sessionStoreCheck(configDir),
     await daemonCheck(configDir, deps.fetch),
   ];
@@ -205,6 +212,38 @@ function bashCheck(): CheckResult {
         detail: "bash is not on PATH",
         fix: "install bash or Git Bash to use the bash tool",
       };
+}
+
+function sandboxCheck(configDir: string, cwd: string, platform: NodeJS.Platform): CheckResult {
+  const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
+  const confinement = { available: probeConfinement(platform) };
+  const idle = idleSandboxTier(confinement, allowUnsandboxedCommands);
+  const bang = resolveShellLaunch(
+    "bang",
+    { allowUnsandboxedCommands, root: cwd },
+    confinement,
+  );
+  const detail = formatSandboxDoctorDetail(idle, bang, allowUnsandboxedCommands);
+  if (bang.kind === "refused") {
+    return {
+      name: "sandbox",
+      status: "warn",
+      detail,
+      fix: "set SERI_ALLOW_UNSANDBOXED_COMMANDS or wait for OS sandbox support",
+    };
+  }
+  if (bang.kind === "unsandboxed") {
+    return {
+      name: "sandbox",
+      status: "warn",
+      detail,
+      fix: "set SERI_ALLOW_UNSANDBOXED_COMMANDS=false to keep ! inside the OS sandbox",
+    };
+  }
+  if (idle === "os") {
+    return { name: "sandbox", status: "ok", detail };
+  }
+  return { name: "sandbox", status: "info", detail };
 }
 
 function sessionStoreCheck(configDir: string): CheckResult {
