@@ -6116,7 +6116,51 @@ describe("App", () => {
       expect(frame).not.toContain("in progress");
     });
 
-    test("a successful todo result paints the issue example above the input box", async () => {
+    test("a session snapshot paints the issue example below the transcript and above the input box", async () => {
+      const { setup, dispatch } = await connect({
+        session: session({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "c1",
+                  toolName: "todo",
+                  input: { items },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              content: [
+                {
+                  type: "tool-result",
+                  toolCallId: "c1",
+                  toolName: "todo",
+                  output: { type: "json", value: items },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      dispatch({ type: "transcript-append", line: "> earlier task", role: "user" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1. find compile flags (done)");
+      expect(frame).toContain("2. add --minify (in progress)");
+      expect(frame).toContain("3. add a size test (pending)");
+      const transcript = rowOf(frame, "earlier task");
+      const first = rowOf(frame, "1. find compile flags (done)");
+      const inputBox = rowOf(frame, "⏸ approve-each mode on");
+      expect(transcript).toBeGreaterThanOrEqual(0);
+      expect(transcript).toBeLessThan(first);
+      expect(first).toBeLessThan(inputBox);
+    });
+
+    test("a successful todo result paints live before messages-updated", async () => {
       const { setup, dispatch } = await connect();
       dispatch({
         type: "loop-event",
@@ -6127,10 +6171,6 @@ describe("App", () => {
       expect(frame).toContain("1. find compile flags (done)");
       expect(frame).toContain("2. add --minify (in progress)");
       expect(frame).toContain("3. add a size test (pending)");
-      const first = rowOf(frame, "1. find compile flags (done)");
-      const inputBox = rowOf(frame, "⏸ approve-each mode on");
-      expect(first).toBeGreaterThanOrEqual(0);
-      expect(first).toBeLessThan(inputBox);
     });
   });
 });

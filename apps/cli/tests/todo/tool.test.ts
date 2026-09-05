@@ -17,9 +17,9 @@ const ITEMS = [
 function run(args: unknown): Promise<unknown> {
   const tools = withTodo({});
   const definition = tools[TODO_TOOL_NAME] as {
-    execute: (args: unknown, options: unknown) => Promise<unknown>;
+    execute: (args: unknown, options: unknown) => unknown;
   };
-  return definition.execute(args, execOpts);
+  return Promise.resolve().then(() => definition.execute(args, execOpts));
 }
 
 describe("withTodo", () => {

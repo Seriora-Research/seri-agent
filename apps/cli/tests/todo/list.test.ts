@@ -26,7 +26,7 @@ function assistantTodo(items: unknown, toolCallId = "c1"): ModelMessage {
   };
 }
 
-function todoJsonResult(items: unknown, toolCallId = "c1"): ModelMessage {
+function todoJsonResult(items: TodoItem[], toolCallId = "c1"): ModelMessage {
   return {
     role: "tool",
     content: [
@@ -121,6 +121,25 @@ describe("todoListFromMessages", () => {
       todoJsonResult([COMPILE], "c1"),
       assistantTodo(failed, "c2"),
       todoErrorResult("c2"),
+    ];
+    expect(todoListFromMessages(messages)).toEqual([COMPILE]);
+  });
+
+  test("unrelated tool-calls are ignored", () => {
+    const messages: ModelMessage[] = [
+      assistantTodo([COMPILE], "c1"),
+      todoJsonResult([COMPILE], "c1"),
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "c2",
+            toolName: "read_file",
+            input: { path: "a.txt" },
+          },
+        ],
+      },
     ];
     expect(todoListFromMessages(messages)).toEqual([COMPILE]);
   });

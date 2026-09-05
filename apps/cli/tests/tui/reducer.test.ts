@@ -248,6 +248,52 @@ describe("tuiReducer: parent checklist", () => {
     { id: "b", content: "add --minify", status: "in_progress" as const },
     { id: "c", content: "add a size test", status: "pending" as const },
   ];
+  const first = [{ id: "a", content: "find compile flags", status: "done" as const }];
+
+  function todoCall(list: typeof items | typeof first, toolCallId: string): ModelMessage {
+    return {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId, toolName: "todo", input: { items: list } }],
+    };
+  }
+
+  function todoResult(list: typeof items | typeof first, toolCallId: string): ModelMessage {
+    return {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "todo",
+          output: { type: "json", value: list },
+        },
+      ],
+    };
+  }
+
+  test("a session with a todo tool-call in messages seeds checklist", () => {
+    const state = initialTuiState(
+      session({ messages: [todoCall(items, "c1"), todoResult(items, "c1")] }),
+    );
+    expect(state.checklist).toEqual(items);
+  });
+
+  test("session-updated with sliced messages restores the earlier list", () => {
+    const messages = [
+      todoCall(first, "c1"),
+      todoResult(first, "c1"),
+      todoCall(items, "c2"),
+      todoResult(items, "c2"),
+    ];
+    const state = initialTuiState(session({ messages }));
+    expect(state.checklist).toEqual(items);
+
+    const rewound = tuiReducer(state, {
+      type: "session-updated",
+      session: session({ messages: messages.slice(0, 2) }),
+    });
+    expect(rewound.checklist).toEqual(first);
+  });
 
   test("tool-result paints a valid list and tool-call does not", () => {
     let state = initialTuiState(session());
@@ -273,6 +319,19 @@ describe("tuiReducer: parent checklist", () => {
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "error", error: 'Tool "todo" threw during execution: duplicate' },
+    });
+    expect(state.checklist).toEqual([]);
+  });
+
+  test("a denial does not paint", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "permission-denied", name: "todo", reason: "declined" },
     });
     expect(state.checklist).toEqual([]);
   });
