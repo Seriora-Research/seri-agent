@@ -14,10 +14,14 @@ const BPF_RET_K = 0x06;
 const SECCOMP_RET_ERRNO_EPERM = 0x00050001;
 const X32_SYSCALL_BIT = 0x40000000;
 
-function runChild(mode: "probe" | "child" | "x32") {
-  return spawnSync(process.execPath, [CHILD, mode], {
+function runChild(mode: "probe" | "child") {
+  return spawnSync(process.execPath, [CHILD, mode], { encoding: "utf8" });
+}
+
+function runX32Child() {
+  return spawnSync(process.execPath, [CHILD, "x32"], {
     encoding: "utf8",
-    timeout: mode === "x32" ? 2000 : undefined,
+    timeout: 2000,
     killSignal: "SIGKILL",
   });
 }
@@ -160,7 +164,7 @@ describe.skipIf(process.platform !== "linux")("io_uring child", () => {
   });
 
   test.skipIf(process.arch !== "x64")("x32 io_uring_setup is killed, not allowed", () => {
-    const result = runChild("x32");
+    const result = runX32Child();
     expect(result.stdout).not.toBe("allow\n");
     const killed =
       result.signal === "SIGSYS" ||
