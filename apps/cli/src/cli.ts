@@ -17,6 +17,8 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
+import { createAskUserPark } from "./ask-user/park";
+import type { HumanReply } from "./ask-user/types";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
@@ -1597,6 +1599,12 @@ async function runTui(
   // aborts for an unrelated reason.
   let pendingApprovalResolve: ((answer: ApprovalAnswer) => void) | undefined;
 
+  const askUserPark = createAskUserPark({
+    dispatchOccupy: (prompt) => dispatch({ type: "ask-user-requested", prompt }),
+    dispatchVacate: () => dispatch({ type: "ask-user-resolved" }),
+    approvalOccupied: () => liveState.pendingApproval !== undefined,
+  });
+
   function tuiApprovalPrompt(
     toolName: string,
     args: unknown,
@@ -2263,6 +2271,7 @@ async function runTui(
             directDispatch === undefined && liveState.plan.kind !== "off"
               ? { askQuestions: tuiAskPlanQuestions, configDir }
               : undefined,
+          askUser: askUserPark.present,
         },
       );
       usage = {
@@ -2388,6 +2397,7 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    if (liveState.pendingAskUser !== undefined) askUserPark.answer({ outcome: "cancelled" });
     if (liveState.plan.kind === "clarifying") onPlanQuestionsAnswered({ cancelled: true });
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
     // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
@@ -3133,6 +3143,7 @@ async function runTui(
       onQuit: quit,
       onEscape,
       onApprovalAnswer,
+      onAskUserAnswered: (reply: HumanReply) => askUserPark.answer(reply),
       onPlanQuestionsAnswered,
       onPlanReview,
       onModelSelected,

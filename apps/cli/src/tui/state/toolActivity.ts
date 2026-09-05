@@ -84,6 +84,7 @@ export const TOOL_LABELS: Record<
     one: "subagent",
     many: "subagents",
   },
+  ask_user: { display: "Question", verb: "Asked", one: "question", many: "questions" },
 };
 
 // An unmapped name falls through to itself, escaped. That is right for an MCP server's own

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
@@ -790,6 +792,108 @@ describe("driveLoop planMode", () => {
     );
     expect(result.doneReason).toBe("plan-submitted");
     expect(result.submittedPlan).toEqual(plan);
+  });
+});
+
+describe("driveLoop ask_user", () => {
+  test("default composes ask_user and joins the overlay; composeAskUser false omits both", async () => {
+    const prepared = preparedStub();
+    const withAsk = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: withAsk.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(withAsk.capture()?.tools[ASK_USER_TOOL_NAME]).toBeDefined();
+    expect(withAsk.capture()?.system).toContain(ASK_USER_OVERLAY.slice(0, 40));
+
+    const withoutAsk = fakeRunLoop();
+    await driveLoop(
+      preparedStub(),
+      unusedCtx(prepared.session.cwd),
+      { runLoop: withoutAsk.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        composeAskUser: false,
+      },
+    );
+    expect(withoutAsk.capture()?.tools[ASK_USER_TOOL_NAME]).toBeUndefined();
+    expect(withoutAsk.capture()?.system).not.toContain("call `ask_user`");
+  });
+
+  test("a missing presenter returns unavailable without hanging", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    const ask = capture.capture()?.tools[ASK_USER_TOOL_NAME];
+    const pending = ask?.execute?.(
+      { prompt: "Which?", choices: ["a", "b"] },
+      { toolCallId: "t", messages: [], context: {} },
+    );
+    const raced = await Promise.race([
+      Promise.resolve(pending).then(() => "done" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+    expect(raced).toBe("done");
+    expect(await pending).toEqual({ outcome: "unavailable", reason: "no-human" });
+  });
+
+  test("plan mode keeps ask_user alongside the plan tools", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    const opts = capture.capture();
+    expect(opts?.tools[ASK_USER_TOOL_NAME]).toBeDefined();
+    expect(opts?.tools[ASK_PLAN_QUESTIONS_TOOL_NAME]).toBeDefined();
   });
 });
 

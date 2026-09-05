@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import {
   classifyBuiltin,
@@ -185,6 +186,13 @@ describe("classifyBuiltin", () => {
     expect(classifyBuiltin(SUBMIT_PLAN_TOOL_NAME)).toBe("read");
     expect(READ_ONLY_TOOL_NAMES).not.toContain(ASK_PLAN_QUESTIONS_TOOL_NAME);
     expect(READ_ONLY_TOOL_NAMES).not.toContain(SUBMIT_PLAN_TOOL_NAME);
+  });
+
+  test("ask_user is read-class but not a concurrent-read batch member or a toolDefinitions key", () => {
+    expect(classifyBuiltin(ASK_USER_TOOL_NAME)).toBe("read");
+    expect(READ_ONLY_TOOL_NAMES).not.toContain(ASK_USER_TOOL_NAME);
+    expect(WRITE_TOOL_NAMES).not.toContain(ASK_USER_TOOL_NAME);
+    expect(Object.keys(toolDefinitions)).not.toContain(ASK_USER_TOOL_NAME);
   });
 
   // The point of enumerating the read class rather than the write one: MCP makes the tool set open,

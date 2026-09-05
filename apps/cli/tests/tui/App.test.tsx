@@ -5416,6 +5416,53 @@ describe("App", () => {
     });
   });
 
+  describe("ask_user panel", () => {
+    const prompt = {
+      prompt: "Which auth?",
+      choices: ["cookies", "JWT"],
+      allowOther: true,
+    };
+
+    test("mounts as question, not plan questions or always, and PageUp does not scroll behind it", async () => {
+      const { setup, dispatch } = await connect();
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "ask-user-requested", prompt });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("question");
+      expect(frame).toContain("Which auth?");
+      expect(frame).toContain("cookies");
+      expect(frame).not.toContain("plan questions");
+      expect(frame).not.toMatch(/\balways\b/i);
+
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("pendingApproval wins over pendingAskUser", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({ type: "ask-user-requested", prompt });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Which auth?");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: { path: "a.txt" },
+        offersAlways: true,
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Write a.txt?");
+      expect(frame).not.toContain("Which auth?");
+    });
+  });
+
   // Render-ternary precedence (app.tsx's own comment): pendingApproval → pendingModelPicker →
   // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → pendingEffort → InputBox.
   // Each test below seeds one adjacent pair at once and checks the earlier-in-the-chain branch

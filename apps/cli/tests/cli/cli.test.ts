@@ -31,6 +31,7 @@ import type { CostReport } from "../../src/provider/cost";
 import { getGroqModel } from "../../src/provider/groq";
 import { configuredProviders, PROVIDER_API_KEY_NAMES } from "../../src/provider/keys";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import {
   listSessionIds,
   loadSession,
@@ -605,10 +606,12 @@ describe("run (task invocation)", () => {
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("approve-each");
     // Cwd-bound tools (one factory per session directory), with filesystem-mutating tools wrapped
-    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition.
+    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition
+    // and ask_user (fail-closed without a presenter on this non-TTY path).
     expect(Object.keys(capture()?.tools ?? {})).toEqual([
       ...Object.keys(toolDefinitions),
       "dispatch_subagents",
+      ASK_USER_TOOL_NAME,
     ]);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });
@@ -622,6 +625,33 @@ describe("run (task invocation)", () => {
       ),
     ).toBe(true);
     expect(capture()?.system).toMatch(/You are powered by the model named/);
+  });
+
+  test("non-TTY ask_user returns unavailable without hanging", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+    await captureLogs(() =>
+      run(["write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+    const pending = capture()?.tools[ASK_USER_TOOL_NAME]?.execute?.(
+      { prompt: "Which?", choices: ["a", "b"] },
+      { toolCallId: "t", messages: [], context: {} },
+    );
+    const raced = await Promise.race([
+      Promise.resolve(pending).then(() => "done" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+    expect(raced).toBe("done");
+    expect(await pending).toEqual({ outcome: "unavailable", reason: "no-human" });
   });
 
   // Design-question fix (this PR's own follow-up, echo/storage mismatch): prepareSession used to

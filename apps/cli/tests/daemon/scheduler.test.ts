@@ -58,6 +58,12 @@ describe("scheduled toolset", () => {
     const dir = makeDir();
     expect(() => assertScheduledToolset(createToolDefinitions(dir))).toThrow(/write_file/);
   });
+
+  test("assertScheduledToolset rejects ask_user", () => {
+    const dir = makeDir();
+    const tools = { ...createScheduledToolDefinitions(dir), ask_user: {} };
+    expect(() => assertScheduledToolset(tools)).toThrow(/ask_user/);
+  });
 });
 
 describe("schedule validation", () => {
