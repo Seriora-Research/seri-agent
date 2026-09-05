@@ -29,9 +29,9 @@ describe("parseAskPrompt", () => {
 
   test("rejects 1 choice, 7 choices, and duplicates after trim", () => {
     expect(parseAskPrompt({ prompt: "Q", choices: ["only"] }).ok).toBe(false);
-    expect(
-      parseAskPrompt({ prompt: "Q", choices: ["a", "b", "c", "d", "e", "f", "g"] }).ok,
-    ).toBe(false);
+    expect(parseAskPrompt({ prompt: "Q", choices: ["a", "b", "c", "d", "e", "f", "g"] }).ok).toBe(
+      false,
+    );
     expect(parseAskPrompt({ prompt: "Q", choices: ["JWT", " JWT "] }).ok).toBe(false);
   });
 });
@@ -65,10 +65,8 @@ describe("assertReplyMatchesPrompt", () => {
       "invalid",
     );
     expect(
-      assertReplyMatchesPrompt(
-        { ...prompt, allowOther: false },
-        { outcome: "other", text: "x" },
-      ).outcome,
+      assertReplyMatchesPrompt({ ...prompt, allowOther: false }, { outcome: "other", text: "x" })
+        .outcome,
     ).toBe("invalid");
   });
 });

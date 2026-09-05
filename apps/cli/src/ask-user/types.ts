@@ -21,10 +21,7 @@ export type AskUserResult =
   | { readonly outcome: "unavailable"; readonly reason: UnavailableReason }
   | { readonly outcome: "invalid"; readonly issues: readonly string[] };
 
-export type AskUserPresenter = (
-  prompt: AskPrompt,
-  signal?: AbortSignal,
-) => Promise<AskUserResult>;
+export type AskUserPresenter = (prompt: AskPrompt, signal?: AbortSignal) => Promise<AskUserResult>;
 
 export type AskUserWire = {
   prompt: string;

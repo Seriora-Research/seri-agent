@@ -5,9 +5,7 @@ import { toolDefinitions } from "../../src/provider/tools";
 
 const valid = { prompt: "Which auth?", choices: ["cookies", "JWT"] };
 
-async function raceUnavailable(
-  run: Promise<unknown>,
-): Promise<"done" | "timeout"> {
+async function raceUnavailable(run: Promise<unknown>): Promise<"done" | "timeout"> {
   return await Promise.race([
     run.then(() => "done" as const),
     new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
@@ -52,10 +50,10 @@ describe("executeAskUser", () => {
     }));
     expect(picked).toEqual({ outcome: "picked", choice: "JWT" });
 
-    const other = await executeAskUser(
-      { ...valid, allowOther: false },
-      async () => ({ outcome: "other", text: "x" }),
-    );
+    const other = await executeAskUser({ ...valid, allowOther: false }, async () => ({
+      outcome: "other",
+      text: "x",
+    }));
     expect(other.outcome).toBe("invalid");
   });
 });

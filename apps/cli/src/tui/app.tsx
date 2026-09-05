@@ -861,11 +861,7 @@ export function App({
           onQuit={onQuit}
         />
       ) : state.pendingAskUser !== undefined ? (
-        <AskUserPanel
-          prompt={state.pendingAskUser}
-          onAnswer={onAskUserAnswered}
-          onQuit={onQuit}
-        />
+        <AskUserPanel prompt={state.pendingAskUser} onAnswer={onAskUserAnswered} onQuit={onQuit} />
       ) : state.plan.kind === "clarifying" ? (
         <PlanQuestionsPanel
           questions={state.plan.questions}
