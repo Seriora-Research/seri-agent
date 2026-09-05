@@ -152,7 +152,7 @@ Everything below is a slash command inside the session.
 | Command | Does |
 | --- | --- |
 | `/mode` | cycle permission mode: `read-only` → `approve-each` → `auto` |
-| `/plan [task]` | TUI-only: research and write a plan; empty `/plan` toggles plan mode |
+| `/plan [task]` | TUI-only: research and write a plan; empty `/plan` or Ctrl+O toggles plan mode |
 | `/effort` | show, set, or clear this session's reasoning-effort override |
 | `/undo` | step back through file checkpoints |
 | `/restore` | restore a checkpoint by sha |

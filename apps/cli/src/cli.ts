@@ -2777,6 +2777,13 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
+  // Empty `/plan`. App.tsx's own comment on `onTogglePlan` explains why this is a prop, not a
+  // dispatch app.tsx makes itself: `getPermissionMode()` reads `liveState.plan`, and only this
+  // file's dispatch funnel advances `liveState`.
+  function onTogglePlan(): void {
+    tuiHandlers["/plan"]([]);
+  }
+
   // Takes the head of the queue and re-enters onSubmit with it, rather than duplicating the
   // dispatch below: that is what makes the echo land exactly once, at the moment the message
   // actually starts, and what keeps a plain task, an `/agent` dispatch and a skill on one code
@@ -3134,6 +3141,7 @@ async function runTui(
       onModelSelected,
       onModelPickerCancel,
       onCycleMode,
+      onTogglePlan,
       skipPermissions,
       onSetupSelect,
       onSetupKeyEntered,

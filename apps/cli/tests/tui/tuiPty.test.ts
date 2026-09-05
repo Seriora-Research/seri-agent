@@ -5585,6 +5585,47 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
+    // Doubles as the liveState-desync guard: empty `/plan` reads `liveState.plan` (cli.ts's own
+    // dispatch funnel), the same state Ctrl+O's `onTogglePlan` just advanced — this can only pass
+    // if the keypress reached `liveState`, not just this component's own render. A local
+    // `plan-on` would leave `liveState.plan.kind === "off"`, so the following empty `/plan`
+    // would turn the overlay ON again instead of off.
+    test("ctrl+o and empty /plan share one overlay, keeping liveState in step with the indicator", async () => {
+      const scriptPath = join(dir, "child-plan-toggle.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, lastFrame, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("approve-each mode on");
+        await wait100ms();
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
+
+        child.stdin?.write("\x0f");
+        await sawLine("plan mode on");
+        expect(lastFrame()).toContain("plan mode on");
+        expect(lastFrame()).not.toContain("approve-each mode on");
+        expect(lastFrame()).toContain("ctrl+o to leave");
+        expect(lastFrame()).not.toContain("shift+tab to cycle");
+
+        child.stdin?.write("/plan");
+        await sawLine("/plan");
+        child.stdin?.write("\r");
+
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const frame = lastFrame();
+          if (frame.includes("approve-each mode on") && !frame.includes("plan mode on")) break;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(lastFrame()).toContain("approve-each mode on");
+        expect(lastFrame()).not.toContain("plan mode on");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
     // Regression coverage for the mount-time counterpart of `config-updated`
     // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
     // starts must show up in the mode row's own effort-tier suffix from the very first frame — no

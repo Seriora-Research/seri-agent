@@ -178,16 +178,18 @@ export const PLAN_MODE_LABEL = "⏸ plan mode on";
 // Persistent (shown on every render, not just right after a cycle) — a transient hint would not
 // help a user who has never pressed the key yet.
 export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
+export const PLAN_MODE_LEAVE_HINT = " (ctrl+o to leave)";
 
 // The persistent mode-indicator row still floors the cycle hint at `MODE_HINT_COLS` (app.tsx
 // via `modeRowHintVisible`). Model, route, and effort are leftover-packed by `formatModeDetail`
 // into whatever columns remain after the indicator — longest suffix that fits, then the next
 // shorter, then empty. Sized against the longest label, "⏵⏵ bypass permissions on" (26 cols,
 // worst case its glyph renders double-width) + the hint (21 cols) = 47, still under 52, so the
-// hint floor holds even in that worst case when detail is empty. This proof does not (and cannot)
-// account for the mode row's own right-hand content (the scroll banner / `state.status`) sharing
-// the same row — see app.tsx's own `showRightSide` for how that side of the row is kept from
-// wrapping instead.
+// hint floor holds even in that worst case when detail is empty. PLAN_MODE_LEAVE_HINT is
+// shorter than MODE_CYCLE_HINT, so the same floor covers the overlay-on row. This proof does
+// not (and cannot) account for the mode row's own right-hand content (the scroll banner /
+// `state.status`) sharing the same row — see app.tsx's own `showRightSide` for how that side of
+// the row is kept from wrapping instead.
 export const MODE_HINT_COLS = 52;
 // formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
 // from models.dev, an external and unvalidated source, so this is a display budget, not a bound

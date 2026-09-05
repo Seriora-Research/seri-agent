@@ -6,6 +6,7 @@ import {
   assertTuiHandlers,
   COMMAND_META,
   commandByName,
+  isCtrlOPlanToggle,
   isShiftTabModeCycle,
   isTuiClaimed,
   sessionMeta,
@@ -150,6 +151,10 @@ describe("command catalog completeness", () => {
     expect(commandByName("/mode")?.shortcut?.chord).toBe("shift+tab");
   });
 
+  test("/plan shortcut is ctrl+o", () => {
+    expect(commandByName("/plan")?.shortcut?.chord).toBe("ctrl+o");
+  });
+
   test("tuiClaimedNames is the TUI surface plus /effort and /memory", () => {
     expect(tuiClaimedNames()).toEqual([...EXPECTED_TUI_CLAIMED]);
   });
@@ -166,6 +171,15 @@ describe("command catalog completeness", () => {
     expect(isShiftTabModeCycle({ name: "tab", shift: true })).toBe(true);
     expect(isShiftTabModeCycle({ name: "tab", shift: false })).toBe(false);
     expect(isShiftTabModeCycle({ name: "enter", shift: true })).toBe(false);
+  });
+
+  test("isCtrlOPlanToggle matches ctrl+o only when /plan's chord is ctrl+o", () => {
+    expect(commandByName("/plan")?.shortcut?.chord).toBe("ctrl+o");
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true })).toBe(true);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: false })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "p", ctrl: true })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true, shift: true })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true, meta: true })).toBe(false);
   });
 });
 

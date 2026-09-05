@@ -38,6 +38,7 @@ import {
   matchesFilter,
   NAME_WIDTH,
   PLAN_MODE_LABEL,
+  PLAN_MODE_LEAVE_HINT,
   pickerLabelWidth,
   singleLine,
   slideWindow,
@@ -4377,15 +4378,18 @@ describe("App", () => {
       markdown: "# Auth rewrite\n\nReplace the login flow.\n",
     };
 
-    test("the shift+tab cycle hint is absent while the overlay is on", async () => {
+    test("the shift+tab cycle hint is absent while the overlay is on, and the leave hint is present", async () => {
       const { setup, dispatch } = await connect({ route: undefined });
       expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+      expect(setup.captureCharFrame()).not.toContain("(ctrl+o to leave)");
 
       dispatch({ type: "plan-on" });
       await flush(setup);
 
-      expect(setup.captureCharFrame()).toContain(PLAN_MODE_LABEL);
-      expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain(PLAN_MODE_LABEL);
+      expect(frame).toContain(PLAN_MODE_LEAVE_HINT.trim());
+      expect(frame).not.toContain("(shift+tab to cycle)");
     });
 
     test("shift+tab does not call onCycleMode while the overlay is on", async () => {
@@ -4400,6 +4404,96 @@ describe("App", () => {
       await flush(setup);
 
       expect(calls).toBe(0);
+    });
+
+    test("ctrl+o calls onTogglePlan when the overlay is off", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        onTogglePlan: () => calls++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("ctrl+o calls onTogglePlan when the overlay is on", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onTogglePlan: () => calls++,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("ctrl+o does not call onCycleMode", async () => {
+      let cycle = 0;
+      let toggle = 0;
+      const { setup } = await connect({
+        onCycleMode: () => cycle++,
+        onTogglePlan: () => toggle++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(toggle).toBe(1);
+      expect(cycle).toBe(0);
+    });
+
+    test("ctrl+o does nothing while a panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onTogglePlan: () => calls++,
+      });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: false,
+      });
+      await flush(setup);
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
+    test("ctrl+o still calls onTogglePlan under skipPermissions", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        skipPermissions: true,
+        onTogglePlan: () => calls++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("plain o does not toggle and still reaches the input buffer", async () => {
+      let calls = 0;
+      const submittedTasks: string[] = [];
+      const { setup } = await connect({
+        onTogglePlan: () => calls++,
+        onSubmit: (v) => submittedTasks.push(v),
+      });
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("o");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submittedTasks).toEqual(["helloo"]);
     });
 
     test("the indicator reads plan mode on in the read-only hue, even under skipPermissions", async () => {

@@ -16,6 +16,7 @@ import {
   MODE_HINT_COLS,
   MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LEAVE_HINT,
   systemEntryFg,
   type TokenProgress,
 } from "../../src/tui/util/format";
@@ -243,6 +244,12 @@ describe("MODE_LABEL", () => {
 describe("MODE_CYCLE_HINT", () => {
   test("is the shift+tab hint, with its own leading space", () => {
     expect(MODE_CYCLE_HINT).toBe(" (shift+tab to cycle)");
+  });
+});
+
+describe("PLAN_MODE_LEAVE_HINT", () => {
+  test("is the ctrl+o hint, with its own leading space", () => {
+    expect(PLAN_MODE_LEAVE_HINT).toBe(" (ctrl+o to leave)");
   });
 });
 
