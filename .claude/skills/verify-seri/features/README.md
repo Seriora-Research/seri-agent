@@ -2,7 +2,7 @@
 
 This directory is the maintained source for verifying seri's user-facing behavior. Read the index, then use the matching feature file as the recipe.
 
-**seri is used through the TUI in this project.** Every feature proof drives the interactive TUI under a real PTY; the non-interactive `seri <task>` prompt path is not a user path here and must not stand in for one. `config`, `permissions` and `usage` are TUI slash commands, not subcommands: `seri config list` sends a task to the model. The only sanctioned non-interactive drives are `--version`, `--help`, `--selftest`, `serve` and `exec`.
+**seri is used through the TUI in this project.** Every feature proof drives the interactive TUI under a real PTY; the non-interactive `seri <task>` prompt path is not a user path here and must not stand in for one. `config`, `permissions` and `usage` are TUI slash commands, not subcommands: `seri config list` sends a task to the model. The only sanctioned non-interactive drives are `--version`, `--help`, `--selftest`, `serve`, `exec`, `doctor` and `update`.
 
 ## Baseline preconditions
 

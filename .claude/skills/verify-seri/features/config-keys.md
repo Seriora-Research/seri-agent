@@ -1,6 +1,6 @@
 # Config and API keys
 
-Per-profile settings and BYOK API keys live in `~\.seri\<profile>\config.json`. The TUI paths are `/setup` (provider keys) and `/config` (non-provider settings), and they are the only paths: there is no `config` subcommand, and no `configCommand` function anywhere in the source — `apps/cli/src/config/commands.ts` defines only the `maskValue` helper. `run()` special-cases exactly two positional verbs, `serve` and `exec`; `seri config list` is neither, so it reaches the model as a task and bills a turn.
+Per-profile settings and BYOK API keys live in `~\.seri\<profile>\config.json`. The TUI paths are `/setup` (provider keys) and `/config` (non-provider settings), and they are the only paths: there is no `config` subcommand, and no `configCommand` function anywhere in the source — `apps/cli/src/config/commands.ts` defines only the `maskValue` helper. `run()` special-cases the positional verbs `serve`, `exec`, `doctor`, and `update`; `seri config list` is none of those, so it reaches the model as a task and bills a turn.
 
 ## Sub-features
 

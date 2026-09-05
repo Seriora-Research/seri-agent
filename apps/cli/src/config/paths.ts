@@ -110,8 +110,12 @@ export function resolveProfile(flagValue: string | undefined): {
   return { profile: DEFAULT_PROFILE, source: "default" };
 }
 
+export function currentProfile(): { profile: string; source: "flag" | "env" | "default" } {
+  return resolveProfile(override);
+}
+
 function activeProfile(): string {
-  return resolveProfile(override).profile;
+  return currentProfile().profile;
 }
 
 // Called unconditionally, once, from run() — including with undefined. That is what stops one
