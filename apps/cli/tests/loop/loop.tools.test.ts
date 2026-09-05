@@ -10,6 +10,7 @@ import { createAskUserPark } from "../../src/ask-user/park";
 import { withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
+import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 import {
@@ -1629,6 +1630,51 @@ describe("runLoop", () => {
       const [output] = toolRowOutputs(events);
       expect(output?.type).toBe("execution-denied");
       expect(output?.reason).toContain("unparseable");
+    });
+
+    test("auto plus an mcp assume-role tool is a containment denial and never executes", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: new MockLanguageModelV4({
+            doStream: [
+              streamResult(
+                toolCallChunks("call-1", MCP_TOOL_NAME, {
+                  tool: "mcp_aws_sts_assume_role",
+                  arguments: {},
+                }),
+              ),
+              streamResult(textOnlyChunks("Done")),
+            ],
+          }),
+          tools: {
+            [MCP_TOOL_NAME]: tool({
+              description: "mcp",
+              inputSchema: z.object({
+                tool: z.string(),
+                arguments: z.record(z.string(), z.unknown()).optional(),
+              }),
+              execute: async (input) => {
+                executed.push(input);
+                return "ok";
+              },
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          callSubject: mcpCallSubject,
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "mcp_aws_sts_assume_role",
+        reason: "containment",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("assume-role");
     });
   });
 

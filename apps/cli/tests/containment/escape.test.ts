@@ -77,6 +77,11 @@ describe("loadContainmentExpected", () => {
     process.env[CONTAINMENT_ESCAPE_EXPECTED_KEY] = "TRUE";
     expect(loadContainmentExpected({ [CONTAINMENT_ESCAPE_EXPECTED_KEY]: "true" })).toBe(false);
   });
+
+  test("empty env is present and not expected even if config says true", () => {
+    process.env[CONTAINMENT_ESCAPE_EXPECTED_KEY] = "";
+    expect(loadContainmentExpected({ [CONTAINMENT_ESCAPE_EXPECTED_KEY]: "true" })).toBe(false);
+  });
 });
 
 describe("screenCall", () => {
@@ -88,6 +93,9 @@ describe("screenCall", () => {
     pass("bash", { command: "cat main.tf # arn:aws:iam::123456789012:role/Other" });
     pass("bash", { command: "echo 169.254.169.254" });
     pass("powershell", { command: "Get-ChildItem" });
+    pass("bash", { command: "curl -X POST https://example.com" });
+    pass("bash", { command: "ssh user@host ls -R" });
+    pass("bash", { command: "ssh -l user host" });
   });
 
   test("write_file is not inspectable even when the path names IMDS", () => {
@@ -285,6 +293,7 @@ describe("screenCall", () => {
     );
     pass("bash", { command: "ssh user@host" });
     pass("bash", { command: "nc host 80" });
+    blockEscape("bash", { command: "ssh -Dlocalhost:1080 host" }, "egress-evasion", "ssh tunnel");
   });
 
   test("cross-tenant is an identity-exercise verb", () => {
@@ -324,6 +333,19 @@ describe("screenCall", () => {
       "cross-tenant",
       "kubectl --as=",
     );
+    blockEscape("bash", { command: "kubectl --as user get pods" }, "cross-tenant", "kubectl --as=");
+    blockEscape(
+      "powershell",
+      { command: "Use-STSRole -RoleArn arn:aws:iam::1:role/x" },
+      "cross-tenant",
+      "Use-STSRole",
+    );
+    blockEscape(
+      "powershell",
+      { command: "Get-AzAccessToken -TenantId 00000000-0000-0000-0000-000000000000" },
+      "cross-tenant",
+      "Get-AzAccessToken -TenantId",
+    );
   });
 
   test("unparseable inspectable input is a block", () => {
@@ -332,6 +354,8 @@ describe("screenCall", () => {
     blockUnparseable("bash", null);
     blockUnparseable("powershell", { command: 1 });
     blockUnparseable("mcp", "not-an-object");
+    blockUnparseable("mcp", { arguments: [] });
+    blockUnparseable("mcp", { arguments: null });
     const circular: { self?: unknown } = {};
     circular.self = circular;
     blockUnparseable("mcp_foo", { arguments: circular });
@@ -361,5 +385,6 @@ describe("screenCall", () => {
       "aws sts assume-role",
     );
     pass("mcp_github_fetch", { arguments: { url: "https://example.com" } });
+    blockEscape("mcp_aws_sts_assume_role", { arguments: {} }, "cross-tenant", "assume-role");
   });
 });

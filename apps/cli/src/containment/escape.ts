@@ -19,6 +19,9 @@ export function parseExpectedEnvironment(raw: string | undefined): boolean {
 }
 
 export function loadContainmentExpected(config: Record<string, string>): boolean {
+  if (Object.hasOwn(process.env, CONTAINMENT_ESCAPE_EXPECTED_KEY)) {
+    return parseExpectedEnvironment(process.env[CONTAINMENT_ESCAPE_EXPECTED_KEY]);
+  }
   return parseExpectedEnvironment(
     resolveConfigValue(CONTAINMENT_ESCAPE_EXPECTED_KEY, config).value,
   );
@@ -111,7 +114,7 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   },
   {
     kind: "egress-evasion",
-    pattern: /\bssh\b[\s\S]*-(?:[A-Za-z]*[DLRW])(?:\s|$|=|[0-9])/i,
+    pattern: /\bssh\b(?:\s+-\S+)*\s+-(?:[A-Za-z]*[DLRW])(?:\s|$|=|[0-9A-Za-z.:/])/,
     label: "ssh tunnel",
   },
   {
@@ -131,8 +134,13 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   { kind: "egress-evasion", pattern: /\/dev\/udp\//i, label: "/dev/udp/" },
   {
     kind: "egress-evasion",
+    pattern: /\b(?:curl|wget)\b[\s\S]*\s-x(?:\s|$|=|\S)/,
+    label: "curl/wget proxy or resolve flag",
+  },
+  {
+    kind: "egress-evasion",
     pattern:
-      /\b(?:curl|wget)\b[\s\S]*(?:\s-x\b|--proxy\b|--socks5\b|--connect-to\b|--resolve\b|--doh-url\b)/i,
+      /\b(?:curl|wget)\b[\s\S]*(?:--proxy\b|--socks5\b|--connect-to\b|--resolve\b|--doh-url\b)/i,
     label: "curl/wget proxy or resolve flag",
   },
   {
@@ -140,6 +148,7 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
     pattern: /\baws\b[\s\S]*\bsts\b[\s\S]*\bassume-role\b/i,
     label: "aws sts assume-role",
   },
+  { kind: "cross-tenant", pattern: /\bassume-role\b/i, label: "assume-role" },
   { kind: "cross-tenant", pattern: /--role-arn\b/i, label: "--role-arn" },
   {
     kind: "cross-tenant",
@@ -156,7 +165,13 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
     pattern: /\bkubectl\b[\s\S]*\bcreate\s+token\b/i,
     label: "kubectl create token",
   },
-  { kind: "cross-tenant", pattern: /\bkubectl\b[\s\S]*--as=/i, label: "kubectl --as=" },
+  { kind: "cross-tenant", pattern: /\bkubectl\b[\s\S]*--as(?:=|\s)/i, label: "kubectl --as=" },
+  { kind: "cross-tenant", pattern: /\bUse-STSRole\b/i, label: "Use-STSRole" },
+  {
+    kind: "cross-tenant",
+    pattern: /\bGet-AzAccessToken\b[\s\S]*-TenantId\b/i,
+    label: "Get-AzAccessToken -TenantId",
+  },
 ];
 
 function decodeOnce(text: string): string {
@@ -199,12 +214,24 @@ function extract(subject: string, input: unknown): Extracted {
       return { status: "unparseable", detail: "unparseable MCP arguments" };
     }
     try {
-      const serialized = JSON.stringify((input as { arguments?: unknown }).arguments);
-      if (typeof serialized !== "string") return { status: "ready", text: "" };
+      const record = input as { arguments?: unknown; tool?: unknown };
+      const identity = [subject, typeof record.tool === "string" ? record.tool : ""].join(" ");
+      if (record.arguments === undefined) {
+        return { status: "ready", text: identity };
+      }
+      if (
+        typeof record.arguments !== "object" ||
+        record.arguments === null ||
+        Array.isArray(record.arguments)
+      ) {
+        return { status: "unparseable", detail: "unparseable MCP arguments" };
+      }
+      const serialized = JSON.stringify(record.arguments);
+      if (typeof serialized !== "string") return { status: "ready", text: identity };
       if (serialized.length > SCAN_LIMIT) {
         return { status: "unparseable", detail: "MCP arguments exceed scan limit" };
       }
-      return { status: "ready", text: serialized };
+      return { status: "ready", text: `${identity} ${serialized}` };
     } catch {
       return { status: "unparseable", detail: "unparseable MCP arguments" };
     }
