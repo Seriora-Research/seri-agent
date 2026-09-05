@@ -5949,9 +5949,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
       writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
 
-      const { child, sawLine, rawOccurrences, lastFrame } = await startChild(scriptPath, dir, {
-        dismissSplash: false,
-      });
+      const { child, sawLine, rawOccurrences, lastFrame, sawInFrameTimes } = await startChild(
+        scriptPath,
+        dir,
+        {
+          dismissSplash: false,
+        },
+      );
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("> Continue");
@@ -5961,6 +5965,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("/setup — provider API keys")).toBe(0);
+        // done · only exists on the main TUI. lastFrame at RUNLOOP_READY can still be the
+        // cleared splash grid that startChild's dismissSplash wait already names.
+        await sawInFrameTimes("done ·", 1);
         expect(lastFrame()).toContain(" · seri");
         expect(lastFrame()).not.toContain("openrouter");
       } finally {
