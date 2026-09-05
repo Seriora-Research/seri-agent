@@ -9,6 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
+import { type ScreenResult, screenCall } from "../containment/escape";
 import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
 import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
 import { checkPermission, denialBlocks, type PathDenial, type PermissionMode } from "../gate/gate";
@@ -62,7 +63,13 @@ export type LoopEvent =
   // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
   // times, and there is no human anywhere in a hook's path to answer even once. A
   // packed-renderer-upload refused in auto (decidePermission) is "blocked" for the same reason.
-  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
+  // Containment-escape is a fourth reason: it is not a mode block and not a human no, and it
+  // must not increment consecutiveDenials.
+  | {
+      type: "permission-denied";
+      name: string;
+      reason: "blocked" | "declined" | "hook" | "containment";
+    }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
       type: "compacted";
@@ -412,6 +419,7 @@ export async function* runLoop(opts: {
    * already run, so a consumer with an objection at this point has a message, not a veto.
    */
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
+  containmentEscapeExpected?: boolean;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
@@ -910,6 +918,39 @@ export async function* runLoop(opts: {
             reason:
               `Tool "${subject}" was not permitted to run because the path matched a deny rule. ` +
               `Do not retry this call, including with another read tool on the same path.`,
+          },
+        });
+        continue;
+      }
+
+      // Before onBeforeTool and the gate so a human is never asked about a call this rail will
+      // refuse, and so auto / --dangerously-skip-permissions cannot reach around it.
+      let containment: ScreenResult;
+      try {
+        containment = screenCall(subject, call.input, opts.containmentEscapeExpected === true);
+      } catch {
+        containment = {
+          outcome: "block",
+          reason: { kind: "unparseable", detail: "could not evaluate" },
+        };
+      }
+      if (containment.outcome === "block") {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        yield { type: "permission-denied", name: subject, reason: "containment" };
+        const named =
+          containment.reason.kind === "escape"
+            ? `${containment.reason.class} (${containment.reason.label})`
+            : `unparseable (${containment.reason.detail})`;
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: {
+            type: "execution-denied",
+            reason:
+              `Tool "${subject}" was blocked as a containment escape: ${named}. ` +
+              `Do not retry this call or a variant of it. The block is a harness rail; ` +
+              `/mode and --dangerously-skip-permissions do not lift it.`,
           },
         });
         continue;

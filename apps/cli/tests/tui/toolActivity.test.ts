@@ -300,6 +300,10 @@ describe("anomalyLineForDenial", () => {
   test("declined", () => {
     expect(anomalyLineForDenial("declined")).toBe("declined");
   });
+
+  test("containment", () => {
+    expect(anomalyLineForDenial("containment")).toBe("blocked by containment");
+  });
 });
 
 describe("anomalyLineForThrow", () => {

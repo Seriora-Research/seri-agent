@@ -96,11 +96,7 @@ describe("formatSandboxIndicator", () => {
 describe("formatSandboxDoctorDetail", () => {
   test("strict confined bang", () => {
     expect(
-      formatSandboxDoctorDetail(
-        "os",
-        { kind: "sandboxed", declared: "os", root },
-        false,
-      ),
+      formatSandboxDoctorDetail("os", { kind: "sandboxed", declared: "os", root }, false),
     ).toBe("os · bang confined · unsandboxed commands disallowed");
   });
 

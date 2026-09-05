@@ -594,6 +594,56 @@ describe("driveLoop directDispatch", () => {
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
   });
 
+  test("SERI_CONTAINMENT_ESCAPE_EXPECTED threads onto the parent loop and a /name child", async () => {
+    const key = "SERI_CONTAINMENT_ESCAPE_EXPECTED";
+    const original = process.env[key];
+
+    async function seenFlag(
+      raw: string | undefined,
+      driveOpts: { directDispatch?: { agent: AgentSpec; goal: string } },
+    ): Promise<boolean | undefined> {
+      if (raw === undefined) delete process.env[key];
+      else process.env[key] = raw;
+      let seen: boolean | undefined;
+      const prepared = preparedStub();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        {
+          runLoop: async function* (opts) {
+            seen = opts.containmentEscapeExpected;
+            yield { type: "done", reason: "no-tool-call" as const };
+            return opts.messages;
+          },
+        },
+        1,
+        () => {},
+        () => "auto",
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { ...driveOpts, runArchivist: false, composeSubagents: false },
+      );
+      return seen;
+    }
+
+    try {
+      expect(await seenFlag(undefined, {})).toBe(false);
+      expect(await seenFlag("true", {})).toBe(true);
+      expect(await seenFlag("TRUE", {})).toBe(false);
+      expect(await seenFlag("true", { directDispatch: { agent: reviewer(), goal: "grade" } })).toBe(
+        true,
+      );
+      expect(
+        await seenFlag(undefined, { directDispatch: { agent: reviewer(), goal: "grade" } }),
+      ).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  });
+
   test("a child's runLoop receives the prepared path denials and cwd", async () => {
     const prepared = preparedStub();
     prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];

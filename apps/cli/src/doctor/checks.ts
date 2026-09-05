@@ -13,11 +13,7 @@ import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
 import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
-import {
-  formatSandboxDoctorDetail,
-  idleSandboxTier,
-  resolveShellLaunch,
-} from "../sandbox/policy";
+import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
 import { SessionDatabase } from "../session/database";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
@@ -266,11 +262,7 @@ function sandboxCheck(configDir: string, cwd: string, platform: NodeJS.Platform)
   const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
   const confinement = { available: probeConfinement(platform) };
   const idle = idleSandboxTier(confinement, allowUnsandboxedCommands);
-  const bang = resolveShellLaunch(
-    "bang",
-    { allowUnsandboxedCommands, root: cwd },
-    confinement,
-  );
+  const bang = resolveShellLaunch("bang", { allowUnsandboxedCommands, root: cwd }, confinement);
   const detail = formatSandboxDoctorDetail(idle, bang, allowUnsandboxedCommands);
   if (bang.kind === "refused") {
     return {
@@ -293,4 +285,3 @@ function sandboxCheck(configDir: string, cwd: string, platform: NodeJS.Platform)
   }
   return { name: "sandbox", status: "info", detail };
 }
-

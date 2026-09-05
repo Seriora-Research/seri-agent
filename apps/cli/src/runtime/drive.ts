@@ -11,6 +11,7 @@ import {
   loadConfig,
   standingDenyReadsOutside,
 } from "../config/config";
+import { loadContainmentExpected } from "../containment/escape";
 import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
@@ -312,7 +313,7 @@ export async function driveLoop(
   // wins over those defaults. Construction failures warn and reuse the session model rather than
   // failing the parent turn. Computed even when composeSubagents is false: maybeRunArchivist
   // still needs the archivist overlay.
-  const pins = parseRolePins(process.env, loadConfig(ctx.configDir));
+  const pins = parseRolePins(process.env, config);
   const configured = configuredProviders(ctx.configDir);
   type RoleOverlay = {
     model: LanguageModel;
@@ -401,6 +402,7 @@ export async function driveLoop(
     cwd: session.cwd,
     signal: controller.signal,
   });
+  const containmentEscapeExpected = loadContainmentExpected(config);
   // Hoisted rather than built inline in the composition below, because directDispatch (further
   // down) runs its one child against this exact same runtime: same overlay resolution, same
   // checkpointer, same usage fold, same child-event forwarding. A `/name` child and a
@@ -430,6 +432,7 @@ export async function driveLoop(
     // would punch a hole through auto.
     onBeforeTool: hookRunner?.onBeforeTool,
     onAfterTool: hookRunner?.onAfterTool,
+    containmentEscapeExpected,
     classifyToolCall: prepared.classifyToolCall,
     autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
     resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
@@ -468,12 +471,12 @@ export async function driveLoop(
       : withPlanTools(stripWriteTools(withAsk), driveOpts.planMode);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
-  // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
-  // mode (read-only, say) doing exactly what the user asked, not a signal anything went wrong;
-  // "declined" is a live refusal, either an actual "no" or nobody there to ask at all. Counting
-  // "blocked" here would flip `seri --resume x "review this repo" && open report.md` to exit 1
-  // solely because a read-only session correctly refused a write probe mid-review, breaking the
-  // `&&` over a mode working as intended. Only "declined" sets `hadDenial`. `tool-call` fires only
+  // `permission-denied` fires on several facts carried in its `reason`. "blocked" is a mode
+  // (read-only, say) doing what the user asked. "hook" and "containment" are rails, not a user
+  // refusal. "declined" is a live "no" or nobody there to ask. Counting anything but "declined"
+  // here would flip `seri --resume x "review this repo" && open report.md` to exit 1 solely
+  // because a read-only session correctly refused a write probe mid-review, breaking the `&&`
+  // over a mode working as intended. Only "declined" sets `hadDenial`. `tool-call` fires only
   // for a call that both passed the gate and had a real tool definition (the unknown-tool branch
   // also `continue`s past it) — so `ranTool` is exactly "did anything actually run".
   let hadDenial = false;
@@ -566,6 +569,7 @@ export async function driveLoop(
           // is: nothing is composed, so nothing is awaited on the path every tool call takes.
           onBeforeTool: hookRunner?.onBeforeTool,
           onAfterTool: hookRunner?.onAfterTool,
+          containmentEscapeExpected,
           signal: controller.signal,
           maxIterations: maxTurns,
           // Without these three, loop.ts's own cost branch (`opts.provider === "openrouter"`
@@ -706,6 +710,7 @@ export async function driveLoop(
         // it runs on a hardcoded "auto" permission mode.
         onBeforeTool: hookRunner?.onBeforeTool,
         onAfterTool: hookRunner?.onAfterTool,
+        containmentEscapeExpected,
         classifyToolCall: prepared.classifyToolCall,
         autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
       });

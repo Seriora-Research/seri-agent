@@ -145,6 +145,7 @@ export type SubagentRuntime = {
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
+  containmentEscapeExpected?: boolean;
 
   // Same inheritance argument as the hooks: a child in auto with no prompt must still see a
   // classifier block, or `dispatch_subagents` is a hole around it. ask becomes a hard deny
@@ -179,9 +180,16 @@ function fallbackSummary(
   lastError: string | undefined,
   deniedCount: number,
   mode: PermissionMode,
+  containmentDenied: boolean,
 ): string {
   if (doneReason === "aborted") return "cancelled before it produced a summary";
   if (deniedCount > 0) {
+    if (containmentDenied) {
+      return (
+        `its tool calls were not permitted (permission mode: "${mode}", ${deniedCount} denied) — ` +
+        `auto mode does not lift a containment block`
+      );
+    }
     return (
       `its tool calls were not permitted (permission mode: "${mode}", ${deniedCount} denied) — ` +
       `it can only write in auto mode or for a tool already granted before this dispatch call`
@@ -253,6 +261,7 @@ export async function runSubagent(opts: {
   let doneReason: DoneReason | undefined;
   let lastError: string | undefined;
   let deniedCount = 0;
+  let containmentDenied = false;
 
   for await (const event of runtime.runLoop({
     model: runtime.model,
@@ -275,6 +284,7 @@ export async function runSubagent(opts: {
     seed: runtime.seed,
     onBeforeTool: runtime.onBeforeTool,
     onAfterTool: runtime.onAfterTool,
+    containmentEscapeExpected: runtime.containmentEscapeExpected,
     classifyToolCall: runtime.classifyToolCall,
     autoModeOnBlock: runtime.autoModeOnBlock,
     workingDirectory: runtime.cwd,
@@ -302,6 +312,7 @@ export async function runSubagent(opts: {
       runtime.onChildUsage?.(event.usage, event.type === "usage" ? event.cost : undefined);
     } else if (event.type === "permission-denied") {
       deniedCount++;
+      if (event.reason === "containment") containmentDenied = true;
     } else if (event.type === "error") {
       lastError = event.error;
     } else if (event.type === "done") {
@@ -324,7 +335,7 @@ export async function runSubagent(opts: {
   const summaryIsFallback = summary.length === 0;
   return {
     summary: summaryIsFallback
-      ? fallbackSummary(doneReason, lastError, deniedCount, mode)
+      ? fallbackSummary(doneReason, lastError, deniedCount, mode, containmentDenied)
       : summary,
     summaryIsFallback,
     usage,

@@ -11,6 +11,7 @@ import { withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import type { ToolCallClassifier } from "../../src/gate/classifier";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
+import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 import {
@@ -1442,6 +1443,239 @@ describe("runLoop", () => {
       expect(model.doStreamCalls).toHaveLength(2);
       expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
       expect(events.find((e) => e.type === "error")).toBeUndefined();
+    });
+  });
+
+  describe("containment escape", () => {
+    const imdsCurl = "curl http://169.254.169.254/latest/meta-data/";
+
+    function makeBashTools(execute: (input: { command: string }) => Promise<string>): ToolSet {
+      return {
+        bash: tool({
+          description: "run bash",
+          inputSchema: z.object({ command: z.string() }),
+          execute,
+        }),
+      };
+    }
+
+    function oneBashThenText(command: string | number): MockLanguageModelV4 {
+      return new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "bash", { command })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+    }
+
+    function toolRowOutputs(events: LoopEvent[]): { type: string; reason?: string }[] {
+      const toolMessage = events
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+            e.type === "messages-updated",
+        )
+        .map((e) => e.messages.at(-1))
+        .find((message) => message?.role === "tool");
+      const content = (toolMessage?.content ?? []) as {
+        output: { type: string; reason?: string };
+      }[];
+      return content.map((part) => part.output);
+    }
+
+    function repeatedImdsCalls(turns: number) {
+      return Array.from({ length: turns }, (_, i) =>
+        streamResult(toolCallChunks(`call-${i}`, "bash", { command: imdsCurl })),
+      );
+    }
+
+    test("auto plus an ordinary curl lets the call through", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneBashThenText("curl https://example.com"),
+          tools: makeBashTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+
+      expect(executed).toEqual([{ command: "curl https://example.com" }]);
+      expect(events).toContainEqual({
+        type: "tool-call",
+        name: "bash",
+        args: { command: "curl https://example.com" },
+      });
+      expect(events).toContainEqual({ type: "tool-result", name: "bash", result: "ok" });
+      expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    });
+
+    test("auto plus an IMDS curl is a containment denial and never executes", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneBashThenText(imdsCurl),
+          tools: makeBashTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events.find((e) => e.type === "tool-call" && e.name === "bash")).toBeUndefined();
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "containment",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("imds");
+      expect(output?.reason).toContain("169.254.169.254");
+      expect(output?.reason).toContain("Do not retry");
+      expect(output?.reason).toContain("/mode");
+      expect(output?.reason).toContain("--dangerously-skip-permissions");
+      expect(output?.reason).not.toMatch(/run \/mode/i);
+    });
+
+    test("a containment block stops the call before the gate ever asks", async () => {
+      const executed: unknown[] = [];
+      const prompted: string[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneBashThenText(imdsCurl),
+          tools: makeBashTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          approvalPrompt: async (toolName) => {
+            prompted.push(toolName);
+            return "once";
+          },
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(prompted).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "containment",
+      });
+    });
+
+    test("containment blocks never trip repeated-denials, however many times they happen", async () => {
+      const model = new MockLanguageModelV4({ doStream: repeatedImdsCalls(5) });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeBashTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: 5,
+        }),
+      );
+
+      expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+      expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(5);
+      expect(model.doStreamCalls).toHaveLength(5);
+    });
+
+    test("containmentEscapeExpected true lets an IMDS curl through in auto", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneBashThenText(imdsCurl),
+          tools: makeBashTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          containmentEscapeExpected: true,
+        }),
+      );
+
+      expect(executed).toEqual([{ command: imdsCurl }]);
+      expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    });
+
+    test("containmentEscapeExpected true still blocks a non-string bash command", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneBashThenText(1),
+          tools: makeBashTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          containmentEscapeExpected: true,
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "containment",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("unparseable");
+    });
+
+    test("auto plus an mcp assume-role tool is a containment denial and never executes", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: new MockLanguageModelV4({
+            doStream: [
+              streamResult(
+                toolCallChunks("call-1", MCP_TOOL_NAME, {
+                  tool: "mcp_aws_sts_assume_role",
+                  arguments: {},
+                }),
+              ),
+              streamResult(textOnlyChunks("Done")),
+            ],
+          }),
+          tools: {
+            [MCP_TOOL_NAME]: tool({
+              description: "mcp",
+              inputSchema: z.object({
+                tool: z.string(),
+                arguments: z.record(z.string(), z.unknown()).optional(),
+              }),
+              execute: async (input) => {
+                executed.push(input);
+                return "ok";
+              },
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          callSubject: mcpCallSubject,
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "mcp_aws_sts_assume_role",
+        reason: "containment",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("assume-role");
     });
   });
 
