@@ -30,7 +30,7 @@ Preconditions:
 
 ## Gotchas
 
-- The splash banner spells the product **lowercase** (`seri v0.1.0`, bold). There is no uppercase `SERI` anywhere in the TUI — only `SERI_*` config-key names — and `wait=` matching is case-sensitive, so a `wait=SERI` step matches nothing but a token the drive itself typed.
+- The splash banner spells the product **lowercase** (`seri v0.1.1`, bold). There is no uppercase `SERI` anywhere in the TUI — only `SERI_*` config-key names — and `wait=` matching is case-sensitive, so a `wait=SERI` step matches nothing but a token the drive itself typed.
 - The splash on an unauthenticated profile is a login picker — Enter SELECTS the highlighted `Log in` and starts a real WorkOS device flow (can open a browser). Dismiss with `"wait=Esc continue" sleep=400 key=esc "wait=created.@30000" sleep=600`; the Esc needs the settle, a too-early Esc is swallowed.
 - The footer mode label (`⏸ approve-each mode on`) renders behind the splash — it is never proof the splash was dismissed.
 - Waiting on the echo of typed text only works for a mid-text fragment of a longer string; slash commands and short strings get split by cursor redraw (`/ exit` in the stream) and never match — use `type=… sleep=400 key=enter`.
