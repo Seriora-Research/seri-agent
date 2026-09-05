@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { checkPermission } from "../../src/gate/gate";
-import {
-  decideFsPolicy,
-  reduceConsent,
-  type PolicyFact,
-} from "../../src/gate/fsBoundary";
+import { decideFsPolicy, reduceConsent, type PolicyFact } from "../../src/gate/fsBoundary";
 
 function fact(overrides: Partial<PolicyFact> = {}): PolicyFact {
   return {
@@ -77,7 +73,9 @@ describe("decideFsPolicy", () => {
   test("allowed-this-run falls through to the name gate", () => {
     expect(decideFsPolicy(fact({ consent: "allowed-this-run" }))).toBe("name-gate");
     expect(
-      decideFsPolicy(fact({ consent: "allowed-this-run", toolClass: "write", mode: "approve-each" })),
+      decideFsPolicy(
+        fact({ consent: "allowed-this-run", toolClass: "write", mode: "approve-each" }),
+      ),
     ).toBe("name-gate");
   });
 });

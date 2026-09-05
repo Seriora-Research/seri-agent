@@ -100,9 +100,9 @@ describe("locationForCall", () => {
       "nopath",
     );
     expect(locationForCall(cwd, "bash", { command: "cat /etc/passwd" })).toBe("nopath");
-    expect(locationForCall(cwd, "powershell", { command: "Get-Content C:\\Windows\\win.ini" })).toBe(
-      "nopath",
-    );
+    expect(
+      locationForCall(cwd, "powershell", { command: "Get-Content C:\\Windows\\win.ini" }),
+    ).toBe("nopath");
     expect(locationForCall(cwd, "mcp_exa_web_search", { path: "/etc/passwd" })).toBe("nopath");
   });
 });

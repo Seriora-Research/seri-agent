@@ -9,11 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
-import {
-  type Consent,
-  decideFsPolicy,
-  reduceConsent,
-} from "../gate/fsBoundary";
+import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { locationForCall } from "../gate/workingDir";
 import { withCodexStoreOption } from "../provider/codex";
@@ -256,9 +252,7 @@ async function decidePermission(args: {
     args.allowedTools.add(args.subject);
     return { verdict: "allow-new" };
   }
-  return answer === "no"
-    ? { verdict: "deny-declined", denyKind: "mode" }
-    : { verdict: "allow" };
+  return answer === "no" ? { verdict: "deny-declined", denyKind: "mode" } : { verdict: "allow" };
 }
 
 function executionDeniedReason(
@@ -899,11 +893,7 @@ export async function* runLoop(opts: {
           toolName: call.toolName,
           output: {
             type: "execution-denied",
-            reason: executionDeniedReason(
-              subject,
-              opts.permissionMode,
-              decided.denyKind ?? "mode",
-            ),
+            reason: executionDeniedReason(subject, opts.permissionMode, decided.denyKind ?? "mode"),
           },
         });
         continue;
