@@ -114,7 +114,7 @@ required. Open a new terminal afterwards so the `PATH` change takes effect.
 
 Refresh an existing install with `seri update`. That talks to GitHub Releases for this
 repo, verifies `SHA256SUMS`, and replaces the binary you ran. It refuses a source checkout
-(`bun run dev`). Pin a tag with `SERI_VERSION=v0.1.0` the same way the install scripts do.
+(`bun run dev`). Pin a tag with `SERI_VERSION=v0.1.1` the same way the install scripts do.
 
 ### Without piping to a shell
 
