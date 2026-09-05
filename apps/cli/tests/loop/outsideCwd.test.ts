@@ -330,4 +330,71 @@ describe("runLoop outside-cwd FS policy", () => {
     expect(asked).toEqual([{ name: "write_file", args: { path: "/tmp/out.txt" } }]);
     expect(executed).toEqual(["/tmp/out.txt"]);
   });
+
+  test("an unpersisted write_file outside asks once, not once for the folder and again for the tool", async () => {
+    const asked: unknown[] = [];
+    const executed: string[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "/tmp/out.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: makeTools(async (input) => {
+          executed.push(input.path);
+          return "ok";
+        }),
+        messages: baseMessages,
+        permissionMode: "approve-each",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        approvalPrompt: async (name, args) => {
+          asked.push({ name, args });
+          return "once";
+        },
+      }),
+    );
+    expect(asked).toEqual([{ name: "write_file", args: { path: "/tmp/out.txt" } }]);
+    expect(executed).toEqual(["/tmp/out.txt"]);
+  });
+
+  test("always on an outside write grants nothing beyond this run: no tool-allowed, and the next inside write still asks", async () => {
+    const asked: unknown[] = [];
+    const executed: string[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "/tmp/out.txt" })),
+        streamResult(toolCallChunks("call-2", "write_file", { path: "inside.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: makeTools(async (input) => {
+          executed.push(input.path);
+          return "ok";
+        }),
+        messages: baseMessages,
+        permissionMode: "approve-each",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        approvalPrompt: async (name, args) => {
+          asked.push({ name, args });
+          return "always";
+        },
+      }),
+    );
+    expect(asked).toEqual([
+      { name: "write_file", args: { path: "/tmp/out.txt" } },
+      { name: "write_file", args: { path: "inside.txt" } },
+    ]);
+    expect(executed).toEqual(["/tmp/out.txt", "inside.txt"]);
+    expect(events.filter((e) => e.type === "tool-allowed")).toEqual([
+      { type: "tool-allowed", name: "write_file" },
+    ]);
+  });
 });

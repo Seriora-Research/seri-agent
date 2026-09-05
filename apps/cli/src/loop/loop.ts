@@ -242,6 +242,9 @@ async function decidePermission(args: {
         answer === "no" ? { type: "declined" } : { type: "granted" },
       );
       if (answer === "no") return { verdict: "deny-declined", denyKind: "outside" };
+      // Folder yes is this call's permit, not a tool grant. Later inside writes still face
+      // checkPermission; an "always" here must not reach allowedTools.add.
+      return { verdict: "allow" };
     }
   }
   const permission = checkPermission(args.subject, args.mode, args.allowedTools);
