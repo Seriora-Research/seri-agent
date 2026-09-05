@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { foldsCase } from "../../src/caseFold";
 import { classifyBuiltin, WRITE_TOOL_NAMES } from "../../src/provider/tools";
 import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/gate";
@@ -101,9 +102,118 @@ describe("checkPermission", () => {
   // The seam a caller composing a non-built-in tool set uses; the default is only a default.
   describe("a caller-supplied classify", () => {
     test("decides in both directions, overriding the built-in classification", () => {
-      expect(checkPermission("bash", "read-only", undefined, () => "read")).toBe("allow");
-      expect(checkPermission("read_file", "read-only", undefined, () => "write")).toBe("block");
+      expect(checkPermission("bash", "read-only", undefined, { classify: () => "read" })).toBe(
+        "allow",
+      );
+      expect(
+        checkPermission("read_file", "read-only", undefined, { classify: () => "write" }),
+      ).toBe("block");
     });
+  });
+
+  describe("path denials", () => {
+    const missing = "/tmp/seri-does-not-exist/secret.txt";
+    const denials = [{ tool: "read_file", pattern: "/tmp/seri-does-not-exist/**" }];
+
+    test("a deny rule blocks a missing path in every mode, before the read short-circuit", () => {
+      for (const mode of ["read-only", "approve-each", "auto"] as const) {
+        expect(
+          checkPermission("read_file", mode, undefined, {
+            input: { path: missing },
+            denials,
+          }),
+        ).toBe("block");
+      }
+    });
+
+    test("a deny rule for glob or grep blocks a missing search path", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, {
+          input: { path: missing, pattern: "*.txt" },
+          denials: [{ tool: "glob", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+      expect(
+        checkPermission("grep", "auto", undefined, {
+          input: { path: missing, pattern: "secret" },
+          denials: [{ tool: "grep", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+    });
+
+    test("a deny for one tool does not block another tool on the same path", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, {
+          input: { path: missing, pattern: "*.txt" },
+          denials,
+        }),
+      ).toBe("allow");
+    });
+
+    test("a path that does not match the pattern is still allowed", () => {
+      expect(
+        checkPermission("read_file", "auto", undefined, {
+          input: { path: "/tmp/other/file.txt" },
+          denials,
+        }),
+      ).toBe("allow");
+    });
+
+    test("a trailing /** pattern also blocks the directory itself", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, {
+          input: { path: "/tmp/seri-does-not-exist", pattern: "*.txt" },
+          denials: [{ tool: "glob", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+    });
+
+    test("the template .env rule matches ./, absolute, and .. spellings of the same file", () => {
+      const cwd = "/tmp/seri-project";
+      const denials = [{ tool: "read_file", pattern: ".env" }];
+      const check = (path: string) =>
+        checkPermission("read_file", "auto", undefined, {
+          input: { path },
+          denials,
+          cwd,
+        });
+      expect(check(".env")).toBe("block");
+      expect(check("./.env")).toBe("block");
+      expect(check("/tmp/seri-project/.env")).toBe("block");
+      expect(check("subdir/../.env")).toBe("block");
+      expect(check("other.env")).toBe("allow");
+    });
+
+    test("a glob deny matches a .. spelling that resolves onto the denied tree", () => {
+      const denials = [{ tool: "glob", pattern: "/tmp/secret/**" }];
+      expect(
+        checkPermission("glob", "auto", undefined, {
+          input: { path: "/tmp/other/../secret/missing", pattern: "*.txt" },
+          denials,
+          cwd: "/tmp/app",
+        }),
+      ).toBe("block");
+      expect(
+        checkPermission("glob", "auto", undefined, {
+          input: { path: "../secret/missing", pattern: "*.txt" },
+          denials,
+          cwd: "/tmp/app",
+        }),
+      ).toBe("block");
+    });
+
+    (foldsCase() ? test : test.skip)(
+      "a deny matches a case-folded spelling of the same path",
+      () => {
+        expect(
+          checkPermission("read_file", "auto", undefined, {
+            input: { path: "/tmp/Secret/missing" },
+            denials: [{ tool: "read_file", pattern: "/tmp/secret/**" }],
+            cwd: "/tmp",
+          }),
+        ).toBe("block");
+      },
+    );
   });
 });
 

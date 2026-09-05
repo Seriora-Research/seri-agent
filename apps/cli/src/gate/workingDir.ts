@@ -4,7 +4,7 @@ import { foldsCase } from "../caseFold";
 // A daemon hosts concurrent sessions and never calls chdir, so each toolset has to carry its own
 // directory.
 export function resolveAgainstCwd(cwd: string, path: string): string {
-  return isAbsolute(path) ? path : resolve(cwd, path);
+  return resolve(cwd, path);
 }
 
 function normalize(path: string): string {

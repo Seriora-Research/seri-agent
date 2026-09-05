@@ -1,6 +1,9 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { resolveAgainstCwd } from "../gate/workingDir";
+
+export { resolveAgainstCwd };
+
 import { isBashAvailable, runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
@@ -11,7 +14,10 @@ import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { writeFile } from "../tools/writeFile";
 
 // Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
-// sessions and never calls chdir, so each toolset has to carry its own directory.
+// sessions and never calls chdir, so each toolset has to carry its own directory. Always
+// `resolve`, including for an absolute input: `isAbsolute ? path : resolve(cwd, path)` would
+// leave `/abs/other/../secret` un-normalized, and the permission matcher has to judge the
+// same string the tool will probe.
 export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
     description: "Read a file's contents as text.",

@@ -243,6 +243,7 @@ export async function driveLoop(
     model,
     worktree,
     allowedTools,
+    pathDenials,
     catalog,
     catalogEntry,
     route,
@@ -417,6 +418,7 @@ export async function driveLoop(
     agents: prepared.agents,
     permissionMode: getPermissionMode,
     allowedTools,
+    pathDenials,
     checkpointer,
     reasoningEffort,
     cwd: worktree,
@@ -528,6 +530,8 @@ export async function driveLoop(
           // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
           // below.
           allowedTools,
+          pathDenials,
+          cwd: session.cwd,
           // The `mcp` tool composed above is one ToolSet key standing in for every tool on every
           // configured server — mcpCallSubject is what tells the gate, the approval prompt and
           // every rendered event which one a given call actually means, resolving to the umbrella

@@ -286,6 +286,7 @@ export async function runArchivist(args: {
     contextWindowSize: args.contextWindow,
     permissionMode: () => "auto",
     allowedTools: [],
+    pathDenials: [],
     reasoningEffort: args.reasoningEffort,
     onBeforeTool: args.onBeforeTool,
     onAfterTool: args.onAfterTool,
