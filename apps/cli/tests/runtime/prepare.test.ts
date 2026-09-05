@@ -246,6 +246,53 @@ describe("prepareSession + mcp", () => {
       { tool: "read_file", pattern: ".env" },
     ]);
   });
+
+  test("permissions.yaml ask loads onto PreparedRun with the allow-all classifier", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("ask");
+    expect(prepared.classifyToolCall).toBeDefined();
+    expect(prepared.classifyToolCall?.("bash", { command: "git push origin v0.42.0" })).toEqual({
+      kind: "allow",
+    });
+  });
+
+  test("a missing permissions.yaml is deny and still installs the classifier", async () => {
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    expect(prepared.classifyToolCall).toBeDefined();
+  });
+
+  test("a non-TTY run is deny even when YAML says ask", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    expect(prepared.classifyToolCall).toBeDefined();
+  });
+
+  test("skipPermissions omits the classifier so a YAML ask cannot fire", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, true, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.permissionMode).toBe("auto");
+    expect(prepared.autoModeOnBlock).toBe("ask");
+    expect(prepared.classifyToolCall).toBeUndefined();
+  });
 });
 
 describe("bindSession + mcp", () => {
@@ -410,6 +457,24 @@ describe("bindSession + mcp", () => {
       () => {},
     );
     expect(prepared.pathDenials).toEqual([{ tool: "grep", pattern: "/hidden/**" }]);
+  });
+
+  test("bindSession reloads autoModeOnBlock from disk", async () => {
+    const prepared = await freshPrepared();
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      mcpConfigDirFor(tmpConfigRoot),
+      permissionsDir,
+      () => {},
+    );
+    expect(prepared.autoModeOnBlock).toBe("ask");
   });
 
   // Asserted through preMountMessages rather than a captured console.error, because that queue IS

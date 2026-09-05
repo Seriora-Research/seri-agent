@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { type Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
+import { parseAutoModeOnBlock, type AutoModeOnBlock } from "../gate/classifier";
 import type { PathDenial } from "../gate/gate";
 import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
@@ -79,6 +80,10 @@ const TEMPLATE = `# seri — tools approved permanently, so seri stops asking.
 #
 # Comments survive when seri rewrites this file. Use them: an entry that cannot say why it exists is
 # an entry nobody later dares remove.
+#
+# autoModeOnBlock: deny
+# In auto mode a classifier block is deny (default) or ask (the ordinary permission prompt, with
+# the classifier's reason attached). A non-TTY run is always deny.
 
 # Approved in every project. seri never writes here — move an entry up from \`projects\` by hand when
 # you mean it everywhere, and delete it here to take it back.
@@ -268,6 +273,21 @@ export function loadGrants(
 
 export function effectiveTools(grants: Grants): string[] {
   return [...new Set([...grants.global, ...grants.project])];
+}
+
+export function loadAutoModeOnBlock(
+  configDir: string,
+  onWarning?: (message: string) => void,
+): AutoModeOnBlock {
+  const state = readStore(configDir);
+  if (state.status !== "ok") return "deny";
+  const raw = state.doc.get("autoModeOnBlock");
+  const value = raw instanceof Scalar ? raw.value : raw;
+  if (value === undefined || value === null) return "deny";
+  if (value !== "ask" && value !== "deny") {
+    onWarning?.(`ignoring autoModeOnBlock ${JSON.stringify(value)}: expected "ask" or "deny"`);
+  }
+  return parseAutoModeOnBlock(value);
 }
 
 // Directory 0o700, file 0o600, write-then-rename — the shape of config/config.ts's writeConfig,

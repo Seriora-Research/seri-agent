@@ -17,6 +17,7 @@ import {
   effectiveTools,
   forgetGrant,
   isPersistableTool,
+  loadAutoModeOnBlock,
   loadDenials,
   loadGrants,
   PERSISTABLE_TOOL_NAMES,
@@ -473,5 +474,56 @@ describe("permissions store", () => {
         : undefined;
       expect(rememberGrant(dir, "/w", name, undefined, fingerprint)).toBe(true);
     }
+  });
+});
+
+describe("loadAutoModeOnBlock", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "seri-permissions-autoblock-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a missing file is deny and is not created", () => {
+    expect(loadAutoModeOnBlock(dir)).toBe("deny");
+    expect(existsSync(permissionsPath(dir))).toBe(false);
+  });
+
+  test("a grants-only file is deny", () => {
+    writeFileSync(permissionsPath(dir), "global: []\nprojects: {}\n");
+    expect(loadAutoModeOnBlock(dir)).toBe("deny");
+  });
+
+  test("ask is honoured when the rest of the file is well-formed", () => {
+    writeFileSync(permissionsPath(dir), "global: []\nprojects: {}\nautoModeOnBlock: ask\n");
+    expect(loadAutoModeOnBlock(dir)).toBe("ask");
+  });
+
+  test("an extra YAML key does not make the file malformed", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      "global: []\nprojects: {}\nunrelated: 1\nautoModeOnBlock: ask\n",
+    );
+    expect(loadAutoModeOnBlock(dir)).toBe("ask");
+  });
+
+  test("an unknown value warns and is deny", () => {
+    writeFileSync(permissionsPath(dir), "global: []\nprojects: {}\nautoModeOnBlock: prompt\n");
+    const warnings: string[] = [];
+    expect(loadAutoModeOnBlock(dir, (m) => warnings.push(m))).toBe("deny");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("autoModeOnBlock");
+    expect(warnings[0]).toContain("prompt");
+  });
+
+  test("a malformed file is deny without a dedicated warning of its own", () => {
+    writeFileSync(permissionsPath(dir), ":::not yaml:::");
+    const warnings: string[] = [];
+    expect(loadAutoModeOnBlock(dir, (m) => warnings.push(m))).toBe("deny");
+    expect(warnings).toEqual([]);
   });
 });

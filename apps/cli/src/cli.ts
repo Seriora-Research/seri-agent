@@ -93,6 +93,7 @@ import type { HooksLoad } from "./hooks/registry";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
+  type ApprovalDetail,
   type ApprovalPrompt,
   DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
@@ -823,7 +824,7 @@ function makeApprovalPrompt(
   // reads and needs no approval at all; this only engages once stdin has actually ended.
   let ended = false;
 
-  return (toolName, args, signal) =>
+  return (toolName, args, signal, detail) =>
     new Promise<ApprovalAnswer>((resolve) => {
       if (signal?.aborted === true || ended) {
         resolve("no");
@@ -858,17 +859,20 @@ function makeApprovalPrompt(
         }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(approvalPromptText(toolName, args, offersAlways), (answer) => {
-        answered = true;
-        abort.dispose();
-        rl.close();
-        const typed = answer.trim().toLowerCase();
-        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-        // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-        // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
-        const wantsAlways = offersAlways && (typed === "a" || typed === "always");
-        resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
-      });
+      rl.question(
+        approvalPromptText(toolName, args, offersAlways, detail?.classifierReason),
+        (answer) => {
+          answered = true;
+          abort.dispose();
+          rl.close();
+          const typed = answer.trim().toLowerCase();
+          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+          // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
+          // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
+          const wantsAlways = offersAlways && (typed === "a" || typed === "always");
+          resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
+        },
+      );
     });
 }
 
@@ -1651,6 +1655,7 @@ async function runTui(
     toolName: string,
     args: unknown,
     signal?: AbortSignal,
+    detail?: ApprovalDetail,
   ): Promise<ApprovalAnswer> {
     return new Promise<ApprovalAnswer>((resolve) => {
       // Mirrors makeApprovalPrompt's own already-aborted check: a turn already cancelled before
@@ -1676,7 +1681,15 @@ async function runTui(
         abort.dispose();
         resolve(answer);
       };
-      dispatch({ type: "approval-requested", toolName, args, offersAlways });
+      dispatch({
+        type: "approval-requested",
+        toolName,
+        args,
+        offersAlways,
+        ...(detail?.classifierReason !== undefined
+          ? { classifierReason: detail.classifierReason }
+          : {}),
+      });
     });
   }
 

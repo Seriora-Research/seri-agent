@@ -424,10 +424,13 @@ export async function driveLoop(
     cwd: worktree,
     blockReadsOutsideWorkingDirectories: standingDeny,
     outsideConsent: prepared.outsideConsent,
-    // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
-    // these two for why a child gets the hooks even though it deliberately does not get the rules.
+    // Hooks and the classifier both have to ride down: a child never sees the parent's
+    // approvalPrompt, and SubagentRuntime's own comments on each pair say why omitting either
+    // would punch a hole through auto.
     onBeforeTool: hookRunner?.onBeforeTool,
     onAfterTool: hookRunner?.onAfterTool,
+    classifyToolCall: prepared.classifyToolCall,
+    autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
     resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
@@ -540,6 +543,8 @@ export async function driveLoop(
           // unchanged for anything that isn't literally "mcp".
           callSubject: mcpCallSubject,
           approvalPrompt,
+          classifyToolCall: prepared.classifyToolCall,
+          autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
           workingDirectory: session.cwd,
           blockReadsOutsideWorkingDirectories: standingDeny,
           askOutsideFs,
@@ -700,6 +705,8 @@ export async function driveLoop(
         // it runs on a hardcoded "auto" permission mode.
         onBeforeTool: hookRunner?.onBeforeTool,
         onAfterTool: hookRunner?.onAfterTool,
+        classifyToolCall: prepared.classifyToolCall,
+        autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
       });
       prepared.trajectory.recordArchivist(archivist);
     }

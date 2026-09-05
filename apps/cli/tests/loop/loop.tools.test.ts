@@ -9,6 +9,7 @@ import { z } from "zod";
 import { createAskUserPark } from "../../src/ask-user/park";
 import { withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
+import type { ToolCallClassifier } from "../../src/gate/classifier";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
@@ -2142,6 +2143,266 @@ describe("runLoop", () => {
         }),
       );
       expect(executed).toEqual([`badge ${mermaidInkUrl}`]);
+    });
+  });
+
+  describe("autoModeOnBlock", () => {
+    function bashTools(execute: (input: { command: string }) => Promise<string>): ToolSet {
+      return {
+        bash: tool({
+          description: "run a command",
+          inputSchema: z.object({ command: z.string() }),
+          execute,
+        }),
+      };
+    }
+
+    const blockPush: ToolCallClassifier = (name, args) => {
+      const command =
+        args !== null && typeof args === "object" && "command" in args
+          ? String((args as { command: unknown }).command)
+          : "";
+      if (name === "bash" && command.includes("git push")) {
+        return { kind: "block", reason: "tag push publishes the package" };
+      }
+      return { kind: "allow" };
+    };
+
+    function classifierOutputReason(events: LoopEvent[]): string | undefined {
+      // Not `.at(-1)` on the last messages-updated: the tool turn is followed by a text-only
+      // turn whose own messages-updated ends in an assistant message. Same shape the PreToolUse
+      // denial tests use.
+      const toolMessage = events
+        .filter(
+          (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+            e.type === "messages-updated",
+        )
+        .map((e) => e.messages.at(-1))
+        .find((message) => message?.role === "tool");
+      const output = (toolMessage?.content as { output: { reason?: string } }[] | undefined)?.[0]
+        ?.output;
+      return output?.reason;
+    }
+
+    test("default deny hard-blocks a classifier match in auto", async () => {
+      const executed: unknown[] = [];
+      const tools = bashTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "bash", { command: "git push origin v0.42.0" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: blockPush,
+          approvalPrompt: async () => {
+            throw new Error("deny must not prompt");
+          },
+        }),
+      );
+
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "blocked",
+      });
+      expect(executed).toEqual([]);
+      const reason = classifierOutputReason(events);
+      expect(reason).toContain("auto-mode classifier");
+      expect(reason).toContain("tag push publishes the package");
+      expect(reason).not.toContain("/mode");
+    });
+
+    test("ask with no prompt is still a hard deny", async () => {
+      const executed: unknown[] = [];
+      const tools = bashTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "bash", { command: "git push origin v0.42.0" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: blockPush,
+          autoModeOnBlock: "ask",
+        }),
+      );
+
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "blocked",
+      });
+      expect(executed).toEqual([]);
+    });
+
+    test("ask with a prompt shows the classifier reason and can allow once", async () => {
+      const executed: unknown[] = [];
+      const seen: Array<{ tool: string; reason?: string }> = [];
+      const tools = bashTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "bash", { command: "git push origin v0.42.0" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: blockPush,
+          autoModeOnBlock: "ask",
+          approvalPrompt: async (toolName, _args, _signal, detail) => {
+            seen.push({ tool: toolName, reason: detail?.classifierReason });
+            return "once";
+          },
+        }),
+      );
+
+      expect(seen).toEqual([{ tool: "bash", reason: "tag push publishes the package" }]);
+      expect(events).toContainEqual({ type: "tool-result", name: "bash", result: "ok" });
+      expect(executed).toEqual([{ command: "git push origin v0.42.0" }]);
+    });
+
+    test("ask declined is a decline, not a mode block", async () => {
+      const tools = bashTools(async () => "ok");
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "bash", { command: "git push origin v0.42.0" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: blockPush,
+          autoModeOnBlock: "ask",
+          approvalPrompt: async () => "no",
+        }),
+      );
+
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "bash",
+        reason: "declined",
+      });
+    });
+
+    test("an always grant skips the classifier on the next call of that tool", async () => {
+      let classified = 0;
+      const classify: ToolCallClassifier = (name) => {
+        if (name !== "write_file") return { kind: "allow" };
+        classified++;
+        return { kind: "block", reason: "writes are risky" };
+      };
+      const tools = makeTools(async () => "ok");
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+          streamResult(toolCallChunks("call-2", "write_file", { path: "b.txt" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: classify,
+          autoModeOnBlock: "ask",
+          approvalPrompt: async () => "always",
+        }),
+      );
+
+      expect(classified).toBe(1);
+      expect(events.filter((e) => e.type === "tool-allowed")).toEqual([
+        { type: "tool-allowed", name: "write_file" },
+      ]);
+      expect(
+        events.filter((e) => e.type === "tool-result" && e.name === "write_file"),
+      ).toHaveLength(2);
+    });
+
+    test("without a classifier, auto still allows writes", async () => {
+      const executed: unknown[] = [];
+      const tools = makeTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          autoModeOnBlock: "ask",
+          approvalPrompt: async () => {
+            throw new Error("no classifier means no prompt");
+          },
+        }),
+      );
+      expect(executed).toEqual([{ path: "a.txt" }]);
+    });
+
+    test("a classifier does not run on a read tool", async () => {
+      const classify: ToolCallClassifier = () => {
+        throw new Error("classifier must not see read_file");
+      };
+      const tools: ToolSet = {
+        read_file: tool({
+          description: "read a file",
+          inputSchema: z.object({ path: z.string() }),
+          execute: async () => "ok",
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "read_file", { path: "a.txt" })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools,
+          messages: baseMessages,
+          permissionMode: "auto",
+          classifyToolCall: classify,
+          autoModeOnBlock: "deny",
+        }),
+      );
+      expect(events).toContainEqual({ type: "tool-result", name: "read_file", result: "ok" });
     });
   });
 });

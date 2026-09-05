@@ -9,6 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
+import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
 import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
 import { checkPermission, denialBlocks, type PathDenial, type PermissionMode } from "../gate/gate";
 import {
@@ -114,10 +115,15 @@ export type LoopEvent =
 // recorded as a denial.
 export type ApprovalAnswer = "once" | "always" | "no";
 
+export type ApprovalDetail = {
+  readonly classifierReason?: string;
+};
+
 export type ApprovalPrompt = (
   toolName: string,
   args: unknown,
   signal?: AbortSignal,
+  detail?: ApprovalDetail,
 ) => Promise<ApprovalAnswer>;
 
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
@@ -125,11 +131,11 @@ export type ApprovalPrompt = (
 const DEFAULT_MAX_ITERATIONS = 500;
 // Consecutive DECLINED calls — a live "no" at the prompt, never a mode block — reset by any
 // approved call, after which the run stops instead of continuing to the iteration cap. Counting
-// only declines (not blocks) is what confines this stop to approve-each: checkPermission returns
-// "block" for every write in read-only, never "needs-approval", so a read-only session can never
-// produce a decline at all — a session that probes a write three times, a hundred turns apart,
-// stays entirely unaffected by this constant no matter how many times it happens. In approve-each,
-// where a decline means a human answered "no" to a live question, three in a row is a real signal.
+// only declines (not blocks) is what keeps a read-only session from ever hitting this stop:
+// checkPermission returns "block" for every write in read-only, never "needs-approval". Auto can
+// produce a decline when autoModeOnBlock is ask and a classifier block falls through to the
+// ordinary prompt — a human answering no three times in a row is the same signal there as in
+// approve-each.
 // The trade this accepts: a model COULD pad declined retries with an approved read to keep
 // resetting the counter and never trip this stop. That evasion is theoretical, not measured —
 // nothing has observed a real model doing it — and two things already sit under it if it ever
@@ -203,15 +209,15 @@ function errorText(err: unknown): string {
 // Two ways to "deny", carried out as two verdicts rather than one so the loop can count only the
 // one that is a signal about the run: "deny-blocked" is the mode doing its job (checkPermission
 // returned "block", the FS table refused an outside path with nobody to ask, a packed-renderer
-// upload, or there was no approvalPrompt — the same as block, just arrived at differently, because
-// there is still no one to ask); "deny-declined" is a real refusal — a live prompt that answered
-// "no". Only the second should ever increment a denial counter or flip an exit code; see
-// MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
-// Packed-renderer-upload is the only rail that reads the call's INPUT in auto: an input that
-// packs content into a public diagram-renderer URL is an upload to that host, refused unless
-// this turn's human text asked for the render. The deny verdicts carry the text the model reads
-// because the blocks need different remedies (/mode cures a mode block and cannot cure packed,
-// path, or outside-cwd) and only this function knows which it produced.
+// upload, a classifier deny, or there was no approvalPrompt — the same as block, just arrived at
+// differently, because there is still no one to ask); "deny-declined" is a real refusal — a live
+// prompt that answered "no". Only the second should ever increment a denial counter or flip an
+// exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
+// Packed-renderer-upload and the optional classifier both read the call's INPUT in auto. Packed
+// refuses an input that packs content into a public diagram-renderer URL unless this turn's
+// human text asked for the render. The deny verdicts carry the text the model reads because the
+// blocks need different remedies (/mode cures a mode block and cannot cure packed, path,
+// outside-cwd, or a classifier) and only this function knows which it produced.
 type PermissionVerdict =
   | { kind: "allow" | "allow-new" }
   | { kind: "deny-blocked" | "deny-declined"; reason: string };
@@ -231,6 +237,8 @@ async function decidePermission(args: {
   standingDeny: boolean;
   askOutsideFs: boolean;
   consent: { current: Consent };
+  classifyToolCall: ToolCallClassifier | undefined;
+  autoModeOnBlock: AutoModeOnBlock;
 }): Promise<PermissionVerdict> {
   if (args.mode === "auto" && packedUploadAppliesTo(args.toolName)) {
     const upload = findPackedRendererUpload(args.input);
@@ -299,7 +307,33 @@ async function decidePermission(args: {
     denials: args.denials,
     cwd: args.cwd,
   });
-  if (permission === "allow") return { kind: "allow" };
+  if (permission === "allow") {
+    if (
+      args.mode === "auto" &&
+      classifyBuiltin(args.toolName) !== "read" &&
+      !args.allowedTools.has(args.subject)
+    ) {
+      const classified = args.classifyToolCall?.(args.subject, args.input) ?? { kind: "allow" };
+      if (classified.kind === "block") {
+        const reason =
+          `Tool "${args.subject}" was blocked by the auto-mode classifier: ${classified.reason} ` +
+          `Do not retry this call.`;
+        if (args.autoModeOnBlock === "ask" && args.approvalPrompt !== undefined) {
+          const answer = await args.approvalPrompt(args.subject, args.input, args.signal, {
+            classifierReason: classified.reason,
+          });
+          if (answer === "always") {
+            args.allowedTools.add(args.subject);
+            return { kind: "allow-new" };
+          }
+          if (answer === "no") return { kind: "deny-declined", reason };
+          return { kind: "allow" };
+        }
+        return { kind: "deny-blocked", reason };
+      }
+    }
+    return { kind: "allow" };
+  }
   if (permission === "block") {
     if (denialBlocks(args.denials, args.subject, args.input, args.cwd)) {
       return {
@@ -423,6 +457,8 @@ export async function* runLoop(opts: {
   // Session cwd the toolset already resolves against. Path denials use the same string
   // so `read_file(.env)` matches `./.env` and an absolute spelling of the same file.
   cwd?: string;
+  classifyToolCall?: ToolCallClassifier;
+  autoModeOnBlock?: AutoModeOnBlock;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -936,6 +972,8 @@ export async function* runLoop(opts: {
         standingDeny: opts.blockReadsOutsideWorkingDirectories === true,
         askOutsideFs: opts.askOutsideFs === true,
         consent: fsConsent,
+        classifyToolCall: opts.classifyToolCall,
+        autoModeOnBlock: opts.autoModeOnBlock ?? "deny",
       });
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
