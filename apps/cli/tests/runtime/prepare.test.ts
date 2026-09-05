@@ -225,6 +225,20 @@ describe("prepareSession + mcp", () => {
       ),
     ).toBe(true);
   });
+
+  test("prepareSession loads path denials from permissions.yaml", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n  - read_file(.env)\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    expect(typeof result).not.toBe("number");
+    expect((result as PreparedRun).pathDenials).toEqual([
+      { tool: "glob", pattern: "/secret/**" },
+      { tool: "read_file", pattern: ".env" },
+    ]);
+  });
 });
 
 describe("bindSession + mcp", () => {
@@ -371,20 +385,6 @@ describe("bindSession + mcp", () => {
 
     expect(prepared.mcp.get("exa")).toBeDefined();
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
-  });
-
-  test("prepareSession loads path denials from permissions.yaml", async () => {
-    mkdirSync(permissionsDir, { recursive: true });
-    writeFileSync(
-      permissionsPath(permissionsDir),
-      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n  - read_file(.env)\n",
-    );
-    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
-    expect(typeof result).not.toBe("number");
-    expect((result as PreparedRun).pathDenials).toEqual([
-      { tool: "glob", pattern: "/secret/**" },
-      { tool: "read_file", pattern: ".env" },
-    ]);
   });
 
   test("bindSession reloads path denials from disk", async () => {
