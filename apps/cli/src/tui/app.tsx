@@ -77,6 +77,7 @@ import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
 import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
 import { PlanReviewPanel } from "./components/PlanReviewPanel";
+import { ChecklistBlock } from "./components/ChecklistBlock";
 import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
@@ -822,6 +823,7 @@ export function App({
         )}
       </box>
       {state.pendingTool !== undefined &&
+        state.pendingTool.name !== "todo" &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
           <WritePreview name={state.pendingTool.name} args={state.pendingTool.args} />
@@ -831,15 +833,7 @@ export function App({
           </text>
         ))}
       <ErrorLine message={state.commandError} />
-      {/* Directly above the input box and below TurnStatus, which is where the issue's own
-      simulation puts it: a queued message has already left the user's hands as far as the box is
-      concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
-      branch of it — like SubagentPanel it accompanies whatever is mounted there
-      rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
-      keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
-      key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
-      the transcript box above is `flexGrow`, so the rows it does draw come out of the scrollbox
-      with no height budget to thread through here. */}
+      <ChecklistBlock items={state.checklist} />
       <QueueBlock
         queue={state.queue}
         width={width}

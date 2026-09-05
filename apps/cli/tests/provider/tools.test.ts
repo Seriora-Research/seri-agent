@@ -14,6 +14,7 @@ import {
   WRITE_TOOL_NAMES,
 } from "../../src/provider/tools";
 import { SKILL_TOOL_NAME } from "../../src/skills/tool";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
@@ -176,11 +177,6 @@ describe("classifyBuiltin", () => {
     }
   });
 
-  // The two composed tools are not keys of toolDefinitions, so READ_ONLY_TOOL_NAMES cannot contain
-  // them and the classifier enumerates them by hand — `skill` as a bare literal, because provider/
-  // does not import skills/. SKILL_TOOL_NAME is imported HERE, where the layering does not apply, so
-  // this assertion is the only thing standing between renaming that constant and silently making
-  // every read-only session unable to load a skill.
   test("plan tools are read-class but not concurrent-read batch members", () => {
     expect(classifyBuiltin(ASK_PLAN_QUESTIONS_TOOL_NAME)).toBe("read");
     expect(classifyBuiltin(SUBMIT_PLAN_TOOL_NAME)).toBe("read");
@@ -193,6 +189,17 @@ describe("classifyBuiltin", () => {
     expect(READ_ONLY_TOOL_NAMES).not.toContain(ASK_USER_TOOL_NAME);
     expect(WRITE_TOOL_NAMES).not.toContain(ASK_USER_TOOL_NAME);
     expect(Object.keys(toolDefinitions)).not.toContain(ASK_USER_TOOL_NAME);
+  });
+
+  test("todo is read-class, not a toolDefinitions key, and not a concurrent-read batch member", () => {
+    expect(TODO_TOOL_NAME).toBe("todo");
+    expect(classifyBuiltin(TODO_TOOL_NAME)).toBe("read");
+    expect(classifyBuiltin("todo")).toBe("read");
+    expect(Object.keys(toolDefinitions)).not.toContain(TODO_TOOL_NAME);
+    expect(READ_ONLY_TOOL_NAMES).not.toContain(TODO_TOOL_NAME);
+    expect(WRITE_TOOL_NAMES).not.toContain(TODO_TOOL_NAME);
+    expect(FS_MUTATING_TOOL_NAMES).not.toContain(TODO_TOOL_NAME);
+    expect(classifyBuiltin(SKILL_TOOL_NAME)).toBe("read");
   });
 
   // The point of enumerating the read class rather than the write one: MCP makes the tool set open,

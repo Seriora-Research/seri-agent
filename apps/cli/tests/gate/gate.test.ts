@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { classifyBuiltin, WRITE_TOOL_NAMES } from "../../src/provider/tools";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/gate";
 
 const READ_TOOL_NAMES = ["read_file", "grep", "glob"];
@@ -26,6 +27,9 @@ describe("checkPermission", () => {
         expect(checkPermission(name, "read-only")).toBe("allow");
       });
     }
+    test("allows todo", () => {
+      expect(checkPermission(TODO_TOOL_NAME, "read-only")).toBe("allow");
+    });
   });
 
   describe("approve-each", () => {

@@ -178,22 +178,23 @@ export type ToolClass = "read" | "write";
 // `bash` re-enters this same gate at the same mode rather than escaping it, and `skill` reads one
 // file the user themselves put under `.seri/skills/`.
 //
-// `ask_plan_questions`, `submit_plan`, and `ask_user` are the same class for the same reason they
-// are not in `READ_ONLY_TOOL_NAMES`: they do not write the worktree, so the gate must not block
-// them under a read-only getter, but they must run sequentially rather than in the concurrent-read
-// batch. Putting `ask_user` on READ_ONLY_TOOL_NAMES would let it share a batch with another
-// sequential UI park.
+// `ask_plan_questions`, `submit_plan`, `todo`, and `ask_user` are the same class for the same
+// reason they are not in `READ_ONLY_TOOL_NAMES`: they do not write the worktree, so the gate must
+// not block them under a read-only getter, but they must run sequentially rather than in the
+// concurrent-read batch. Putting `ask_user` on READ_ONLY_TOOL_NAMES would let it share a batch
+// with another sequential UI park.
 //
-// `skill`, `ask_plan_questions`, `submit_plan` and `ask_user` are literals rather than imports of
-// their own modules' constants because `provider/` sits below `skills/`, `plan/` and `ask-user/`
-// in the module graph, and the foundational modules here do not import the extension modules layered
-// on top of them. The drift a literal invites is guarded in tests/provider/tools.test.ts, which
-// imports each constant and asserts the two still agree — a cross-module import that costs
-// nothing in a test.
+// `skill`, `todo`, `ask_plan_questions`, `submit_plan` and `ask_user` are literals rather than
+// imports of their own modules' constants because `provider/` sits below those modules in the
+// graph, and the foundational modules here do not import the extension modules layered on top of
+// them. The drift a literal invites is guarded in tests/provider/tools.test.ts, which imports
+// each constant and asserts the two still agree — a cross-module import that costs nothing in a
+// test.
 const READ_CLASS_TOOL_NAMES = new Set<string>([
   ...READ_ONLY_TOOL_NAMES,
   DISPATCH_TOOL_NAME,
   "skill",
+  "todo",
   "ask_plan_questions",
   "submit_plan",
   "ask_user",

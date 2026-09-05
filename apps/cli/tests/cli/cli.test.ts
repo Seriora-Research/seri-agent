@@ -606,11 +606,12 @@ describe("run (task invocation)", () => {
     expect(capture()).toBeDefined();
     expect(capture()?.permissionMode).toBe("approve-each");
     // Cwd-bound tools (one factory per session directory), with filesystem-mutating tools wrapped
-    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition
-    // and ask_user (fail-closed without a presenter on this non-TTY path).
+    // for checkpointing, plus dispatch_subagents from driveLoop's withSubagents composition,
+    // todo from withTodo, and ask_user (fail-closed without a presenter on this non-TTY path).
     expect(Object.keys(capture()?.tools ?? {})).toEqual([
       ...Object.keys(toolDefinitions),
       "dispatch_subagents",
+      "todo",
       ASK_USER_TOOL_NAME,
     ]);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
