@@ -1,4 +1,4 @@
-import { onAbort } from "../abort";
+import { abortedError, onAbort } from "../abort";
 import type { AskPrompt, AskUserPresenter, AskUserResult, HumanReply } from "./types";
 
 export type AskUserPark = {
@@ -13,28 +13,44 @@ export type AskUserParkDeps = {
 };
 
 export function createAskUserPark(deps: AskUserParkDeps): AskUserPark {
-  let resolve: ((result: AskUserResult) => void) | undefined;
+  let settle:
+    | { resolve: (result: AskUserResult) => void; reject: (err: unknown) => void }
+    | undefined;
 
   function answer(reply: HumanReply): void {
-    const ok = resolve;
-    if (ok === undefined) return;
-    resolve = undefined;
+    const waiting = settle;
+    if (waiting === undefined) return;
+    settle = undefined;
     deps.dispatchVacate();
-    ok(reply);
+    waiting.resolve(reply);
   }
 
   async function present(prompt: AskPrompt, signal?: AbortSignal): Promise<AskUserResult> {
     if (deps.approvalOccupied()) return { outcome: "unavailable", reason: "nested-approval" };
-    if (resolve !== undefined) return { outcome: "unavailable", reason: "nested-approval" };
-    if (signal?.aborted === true) return { outcome: "cancelled" };
-    return await new Promise<AskUserResult>((ok) => {
+    if (settle !== undefined) return { outcome: "unavailable", reason: "nested-approval" };
+    if (signal?.aborted === true) throw abortedError(signal);
+    return await new Promise<AskUserResult>((ok, fail) => {
       let abort: ReturnType<typeof onAbort> | undefined;
-      resolve = (result) => {
-        abort?.dispose();
-        ok(result);
+      settle = {
+        resolve: (result) => {
+          abort?.dispose();
+          ok(result);
+        },
+        reject: (err) => {
+          abort?.dispose();
+          fail(err);
+        },
       };
-      abort = onAbort(signal, () => answer({ outcome: "cancelled" }));
-      if (resolve === undefined) {
+      abort = onAbort(signal, () => {
+        if (signal === undefined) return;
+        const waiting = settle;
+        settle = undefined;
+        if (waiting === undefined) return;
+        abort?.dispose();
+        deps.dispatchVacate();
+        fail(abortedError(signal));
+      });
+      if (settle === undefined) {
         abort.dispose();
         return;
       }

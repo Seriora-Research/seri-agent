@@ -22,15 +22,16 @@ describe("executeAskUser", () => {
     expect(result.outcome).not.toBe("cancelled");
   });
 
-  test("an already-aborted signal with a presenter is cancelled, not no-human", async () => {
+  test("an already-aborted signal with a presenter rejects, not cancelled or no-human", async () => {
     let called = false;
     const presenter: AskUserPresenter = async () => {
       called = true;
       return { outcome: "picked", choice: "JWT" };
     };
-    const result = await executeAskUser(valid, presenter, AbortSignal.abort());
+    await expect(executeAskUser(valid, presenter, AbortSignal.abort())).rejects.toMatchObject({
+      name: "AbortError",
+    });
     expect(called).toBe(false);
-    expect(result).toEqual({ outcome: "cancelled" });
   });
 
   test("an already-aborted signal without a presenter is still no-human", async () => {

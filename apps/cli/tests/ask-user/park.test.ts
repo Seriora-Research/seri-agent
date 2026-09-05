@@ -56,7 +56,7 @@ describe("createAskUserPark", () => {
     await expect(first).resolves.toEqual({ outcome: "cancelled" });
   });
 
-  test("abort while occupied settles cancelled and vacates", async () => {
+  test("abort while occupied rejects and vacates, not cancelled", async () => {
     let vacated = 0;
     const park = createAskUserPark({
       dispatchOccupy: () => {},
@@ -68,11 +68,11 @@ describe("createAskUserPark", () => {
     const controller = new AbortController();
     const pending = park.present(prompt, controller.signal);
     controller.abort();
-    await expect(pending).resolves.toEqual({ outcome: "cancelled" });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(vacated).toBe(1);
   });
 
-  test("an already-aborted signal does not occupy and is cancelled, not no-human", async () => {
+  test("an already-aborted signal does not occupy and rejects, not no-human", async () => {
     let occupied = 0;
     let vacated = 0;
     const park = createAskUserPark({
@@ -84,8 +84,8 @@ describe("createAskUserPark", () => {
       },
       approvalOccupied: () => false,
     });
-    await expect(park.present(prompt, AbortSignal.abort())).resolves.toEqual({
-      outcome: "cancelled",
+    await expect(park.present(prompt, AbortSignal.abort())).rejects.toMatchObject({
+      name: "AbortError",
     });
     expect(occupied).toBe(0);
     expect(vacated).toBe(0);

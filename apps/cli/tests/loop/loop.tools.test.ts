@@ -6,6 +6,9 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
+import { createAskUserPark } from "../../src/ask-user/park";
+import { withAskUser } from "../../src/ask-user/tool";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
@@ -697,6 +700,57 @@ describe("runLoop", () => {
       ]);
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
       expect(executed).toEqual([]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a cancel during ask_user is recorded as a cancel, not as a declined answer", async () => {
+      const controller = new AbortController();
+      const after: string[] = [];
+      const phase: string[][] = [];
+      const park = createAskUserPark({
+        dispatchOccupy: () => {},
+        dispatchVacate: () => {},
+        approvalOccupied: () => false,
+      });
+      const tools = withAskUser({}, park.present);
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", ASK_USER_TOOL_NAME, {
+              prompt: "Which?",
+              choices: ["a", "b"],
+            }),
+          ),
+        ],
+      });
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+        onAfterTool: async (subject) => {
+          after.push(subject);
+          return [];
+        },
+        onToolPhaseEnd: (executed) => {
+          phase.push(executed.map((row) => row.toolName));
+          return undefined;
+        },
+      })) {
+        events.push(event);
+        if (event.type === "tool-call") controller.abort();
+      }
+      expect(toolRowOf(events).outputs).toEqual([
+        {
+          type: "execution-denied",
+          reason: `Tool "${ASK_USER_TOOL_NAME}" was cancelled by the user before it completed.`,
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain('"outcome":"cancelled"');
+      expect(after).toEqual([]);
+      expect(phase).toEqual([]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
   });

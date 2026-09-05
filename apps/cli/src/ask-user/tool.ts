@@ -1,6 +1,7 @@
 import type { ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
+import { abortedError } from "../abort";
 import { parseAskPrompt, assertReplyMatchesPrompt } from "./parse";
 import {
   ASK_USER_TOOL_NAME,
@@ -41,7 +42,7 @@ export async function executeAskUser(
   const parsed = parseAskPrompt(input);
   if (!parsed.ok) return { outcome: "invalid", issues: parsed.issues };
   if (presenter === undefined) return { outcome: "unavailable", reason: "no-human" };
-  if (signal?.aborted === true) return { outcome: "cancelled" };
+  if (signal?.aborted === true) throw abortedError(signal);
   const raw = await presenter(parsed.prompt, signal);
   if (raw.outcome === "picked" || raw.outcome === "other") {
     return assertReplyMatchesPrompt(parsed.prompt, raw);
