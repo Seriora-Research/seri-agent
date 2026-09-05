@@ -1,12 +1,7 @@
 import type { ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
-import {
-  parseTodoList,
-  TODO_STATUSES,
-  TODO_TOOL_NAME,
-  type TodoList,
-} from "./list";
+import { parseTodoList, TODO_STATUSES, TODO_TOOL_NAME, type TodoList } from "./list";
 
 export { TODO_TOOL_NAME };
 

@@ -16,7 +16,12 @@ import type { McpPanelRow } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
-import { parseTodoList, TODO_TOOL_NAME, todoListFromMessages, type TodoList } from "../../todo/list";
+import {
+  parseTodoList,
+  TODO_TOOL_NAME,
+  todoListFromMessages,
+  type TodoList,
+} from "../../todo/list";
 import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
@@ -1243,8 +1248,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       };
     }
     case "tool-result": {
-      const nextList =
-        event.name === TODO_TOOL_NAME ? parseTodoList(event.result) : undefined;
+      const nextList = event.name === TODO_TOOL_NAME ? parseTodoList(event.result) : undefined;
       return {
         ...state,
         ...(event.name === "dispatch_subagents" ? EMPTY_ROSTER : {}),

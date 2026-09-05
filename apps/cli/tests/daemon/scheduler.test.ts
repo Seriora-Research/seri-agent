@@ -62,9 +62,9 @@ describe("scheduled toolset", () => {
 
   test("assertScheduledToolset rejects a scheduled set with todo injected", () => {
     const dir = makeDir();
-    expect(() =>
-      assertScheduledToolset(withTodo(createScheduledToolDefinitions(dir))),
-    ).toThrow(/todo/);
+    expect(() => assertScheduledToolset(withTodo(createScheduledToolDefinitions(dir)))).toThrow(
+      /todo/,
+    );
   });
 });
 
