@@ -1037,8 +1037,7 @@ export function App({
       )}
       <box flexDirection="row" justifyContent="space-between">
         <box flexDirection="row">
-          <text fg={theme.mode[displayMode]}>{indicatorText}</text>
-          {packedSandbox.length > 0 && <text fg={theme.mode[displayMode]}>{packedSandbox}</text>}
+          <text fg={theme.mode[displayMode]}>{indicatorText}{packedSandbox}</text>
           {showModeHint && <text fg={theme.muted}>{modeHint}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
