@@ -672,6 +672,31 @@ describe("dispatch_subagents", () => {
     expect(opts.reasoningEffort).toBe("medium");
   });
 
+  test("a child shares the parent's outside-cwd latch but is never a live human", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const outsideConsent = { current: "allowed-this-run" as const };
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        cwd: "/tmp/parent-wd",
+        blockReadsOutsideWorkingDirectories: true,
+        outsideConsent,
+        agents: withMutators(),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "tester", goal: "run checks" }] },
+      dispatchOpts("t1"),
+    );
+
+    const opts = calls[0].opts;
+    expect(opts.workingDirectory).toBe("/tmp/parent-wd");
+    expect(opts.blockReadsOutsideWorkingDirectories).toBe(true);
+    expect(opts.askOutsideFs).toBe(false);
+    expect(opts.outsideConsent).toBe(outsideConsent);
+  });
+
   test("a default runtime leaves nested opts.reasoningEffort undefined", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],

@@ -421,6 +421,7 @@ export async function driveLoop(
     reasoningEffort,
     cwd: worktree,
     blockReadsOutsideWorkingDirectories: standingDeny,
+    outsideConsent: prepared.outsideConsent,
     // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
     // these two for why a child gets the hooks even though it deliberately does not get the rules.
     onBeforeTool: hookRunner?.onBeforeTool,
