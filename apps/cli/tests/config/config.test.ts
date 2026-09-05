@@ -253,8 +253,9 @@ describe("standingDenyReadsOutside", () => {
     restoreEnv(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, original);
   });
 
-  test("unset, false, yes, and a typo stay off; only the exact string true is on", () => {
+  test("unset, empty, false, yes, and a typo stay off; only the exact string true is on", () => {
     expect(standingDenyReadsOutside(undefined)).toBe(false);
+    expect(standingDenyReadsOutside("")).toBe(false);
     expect(standingDenyReadsOutside("false")).toBe(false);
     expect(standingDenyReadsOutside("yes")).toBe(false);
     expect(standingDenyReadsOutside("TRUE")).toBe(false);
