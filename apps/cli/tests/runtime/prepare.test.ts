@@ -232,7 +232,7 @@ describe("prepareSession + mcp", () => {
       permissionsPath(permissionsDir),
       "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
     );
-    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
     const prepared = result as PreparedRun;
     expect(prepared.autoModeOnBlock).toBe("ask");
     expect(prepared.classifyToolCall).toBeDefined();
@@ -248,13 +248,25 @@ describe("prepareSession + mcp", () => {
     expect(prepared.classifyToolCall).toBeDefined();
   });
 
+  test("a non-TTY run is deny even when YAML says ask", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    expect(prepared.classifyToolCall).toBeDefined();
+  });
+
   test("skipPermissions omits the classifier so a YAML ask cannot fire", async () => {
     mkdirSync(permissionsDir, { recursive: true });
     writeFileSync(
       permissionsPath(permissionsDir),
       "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
     );
-    const result = await prepareSession(baseCtx(makeDir()), deps, true, false);
+    const result = await prepareSession(baseCtx(makeDir()), deps, true, true);
     const prepared = result as PreparedRun;
     expect(prepared.permissionMode).toBe("auto");
     expect(prepared.autoModeOnBlock).toBe("ask");

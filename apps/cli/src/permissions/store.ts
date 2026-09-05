@@ -82,7 +82,7 @@ const TEMPLATE = `# seri — tools approved permanently, so seri stops asking.
 #
 # autoModeOnBlock: deny
 # In auto mode a classifier block is deny (default) or ask (the ordinary permission prompt, with
-# the classifier's reason attached).
+# the classifier's reason attached). A non-TTY run is always deny.
 
 # Approved in every project. seri never writes here — move an entry up from \`projects\` by hand when
 # you mean it everywhere, and delete it here to take it back.

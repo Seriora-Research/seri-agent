@@ -357,9 +357,10 @@ export type PreparedRun = {
   // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
   // nothing to assign into `session`.
   allowedTools: readonly string[];
-  // From permissions.yaml. Missing or garbage is deny. `--dangerously-skip-permissions` still
-  // loads the value but omits `classifyToolCall` below so a later blocking classifier cannot
-  // fire on a true bypass.
+  // From permissions.yaml on a TTY. Missing or garbage is deny. A non-TTY run is always deny —
+  // YAML ask would otherwise park on makeApprovalPrompt (or count stdin EOF as a decline).
+  // `--dangerously-skip-permissions` still loads the value but omits `classifyToolCall` below
+  // so a later blocking classifier cannot fire on a true bypass.
   autoModeOnBlock?: AutoModeOnBlock;
   classifyToolCall?: ToolCallClassifier;
   // Loaded once here (@seri/model-catalog caches it for the rest of the process anyway) and carried
@@ -941,9 +942,13 @@ export async function prepareSession(
       printWarning(msg, warnSink),
     );
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;
-    const autoModeOnBlock = loadAutoModeOnBlock(ctx.permissionsDir, (msg) =>
+    const loadedAutoModeOnBlock = loadAutoModeOnBlock(ctx.permissionsDir, (msg) =>
       printWarning(msg, warnSink),
     );
+    // YAML ask is a human-at-the-keyboard disposition. A non-TTY run still constructs
+    // makeApprovalPrompt, and a classifier block with ask would park on readline (or treat
+    // EOF as a decline that counts toward MAX_CONSECUTIVE_DENIALS). Headless is deny.
+    const autoModeOnBlock = isTTY ? loadedAutoModeOnBlock : "deny";
     // approve-each only: in read-only the gate blocks these tools before it ever consults the
     // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
     // either would be a sentence the run does not honour. `isTTY ? emit : undefined`, not
