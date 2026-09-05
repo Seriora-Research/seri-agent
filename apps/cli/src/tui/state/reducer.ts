@@ -274,9 +274,6 @@ export type TuiState = {
   // message has not been said to the model yet, and a session resumed with one still pending
   // would replay it with no way for the user to see it coming.
   queue: MessageQueue;
-  // Last successful parent `todo` snapshot. Derived from session.messages (and live from a
-  // successful tool-result). Not session JSON of its own: rewind truncates messages, and this
-  // field is recomputed from whatever successful results remain.
   checklist: TodoList;
   // In-memory live rows for the in-flight dispatch. Cleared when the parent
   // dispatch_subagents tool-result lands (the summaries are already in the parent
@@ -1237,7 +1234,6 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       const settled = settleReasoning(state, Date.now());
       return {
         ...flushStreaming(settled),
-        // dispatch_subagents' live surface is the child panel; todo's is ChecklistBlock.
         status:
           event.name === "dispatch_subagents" || event.name === TODO_TOOL_NAME
             ? ""

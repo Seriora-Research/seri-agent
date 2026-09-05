@@ -176,11 +176,6 @@ describe("classifyBuiltin", () => {
     }
   });
 
-  // The two composed tools are not keys of toolDefinitions, so READ_ONLY_TOOL_NAMES cannot contain
-  // them and the classifier enumerates them by hand — `skill` as a bare literal, because provider/
-  // does not import skills/. SKILL_TOOL_NAME is imported HERE, where the layering does not apply, so
-  // this assertion is the only thing standing between renaming that constant and silently making
-  // every read-only session unable to load a skill.
   test("plan tools are read-class but not concurrent-read batch members", () => {
     expect(classifyBuiltin(ASK_PLAN_QUESTIONS_TOOL_NAME)).toBe("read");
     expect(classifyBuiltin(SUBMIT_PLAN_TOOL_NAME)).toBe("read");

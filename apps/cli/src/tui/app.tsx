@@ -828,15 +828,6 @@ export function App({
           </text>
         ))}
       <ErrorLine message={state.commandError} />
-      {/* Directly above the input box and below TurnStatus, which is where the issue's own
-      simulation puts it: a queued message has already left the user's hands as far as the box is
-      concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
-      branch of it — like SubagentPanel it accompanies whatever is mounted there
-      rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
-      keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
-      key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
-      the transcript box above is `flexGrow`, so the rows it does draw come out of the scrollbox
-      with no height budget to thread through here. */}
       <ChecklistBlock items={state.checklist} />
       <QueueBlock
         queue={state.queue}
