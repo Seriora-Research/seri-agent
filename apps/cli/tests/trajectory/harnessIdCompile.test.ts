@@ -31,6 +31,11 @@ function runBinary(
   return { stdout: run.stdout, status: run.status };
 }
 
+function rmFixture(dir: string): void {
+  // Windows still maps the compiled exe after spawnSync returns. force:true does not retry EBUSY.
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 describe("compiled harnessId", () => {
   test("a baked --define commit survives a non-repo cwd with no SERI_BUILD_COMMIT", () => {
     const dir = mkdtempSync(join(tmpdir(), "seri-harness-id-"));
@@ -46,7 +51,7 @@ describe("compiled harnessId", () => {
         commit: BAKED,
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmFixture(dir);
     }
   }, 60_000);
 
@@ -61,7 +66,7 @@ describe("compiled harnessId", () => {
       expect(run.status, run.stdout).toBe(0);
       expect(JSON.parse(run.stdout)).toEqual({ version: expect.any(String) });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmFixture(dir);
     }
   }, 60_000);
 
@@ -90,7 +95,7 @@ describe("compiled harnessId", () => {
         commit: sha,
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmFixture(dir);
     }
   }, 60_000);
 
@@ -106,7 +111,7 @@ describe("compiled harnessId", () => {
         commit: "abc123",
       });
     } finally {
-      rmSync(dir, { recursive: true, force: true });
+      rmFixture(dir);
     }
   }, 60_000);
 });
