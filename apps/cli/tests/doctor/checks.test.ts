@@ -196,4 +196,31 @@ describe("runDoctorChecks", () => {
     });
     expect(checks.find((check) => check.name === "io_uring")?.status).toBe("info");
   });
+
+  test("fails on Linux when the io_uring probe errors", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: "linux",
+      arch: "x64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "error", message: "dlopen failed" }),
+    });
+    const ioUring = checks.find((check) => check.name === "io_uring");
+    expect(ioUring).toBeDefined();
+    if (ioUring === undefined) return;
+    expect(ioUring.status).toBe("fail");
+    expect(ioUring.detail).toBe("dlopen failed");
+    expect(doctorExitCode([ioUring])).toBe(1);
+  });
 });

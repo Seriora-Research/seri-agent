@@ -1,4 +1,4 @@
-import { dlopen, FFIType, ptr } from "bun:ffi";
+import { dlopen, FFIType, ptr, read } from "bun:ffi";
 import type { CheckResult } from "../doctor/report";
 
 export const IO_URING_SYSCALLS = ["io_uring_setup", "io_uring_enter", "io_uring_register"] as const;
@@ -29,6 +29,7 @@ const BPF_W = 0x00;
 const BPF_ABS = 0x20;
 const BPF_JMP = 0x05;
 const BPF_JEQ = 0x10;
+const BPF_JGE = 0x30;
 const BPF_K = 0x00;
 const BPF_RET = 0x06;
 const SECCOMP_RET_KILL_PROCESS = 0x80000000;
@@ -36,6 +37,9 @@ const SECCOMP_RET_ERRNO = 0x00050000;
 const SECCOMP_RET_ALLOW = 0x7fff0000;
 const SECCOMP_RET_DATA = 0x0000ffff;
 const EPERM = 1;
+const EACCES = 13;
+const ENOSYS = 38;
+const X32_SYSCALL_BIT = 0x40000000;
 const PR_SET_NO_NEW_PRIVS = 38;
 const PR_SET_SECCOMP = 22;
 const SECCOMP_MODE_FILTER = 2;
@@ -57,6 +61,14 @@ export function ioUringDenyFilter(arch: LinuxArch): Uint8Array {
     ...insn(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
     ...insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0),
   ];
+  // x32 syscalls share AUDIT_ARCH_X86_64; bit 0x40000000 is set on nr. Without
+  // this JGE they miss nr==425/426/427 and fall through to ALLOW.
+  if (arch === "x64") {
+    bytes.push(
+      ...insn(BPF_JMP | BPF_JGE | BPF_K, 0, 1, X32_SYSCALL_BIT),
+      ...insn(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
+    );
+  }
   for (const name of IO_URING_SYSCALLS) {
     bytes.push(
       ...insn(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, SYSCALL_NR[name]),
@@ -80,7 +92,23 @@ function openLibc() {
       returns: FFIType.i32,
     },
     close: { args: [FFIType.i32], returns: FFIType.i32 },
+    __errno_location: { args: [], returns: FFIType.ptr },
   });
+}
+
+function errnoOf(libc: ReturnType<typeof openLibc>): number {
+  const location = libc.symbols.__errno_location();
+  if (location === null) throw new Error("__errno_location returned null");
+  return read.i32(location, 0);
+}
+
+export function classifyIoUringSetup(
+  fd: bigint,
+  errno: number,
+): Exclude<IoUringProbe, { status: "unsupported" }> {
+  if (fd >= 0n) return { status: "allow" };
+  if (errno === EPERM || errno === ENOSYS || errno === EACCES) return { status: "deny" };
+  return { status: "error", message: `io_uring_setup failed with errno ${errno}` };
 }
 
 export function probeIoUringSetup(): IoUringProbe {
@@ -93,7 +121,7 @@ export function probeIoUringSetup(): IoUringProbe {
       libc.symbols.close(Number(fd));
       return { status: "allow" };
     }
-    return { status: "deny" };
+    return classifyIoUringSetup(fd, errnoOf(libc));
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : String(error) };
   }
@@ -139,10 +167,15 @@ export function ioUringDoctorCheck(probe: IoUringProbe, platform: NodeJS.Platfor
     };
   }
   if (probe.status === "deny") {
-    return { name: "io_uring", status: "ok", detail: "kernel rejects io_uring_setup" };
+    return { name: "io_uring", status: "ok", detail: "io_uring_setup is rejected" };
   }
   if (probe.status === "unsupported") {
     return { name: "io_uring", status: "info", detail: "io_uring probe skipped" };
   }
-  return { name: "io_uring", status: "warn", detail: probe.message };
+  return {
+    name: "io_uring",
+    status: "fail",
+    detail: probe.message,
+    fix: "doctor could not probe io_uring_setup; the host may still allow it",
+  };
 }
