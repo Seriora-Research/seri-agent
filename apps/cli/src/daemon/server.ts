@@ -150,6 +150,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
       createRunScheduled({
         configDir: opts.configDir,
         sessionsDir,
+        permissionsDir,
         deps,
         database,
       });

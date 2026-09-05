@@ -61,6 +61,7 @@ function preparedStub(): PreparedRun {
     permissionMode: "read-only",
     worktree: dir,
     allowedTools: [],
+    pathDenials: [],
     catalog: { fetchedAt: "", entries: [] },
     catalogEntry: undefined,
     route: {
@@ -146,6 +147,46 @@ describe("driveLoop options", () => {
     );
     expect(DISPATCH_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
     expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
+  });
+
+  test("passes session.cwd as workingDirectory and treats the approvalPrompt as a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(capture.capture()?.workingDirectory).toBe(prepared.session.cwd);
+    expect(capture.capture()?.askOutsideFs).toBe(true);
+    expect(capture.capture()?.outsideConsent?.current).toBe("unasked");
+  });
+
+  test("askOutsideFs false reaches the loop so a dummy prompt is not a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false, askOutsideFs: false },
+    );
+    expect(capture.capture()?.askOutsideFs).toBe(false);
   });
 
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {
@@ -549,6 +590,62 @@ describe("driveLoop directDispatch", () => {
       before: { errors: [] },
     });
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
+  });
+
+  test("a child's runLoop receives the prepared path denials and cwd", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "glob", pattern: "/secret/**" }],
+      cwd: prepared.worktree,
+    });
+  });
+
+  test("the parent runLoop receives session cwd with the path denials", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "read_file", pattern: ".env" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "read_file", pattern: ".env" }],
+      cwd: prepared.session.cwd,
+    });
   });
 });
 

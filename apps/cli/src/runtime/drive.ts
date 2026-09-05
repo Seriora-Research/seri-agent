@@ -5,7 +5,12 @@ import { buildVolatileTier, joinTiers } from "../agents/systemPrompt";
 import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output";
-import { loadConfig } from "../config/config";
+import {
+  BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
+  configValue,
+  loadConfig,
+  standingDenyReadsOutside,
+} from "../config/config";
 import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
@@ -155,6 +160,10 @@ export type DriveLoopOptions = {
   askUser?: AskUserPresenter;
   // Default true. Scheduled runs pass false so the tool and overlay are both absent.
   composeAskUser?: boolean;
+  // Default true. A live human can answer the one-shot outside-cwd question. Scheduled
+  // runs pass false: they already supply a dummy approvalPrompt that answers "no", and
+  // treating that function's existence as a human would decline a question nobody saw.
+  askOutsideFs?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -234,6 +243,7 @@ export async function driveLoop(
     model,
     worktree,
     allowedTools,
+    pathDenials,
     catalog,
     catalogEntry,
     route,
@@ -241,8 +251,16 @@ export async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  const reasoningEffort = resolveReasoningEffort(session, loadConfig(ctx.configDir));
+  const config = loadConfig(ctx.configDir);
+  const reasoningEffort = resolveReasoningEffort(session, config);
   const samplingConfig = loadSamplingConfig(ctx.configDir);
+  const standingDeny = standingDenyReadsOutside(
+    configValue(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, config),
+  );
+  const askOutsideFs = driveOpts.askOutsideFs !== false;
+  if (prepared.outsideConsent === undefined) {
+    prepared.outsideConsent = { current: "unasked" };
+  }
   prepared.trajectory.setStepCeiling(maxTurns ?? 500);
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -400,9 +418,12 @@ export async function driveLoop(
     agents: prepared.agents,
     permissionMode: getPermissionMode,
     allowedTools,
+    pathDenials,
     checkpointer,
     reasoningEffort,
     cwd: worktree,
+    blockReadsOutsideWorkingDirectories: standingDeny,
+    outsideConsent: prepared.outsideConsent,
     // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
     // these two for why a child gets the hooks even though it deliberately does not get the rules.
     onBeforeTool: hookRunner?.onBeforeTool,
@@ -509,6 +530,8 @@ export async function driveLoop(
           // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
           // below.
           allowedTools,
+          pathDenials,
+          cwd: session.cwd,
           // The `mcp` tool composed above is one ToolSet key standing in for every tool on every
           // configured server — mcpCallSubject is what tells the gate, the approval prompt and
           // every rendered event which one a given call actually means, resolving to the umbrella
@@ -517,6 +540,10 @@ export async function driveLoop(
           // unchanged for anything that isn't literally "mcp".
           callSubject: mcpCallSubject,
           approvalPrompt,
+          workingDirectory: session.cwd,
+          blockReadsOutsideWorkingDirectories: standingDeny,
+          askOutsideFs,
+          outsideConsent: prepared.outsideConsent,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
           system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and

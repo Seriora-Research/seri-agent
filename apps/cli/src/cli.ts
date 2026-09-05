@@ -87,6 +87,7 @@ import {
 } from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
+import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
@@ -806,6 +807,7 @@ function makeApprovalPrompt(
   // Reads only from `input`, unchanged.
   openInterface: () => Interface = () =>
     createInterface({ input: process.stdin, output: chooseInterfaceOutput() }),
+  cwd: () => string = () => process.cwd(),
 ): ApprovalPrompt {
   // Once true, no further prompt in this run touches stdin at all. `process.stdin` is a single
   // shared stream that only ever emits 'end' once: the FIRST prompt's Interface is what actually
@@ -829,8 +831,10 @@ function makeApprovalPrompt(
       }
       // isPersistableTool (permissions/store.ts) is the single answer to "may this be remembered
       // permanently" — this prompt's offer and rememberGrant's own acceptance read the same
-      // function so the two cannot drift out of agreement with each other.
-      const offersAlways = isPersistableTool(toolName);
+      // function so the two cannot drift out of agreement with each other. An outside-cwd path
+      // is a one-shot for this run, never a persisted grant, so [a]lways stays off there.
+      const offersAlways =
+        isPersistableTool(toolName) && locationForCall(cwd(), toolName, args) !== "outside";
       let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
@@ -1656,7 +1660,9 @@ async function runTui(
         return;
       }
       // See makeApprovalPrompt's own comment on this same expression.
-      const offersAlways = isPersistableTool(toolName);
+      const offersAlways =
+        isPersistableTool(toolName) &&
+        locationForCall(liveState.session.cwd, toolName, args) !== "outside";
       // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
       // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
       // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
@@ -3488,7 +3494,7 @@ async function finishCliRun(
         printEvent,
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir, ctx.database),
-        makeApprovalPrompt(deps.createInterface),
+        makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd),
         createArchivistState(prepared.session),
       );
     } else {

@@ -37,7 +37,12 @@ import {
 } from "../../checkpoint/checkpoint";
 import { projectRoot } from "../../checkpoint/shadowGit";
 import { maskValue } from "../../config/commands";
-import { configBoolean, loadConfig, resolveConfigValue } from "../../config/config";
+import {
+  BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
+  configBoolean,
+  loadConfig,
+  resolveConfigValue,
+} from "../../config/config";
 import { isDefaultProfile, profileDir, profileNameError } from "../../config/paths";
 import { cycleMode } from "../../gate/gate";
 import { type HooksLoad, loadHookRegistry } from "../../hooks/registry";
@@ -392,6 +397,9 @@ type ConfigKeyInfo = {
   // running process — a /config write to either lands in config.json correctly but has no effect
   // on the CURRENT session, only the next one.
   takesEffectNextRun: boolean;
+  // Boolean rows default to configBoolean (unset is on). Standing-deny keys flip that:
+  // unset must stay off or a typo would lock the agent inside cwd with no prompt.
+  booleanUnset?: "on" | "off";
 };
 
 // Human-readable label/description/kind for each key /config always shows, in this order,
@@ -482,6 +490,16 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       takesEffectNextRun: true,
     },
   ],
+  [
+    BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
+    {
+      label: "Outside working dir",
+      description: "Block paths outside the session cwd. Unset keeps the one-shot prompt.",
+      kind: "boolean",
+      takesEffectNextRun: false,
+      booleanUnset: "off",
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 
@@ -498,6 +516,10 @@ export function configKeyInfo(key: string): ConfigKeyInfo {
       takesEffectNextRun: false,
     }
   );
+}
+
+export function booleanRowOn(key: string, value: string | undefined): boolean {
+  return configKeyInfo(key).booleanUnset === "off" ? value === "true" : configBoolean(value);
 }
 
 // Never listed by /config, even if present in config.json: OAuth client ids (/login's WorkOS
@@ -542,7 +564,7 @@ export function decideConfigOpen(configDir: string): ConfigRow[] {
     // it only ever picks which value `masked` computes to, right here.
     const secret = !CONFIG_KEY_INFO.has(key);
     const kindFields: ConfigRowKind =
-      kind === "boolean" ? { kind: "boolean", on: configBoolean(value) } : { kind: "string" };
+      kind === "boolean" ? { kind: "boolean", on: booleanRowOn(key, value) } : { kind: "string" };
     return {
       key,
       masked: value === undefined ? "" : secret ? maskValue(value) : value,
