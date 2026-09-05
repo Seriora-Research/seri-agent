@@ -27,6 +27,7 @@ import {
   prepareSession,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
+import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",
@@ -231,6 +232,20 @@ describe("prepareSession + mcp", () => {
         (m) => m.text.includes("mcp_exa_web_search") && m.text.includes("asked again"),
       ),
     ).toBe(true);
+  });
+
+  test("skip-permissions does not change the assembled system prompt or invert dedicated file tools", async () => {
+    const attended = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const bypass = await prepareSession(baseCtx(makeDir()), deps, true, false);
+    expect(typeof attended).not.toBe("number");
+    expect(typeof bypass).not.toBe("number");
+    const attendedRun = attended as PreparedRun;
+    const bypassRun = bypass as PreparedRun;
+    expect(attendedRun.session.systemPrompt).toBe(bypassRun.session.systemPrompt);
+    expect(attendedRun.permissionMode).not.toBe("auto");
+    expect(bypassRun.permissionMode).toBe("auto");
+    expectDedicatedFileTools(attendedRun.session.systemPrompt);
+    expectNoBashFirstSteer(attendedRun.session.systemPrompt);
   });
 
   test("prepareSession loads path denials from permissions.yaml", async () => {

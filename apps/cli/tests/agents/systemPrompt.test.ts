@@ -4,6 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSystemPrompt, buildVolatileTier, familyOverlay } from "../../src/agents/systemPrompt";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
+import {
+  bashFirstSteerIn,
+  CLAUDE_CODE_BASH_FIRST_ATTACHMENT,
+  expectDedicatedFileTools,
+  expectNoBashFirstSteer,
+} from "./bashFirstSteer";
 
 let configDir: string | undefined;
 afterEach(() => {
@@ -175,6 +181,41 @@ describe("buildSystemPrompt", () => {
     expect(scheduled).toContain("`glob`");
   });
 
+  test("the assembled system prompt prefers dedicated tools over a shell for file work", () => {
+    for (const composeSubagents of [true, false] as const) {
+      const prompt = buildSystemPrompt({
+        agentsContent: "",
+        skills: [],
+        rules: [],
+        composeSubagents,
+      });
+      expectDedicatedFileTools(prompt);
+    }
+  });
+
+  test("the assembled system prompt never contains a bash-first file-I/O steer", () => {
+    for (const composeSubagents of [true, false] as const) {
+      const prompt = buildSystemPrompt({
+        agentsContent: "",
+        skills: [],
+        rules: [],
+        composeSubagents,
+      });
+      expectNoBashFirstSteer(prompt);
+    }
+  });
+
+  test("the bash-first forbidden matcher matches Claude Code's attachment", () => {
+    expect(bashFirstSteerIn(CLAUDE_CODE_BASH_FIRST_ATTACHMENT)).toBe(
+      "Do your work through the Bash tool",
+    );
+    expect(
+      bashFirstSteerIn(
+        "Prefer the dedicated tools over a shell for file work: `read_file` instead of `cat`",
+      ),
+    ).toBeUndefined();
+  });
+
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
   // assembled output, and the join between them must match today's separator shape exactly — a
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
@@ -295,6 +336,16 @@ describe("buildVolatileTier", () => {
     expect(mac).toMatch(/use `bash`/i);
   });
 
+  test("the volatile tier never contains a bash-first file-I/O steer", () => {
+    const memory = loadMemory(emptyMemoryCtx());
+    for (const platform of ["linux", "win32", "darwin"] as const) {
+      for (const family of [null, "llama"] as const) {
+        const line = buildVolatileTier("m", "groq", undefined, memory, { platform, family });
+        expectNoBashFirstSteer(line);
+      }
+    }
+  });
+
   test("a llama family adds the overlay; a null family is the same identity-plus-platform without it", () => {
     const memory = loadMemory(emptyMemoryCtx());
     const none = buildVolatileTier("m", "groq", undefined, memory, {
@@ -331,3 +382,15 @@ describe("familyOverlay", () => {
     expect(familyOverlay("  LLAMA  ")).toBe(overlay);
   });
 });
+
+type SystemPromptOpts = Parameters<typeof buildSystemPrompt>[0];
+const _noModeOnPrompt: Extract<keyof SystemPromptOpts, "permissionMode"> extends never
+  ? true
+  : false = true;
+void _noModeOnPrompt;
+
+type VolatileOpts = NonNullable<Parameters<typeof buildVolatileTier>[4]>;
+const _noModeOnVolatile: Extract<keyof VolatileOpts, "permissionMode"> extends never
+  ? true
+  : false = true;
+void _noModeOnVolatile;

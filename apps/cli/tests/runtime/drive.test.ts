@@ -7,6 +7,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
@@ -26,6 +27,7 @@ import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -823,6 +825,53 @@ describe("driveLoop mcp composition", () => {
       { composeSubagents: false, bindProcessCancel: false },
     );
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
+  });
+
+  test("permission mode does not change the assembled system or messages", async () => {
+    const modes = [
+      "read-only",
+      "approve-each",
+      "auto",
+    ] as const satisfies readonly PermissionMode[];
+    const _allModes: Record<PermissionMode, true> = {
+      "read-only": true,
+      "approve-each": true,
+      auto: true,
+    };
+    void _allModes;
+
+    const captured: { system: string; messages: RunLoopOpts["messages"] }[] = [];
+    for (const mode of modes) {
+      const prepared = preparedStub();
+      prepared.permissionMode = mode;
+      prepared.session.permissionMode = mode;
+      const capture = fakeRunLoop();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        { runLoop: capture.fake },
+        1,
+        () => {},
+        () => mode,
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+      );
+      const opts = capture.capture();
+      expect(opts?.system).toBeDefined();
+      expect(opts?.messages).toBeDefined();
+      expectNoBashFirstSteer(opts?.system ?? "");
+      captured.push({ system: opts?.system as string, messages: opts!.messages });
+    }
+
+    const [first, ...rest] = captured;
+    expect(first).toBeDefined();
+    for (const row of rest) {
+      expect(row.system).toBe(first!.system);
+      expect(row.messages).toEqual(first!.messages);
+    }
   });
 });
 
