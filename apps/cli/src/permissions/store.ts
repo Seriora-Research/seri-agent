@@ -4,6 +4,7 @@ import { type Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
 import { parseAutoModeOnBlock, type AutoModeOnBlock } from "../gate/classifier";
+import type { PathDenial } from "../gate/gate";
 import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
 // NOT derived from WRITE_TOOL_NAMES, on purpose: a tool added to the gate must be opted IN here
@@ -90,9 +91,35 @@ global: []
 
 # Approved only under the given project root. An answer of "a" lands here, never in \`global\`.
 projects: {}
+
+# Search roots glob, grep, read_file, and write_file must not be pointed at. A missing
+# path still comes back as a permission denial, not as "path not found". A search rooted
+# above a denied tree still descends into it. seri never writes here.
+#   - glob(/secret/**)
+#   - read_file(.env)
+deny: []
 `;
 
 type StoreState = { status: "missing" } | { status: "malformed" } | { status: "ok"; doc: Document };
+
+type YamlStore =
+  | { status: "missing" }
+  | { status: "unreadable"; path: string }
+  | { status: "parsed"; path: string; doc: Document };
+
+function parseYamlStore(configDir: string): YamlStore {
+  const path = permissionsPath(configDir);
+  if (!existsSync(path)) return { status: "missing" };
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { status: "unreadable", path };
+  }
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) return { status: "unreadable", path };
+  return { status: "parsed", path, doc };
+}
 
 // A file is "malformed" for this store's purposes whenever it cannot be trusted as the shape this
 // module writes — a real YAML syntax error, a well-formed document missing the `global`/`projects`
@@ -106,21 +133,14 @@ type StoreState = { status: "missing" } | { status: "malformed" } | { status: "o
 // a file missing either — a file lacking one was not written by seri, and guessing at its shape is
 // not worth the risk of a rememberGrant mutating content it does not understand.
 function readStore(configDir: string): StoreState {
-  const path = permissionsPath(configDir);
-  if (!existsSync(path)) return { status: "missing" };
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch {
-    return { status: "malformed" };
-  }
-  const doc = parseDocument(text);
-  if (doc.errors.length > 0) return { status: "malformed" };
-  const global = doc.get("global");
-  const projects = doc.get("projects");
+  const parsed = parseYamlStore(configDir);
+  if (parsed.status === "missing") return { status: "missing" };
+  if (parsed.status === "unreadable") return { status: "malformed" };
+  const global = parsed.doc.get("global");
+  const projects = parsed.doc.get("projects");
   if (!(global instanceof YAMLSeq)) return { status: "malformed" };
   if (!(projects instanceof YAMLMap)) return { status: "malformed" };
-  return { status: "ok", doc };
+  return { status: "ok", doc: parsed.doc };
 }
 
 function scalarStrings(seq: YAMLSeq): string[] {
@@ -150,6 +170,66 @@ function extractToolList(
         `ignoring "${value}" in ${path}: only write_file, edit, and a valid mcp_<server>_<tool>@<digest> grant can be approved permanently — a grant keyed on a bare tool name says nothing about what a shell command will do, and an MCP grant is only meaningful bound to the contract's fingerprint`,
       );
     }
+  }
+  return result;
+}
+
+const DENIAL_ENTRY = /^([A-Za-z0-9_]+)\((.+)\)$/;
+// Tools whose input schema has a top-level `path`. Everything else either has no path
+// (bash, edit) or keeps it under `arguments` (mcp), so a deny entry for those names
+// can never match.
+const DENIABLE_TOOLS: ReadonlySet<string> = new Set(["read_file", "glob", "grep", "write_file"]);
+
+function parseDenialEntry(value: string): PathDenial | undefined {
+  const match = DENIAL_ENTRY.exec(value);
+  if (match === null) return undefined;
+  const tool = match[1];
+  const pattern = match[2];
+  if (tool === undefined || pattern === undefined) return undefined;
+  return { tool, pattern };
+}
+
+// `deny` is optional on purpose: every existing permissions.yaml was written without it, and a
+// missing or wrong-type key must not mark the whole store malformed. That would drop grants.
+// seri never writes this list; a human edits it. A bad entry is skipped, not fatal.
+//
+// Parsed independently of `global`/`projects`: a hand-written file that is only `deny:` still
+// has to load. Those two keys exist so rememberGrant will not mutate a file it did not write;
+// loadDenials is read-only and does not need them.
+export function loadDenials(
+  configDir: string,
+  onWarning?: (message: string) => void,
+): PathDenial[] {
+  const parsed = parseYamlStore(configDir);
+  if (parsed.status === "missing") return [];
+  if (parsed.status === "unreadable") {
+    onWarning?.(`could not parse ${parsed.path}, so path denials were ignored`);
+    return [];
+  }
+
+  const node = parsed.doc.get("deny");
+  if (node === undefined || node === null) return [];
+  if (!(node instanceof YAMLSeq)) {
+    onWarning?.(`ignoring deny in ${parsed.path}: expected a list of tool(pattern) entries`);
+    return [];
+  }
+
+  const result: PathDenial[] = [];
+  for (const value of scalarStrings(node)) {
+    const entry = parseDenialEntry(value);
+    if (entry === undefined) {
+      onWarning?.(
+        `ignoring "${value}" in ${parsed.path}: deny entries must look like tool(pattern), e.g. glob(/secret/**)`,
+      );
+      continue;
+    }
+    if (!DENIABLE_TOOLS.has(entry.tool)) {
+      onWarning?.(
+        `ignoring "${value}" in ${parsed.path}: deny entries must name a tool with a path argument (read_file, glob, grep, write_file)`,
+      );
+      continue;
+    }
+    result.push(entry);
   }
   return result;
 }

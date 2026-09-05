@@ -4,8 +4,9 @@ import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
 import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
-import type { PermissionMode } from "../gate/gate";
 import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
+import type { Consent } from "../gate/fsBoundary";
+import type { PathDenial, PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import type { RouteCredential } from "../provider/routing";
@@ -93,6 +94,9 @@ export type SubagentRuntime = {
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
   allowedTools: readonly string[];
+  // Same list the parent loop is gated with. Required (empty is fine): a child that omitted
+  // this would probe a denied path the parent already refused.
+  pathDenials: readonly PathDenial[];
   // onAfterMutation is optional here even though the concrete Checkpointer (checkpoint.ts) always
   // has one: this type is the generic contract runOne/agentToolSet code against, and a test
   // double or a future caller with no write ledger is still a valid OnBeforeMutation without it.
@@ -121,6 +125,10 @@ export type SubagentRuntime = {
   };
   // Session worktree. Children must not fall back to process.cwd().
   cwd?: string;
+  blockReadsOutsideWorkingDirectories?: boolean;
+  // The parent's latch, shared by reference. A child has no human to ask, so it can only read
+  // the answer the parent already got (or the skip-permissions seed); it never writes the box.
+  outsideConsent?: { current: Consent };
   // The parent's hook callbacks, handed down deliberately — and note that this is the opposite of
   // what `createRuleInjector` does, which drive.ts keeps parent-only on purpose. The two are not
   // inconsistent, because a rule and a hook are not the same kind of thing. A rule is CONTEXT: it
@@ -137,6 +145,7 @@ export type SubagentRuntime = {
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
+
   // Same inheritance argument as the hooks: a child in auto with no prompt must still see a
   // classifier block, or `dispatch_subagents` is a hole around it. ask becomes a hard deny
   // because this runtime has no approvalPrompt — see fallbackSummary's deny-blocked note.
@@ -251,6 +260,8 @@ export async function runSubagent(opts: {
     messages: opts.messages,
     permissionMode: mode,
     allowedTools: runtime.allowedTools,
+    pathDenials: runtime.pathDenials,
+    cwd: runtime.cwd,
     system: opts.system,
     signal: opts.signal,
     maxIterations: runtime.maxIterations ?? MAX_CHILD_ITERATIONS,
@@ -266,6 +277,10 @@ export async function runSubagent(opts: {
     onAfterTool: runtime.onAfterTool,
     classifyToolCall: runtime.classifyToolCall,
     autoModeOnBlock: runtime.autoModeOnBlock,
+    workingDirectory: runtime.cwd,
+    blockReadsOutsideWorkingDirectories: runtime.blockReadsOutsideWorkingDirectories === true,
+    askOutsideFs: false,
+    outsideConsent: runtime.outsideConsent,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;

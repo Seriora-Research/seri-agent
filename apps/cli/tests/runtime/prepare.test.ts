@@ -169,6 +169,13 @@ describe("prepareSession + mcp", () => {
     expect(entry?.catalog).toBeUndefined();
   });
 
+  test("skipPermissions seeds the outside-cwd latch for this run only", async () => {
+    const attended = (await prepareSession(baseCtx(makeDir()), deps, false, false)) as PreparedRun;
+    expect(attended.outsideConsent?.current).toBe("unasked");
+    const skipped = (await prepareSession(baseCtx(makeDir()), deps, true, false)) as PreparedRun;
+    expect(skipped.outsideConsent?.current).toBe("allowed-this-run");
+  });
+
   test("a stored MCP grant whose digest matches the session catalog enters allowedTools as the bare name", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
     const tool: McpToolInfo = {
@@ -224,6 +231,20 @@ describe("prepareSession + mcp", () => {
         (m) => m.text.includes("mcp_exa_web_search") && m.text.includes("asked again"),
       ),
     ).toBe(true);
+  });
+
+  test("prepareSession loads path denials from permissions.yaml", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n  - read_file(.env)\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    expect(typeof result).not.toBe("number");
+    expect((result as PreparedRun).pathDenials).toEqual([
+      { tool: "glob", pattern: "/secret/**" },
+      { tool: "read_file", pattern: ".env" },
+    ]);
   });
 
   test("permissions.yaml ask loads onto PreparedRun with the allow-all classifier", async () => {
@@ -418,6 +439,24 @@ describe("bindSession + mcp", () => {
 
     expect(prepared.mcp.get("exa")).toBeDefined();
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
+  });
+
+  test("bindSession reloads path denials from disk", async () => {
+    const prepared = await freshPrepared();
+    expect(prepared.pathDenials).toEqual([]);
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - grep(/hidden/**)\n",
+    );
+    bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      mcpConfigDirFor(tmpConfigRoot),
+      permissionsDir,
+      () => {},
+    );
+    expect(prepared.pathDenials).toEqual([{ tool: "grep", pattern: "/hidden/**" }]);
   });
 
   test("bindSession reloads autoModeOnBlock from disk", async () => {

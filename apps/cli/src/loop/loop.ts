@@ -10,7 +10,15 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
-import { checkPermission, type PermissionMode } from "../gate/gate";
+import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
+import { checkPermission, denialBlocks, type PathDenial, type PermissionMode } from "../gate/gate";
+import {
+  findPackedRendererUpload,
+  humanAskedForPackedRender,
+  lastUserText,
+  packedUploadAppliesTo,
+} from "../gate/packedRenderer";
+import { locationForCall } from "../gate/workingDir";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
@@ -52,7 +60,8 @@ export type LoopEvent =
   // a PreToolUse hook is configuration the user installed, refusing the call it was installed to
   // refuse, which is the mode argument again in another shape. It must therefore never increment
   // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
-  // times, and there is no human anywhere in a hook's path to answer even once.
+  // times, and there is no human anywhere in a hook's path to answer even once. A
+  // packed-renderer-upload refused in auto (decidePermission) is "blocked" for the same reason.
   | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
@@ -189,48 +198,6 @@ function errorText(err: unknown): string {
   }
 }
 
-type PermissionDecision =
-  | { readonly verdict: "allow" }
-  | { readonly verdict: "allow-new" }
-  | { readonly verdict: "deny-blocked"; readonly classifierReason?: string }
-  | { readonly verdict: "deny-declined"; readonly classifierReason?: string };
-
-function executionDeniedReason(
-  subject: string,
-  mode: PermissionMode,
-  classifierReason: string | undefined,
-): string {
-  if (classifierReason !== undefined) {
-    return (
-      `Tool "${subject}" was blocked by the auto-mode classifier: ${classifierReason} ` +
-      `Do not retry this call.`
-    );
-  }
-  return (
-    `Tool "${subject}" was not permitted to run (permission mode: ${mode}). ` +
-    `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
-    `/mode to change the permission mode.`
-  );
-}
-
-async function promptForApproval(
-  toolName: string,
-  input: unknown,
-  allowedTools: Set<string>,
-  approvalPrompt: ApprovalPrompt,
-  signal: AbortSignal | undefined,
-  detail?: ApprovalDetail,
-): Promise<PermissionDecision> {
-  const answer = await approvalPrompt(toolName, input, signal, detail);
-  if (answer === "always") {
-    allowedTools.add(toolName);
-    return { verdict: "allow-new" };
-  }
-  return answer === "no"
-    ? { verdict: "deny-declined", classifierReason: detail?.classifierReason }
-    : { verdict: "allow" };
-}
-
 // "allow-new" rather than a boolean-plus-flag: a fresh grant needs to reach the loop as a single
 // fact ("this call is allowed, AND it is the first time"), and this is the one place that fact is
 // produced, so it owns the gate check, the prompt call and the allowedTools.add together instead
@@ -241,37 +208,150 @@ async function promptForApproval(
 // verdict, which is exactly the reordering that guarantee depends on not happening.
 // Two ways to "deny", carried out as two verdicts rather than one so the loop can count only the
 // one that is a signal about the run: "deny-blocked" is the mode doing its job (checkPermission
-// returned "block", a classifier deny, or there was no approvalPrompt to ask at all); "deny-declined"
-// is a real refusal — a live prompt that answered "no". Only the second should ever increment a
-// denial counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
-async function decidePermission(
-  toolName: string,
-  input: unknown,
-  mode: PermissionMode,
-  allowedTools: Set<string>,
-  approvalPrompt: ApprovalPrompt | undefined,
-  signal: AbortSignal | undefined,
-  classifyToolCall: ToolCallClassifier | undefined,
-  autoModeOnBlock: AutoModeOnBlock,
-): Promise<PermissionDecision> {
-  const permission = checkPermission(toolName, mode, allowedTools);
-  if (permission === "block") return { verdict: "deny-blocked" };
+// returned "block", the FS table refused an outside path with nobody to ask, a packed-renderer
+// upload, a classifier deny, or there was no approvalPrompt — the same as block, just arrived at
+// differently, because there is still no one to ask); "deny-declined" is a real refusal — a live
+// prompt that answered "no". Only the second should ever increment a denial counter or flip an
+// exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
+// Packed-renderer-upload and the optional classifier both read the call's INPUT in auto. Packed
+// refuses an input that packs content into a public diagram-renderer URL unless this turn's
+// human text asked for the render. The deny verdicts carry the text the model reads because the
+// blocks need different remedies (/mode cures a mode block and cannot cure packed, path,
+// outside-cwd, or a classifier) and only this function knows which it produced.
+type PermissionVerdict =
+  | { kind: "allow" | "allow-new" }
+  | { kind: "deny-blocked" | "deny-declined"; reason: string };
 
-  if (mode === "auto" && classifyBuiltin(toolName) !== "read" && !allowedTools.has(toolName)) {
-    const classified = classifyToolCall?.(toolName, input) ?? { kind: "allow" };
-    if (classified.kind === "block") {
-      if (autoModeOnBlock === "ask" && approvalPrompt !== undefined) {
-        return promptForApproval(toolName, input, allowedTools, approvalPrompt, signal, {
-          classifierReason: classified.reason,
-        });
-      }
-      return { verdict: "deny-blocked", classifierReason: classified.reason };
+async function decidePermission(args: {
+  subject: string;
+  toolName: string;
+  input: unknown;
+  mode: PermissionMode;
+  allowedTools: Set<string>;
+  approvalPrompt: ApprovalPrompt | undefined;
+  signal: AbortSignal | undefined;
+  denials: readonly PathDenial[] | undefined;
+  cwd: string | undefined;
+  turnUserText: string;
+  workingDirectory: string | undefined;
+  standingDeny: boolean;
+  askOutsideFs: boolean;
+  consent: { current: Consent };
+  classifyToolCall: ToolCallClassifier | undefined;
+  autoModeOnBlock: AutoModeOnBlock;
+}): Promise<PermissionVerdict> {
+  if (args.mode === "auto" && packedUploadAppliesTo(args.toolName)) {
+    const upload = findPackedRendererUpload(args.input);
+    if (upload !== null && !humanAskedForPackedRender(args.turnUserText)) {
+      return {
+        kind: "deny-blocked",
+        reason:
+          `Tool "${args.subject}" was not permitted to run: packing repo or user content into a public ` +
+          `diagram-renderer URL is a ${upload.class} to ${upload.host}, and auto mode does not ` +
+          `approve that unless the user asked for the render or export this turn. Do not retry ` +
+          `this call.`,
+      };
     }
   }
-
-  if (permission === "allow") return { verdict: "allow" };
-  if (approvalPrompt === undefined) return { verdict: "deny-blocked" };
-  return promptForApproval(toolName, input, allowedTools, approvalPrompt, signal);
+  if (args.workingDirectory !== undefined) {
+    const fsVerdict = decideFsPolicy({
+      mode: args.mode,
+      toolClass: classifyBuiltin(args.toolName),
+      location: locationForCall(args.workingDirectory, args.toolName, args.input),
+      consent: args.consent.current,
+      standingDeny: args.standingDeny,
+      hasPrompt: args.askOutsideFs,
+    });
+    if (fsVerdict === "block") {
+      return {
+        kind: "deny-blocked",
+        reason:
+          `Tool "${args.subject}" was not permitted to run because its path is outside the working directory. ` +
+          `Do not retry this call. Stay inside the working directory, or tell the user to allow outside access for this run.`,
+      };
+    }
+    if (fsVerdict === "ask") {
+      if (args.approvalPrompt === undefined) {
+        return {
+          kind: "deny-blocked",
+          reason:
+            `Tool "${args.subject}" was not permitted to run because its path is outside the working directory. ` +
+            `Do not retry this call. Stay inside the working directory, or tell the user to allow outside access for this run.`,
+        };
+      }
+      const answer = await args.approvalPrompt(args.subject, args.input, args.signal);
+      args.consent.current = reduceConsent(
+        args.consent.current,
+        answer === "no" ? { type: "declined" } : { type: "granted" },
+      );
+      if (answer === "no") {
+        return {
+          kind: "deny-declined",
+          reason:
+            `Tool "${args.subject}" was not permitted to run because its path is outside the working directory. ` +
+            `Do not retry this call. Stay inside the working directory, or tell the user to allow outside access for this run.`,
+        };
+      }
+      return { kind: "allow" };
+    }
+  }
+  const byMode = (kind: "deny-blocked" | "deny-declined"): PermissionVerdict => ({
+    kind,
+    reason:
+      `Tool "${args.subject}" was not permitted to run (permission mode: ${args.mode}). ` +
+      `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+      `/mode to change the permission mode.`,
+  });
+  const permission = checkPermission(args.subject, args.mode, args.allowedTools, {
+    input: args.input,
+    denials: args.denials,
+    cwd: args.cwd,
+  });
+  if (permission === "allow") {
+    if (
+      args.mode === "auto" &&
+      classifyBuiltin(args.toolName) !== "read" &&
+      !args.allowedTools.has(args.subject)
+    ) {
+      const classified = args.classifyToolCall?.(args.subject, args.input) ?? { kind: "allow" };
+      if (classified.kind === "block") {
+        const reason =
+          `Tool "${args.subject}" was blocked by the auto-mode classifier: ${classified.reason} ` +
+          `Do not retry this call.`;
+        if (args.autoModeOnBlock === "ask" && args.approvalPrompt !== undefined) {
+          const answer = await args.approvalPrompt(args.subject, args.input, args.signal, {
+            classifierReason: classified.reason,
+          });
+          if (answer === "always") {
+            args.allowedTools.add(args.subject);
+            return { kind: "allow-new" };
+          }
+          if (answer === "no") return { kind: "deny-declined", reason };
+          return { kind: "allow" };
+        }
+        return { kind: "deny-blocked", reason };
+      }
+    }
+    return { kind: "allow" };
+  }
+  if (permission === "block") {
+    if (denialBlocks(args.denials, args.subject, args.input, args.cwd)) {
+      return {
+        kind: "deny-blocked",
+        reason:
+          `Tool "${args.subject}" was not permitted to run because the path matched a deny rule. ` +
+          `Do not retry this call, including with another read tool on the same path.`,
+      };
+    }
+    return byMode("deny-blocked");
+  }
+  if (args.approvalPrompt === undefined) return byMode("deny-blocked");
+  const answer = await args.approvalPrompt(args.subject, args.input, args.signal);
+  if (answer === "always") {
+    args.allowedTools.add(args.subject);
+    return { kind: "allow-new" };
+  }
+  return answer === "no" ? byMode("deny-declined") : { kind: "allow" };
 }
 
 function isConcurrentReadTool(name: string): boolean {
@@ -302,16 +382,17 @@ export async function* runLoop(opts: {
     executed: readonly { toolName: string; input: unknown }[],
   ) => string | undefined;
   /**
-   * Consulted before the gate, per call, with the resolved `subject` rather than `call.toolName` —
-   * the rule this file already states for every string a model or a human reads applies to a
-   * consumer's matcher too, and one reading the raw ToolSet key would see every MCP call as the
-   * literal "mcp".
+   * Consulted after a path deny and before the rest of the gate, per call, with the resolved
+   * `subject` rather than `call.toolName` — the rule this file already states for every string a
+   * model or a human reads applies to a consumer's matcher too, and one reading the raw ToolSet
+   * key would see every MCP call as the literal "mcp".
    *
-   * Ahead of the gate, and that ordering is load-bearing rather than incidental: it is the argument
-   * the unknown-tool guard's own comment makes one branch further down. A human must never be asked
-   * to approve a call that is about to be refused anyway, and a block reached only after the prompt
-   * could be answered "always" and never asked about again — which is the whole determinism claim
-   * gone.
+   * A path deny is a refusal. A PreToolUse script that stats `tool_input.path` would be the same
+   * existence leak this gate exists to stop, one layer up, so denials run first. Ahead of the
+   * approval prompt, and that ordering is load-bearing rather than incidental: a human must never
+   * be asked to approve a call that is about to be refused anyway, and a block reached only after
+   * the prompt could be answered "always" and never asked about again — which is the whole
+   * determinism claim gone.
    *
    * Asynchronous, where onToolPhaseEnd above is deliberately synchronous, and it leans on the same
    * mitigation that one relies on: a consumer with nothing to say returns undefined from its own
@@ -335,6 +416,14 @@ export async function* runLoop(opts: {
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
   allowedTools?: readonly string[];
+  workingDirectory?: string;
+  blockReadsOutsideWorkingDirectories?: boolean;
+  // Live human, not "a prompt function exists". Scheduled runs pass a dummy that always
+  // answers no; treating that as a human would count a decline for a question nobody saw.
+  askOutsideFs?: boolean;
+  // Seed and latch for this run. The loop mutates `.current` so a later turn in the same
+  // session sees the answer. Omitted is a fresh unasked latch that dies with the generator.
+  outsideConsent?: { current: Consent };
   maxIterations?: number;
   system?: string;
   contextWindowSize?: number;
@@ -364,6 +453,10 @@ export async function* runLoop(opts: {
   temperature?: number;
   seed?: number;
   terminalTools?: ReadonlySet<string>;
+  pathDenials?: readonly PathDenial[];
+  // Session cwd the toolset already resolves against. Path denials use the same string
+  // so `read_file(.env)` matches `./.env` and an absolute spelling of the same file.
+  cwd?: string;
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
 }): AsyncGenerator<LoopEvent> {
@@ -393,6 +486,7 @@ export async function* runLoop(opts: {
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
+  const turnUserText = lastUserText(opts.messages);
 
   // The AI SDK auto-runs a tool's `execute` while streaming. Strip it so every
   // tool call is surfaced as an event instead, and runs only after the gate below.
@@ -441,6 +535,7 @@ export async function* runLoop(opts: {
   // gate check, so an "always" answer takes effect on the very next call in the same turn — which
   // is the whole point, and is why this cannot live in the caller's copy of anything.
   const allowedTools = new Set<string>(opts.allowedTools ?? []);
+  const fsConsent = opts.outsideConsent ?? { current: "unasked" as Consent };
   let consecutiveDenials = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -801,6 +896,24 @@ export async function* runLoop(opts: {
       // can disagree; telling the model a tool has two different names within one turn is an
       // invitation to retry under the wrong one.
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
+      const pathDenied = denialBlocks(opts.pathDenials, subject, call.input, opts.cwd);
+
+      if (pathDenied) {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        yield { type: "permission-denied", name: subject, reason: "blocked" };
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: {
+            type: "execution-denied",
+            reason:
+              `Tool "${subject}" was not permitted to run because the path matched a deny rule. ` +
+              `Do not retry this call, including with another read tool on the same path.`,
+          },
+        });
+        continue;
+      }
 
       if (opts.onBeforeTool !== undefined) {
         let hook: { readonly block?: string; readonly errors?: readonly string[] };
@@ -844,16 +957,24 @@ export async function* runLoop(opts: {
         }
       }
 
-      const decision = await decidePermission(
+      const verdict = await decidePermission({
         subject,
-        call.input,
-        opts.permissionMode,
+        toolName: call.toolName,
+        input: call.input,
+        mode: opts.permissionMode,
         allowedTools,
-        opts.approvalPrompt,
-        opts.signal,
-        opts.classifyToolCall,
-        opts.autoModeOnBlock ?? "deny",
-      );
+        approvalPrompt: opts.approvalPrompt,
+        signal: opts.signal,
+        denials: opts.pathDenials,
+        cwd: opts.cwd,
+        turnUserText,
+        workingDirectory: opts.workingDirectory,
+        standingDeny: opts.blockReadsOutsideWorkingDirectories === true,
+        askOutsideFs: opts.askOutsideFs === true,
+        consent: fsConsent,
+        classifyToolCall: opts.classifyToolCall,
+        autoModeOnBlock: opts.autoModeOnBlock ?? "deny",
+      });
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
       // resolves it "no" (cli.ts closes the readline to unpark the turn) and "no" is otherwise
@@ -865,26 +986,23 @@ export async function* runLoop(opts: {
       // inside decidePermission on purpose — see that function's own comment.
       if (opts.signal?.aborted) break;
 
-      if (decision.verdict === "allow-new") yield { type: "tool-allowed", name: subject };
+      if (verdict.kind === "allow-new") yield { type: "tool-allowed", name: subject };
 
-      if (decision.verdict === "deny-blocked" || decision.verdict === "deny-declined") {
+      if (verdict.kind === "deny-blocked" || verdict.kind === "deny-declined") {
         if ((yield* flushReadBatch()) === "aborted") break;
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
         // the user asked. See MAX_CONSECUTIVE_DENIALS.
-        if (decision.verdict === "deny-declined") consecutiveDenials++;
+        if (verdict.kind === "deny-declined") consecutiveDenials++;
         yield {
           type: "permission-denied",
           name: subject,
-          reason: decision.verdict === "deny-blocked" ? "blocked" : "declined",
+          reason: verdict.kind === "deny-blocked" ? "blocked" : "declined",
         };
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: {
-            type: "execution-denied",
-            reason: executionDeniedReason(subject, opts.permissionMode, decision.classifierReason),
-          },
+          output: { type: "execution-denied", reason: verdict.reason },
         });
         continue;
       }
