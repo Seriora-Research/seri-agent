@@ -1,6 +1,6 @@
-import { isAbsolute, resolve } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
+import { resolveAgainstCwd } from "../gate/workingDir";
 import { isBashAvailable, runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
@@ -12,10 +12,6 @@ import { writeFile } from "../tools/writeFile";
 
 // Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
 // sessions and never calls chdir, so each toolset has to carry its own directory.
-function resolveAgainstCwd(cwd: string, path: string): string {
-  return isAbsolute(path) ? path : resolve(cwd, path);
-}
-
 export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
     description: "Read a file's contents as text.",
