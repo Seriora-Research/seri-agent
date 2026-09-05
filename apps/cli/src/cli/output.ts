@@ -37,6 +37,7 @@ Options:
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
+  --permission-prompts <mode>     none denies anything that would prompt; the permission mode still decides
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
 

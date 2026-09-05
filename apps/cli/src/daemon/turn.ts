@@ -31,26 +31,29 @@ export function createAttendedExecuteTurn(opts: {
     const prepared = await prepareSession(ctx, opts.deps, false, false);
     if (typeof prepared === "number") return { exitCode: 1 };
 
-    const approvalPrompt: ApprovalPrompt = async (toolName, args, signal) => {
-      if (signal?.aborted) return "no";
-      const requestId = randomUUID();
-      const pending = input.requestApproval(requestId, toolName, args);
-      if (signal === undefined) return pending;
-      return await new Promise((resolve, reject) => {
-        const onAbort = () => resolve("no");
-        signal.addEventListener("abort", onAbort, { once: true });
-        pending.then(
-          (answer) => {
-            signal.removeEventListener("abort", onAbort);
-            resolve(answer);
-          },
-          (error) => {
-            signal.removeEventListener("abort", onAbort);
-            reject(error);
-          },
-        );
-      });
-    };
+    const approvalPrompt: ApprovalPrompt | undefined =
+      input.promptChannel === "none"
+        ? undefined
+        : async (toolName, args, signal) => {
+            if (signal?.aborted) return "no";
+            const requestId = randomUUID();
+            const pending = input.requestApproval(requestId, toolName, args);
+            if (signal === undefined) return pending;
+            return await new Promise((resolve, reject) => {
+              const onAbort = () => resolve("no");
+              signal.addEventListener("abort", onAbort, { once: true });
+              pending.then(
+                (answer) => {
+                  signal.removeEventListener("abort", onAbort);
+                  resolve(answer);
+                },
+                (error) => {
+                  signal.removeEventListener("abort", onAbort);
+                  reject(error);
+                },
+              );
+            });
+          };
 
     const archivistState = createArchivistState(
       prepared.session,
