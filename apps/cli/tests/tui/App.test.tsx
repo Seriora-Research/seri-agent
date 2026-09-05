@@ -5463,11 +5463,6 @@ describe("App", () => {
     });
   });
 
-  // Render-ternary precedence (app.tsx's own comment): pendingApproval → pendingModelPicker →
-  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → pendingEffort → InputBox.
-  // Each test below seeds one adjacent pair at once and checks the earlier-in-the-chain branch
-  // wins, extending the existing pendingSetup-vs-InputBox precedence test above to the three new
-  // Stage A branches, and pendingEffort at the tail of the chain.
   describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions / pendingEffort", () => {
     test("pendingApproval wins over pendingAuth", async () => {
       const { setup, dispatch } = await connect();
