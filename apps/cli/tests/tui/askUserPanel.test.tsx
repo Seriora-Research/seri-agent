@@ -42,6 +42,10 @@ async function waitUntil(
   throw new Error(label);
 }
 
+function otherRowIsEmpty(frame: string): boolean {
+  return !frame.includes("type your own:");
+}
+
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
@@ -91,7 +95,7 @@ describe("AskUserPanel", () => {
       () => setup.captureCharFrame().includes("type your own: ab"),
       "typed keys never landed in Other",
       () => {
-        if (!setup.captureCharFrame().includes("type your own:")) press();
+        if (otherRowIsEmpty(setup.captureCharFrame())) press();
       },
     );
     expect(setup.captureCharFrame()).toContain("type your own: ab");
