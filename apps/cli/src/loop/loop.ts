@@ -10,6 +10,12 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { checkPermission, type PermissionMode } from "../gate/gate";
+import {
+  findPackedRendererUpload,
+  humanAskedForPackedRender,
+  lastUserText,
+  PACKED_RENDERER_UPLOAD,
+} from "../gate/packedRenderer";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
@@ -204,7 +210,15 @@ async function decidePermission(
   allowedTools: Set<string>,
   approvalPrompt: ApprovalPrompt | undefined,
   signal: AbortSignal | undefined,
+  turnUserText: string,
 ): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
+  if (
+    mode === "auto" &&
+    findPackedRendererUpload(input) !== null &&
+    !humanAskedForPackedRender(turnUserText)
+  ) {
+    return "deny-blocked";
+  }
   const permission = checkPermission(toolName, mode, allowedTools);
   if (permission === "allow") return "allow";
   if (permission === "block") return "deny-blocked";
@@ -334,6 +348,7 @@ export async function* runLoop(opts: {
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
+  const turnUserText = lastUserText(opts.messages);
 
   // The AI SDK auto-runs a tool's `execute` while streaming. Strip it so every
   // tool call is surfaced as an event instead, and runs only after the gate below.
@@ -792,6 +807,7 @@ export async function* runLoop(opts: {
         allowedTools,
         opts.approvalPrompt,
         opts.signal,
+        turnUserText,
       );
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
@@ -816,6 +832,12 @@ export async function* runLoop(opts: {
           name: subject,
           reason: verdict === "deny-blocked" ? "blocked" : "declined",
         };
+        const packed = findPackedRendererUpload(call.input);
+        const packedAutoBlock =
+          verdict === "deny-blocked" &&
+          opts.permissionMode === "auto" &&
+          packed !== null &&
+          !humanAskedForPackedRender(turnUserText);
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
@@ -823,9 +845,11 @@ export async function* runLoop(opts: {
           output: {
             type: "execution-denied",
             reason:
-              `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
-              `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
-              `/mode to change the permission mode.`,
+              packedAutoBlock && packed !== null
+                ? `Tool "${subject}" was not permitted to run: packing repo or user content into a public diagram-renderer URL is a ${PACKED_RENDERER_UPLOAD} to ${packed.host}. Auto mode does not approve that unless you were asked to render or export it this turn. Do not retry this call.`
+                : `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
+                  `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+                  `/mode to change the permission mode.`,
           },
         });
         continue;
