@@ -31,6 +31,8 @@ export type ApprovalCopy = {
   classifierReason?: string;
 };
 
+// TUI-only prose for an approval or an in-flight write. The non-interactive CLI path keeps
+// approvalPromptText's JSON line so a piped `seri <task>` prompt stays one readline row.
 export function approvalCopy(
   toolName: string,
   args: unknown,
