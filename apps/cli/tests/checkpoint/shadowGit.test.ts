@@ -28,7 +28,6 @@ import {
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
-import { readGitHead } from "../../src/trajectory/harnessId";
 
 // The cold first snapshot of a real repo measured 300 ms on Windows, and every test here takes
 // several snapshots plus a restore. bun's default is comfortably too tight on a loaded runner.
@@ -458,13 +457,12 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       expect(basename(projectRoot(repo))).toBe("handed-over");
       expect(existsSync(fired)).toBe(false);
 
-      const cwd = process.cwd();
-      try {
-        process.chdir(repo);
-        readGitHead();
-      } finally {
-        process.chdir(cwd);
-      }
+      spawnSync("git", gitArgv(["rev-parse", "HEAD"]), {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
       expect(existsSync(fired)).toBe(false);
 
       initShadow(gitDir);
