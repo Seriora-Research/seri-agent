@@ -312,6 +312,9 @@ export async function* runLoop(opts: {
   seed?: number;
   terminalTools?: ReadonlySet<string>;
   pathDenials?: readonly PathDenial[];
+  // Session cwd the toolset already resolves against. Path denials use the same string
+  // so `read_file(.env)` matches `./.env` and an absolute spelling of the same file.
+  cwd?: string;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { foldsCase } from "../../src/caseFold";
 import { classifyBuiltin, WRITE_TOOL_NAMES } from "../../src/provider/tools";
 import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/gate";
@@ -162,6 +163,53 @@ describe("checkPermission", () => {
         }),
       ).toBe("block");
     });
+
+    test("the template .env rule matches ./, absolute, and .. spellings of the same file", () => {
+      const cwd = "/tmp/seri-project";
+      const denials = [{ tool: "read_file", pattern: ".env" }];
+      const check = (path: string) =>
+        checkPermission("read_file", "auto", undefined, undefined, {
+          input: { path },
+          denials,
+          cwd,
+        });
+      expect(check(".env")).toBe("block");
+      expect(check("./.env")).toBe("block");
+      expect(check("/tmp/seri-project/.env")).toBe("block");
+      expect(check("subdir/../.env")).toBe("block");
+      expect(check("other.env")).toBe("allow");
+    });
+
+    test("a glob deny matches a .. spelling that resolves onto the denied tree", () => {
+      const denials = [{ tool: "glob", pattern: "/tmp/secret/**" }];
+      expect(
+        checkPermission("glob", "auto", undefined, undefined, {
+          input: { path: "/tmp/other/../secret/missing", pattern: "*.txt" },
+          denials,
+          cwd: "/tmp/app",
+        }),
+      ).toBe("block");
+      expect(
+        checkPermission("glob", "auto", undefined, undefined, {
+          input: { path: "../secret/missing", pattern: "*.txt" },
+          denials,
+          cwd: "/tmp/app",
+        }),
+      ).toBe("block");
+    });
+
+    (foldsCase() ? test : test.skip)(
+      "a deny matches a case-folded spelling of the same path",
+      () => {
+        expect(
+          checkPermission("read_file", "auto", undefined, undefined, {
+            input: { path: "/tmp/Secret/missing" },
+            denials: [{ tool: "read_file", pattern: "/tmp/secret/**" }],
+            cwd: "/tmp",
+          }),
+        ).toBe("block");
+      },
+    );
   });
 });
 

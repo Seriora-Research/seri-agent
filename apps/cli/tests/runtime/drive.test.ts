@@ -552,16 +552,16 @@ describe("driveLoop directDispatch", () => {
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
   });
 
-  test("a child's runLoop receives the prepared path denials", async () => {
+  test("a child's runLoop receives the prepared path denials and cwd", async () => {
     const prepared = preparedStub();
     prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
-    let received: RunLoopOpts["pathDenials"];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] };
     await driveLoop(
       prepared,
       unusedCtx(prepared.session.cwd),
       {
         runLoop: async function* (opts) {
-          received = opts.pathDenials;
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
           yield { type: "done", reason: "no-tool-call" as const };
           return opts.messages;
         },
@@ -575,7 +575,33 @@ describe("driveLoop directDispatch", () => {
       undefined,
       { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
     );
-    expect(received).toEqual([{ tool: "glob", pattern: "/secret/**" }]);
+    expect(received.pathDenials).toEqual([{ tool: "glob", pattern: "/secret/**" }]);
+    expect(received.cwd).toBe(prepared.worktree);
+  });
+
+  test("the parent runLoop receives session cwd with the path denials", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "read_file", pattern: ".env" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] };
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+    expect(received.pathDenials).toEqual([{ tool: "read_file", pattern: ".env" }]);
+    expect(received.cwd).toBe(prepared.session.cwd);
   });
 });
 

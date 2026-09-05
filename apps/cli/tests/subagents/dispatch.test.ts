@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
@@ -90,6 +90,7 @@ function makeRuntime(
     agents: builtinRegistry(),
     permissionMode: () => "auto",
     allowedTools: [],
+    pathDenials: [],
     reasoningEffort: undefined,
     ...overrides,
   };
@@ -593,6 +594,7 @@ describe("dispatch_subagents", () => {
       catalog: { fetchedAt: "", entries: [] },
       permissionMode: () => "approve-each",
       allowedTools: [],
+      pathDenials: [],
       maxIterations: 3,
       reasoningEffort: undefined,
     };
@@ -608,6 +610,56 @@ describe("dispatch_subagents", () => {
     expect(result.summary).toContain('"approve-each"');
     expect(result.summary).toContain("3 denied");
     expect(result.summary).not.toContain("iteration cap");
+  });
+
+  test("a child's denied missing path is a permission denial, not a missing-path probe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "seri-child-deny-"));
+    const app = join(root, "app");
+    mkdirSync(app);
+    const events: LoopEvent[] = [];
+    try {
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", "glob", { pattern: "*.txt", path: "../secret/missing" }),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const runtime: SubagentRuntime = {
+        runLoop: async function* (opts) {
+          for await (const event of realRunLoop(opts)) {
+            events.push(event);
+            yield event;
+          }
+        } as typeof realRunLoop,
+        model,
+        provider: "groq",
+        modelId: "test-model",
+        catalog: { fetchedAt: "", entries: [] },
+        permissionMode: () => "auto",
+        allowedTools: [],
+        pathDenials: [{ tool: "glob", pattern: `${root.replaceAll("\\", "/")}/secret/**` }],
+        cwd: app,
+        reasoningEffort: undefined,
+      };
+      await runSubagent({
+        tools: agentToolSet(agentSpec("explore"), undefined, app),
+        system: "irrelevant",
+        messages: [{ role: "user", content: "go" }],
+        runtime,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "glob",
+      reason: "blocked",
+    });
+    const error = events.find((event) => event.type === "error");
+    expect(error?.type === "error" ? error.error : "").not.toContain("Path not found");
   });
 
   test("batch cap: only the first 3 tasks run, the rest come back as not-run rows", async () => {
