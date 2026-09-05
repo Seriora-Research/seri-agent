@@ -27,7 +27,7 @@ export function loadContainmentExpected(config: Record<string, string>): boolean
   );
 }
 
-const FETCH_NEAR = String.raw`(?:https?:\/\/|\bcurl\b|\bwget\b|\binvoke-webrequest\b|\biwr\b|\birm\b|\bnc\b|\bncat\b|\bsocat\b|\/dev\/tcp)`;
+const FETCH_NEAR = String.raw`(?:https?:\/\/|\bcurl\b|\bwget\b|\binvoke-webrequest\b|\binvoke-restmethod\b|\biwr\b|\birm\b|\bnc\b|\bncat\b|\bsocat\b|\/dev\/tcp)`;
 
 function nearFetch(target: string): RegExp {
   return new RegExp(
@@ -119,6 +119,11 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   },
   {
     kind: "egress-evasion",
+    pattern: /\bssh\b[\s\S]*\b(?:LocalForward|RemoteForward|DynamicForward)\b/i,
+    label: "ssh tunnel",
+  },
+  {
+    kind: "egress-evasion",
     pattern: /\bssh\b[\s\S]*ProxyCommand/i,
     label: "ssh ProxyCommand",
   },
@@ -128,19 +133,19 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   { kind: "egress-evasion", pattern: /\biodine\b/i, label: "iodine" },
   { kind: "egress-evasion", pattern: /\bdnscat/i, label: "dnscat" },
   { kind: "egress-evasion", pattern: /\bproxychains/i, label: "proxychains" },
-  { kind: "egress-evasion", pattern: /\bnc\b[\s\S]*\s-e(?:\s|$)/i, label: "nc -e" },
-  { kind: "egress-evasion", pattern: /\bncat\b[\s\S]*--exec\b/i, label: "ncat --exec" },
+  { kind: "egress-evasion", pattern: /\b(?:nc|ncat)\b[\s\S]*\s-e(?:\s|$)/i, label: "nc -e" },
+  { kind: "egress-evasion", pattern: /\bncat\b[\s\S]*--(?:exec|sh-exec)\b/i, label: "ncat --exec" },
   { kind: "egress-evasion", pattern: /\/dev\/tcp\//i, label: "/dev/tcp/" },
   { kind: "egress-evasion", pattern: /\/dev\/udp\//i, label: "/dev/udp/" },
   {
     kind: "egress-evasion",
-    pattern: /\b(?:curl|wget)\b[\s\S]*\s-x(?:\s|$|=|\S)/,
+    pattern: /\bcurl\b[\s\S]*\s-x(?:\s|$|=|\S)/,
     label: "curl/wget proxy or resolve flag",
   },
   {
     kind: "egress-evasion",
     pattern:
-      /\b(?:curl|wget)\b[\s\S]*(?:--proxy\b|--socks5\b|--connect-to\b|--resolve\b|--doh-url\b)/i,
+      /\b(?:curl|wget)\b[\s\S]*(?:--proxy(?:\s|=(?!off\b)|$)|--socks5\b|--connect-to\b|--resolve\b|--doh-url\b)/i,
     label: "curl/wget proxy or resolve flag",
   },
   {
@@ -247,7 +252,10 @@ export function screenCall(subject: string, input: unknown, expected: boolean): 
   if (extracted.status === "empty") return { outcome: "pass" };
   if (expected) return { outcome: "pass" };
 
-  const raw = extracted.text;
+  // MCP arguments are JSON, so they have no curl/wget neighbor. Prefix http:// so
+  // the same IMDS address rows still fire; bash `echo 169.254.169.254` stays a pass.
+  const raw =
+    subject === "mcp" || isMcpToolName(subject) ? `http:// ${extracted.text}` : extracted.text;
   const decoded = decodeAll(raw);
   const folded = decoded.toLowerCase();
   for (const row of ESCAPE_TABLE) {

