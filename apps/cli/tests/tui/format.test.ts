@@ -1,25 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import type { McpPanelRow } from "../../src/mcp/commands";
+import { theme } from "../../src/tui/theme/theme";
 import {
   DEFAULT_COLUMNS,
   estimateTokens,
   formatDoneLine,
   formatElapsed,
-  formatLiveThinkingStatus,
-  formatReasoningCaret,
   formatHomePath,
+  formatLiveThinkingStatus,
   formatMcpRow,
   formatModeDetail,
+  formatReasoningCaret,
   formatRouteLabelFromResolved,
   formatTokenProgress,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LEAVE_HINT,
   systemEntryFg,
   type TokenProgress,
 } from "../../src/tui/util/format";
-import { theme } from "../../src/tui/theme/theme";
 import { route } from "./helpers";
 
 describe("systemEntryFg", () => {
@@ -246,6 +247,12 @@ describe("MODE_CYCLE_HINT", () => {
   });
 });
 
+describe("PLAN_MODE_LEAVE_HINT", () => {
+  test("is the ctrl+o hint, with its own leading space", () => {
+    expect(PLAN_MODE_LEAVE_HINT).toBe(" (ctrl+o to leave)");
+  });
+});
+
 // The mode-indicator row's own model/route suffix, factored out as a pure function so leftover
 // packing is testable without mounting a renderer (formatModelRow's own extraction already used
 // this reasoning). `width` is the detail budget (space after the indicator; the caller subtracts
@@ -385,18 +392,47 @@ describe("formatRouteLabelFromResolved", () => {
 
 describe("modeRowHintVisible", () => {
   test("hint at MODE_HINT_COLS with empty detail", () => {
-    expect(modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, 0)).toBe(true);
+    expect(
+      modeRowHintVisible(
+        MODE_HINT_COLS,
+        MODE_LABEL["approve-each"].length,
+        0,
+        MODE_CYCLE_HINT.length,
+      ),
+    ).toBe(true);
   });
 
   test("hint hidden when detail+hint overflow even if remaining >= MODE_HINT_COLS", () => {
     const detail = "  claude-sonnet-5 · anthropic";
     expect(
-      modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, detail.length),
+      modeRowHintVisible(
+        MODE_HINT_COLS,
+        MODE_LABEL["approve-each"].length,
+        detail.length,
+        MODE_CYCLE_HINT.length,
+      ),
     ).toBe(false);
     const worstDetail = `  ${"n".repeat(22)} · → openrouter · high`;
-    expect(modeRowHintVisible(DEFAULT_COLUMNS, MODE_LABEL.auto.length, worstDetail.length)).toBe(
+    expect(
+      modeRowHintVisible(
+        DEFAULT_COLUMNS,
+        MODE_LABEL.auto.length,
+        worstDetail.length,
+        MODE_CYCLE_HINT.length,
+      ),
+    ).toBe(false);
+  });
+
+  test("the leave hint can still fit when the cycle hint would overflow", () => {
+    const remaining = MODE_HINT_COLS;
+    const indicator = MODE_LABEL["approve-each"].length;
+    const detail = "x".repeat(remaining - indicator - PLAN_MODE_LEAVE_HINT.length);
+    expect(modeRowHintVisible(remaining, indicator, detail.length, MODE_CYCLE_HINT.length)).toBe(
       false,
     );
+    expect(
+      modeRowHintVisible(remaining, indicator, detail.length, PLAN_MODE_LEAVE_HINT.length),
+    ).toBe(true);
   });
 });
 

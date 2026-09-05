@@ -54,7 +54,7 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isShiftTabModeCycle } from "../cli/commandCatalog";
+import { isCtrlOPlanToggle, isShiftTabModeCycle } from "../cli/commandCatalog";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
@@ -109,6 +109,7 @@ import {
   MODE_LABEL,
   modeRowHintVisible,
   PLAN_MODE_LABEL,
+  PLAN_MODE_LEAVE_HINT,
 } from "./util/format";
 import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 
@@ -282,6 +283,7 @@ export type AppProps = {
   // mode while this component's own state (and the indicator it renders) already showed the new
   // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
   onCycleMode?: () => void;
+  onTogglePlan?: () => void;
   // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
   // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
   // this is the single render-time mirror of that override: the indicator must not claim a mode
@@ -378,6 +380,7 @@ export function App({
   splashBanner,
   onPreSessionSubmit,
   onCycleMode,
+  onTogglePlan,
   skipPermissions,
   showSplash,
   authOffer,
@@ -601,18 +604,22 @@ export function App({
     Math.max(0, remaining - indicatorText.length),
     effortTier,
   );
-  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
+  const modeHint = planOn ? PLAN_MODE_LEAVE_HINT : MODE_CYCLE_HINT;
+  const showModeHint = modeRowHintVisible(
+    remaining,
+    indicatorText.length,
+    modeDetail.length,
+    modeHint.length,
+  );
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
   // independent registration is the idiomatic way to keep two unrelated concerns from having to
   // reason about each other's ordering/guards, the same shape InputBox's own handler already uses.
-  // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is pinned
-  // to bypass regardless of what a cycle would compute, so a functioning binding here would
-  // silently mutate and persist a session field the gate is already ignoring.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
+    if (isShiftTabModeCycle(key) && skipPermissions !== true && !planOn) onCycleMode?.();
+    if (isCtrlOPlanToggle(key)) onTogglePlan?.();
     // Mouse reporting is off, so the live pin cannot be clicked. ctrl+t does
     // not steal ↑/↓ or shift+tab; InputBox already ignores key.ctrl.
     if (key.ctrl && key.name === "t") dispatch({ type: "reasoning-toggled" });
@@ -1019,12 +1026,9 @@ export function App({
         />
       )}
       <box flexDirection="row" justifyContent="space-between">
-        {/* No `gap` — all spacing between these three is carried inside the strings themselves
-        (MODE_CYCLE_HINT's own leading space, `modeDetail`'s own leading two spaces), so the mode
-        hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
-          {showModeHint && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
+          {showModeHint && <text fg={theme.muted}>{modeHint}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>

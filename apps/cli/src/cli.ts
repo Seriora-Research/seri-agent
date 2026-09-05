@@ -2777,6 +2777,10 @@ async function runTui(
   };
   assertTuiHandlers(tuiHandlers);
 
+  function onTogglePlan(): void {
+    tuiHandlers["/plan"]([]);
+  }
+
   // Takes the head of the queue and re-enters onSubmit with it, rather than duplicating the
   // dispatch below: that is what makes the echo land exactly once, at the moment the message
   // actually starts, and what keeps a plain task, an `/agent` dispatch and a skill on one code
@@ -3134,6 +3138,7 @@ async function runTui(
       onModelSelected,
       onModelPickerCancel,
       onCycleMode,
+      onTogglePlan,
       skipPermissions,
       onSetupSelect,
       onSetupKeyEntered,
