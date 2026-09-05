@@ -1,9 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 
-// Build-time source for the identifier `harnessId` reads after a compile.
-// `SERI_BUILD_COMMIT` here chooses what to bake; at runtime the same env
-// var is an override of the baked value, not this lookup.
 export function resolveBuildCommit(
   env: NodeJS.ProcessEnv = process.env,
   gitHead: () => string | undefined = readGitHead,
