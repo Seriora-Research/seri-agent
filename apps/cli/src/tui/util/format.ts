@@ -181,14 +181,15 @@ export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
 export const PLAN_MODE_LEAVE_HINT = " (ctrl+o to leave)";
 
 // The persistent mode-indicator row still floors the cycle hint at `MODE_HINT_COLS` (app.tsx
-// via `modeRowHintVisible`). Model, route, and effort are leftover-packed by `formatModeDetail`
-// into whatever columns remain after the indicator — longest suffix that fits, then the next
-// shorter, then empty. Sized against the longest label, "⏵⏵ bypass permissions on" (26 cols,
-// worst case its glyph renders double-width) + the hint (21 cols) = 47, still under 52, so the
-// hint floor holds even in that worst case when detail is empty. This proof does not (and
-// cannot) account for the mode row's own right-hand content (the scroll banner /
-// `state.status`) sharing the same row — see app.tsx's own `showRightSide` for how that side of
-// the row is kept from wrapping instead.
+// via `modeRowHintVisible`). Sandbox suffix, model, route, and effort are leftover-packed into
+// whatever columns remain after the indicator — sandbox first (whole suffix or empty), then
+// `formatModeDetail`'s longest suffix that fits, then the next shorter, then empty. Sized
+// against the longest label, "⏵⏵ bypass permissions on" (26 cols, worst case its glyph renders
+// double-width) + the hint (21 cols) = 47, still under 52, so the hint floor holds even in that
+// worst case when leftover-packed detail is empty. This proof does not (and cannot) account for
+// the mode row's own right-hand content (the scroll banner / `state.status`) sharing the same
+// row — see app.tsx's own `showRightSide` for how that side of the row is kept from wrapping
+// instead.
 export const MODE_HINT_COLS = 52;
 // formatModeDetail's display cap for the `/effort` tier suffix — a tier value ultimately comes
 // from models.dev, an external and unvalidated source, so this is a display budget, not a bound
@@ -400,9 +401,10 @@ export function formatRouteLabelFromResolved(route: ResolvedRoute): string {
 // suffix — showing a fabricated route would misreport "your key"/"→ provider" during the exact
 // flow where neither is true.
 // `width` is the leftover budget for this suffix only: the caller has already subtracted the
-// indicator and any right-side banner/status. Hint visibility is applied by the caller
-// (`modeRowHintVisible`), not here, so the suffix claims space first. Greedy drop order:
-// model+route+effort, then model+route, then model, then empty. `route.model` is capped to
+// indicator, any leftover-packed sandbox suffix, and any right-side banner/status. Hint
+// visibility is applied by the caller (`modeRowHintVisible`), not here, so the suffix claims
+// space first. Greedy drop order: model+route+effort, then model+route, then model, then empty.
+// `route.model` is capped to
 // NAME_WIDTH (the same width the picker table already truncates model names to) before it goes
 // into the return — a real catalog id (a long OpenRouter id is well over 40 chars) was otherwise
 // unbounded here and could overflow the leftover. Carries its own leading two spaces (mirroring

@@ -425,11 +425,10 @@ export function App({
   const allowUnsandboxedCommands = configBoolean(
     configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, state.config),
   );
-  const indicatorText =
-    (planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode]) +
-    formatSandboxIndicator(
-      idleSandboxTier({ available: confinementAvailable }, allowUnsandboxedCommands),
-    );
+  const indicatorText = planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode];
+  const sandboxSuffix = formatSandboxIndicator(
+    idleSandboxTier({ available: confinementAvailable }, allowUnsandboxedCommands),
+  );
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
@@ -596,15 +595,16 @@ export function App({
     rightSideText.length +
     (rightSideText.length > 0 && state.status.length > 0 ? 1 : 0) +
     state.status.length;
-  // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/model/route,
-  // it's never hidden or shortened as the terminal narrows (there's nothing smaller to fall back
-  // to than the mode's own name). So on a narrow enough terminal, indicatorText + the right side
-  // together can still exceed `width` even after leftover packing has already given up all the
-  // room it can. Rather than let that wrap the row, the right side loses instead: it only shows
-  // when there's room for it alongside the label, which — like the hint/detail split above — is
-  // real terminal width, not a real cell-width measurement (`.length`, not `stringWidth`; the
-  // banner's own `—`/`↑` and `state.status`'s `…` can in principle render wider than 1 cell on a
-  // terminal configured for ambiguous-width-double, same caveat the D3 glyphs already carry).
+  // `indicatorText` — the mode label — has no width tier of its own: unlike the hint/sandbox
+  // suffix/model/route, it's never hidden or shortened as the terminal narrows (there's nothing
+  // smaller to fall back to than the mode's own name). So on a narrow enough terminal,
+  // indicatorText + the right side together can still exceed `width` even after leftover packing
+  // has already given up all the room it can. Rather than let that wrap the row, the right side
+  // loses instead: it only shows when there's room for it alongside the label, which — like the
+  // hint/detail split above — is real terminal width, not a real cell-width measurement (`.length`,
+  // not `stringWidth`; the banner's own `—`/`↑` and `state.status`'s `…` can in principle render
+  // wider than 1 cell on a terminal configured for ambiguous-width-double, same caveat the D3
+  // glyphs already carry).
   const showRightSide = width >= indicatorText.length + rawRightSideWidth;
   const rightSideWidth = showRightSide ? rawRightSideWidth : 0;
   const catalogEntry =
@@ -616,16 +616,14 @@ export function App({
     catalogEntry,
   );
   const remaining = width - rightSideWidth;
-  const modeDetail = formatModeDetail(
-    state.route,
-    Math.max(0, remaining - indicatorText.length),
-    effortTier,
-  );
+  const leftover = Math.max(0, remaining - indicatorText.length);
+  const packedSandbox = sandboxSuffix.length <= leftover ? sandboxSuffix : "";
+  const modeDetail = formatModeDetail(state.route, leftover - packedSandbox.length, effortTier);
   const modeHint = planOn ? PLAN_MODE_LEAVE_HINT : MODE_CYCLE_HINT;
   const showModeHint = modeRowHintVisible(
     remaining,
     indicatorText.length,
-    modeDetail.length,
+    packedSandbox.length + modeDetail.length,
     modeHint.length,
   );
 
@@ -1040,6 +1038,7 @@ export function App({
       <box flexDirection="row" justifyContent="space-between">
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
+          {packedSandbox.length > 0 && <text fg={theme.mode[displayMode]}>{packedSandbox}</text>}
           {showModeHint && <text fg={theme.muted}>{modeHint}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
