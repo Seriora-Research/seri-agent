@@ -345,9 +345,8 @@ export type PreparedRun = {
   // is no `session.permissionMode` assignment for a future edit to reach for by mistake — the
   // session this run started from is untouched, and driveLoop never sees anything else to assign.
   permissionMode: PermissionMode;
-  // Latch for the one-shot outside-cwd question. `--dangerously-skip-permissions` seeds
-  // allowed-this-run; a standing deny still wins in the policy table. Never written to
-  // permissions.yaml. /clear keeps this box: it is the process run, not the conversation.
+  // Never written to permissions.yaml. /clear keeps this box: it is the process run, not the
+  // conversation.
   outsideConsent?: { current: Consent };
   // The project checkpoints already resolved this run against — carried here rather than
   // re-derived in driveLoop, which needs it too (rememberGrant) and would otherwise resolve the

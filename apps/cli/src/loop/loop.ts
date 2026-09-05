@@ -337,8 +337,6 @@ export async function* runLoop(opts: {
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
   allowedTools?: readonly string[];
-  // When omitted, the FS-boundary table is skipped so existing library callers keep today's
-  // name-only gate. Production driveLoop always passes session.cwd.
   workingDirectory?: string;
   blockReadsOutsideWorkingDirectories?: boolean;
   // Live human, not "a prompt function exists". Scheduled runs pass a dummy that always

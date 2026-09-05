@@ -1,9 +1,8 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 
-// Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
-// sessions and never calls chdir, so each toolset has to carry its own directory. Shared with the
-// FS-boundary classifier so a path the gate allows is the same string the tool opens.
+// A daemon hosts concurrent sessions and never calls chdir, so each toolset has to carry its own
+// directory.
 export function resolveAgainstCwd(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
 }
@@ -31,9 +30,6 @@ export function pathLocation(cwd: string, path: string): PathLocation {
   return isInsideWorkingDir(cwd, path) ? "inside" : "outside";
 }
 
-// The four execute wrappers that close over resolveAgainstCwd. A name missing from this set
-// never has a working-directory question: edit takes in-memory content, bash/powershell take a
-// command string, and MCP/skill/memory tools are not this resolver.
 export const PATH_BEARING_FS_TOOLS: ReadonlySet<string> = new Set([
   "read_file",
   "grep",

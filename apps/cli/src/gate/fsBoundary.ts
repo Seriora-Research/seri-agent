@@ -19,9 +19,7 @@ export type FsPolicyVerdict = "name-gate" | "block" | "ask";
 
 type UnaskedOutsideKey = `${ToolClass}:${PermissionMode}:${"prompt" | "noprompt"}`;
 
-// Cells where consent is unasked, location is outside, standingDeny is false.
-// Read rows ask when a human is present and block when they are not.
-// Write + auto is the same, because checkPermission would allow the write.
+// Write + auto asks with a prompt and blocks without one, because checkPermission would allow the write.
 // Write + approve-each also asks, so a persisted write_file grant cannot skip the folder question.
 // Write + read-only defers. Asking would let a yes bypass read-only.
 export const UNASKED_OUTSIDE: { readonly [K in UnaskedOutsideKey]: FsPolicyVerdict } = {
@@ -52,8 +50,7 @@ export function decideFsPolicy(fact: PolicyFact): FsPolicyVerdict {
 }
 
 // One-shot latch. Terminal states ignore further events so a retried prompt cannot flip a no
-// into a yes, or the other way around. The table must not return "ask" unless consent is
-// unasked, so a second event is a caller bug, not a new question.
+// into a yes, or the other way around.
 export function reduceConsent(current: Consent, event: ConsentEvent): Consent {
   if (current !== "unasked") return current;
   return event.type === "granted" ? "allowed-this-run" : "denied-this-run";
