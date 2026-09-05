@@ -3481,7 +3481,15 @@ async function finishCliRun(
     // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
     // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
-      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions, promptChannel, queuedTask);
+      runResult = await runTui(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        skipPermissions,
+        promptChannel,
+        queuedTask,
+      );
     } catch (err) {
       return fatalDuringTui(err, prepared.preMountMessages);
     }
