@@ -25,7 +25,8 @@ describe("releaseAssetName", () => {
 
 describe("checksumForAsset", () => {
   test("reads the two SHA256SUMS spellings install.sh accepts", () => {
-    const sums = "abc\tseri-linux-x64\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  *seri-linux-arm64\n";
+    const sums =
+      "abc\tseri-linux-x64\n0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  *seri-linux-arm64\n";
     expect(checksumForAsset(sums, "seri-linux-x64")).toBeUndefined();
     const hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     expect(checksumForAsset(`${hex}  seri-linux-x64\n`, "seri-linux-x64")).toBe(hex);

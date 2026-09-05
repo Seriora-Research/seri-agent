@@ -64,7 +64,8 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const pin = deps.env.SERI_VERSION?.trim();
   let tag: string;
   try {
-    tag = pin && pin.length > 0 ? (pin.startsWith("v") ? pin : `v${pin}`) : await fetchLatestTag(deps);
+    tag =
+      pin && pin.length > 0 ? (pin.startsWith("v") ? pin : `v${pin}`) : await fetchLatestTag(deps);
   } catch (error) {
     return { code: 1, lines: [messageOf(error)] };
   }
@@ -187,4 +188,3 @@ async function defaultSmoke(binaryPath: string): Promise<void> {
     throw new Error(`new binary --selftest failed: ${selftest.stderr || selftest.stdout}`);
   }
 }
-
