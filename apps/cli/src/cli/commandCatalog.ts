@@ -235,8 +235,6 @@ export const COMMAND_META: readonly CommandMeta[] = [
     surface: "tui",
     description: "enter plan mode, or research a plan for a task",
     argsUsage: "[task]",
-    // Claims the name so `/plan` never falls through to the `plan` subagent. Empty form toggles;
-    // a task starts the workflow. The handler still rejects mid-turn and mid-review.
     accepts: () => true,
   },
 ];

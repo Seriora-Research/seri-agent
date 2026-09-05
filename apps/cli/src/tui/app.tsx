@@ -290,8 +290,6 @@ export type AppProps = {
   // Also makes Shift+Tab inert while set, checked inside this component rather than left to every
   // caller to remember: a functioning binding would silently mutate and persist a session field
   // the gate is ignoring, with zero visible feedback.
-  // The `/plan` overlay beats this flag: plan mode is read-only even under skip-permissions, and
-  // the indicator follows the overlay rather than claiming bypass.
   skipPermissions?: boolean;
 };
 
@@ -406,9 +404,6 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  // The `/plan` overlay wins even under `skipPermissions`: the gate is read-only for that
-  // overlay, so the indicator must not claim bypass. Hue reuses read-only; the label is distinct
-  // so it cannot be mistaken for `/mode` having cycled there.
   const planOn = isPlanOverlayOn(state.plan);
   const displayMode: PermissionMode = planOn
     ? "read-only"
@@ -842,9 +837,7 @@ export function App({
       />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
-      means anything until it clears. Plan-mode Q&A and review sit immediately after approval, then
-      /model, /setup, /login /signup, /config, /permissions, /effort: each is the same kind of
-      "only this input means anything right now" question. Child inspect keeps InputBox mounted
+      means anything until it clears. Child inspect keeps InputBox mounted
       and inert. Every branch here — including
       AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/

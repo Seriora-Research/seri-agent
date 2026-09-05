@@ -173,8 +173,6 @@ export const MODE_LABEL = {
   auto: "⏵⏵ bypass permissions on",
 } satisfies Record<PermissionMode, string>;
 
-// Plan mode is an overlay, not a PermissionMode. Same pause glyph and read-only hue; a distinct
-// string so the indicator cannot be mistaken for `/mode` having cycled to read-only.
 export const PLAN_MODE_LABEL = "⏸ plan mode on";
 
 // Persistent (shown on every render, not just right after a cycle) — a transient hint would not

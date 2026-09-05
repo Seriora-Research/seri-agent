@@ -247,11 +247,6 @@ export type TuiState = {
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
   pendingChrome: ChromePanelState | undefined;
-  /**
-   * TUI-only `/plan` overlay. Off by default; never persisted in session files. `cli.ts` reads this
-   * synchronously through `liveState` after each dispatch, so `getPermissionMode` and the `/plan`
-   * handler see the same value React does.
-   */
   plan: PlanOverlay;
   // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
   // which App forwards from its `showSplash` prop so the first committed frame is already the

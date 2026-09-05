@@ -89,9 +89,7 @@ function builtinAgent(opts: {
 }
 
 // `plan` shares `explore`'s array by reference: read access is identical. Plan is still a
-// distinct seat — isolated context and a different addendum — not a second explorer. Dropped
-// built-in names (`code`, `test`, `oracle`) stay in ROUTABLE_ROLES so a user file cannot reclaim
-// them; they are not seats here.
+// distinct seat — isolated context and a different addendum — not a second explorer.
 //
 // Non-empty by type, which is what lets the dispatch tool's own z.enum be built from registry keys
 // without a cast (dispatch.ts destructures this rather than asserting the array is populated).

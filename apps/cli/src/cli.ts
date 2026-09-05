@@ -1564,7 +1564,7 @@ async function runTui(
   // up in time." `skipPermissions` still wins over the stored session mode, matching
   // prepareSession's own original derivation of `prepared.permissionMode`: a run-scoped
   // `--dangerously-skip-permissions` override is not something a mid-run /mode should be able to
-  // undo. The `/plan` overlay beats both: plan-mode turns are read-only even under that flag.
+  // undo.
   function getPermissionMode(): PermissionMode {
     if (isPlanOverlayOn(liveState.plan)) return "read-only";
     return skipPermissions ? "auto" : liveState.session.permissionMode;
@@ -1628,9 +1628,6 @@ async function runTui(
     });
   }
 
-  // Parks `ask_plan_questions` on the TUI the same way tuiApprovalPrompt parks the gate. Cancel
-  // (Esc, or a turn abort) returns `{ cancelled: true }` as the tool result rather than aborting
-  // the turn — the model should keep researching with whatever it already knows.
   let pendingPlanQuestionsResolve: ((answers: PlanAnswers) => void) | undefined;
 
   function tuiAskPlanQuestions(

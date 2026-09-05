@@ -214,8 +214,6 @@ export function getTrajectoriesDir(configDir: string = getConfigDir()): string {
   return join(configDir, TRAJECTORIES_DIRNAME);
 }
 
-// Always under the profile root, never the worktree: a default-profile user puts plans in
-// ~/.seri/plans/, a `--profile work` user in ~/.seri/work/plans/.
 export function getPlansDir(configDir: string = getConfigDir()): string {
   return join(configDir, PLANS_DIRNAME);
 }

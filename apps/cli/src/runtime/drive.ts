@@ -118,7 +118,6 @@ export type DriveLoopResult = {
   // it unconditionally is what makes `false` mean exactly one thing (nothing ever ran) instead of
   // also being read as "the caller didn't bother to set the field."
   ranAnyTurn: boolean;
-  // Set when this turn ended because `submit_plan` ran. Undefined on every other reason.
   submittedPlan?: SubmittedPlan;
 };
 
@@ -140,8 +139,6 @@ export type DriveLoopOptions = {
   // model. Everything above the engine — route resolution, overlays, the checkpointer, the system
   // tier, the usage fold — is shared with an ordinary turn; only the engine differs.
   directDispatch?: { agent: AgentSpec; goal: string };
-  // TUI plan-mode parent turns only. Direct `/explore` dispatch and the non-interactive path omit
-  // this, so they never see `ask_plan_questions` / `submit_plan` and never join the overlay.
   planMode?: {
     askQuestions: (
       questions: readonly PlanQuestion[],
@@ -276,8 +273,6 @@ export async function driveLoop(
       family: catalogEntry?.family ?? null,
     }),
   );
-  // Parent-only: a `plan`/`explore` child inherits the read-only getter, not this overlay, so it
-  // cannot call `submit_plan` (it does not have that tool).
   const parentSystem =
     driveOpts.planMode === undefined ? system : joinTiers(system, PLAN_MODE_OVERLAY);
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
@@ -510,7 +505,6 @@ export async function driveLoop(
           callSubject: mcpCallSubject,
           approvalPrompt,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
-          // Parent-only overlay lives on `parentSystem`; children still get `system`.
           system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and
           // costs the loop nothing. The parent loop only: a subagent builds its own message array

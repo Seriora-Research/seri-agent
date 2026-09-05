@@ -306,8 +306,6 @@ export async function* runLoop(opts: {
   // a Codex subscription child must not inherit a Groq parent's seed.
   temperature?: number;
   seed?: number;
-  // After a successful execute of a name in this set, finish the current tool round, then end the
-  // turn. Plan mode uses this so `submit_plan` is the last model step rather than another round.
   terminalTools?: ReadonlySet<string>;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
