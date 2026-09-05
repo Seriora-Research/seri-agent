@@ -19,7 +19,7 @@ export function compileArgs(opts: {
   target?: string;
   commit?: string;
 }): string[] {
-  const args = ["build", "--compile", opts.entry, "--outfile", opts.outfile];
+  const args = ["build", "--compile", "--minify", opts.entry, "--outfile", opts.outfile];
   if (opts.target !== undefined && opts.target.length > 0) {
     args.push("--target", opts.target);
   }
