@@ -610,6 +610,26 @@ describe("dispatch_subagents", () => {
     expect(result.summary).not.toContain("iteration cap");
   });
 
+  test("a containment-denied child's summary does not tell the parent to switch to auto", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "permission-denied", name: "bash", reason: "containment" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+
+    const result = await runSubagent({
+      tools: {},
+      system: "irrelevant",
+      messages: [{ role: "user", content: "go" }],
+      runtime: makeRuntime(fake, { permissionMode: () => "auto" }),
+    });
+
+    expect(result.summary).toContain("containment block");
+    expect(result.summary).toContain('"auto"');
+    expect(result.summary).not.toContain("it can only write in auto mode");
+  });
+
   test("batch cap: only the first 3 tasks run, the rest come back as not-run rows", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],

@@ -299,11 +299,15 @@ export function anomalyLineForResult(
   return undefined;
 }
 
-export function anomalyLineForDenial(reason: "blocked" | "declined" | "hook"): string {
-  // "blocked" and "declined" each read as a complete statement about the call. "hook" names an
-  // actor instead, so on its own it tells a reader who did it and not what was done — it needs the
-  // verb the other two carry implicitly.
-  return reason === "hook" ? "blocked by hook" : reason;
+export function anomalyLineForDenial(
+  reason: "blocked" | "declined" | "hook" | "containment",
+): string {
+  // "blocked" and "declined" each read as a complete statement about the call. "hook" and
+  // "containment" name the rail, so on their own they tell a reader which one fired and not
+  // what was done. They need the verb the other two carry implicitly.
+  if (reason === "hook") return "blocked by hook";
+  if (reason === "containment") return "blocked by containment";
+  return reason;
 }
 
 const TOOL_THROW_PREFIX = /^Tool "[^"]+" threw during execution: /;
@@ -490,7 +494,7 @@ export function recordThrow(
 export function recordDenial(
   entries: ToolActivityEntry[],
   name: string,
-  reason: "blocked" | "declined" | "hook",
+  reason: "blocked" | "declined" | "hook" | "containment",
 ): ToolActivityEntry[] {
   const labels = TOOL_LABELS[name];
   return mapEntry(

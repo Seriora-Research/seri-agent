@@ -9,6 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
+import { type ScreenResult, screenCall } from "../containment/escape";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { withCodexStoreOption } from "../provider/codex";
 import {
@@ -51,8 +52,9 @@ export type LoopEvent =
   // a PreToolUse hook is configuration the user installed, refusing the call it was installed to
   // refuse, which is the mode argument again in another shape. It must therefore never increment
   // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
-  // times, and there is no human anywhere in a hook's path to answer even once.
-  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
+  // times, and there is no human anywhere in a hook's path to answer even once. "containment" is
+  // the same kind of rail: the harness refused the call, so a human did not say no.
+  | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" | "containment" }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
       type: "compacted";
@@ -274,6 +276,9 @@ export async function* runLoop(opts: {
    * already run, so a consumer with an objection at this point has a message, not a veto.
    */
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
+  // Host annotation for the containment-escape table. Default false. The loop always screens;
+  // this flag only skips table hits, never an unparseable inspectable payload.
+  containmentEscapeExpected?: boolean;
   // The tools already approved with "always" before this run started, or nothing. A seed, not a
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
@@ -742,6 +747,40 @@ export async function* runLoop(opts: {
       // can disagree; telling the model a tool has two different names within one turn is an
       // invitation to retry under the wrong one.
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
+
+      // Before onBeforeTool and the gate so a human is never asked about a call this rail will
+      // refuse, and so auto / --dangerously-skip-permissions cannot reach around it. A throw is a
+      // block — the opposite of onBeforeTool.errors, which proceed.
+      let containment: ScreenResult;
+      try {
+        containment = screenCall(subject, call.input, opts.containmentEscapeExpected === true);
+      } catch {
+        containment = {
+          outcome: "block",
+          reason: { kind: "unparseable", detail: "could not evaluate" },
+        };
+      }
+      if (containment.outcome === "block") {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        yield { type: "permission-denied", name: subject, reason: "containment" };
+        const named =
+          containment.reason.kind === "escape"
+            ? `${containment.reason.class} (${containment.reason.label})`
+            : `unparseable (${containment.reason.detail})`;
+        toolResults.push({
+          type: "tool-result",
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          output: {
+            type: "execution-denied",
+            reason:
+              `Tool "${subject}" was blocked as a containment escape: ${named}. ` +
+              `Do not retry this call or a variant of it. The block is a harness rail; ` +
+              `/mode and --dangerously-skip-permissions do not lift it.`,
+          },
+        });
+        continue;
+      }
 
       if (opts.onBeforeTool !== undefined) {
         let hook: { readonly block?: string; readonly errors?: readonly string[] };

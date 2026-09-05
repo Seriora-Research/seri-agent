@@ -234,6 +234,7 @@ export async function runArchivist(args: {
   // PreToolUse hook is the only thing left in front of a write it decides to make.
   onBeforeTool?: SubagentRuntime["onBeforeTool"];
   onAfterTool?: SubagentRuntime["onAfterTool"];
+  containmentEscapeExpected?: boolean;
   // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
   // makeRuntime already uses) — every production call (maybeRunArchivist, below) leaves this at
   // its default, the real runLoop.
@@ -289,6 +290,7 @@ export async function runArchivist(args: {
     reasoningEffort: args.reasoningEffort,
     onBeforeTool: args.onBeforeTool,
     onAfterTool: args.onAfterTool,
+    containmentEscapeExpected: args.containmentEscapeExpected,
   };
 
   let result: Awaited<ReturnType<typeof runSubagent>>;
@@ -359,6 +361,7 @@ export async function maybeRunArchivist(args: {
   // Passed straight through to runArchivist — see its own comment on this pair.
   onBeforeTool?: SubagentRuntime["onBeforeTool"];
   onAfterTool?: SubagentRuntime["onAfterTool"];
+  containmentEscapeExpected?: boolean;
   // Overridable only for tests (fakeChildLoop). Production callers omit it.
   runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
@@ -403,6 +406,7 @@ export async function maybeRunArchivist(args: {
     onWarning: args.onWarning,
     onBeforeTool: args.onBeforeTool,
     onAfterTool: args.onAfterTool,
+    containmentEscapeExpected: args.containmentEscapeExpected,
     runLoop: args.runLoop,
   });
 }
