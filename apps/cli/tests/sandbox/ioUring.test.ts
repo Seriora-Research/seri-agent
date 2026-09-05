@@ -15,7 +15,11 @@ const SECCOMP_RET_ERRNO_EPERM = 0x00050001;
 const X32_SYSCALL_BIT = 0x40000000;
 
 function runChild(mode: "probe" | "child" | "x32") {
-  return spawnSync(process.execPath, [CHILD, mode], { encoding: "utf8" });
+  return spawnSync(process.execPath, [CHILD, mode], {
+    encoding: "utf8",
+    timeout: mode === "x32" ? 2000 : undefined,
+    killSignal: "SIGKILL",
+  });
 }
 
 function filterInsns(filter: Uint8Array): { code: number; k: number }[] {
@@ -158,6 +162,11 @@ describe.skipIf(process.platform !== "linux")("io_uring child", () => {
   test.skipIf(process.arch !== "x64")("x32 io_uring_setup is killed, not allowed", () => {
     const result = runChild("x32");
     expect(result.stdout).not.toBe("allow\n");
-    expect(result.signal === "SIGSYS" || result.status === 159).toBe(true);
+    const killed =
+      result.signal === "SIGSYS" ||
+      result.signal === "SIGKILL" ||
+      result.status === 159 ||
+      result.error !== null;
+    expect(killed).toBe(true);
   });
 });

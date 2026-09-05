@@ -13,7 +13,8 @@ if (mode === "x32") {
   const libc = dlopen("libc.so.6", {
     syscall: { args: [FFIType.i64, FFIType.u32, FFIType.ptr], returns: FFIType.i64 },
   });
-  libc.symbols.syscall(BigInt(0x40000000 | 425), 1, ptr(new Uint8Array(128)));
+  const params = new Uint8Array(128);
+  libc.symbols.syscall(BigInt(0x40000000 | 425), 1, ptr(params));
   process.stdout.write("allow\n");
   process.exit(0);
 }
