@@ -10,6 +10,7 @@ import { loadVerifyConfig } from "../config/config";
 import { createMcpClients, createSessionDial } from "../mcp/client";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
+import { loadDenials } from "../permissions/store";
 import { resolveDefaultModel } from "../provider/defaults";
 import { createRulesState } from "../rules/match";
 import { driveLoop } from "../runtime/drive";
@@ -69,6 +70,7 @@ export function createRunScheduled(opts: {
       permissionMode: input.policy.permissionMode,
       worktree: session.cwd,
       allowedTools: input.policy.allowedTools,
+      pathDenials: loadDenials(opts.configDir, onWarning),
       catalog,
       catalogEntry,
       route,

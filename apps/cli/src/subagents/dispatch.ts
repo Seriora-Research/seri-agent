@@ -4,7 +4,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
 import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
-import type { PermissionMode } from "../gate/gate";
+import type { PathDenial, PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import type { RouteCredential } from "../provider/routing";
@@ -92,6 +92,9 @@ export type SubagentRuntime = {
   // current mode rather than the one driveLoop composed this runtime with.
   permissionMode: () => PermissionMode;
   allowedTools: readonly string[];
+  // Same list the parent loop is gated with. A child that omitted this would probe a denied
+  // path the parent already refused.
+  pathDenials?: readonly PathDenial[];
   // onAfterMutation is optional here even though the concrete Checkpointer (checkpoint.ts) always
   // has one: this type is the generic contract runOne/agentToolSet code against, and a test
   // double or a future caller with no write ledger is still a valid OnBeforeMutation without it.
@@ -245,6 +248,7 @@ export async function runSubagent(opts: {
     messages: opts.messages,
     permissionMode: mode,
     allowedTools: runtime.allowedTools,
+    pathDenials: runtime.pathDenials,
     system: opts.system,
     signal: opts.signal,
     maxIterations: runtime.maxIterations ?? MAX_CHILD_ITERATIONS,

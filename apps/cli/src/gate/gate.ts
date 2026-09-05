@@ -54,7 +54,7 @@ export function checkPermission(
   classify: (name: string) => ToolClass = classifyBuiltin,
   check?: PermissionCheck,
 ): "allow" | "block" | "needs-approval" {
-  void check;
+  if (denialBlocks(check?.denials, toolName, check?.input)) return "block";
   if (classify(toolName) === "read") return "allow";
   if (mode === "auto") return "allow";
   if (mode === "read-only") return "block";

@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { type Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
+import type { PathDenial } from "../gate/gate";
 import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
 // NOT derived from WRITE_TOOL_NAMES, on purpose: a tool added to the gate must be opted IN here
@@ -85,6 +86,12 @@ global: []
 
 # Approved only under the given project root. An answer of "a" lands here, never in \`global\`.
 projects: {}
+
+# Paths glob, grep, and read_file must not touch. A missing path still comes back as a
+# permission denial, not as "path not found". seri never writes here.
+#   - glob(/secret/**)
+#   - read_file(.env)
+deny: []
 `;
 
 type StoreState = { status: "missing" } | { status: "malformed" } | { status: "ok"; doc: Document };
@@ -145,6 +152,53 @@ function extractToolList(
         `ignoring "${value}" in ${path}: only write_file, edit, and a valid mcp_<server>_<tool>@<digest> grant can be approved permanently — a grant keyed on a bare tool name says nothing about what a shell command will do, and an MCP grant is only meaningful bound to the contract's fingerprint`,
       );
     }
+  }
+  return result;
+}
+
+const DENIAL_ENTRY = /^([A-Za-z0-9_]+)\((.+)\)$/;
+
+function parseDenialEntry(value: string): PathDenial | undefined {
+  const match = DENIAL_ENTRY.exec(value);
+  if (match === null) return undefined;
+  const tool = match[1];
+  const pattern = match[2];
+  if (tool === undefined || pattern === undefined) return undefined;
+  return { tool, pattern };
+}
+
+// `deny` is optional on purpose: every existing permissions.yaml was written without it, and a
+// missing or wrong-type key must not mark the whole store malformed. That would drop grants.
+// seri never writes this list; a human edits it. A bad entry is skipped, not fatal.
+export function loadDenials(
+  configDir: string,
+  onWarning?: (message: string) => void,
+): PathDenial[] {
+  const path = permissionsPath(configDir);
+  const state = readStore(configDir);
+  if (state.status === "missing") return [];
+  if (state.status === "malformed") {
+    onWarning?.(`could not parse ${path}, so path denials were ignored`);
+    return [];
+  }
+
+  const node = state.doc.get("deny");
+  if (node === undefined || node === null) return [];
+  if (!(node instanceof YAMLSeq)) {
+    onWarning?.(`ignoring deny in ${path}: expected a list of tool(pattern) entries`);
+    return [];
+  }
+
+  const result: PathDenial[] = [];
+  for (const value of scalarStrings(node)) {
+    const parsed = parseDenialEntry(value);
+    if (parsed === undefined) {
+      onWarning?.(
+        `ignoring "${value}" in ${path}: deny entries must look like tool(pattern), e.g. glob(/secret/**)`,
+      );
+      continue;
+    }
+    result.push(parsed);
   }
   return result;
 }

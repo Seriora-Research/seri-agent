@@ -61,6 +61,7 @@ function preparedStub(): PreparedRun {
     permissionMode: "read-only",
     worktree: dir,
     allowedTools: [],
+    pathDenials: [],
     catalog: { fetchedAt: "", entries: [] },
     catalogEntry: undefined,
     route: {
@@ -549,6 +550,32 @@ describe("driveLoop directDispatch", () => {
       before: { errors: [] },
     });
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
+  });
+
+  test("a child's runLoop receives the prepared path denials", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
+    let received: RunLoopOpts["pathDenials"];
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = opts.pathDenials;
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(received).toEqual([{ tool: "glob", pattern: "/secret/**" }]);
   });
 });
 

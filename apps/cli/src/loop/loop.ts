@@ -204,8 +204,12 @@ async function decidePermission(
   allowedTools: Set<string>,
   approvalPrompt: ApprovalPrompt | undefined,
   signal: AbortSignal | undefined,
+  denials: readonly PathDenial[] | undefined,
 ): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
-  const permission = checkPermission(toolName, mode, allowedTools);
+  const permission = checkPermission(toolName, mode, allowedTools, undefined, {
+    input,
+    denials,
+  });
   if (permission === "allow") return "allow";
   if (permission === "block") return "deny-blocked";
   if (approvalPrompt === undefined) return "deny-blocked";
@@ -793,6 +797,7 @@ export async function* runLoop(opts: {
         allowedTools,
         opts.approvalPrompt,
         opts.signal,
+        opts.pathDenials,
       );
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked

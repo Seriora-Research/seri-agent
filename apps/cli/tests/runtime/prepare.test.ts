@@ -373,6 +373,38 @@ describe("bindSession + mcp", () => {
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
   });
 
+  test("prepareSession loads path denials from permissions.yaml", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n  - read_file(.env)\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    expect(typeof result).not.toBe("number");
+    expect((result as PreparedRun).pathDenials).toEqual([
+      { tool: "glob", pattern: "/secret/**" },
+      { tool: "read_file", pattern: ".env" },
+    ]);
+  });
+
+  test("bindSession reloads path denials from disk", async () => {
+    const prepared = await freshPrepared();
+    expect(prepared.pathDenials).toEqual([]);
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - grep(/hidden/**)\n",
+    );
+    bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      mcpConfigDirFor(tmpConfigRoot),
+      permissionsDir,
+      () => {},
+    );
+    expect(prepared.pathDenials).toEqual([{ tool: "grep", pattern: "/hidden/**" }]);
+  });
+
   // Asserted through preMountMessages rather than a captured console.error, because that queue IS
   // the delivery: prepareSession runs after the shared renderer exists but before the TUI's first
   // frame, so a line written straight to the console in that window is painted over and gone.
