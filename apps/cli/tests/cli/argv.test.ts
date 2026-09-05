@@ -532,6 +532,30 @@ describe("run (argv and usage errors)", () => {
     expect(code === 0 || code === 1).toBe(true);
   });
 
+  test("`seri --profile work doctor` names the flag profile", async () => {
+    delete process.env.GROQ_API_KEY;
+    const { fake, capture } = fakeRunLoop();
+    const grepFn = async () => ({
+      mode: "content" as const,
+      matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+      truncated: false,
+    });
+    const { code, logs } = await captureLogs(() =>
+      run(["--profile", "work", "doctor"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        grep: grepFn,
+        fetch: (async () => {
+          throw new Error("doctor must not fetch");
+        }) as unknown as typeof fetch,
+      }),
+    );
+    expect(capture()).toBeUndefined();
+    expect(logs.join("\n")).toContain("work (flag)");
+    expect(code === 0 || code === 1).toBe(true);
+  });
+
   test("`seri doctor extra` is a usage error", async () => {
     const { fake, capture } = fakeRunLoop();
     const { code } = await captureLogs(() =>

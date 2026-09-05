@@ -5,7 +5,7 @@ import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
 import { isGitAvailable } from "../checkpoint/shadowGit";
 import { inspectConfig } from "../config/config";
-import { DATABASE_FILENAME, getConfigDir, resolveProfile, resolveUserHome } from "../config/paths";
+import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
 import { loadGrants } from "../permissions/store";
@@ -73,7 +73,7 @@ async function ripgrepCheck(deps: DoctorDeps): Promise<CheckResult> {
 }
 
 function profileCheck(configDir: string): CheckResult {
-  const { profile, source } = resolveProfile(undefined);
+  const { profile, source } = currentProfile();
   return {
     name: "profile",
     status: "ok",
