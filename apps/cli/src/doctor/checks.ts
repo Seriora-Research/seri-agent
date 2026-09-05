@@ -11,6 +11,7 @@ import { looksLikeSeriBinary } from "../installIdentity";
 import { loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
+import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import { SessionDatabase } from "../session/database";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
@@ -27,6 +28,7 @@ export type DoctorDeps = {
   arch: string;
   cwd: string;
   configDir?: string;
+  probeIoUring?: () => IoUringProbe;
 };
 
 export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> {
@@ -44,6 +46,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     bashCheck(),
     sessionStoreCheck(configDir),
     await daemonCheck(configDir, deps.fetch),
+    ioUringCheck(deps),
   ];
 }
 
@@ -227,6 +230,14 @@ function sessionStoreCheck(configDir: string): CheckResult {
   } finally {
     database?.close();
   }
+}
+
+function ioUringCheck(deps: DoctorDeps): CheckResult {
+  if (deps.platform !== "linux") {
+    return ioUringDoctorCheck({ status: "unsupported" }, deps.platform);
+  }
+  const probe = (deps.probeIoUring ?? probeIoUringSetup)();
+  return ioUringDoctorCheck(probe, deps.platform);
 }
 
 async function daemonCheck(configDir: string, fetchFn: typeof fetch): Promise<CheckResult> {
