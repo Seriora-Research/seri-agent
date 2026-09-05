@@ -31,6 +31,18 @@ import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
 import { withSkills } from "../skills/tool";
+import { ASK_USER_OVERLAY } from "../ask-user/prompt";
+import { withAskUser } from "../ask-user/tool";
+import type { AskUserPresenter } from "../ask-user/types";
+import { withTodo } from "../todo/tool";
+import { PLAN_MODE_OVERLAY } from "../plan/prompt";
+import {
+  isSubmittedPlan,
+  type PlanAnswers,
+  type PlanQuestion,
+  type SubmittedPlan,
+} from "../plan/mode";
+import { SUBMIT_PLAN_TOOL_NAME, stripWriteTools, withPlanTools } from "../plan/tools";
 import { type ChildEventPayload, dispatchDirect, withSubagents } from "../subagents/dispatch";
 import type { AgentSpec } from "../subagents/registry";
 import {
@@ -110,6 +122,7 @@ export type DriveLoopResult = {
   // it unconditionally is what makes `false` mean exactly one thing (nothing ever ran) instead of
   // also being read as "the caller didn't bother to set the field."
   ranAnyTurn: boolean;
+  submittedPlan?: SubmittedPlan;
 };
 
 export type DriveLoopOptions = {
@@ -121,7 +134,8 @@ export type DriveLoopOptions = {
   // fatal). The daemon sets this false so a Ctrl-C at `seri serve` is not stolen by an in-flight
   // turn's slot.
   bindProcessCancel?: boolean;
-  // Default true: wrap tools with dispatch_subagents. Scheduled runs never compose that tool.
+  // Default true: wrap tools with dispatch_subagents and the parent-only `todo` checklist.
+  // Scheduled runs pass false so neither tool exists on the unattended path.
   composeSubagents?: boolean;
   // Scheduled runs omit this child. maybeRunArchivist's only tool is memory_write, which is
   // not in the read-only scheduled toolset. Default remains true for attended CLI and TUI.
@@ -130,11 +144,23 @@ export type DriveLoopOptions = {
   // model. Everything above the engine — route resolution, overlays, the checkpointer, the system
   // tier, the usage fold — is shared with an ordinary turn; only the engine differs.
   directDispatch?: { agent: AgentSpec; goal: string };
+  planMode?: {
+    askQuestions: (
+      questions: readonly PlanQuestion[],
+      signal?: AbortSignal,
+    ) => Promise<PlanAnswers>;
+    configDir: string;
+  };
+  // TUI parks a question; omitted presenter fails closed (piped CLI, daemon attended).
+  askUser?: AskUserPresenter;
+  // Default true. Scheduled runs pass false so the tool and overlay are both absent.
+  composeAskUser?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
   if (!result.ranAnyTurn) return 0;
   if (result.doneReason === "no-tool-call") return result.refusedWithoutRunning ? 1 : 0;
+  if (result.doneReason === "plan-submitted") return 0;
   return 1;
 }
 
@@ -255,6 +281,12 @@ export async function driveLoop(
     buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory, {
       family: catalogEntry?.family ?? null,
     }),
+  );
+  const askUserEnabled = driveOpts.composeAskUser !== false;
+  const parentSystem = joinTiers(
+    system,
+    driveOpts.planMode === undefined ? undefined : PLAN_MODE_OVERLAY,
+    askUserEnabled ? ASK_USER_OVERLAY : undefined,
   );
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
   // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
@@ -390,21 +422,25 @@ export async function driveLoop(
       onChildEvent?.(payload);
     },
   };
-  // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
-  // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
-  // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
   const dispatchable =
-    driveOpts.composeSubagents === false ? baseTools : withSubagents(baseTools, subagentRuntime);
+    driveOpts.composeSubagents === false
+      ? baseTools
+      : withTodo(withSubagents(baseTools, subagentRuntime));
   // Needs no flag of its own: withSkills adds nothing when the registry holds no model-visible
   // skill, and the one path that must never see this tool — a scheduled run — is built with an
   // empty registry, so its absence there is structural rather than conditional. withMcp composes
   // the same way, on the same terms: it adds nothing for a registry with no cataloged tool, which
   // is what a fresh install or an unpreviewed server both look like.
-  const tools = withMcp(
+  const composed = withMcp(
     withSkills(dispatchable, prepared.skills),
     prepared.mcp,
     prepared.mcpClients,
   );
+  const withAsk = askUserEnabled ? withAskUser(composed, driveOpts.askUser) : composed;
+  const tools =
+    driveOpts.planMode === undefined
+      ? withAsk
+      : withPlanTools(stripWriteTools(withAsk), driveOpts.planMode);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -419,6 +455,7 @@ export async function driveLoop(
   let ranTool = false;
   let archivist: ArchivistReport | undefined;
   let directSummary: string | undefined;
+  let submittedPlan: SubmittedPlan | undefined;
 
   // `/name <task>`: one agent the USER picked, run in place of a parent model call. It yields the
   // same LoopEvent stream the loop would for a dispatch the model itself issued — tool-call,
@@ -481,7 +518,7 @@ export async function driveLoop(
           callSubject: mcpCallSubject,
           approvalPrompt,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
-          system,
+          system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and
           // costs the loop nothing. The parent loop only: a subagent builds its own message array
           // (subagents/dispatch.ts), and a child still inherits every `alwaysApply` rule through
@@ -518,6 +555,8 @@ export async function driveLoop(
           reasoningEffort,
           temperature: samplingConfig.temperature,
           seed: samplingConfig.seed,
+          terminalTools:
+            driveOpts.planMode === undefined ? undefined : new Set([SUBMIT_PLAN_TOOL_NAME]),
         })) {
       // The archivist's entire view of this turn — its own module owns what each event means to
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
@@ -536,6 +575,13 @@ export async function driveLoop(
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
       if (event.type === "tool-call") ranTool = true;
+      if (
+        event.type === "tool-result" &&
+        event.name === SUBMIT_PLAN_TOOL_NAME &&
+        isSubmittedPlan(event.result)
+      ) {
+        submittedPlan = event.result;
+      }
       // Compaction splices the whole message array, so every rewind anchor recorded before this
       // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
       // so instead of silently slicing garbage. A session that never checkpointed has no log, and
@@ -646,5 +692,6 @@ export async function driveLoop(
     archivist,
     directSummary,
     ranAnyTurn: true,
+    submittedPlan,
   };
 }

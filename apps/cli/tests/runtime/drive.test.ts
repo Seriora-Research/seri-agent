@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
@@ -14,8 +16,11 @@ import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mc
 import { createArchivistState } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
-import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
-import { driveLoop } from "../../src/runtime/drive";
+import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
+import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
+import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
+import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
@@ -106,7 +111,7 @@ function unusedCtx(configDir: string) {
 }
 
 describe("driveLoop options", () => {
-  test("composeSubagents false omits dispatch_subagents; the default still adds it", async () => {
+  test("composeSubagents false omits dispatch_subagents and todo; the default still adds both", async () => {
     const prepared = preparedStub();
     const ctx = unusedCtx(prepared.session.cwd);
     const emptyArchivist = createArchivistState(prepared.session);
@@ -123,6 +128,7 @@ describe("driveLoop options", () => {
       emptyArchivist,
     );
     expect(DISPATCH_TOOL_NAME in (withDispatch.capture()?.tools ?? {})).toBe(true);
+    expect(TODO_TOOL_NAME in (withDispatch.capture()?.tools ?? {})).toBe(true);
 
     const withoutDispatch = fakeRunLoop();
     await driveLoop(
@@ -139,6 +145,7 @@ describe("driveLoop options", () => {
       { composeSubagents: false },
     );
     expect(DISPATCH_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
+    expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
   });
 
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {
@@ -224,8 +231,8 @@ describe("driveLoop options", () => {
 });
 
 describe("driveLoop directDispatch", () => {
-  // The five parent-callable agents are registry entries like any other, so `/explore …` reaches
-  // this path with no source change; a file-defined agent reaches it identically.
+  // Built-in explore/plan and a file-defined agent are registry entries alike, so `/explore …`
+  // reaches this path with no source change; a file-defined agent reaches it identically.
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
     return {
@@ -688,5 +695,234 @@ describe("driveLoop mcp composition", () => {
       { composeSubagents: false, bindProcessCancel: false },
     );
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
+  });
+});
+
+describe("driveLoop planMode", () => {
+  function withWriteTools(): PreparedRun {
+    const prepared = preparedStub();
+    prepared.tools = {
+      write_file: toolDefinitions.write_file,
+      read_file: toolDefinitions.read_file,
+    };
+    return prepared;
+  }
+
+  test("composes plan tools, strips writes, joins the overlay, and sets terminalTools", async () => {
+    const prepared = withWriteTools();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    const opts = capture.capture();
+    expect(opts?.tools[ASK_PLAN_QUESTIONS_TOOL_NAME]).toBeDefined();
+    expect(opts?.tools[SUBMIT_PLAN_TOOL_NAME]).toBeDefined();
+    expect(opts?.tools.write_file).toBeUndefined();
+    expect(opts?.tools.read_file).toBeDefined();
+    expect(opts?.system).toContain(PLAN_MODE_OVERLAY.slice(0, 40));
+    expect(opts?.terminalTools).toEqual(new Set([SUBMIT_PLAN_TOOL_NAME]));
+  });
+
+  test("without planMode the parent ToolSet has neither plan tool nor the overlay", async () => {
+    const prepared = withWriteTools();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    const opts = capture.capture();
+    expect(opts?.tools[ASK_PLAN_QUESTIONS_TOOL_NAME]).toBeUndefined();
+    expect(opts?.tools[SUBMIT_PLAN_TOOL_NAME]).toBeUndefined();
+    expect(opts?.tools.write_file).toBeDefined();
+    expect(opts?.system).not.toContain("You are in plan mode");
+    expect(opts?.terminalTools).toBeUndefined();
+  });
+
+  test("a submit_plan tool-result is returned as submittedPlan", async () => {
+    const prepared = withWriteTools();
+    const plan = { path: "/tmp/p.md", title: "T", markdown: "# T\n" };
+    const capture = fakeRunLoop([
+      { type: "tool-result", name: SUBMIT_PLAN_TOOL_NAME, result: plan },
+      { type: "done", reason: "plan-submitted" },
+    ]);
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    expect(result.doneReason).toBe("plan-submitted");
+    expect(result.submittedPlan).toEqual(plan);
+  });
+});
+
+describe("driveLoop ask_user", () => {
+  test("default composes ask_user and joins the overlay; composeAskUser false omits both", async () => {
+    const prepared = preparedStub();
+    const withAsk = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: withAsk.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(withAsk.capture()?.tools[ASK_USER_TOOL_NAME]).toBeDefined();
+    expect(withAsk.capture()?.system).toContain(ASK_USER_OVERLAY.slice(0, 40));
+
+    const withoutAsk = fakeRunLoop();
+    await driveLoop(
+      preparedStub(),
+      unusedCtx(prepared.session.cwd),
+      { runLoop: withoutAsk.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        composeAskUser: false,
+      },
+    );
+    expect(withoutAsk.capture()?.tools[ASK_USER_TOOL_NAME]).toBeUndefined();
+    expect(withoutAsk.capture()?.system).not.toContain("call `ask_user`");
+  });
+
+  test("a missing presenter returns unavailable without hanging", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    const ask = capture.capture()?.tools[ASK_USER_TOOL_NAME];
+    const pending = ask?.execute?.(
+      { prompt: "Which?", choices: ["a", "b"] },
+      { toolCallId: "t", messages: [], context: {} },
+    );
+    const raced = await Promise.race([
+      Promise.resolve(pending).then(() => "done" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 50)),
+    ]);
+    expect(raced).toBe("done");
+    expect(await pending).toEqual({ outcome: "unavailable", reason: "no-human" });
+  });
+
+  test("plan mode keeps ask_user alongside the plan tools", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    const opts = capture.capture();
+    expect(opts?.tools[ASK_USER_TOOL_NAME]).toBeDefined();
+    expect(opts?.tools[ASK_PLAN_QUESTIONS_TOOL_NAME]).toBeDefined();
+  });
+});
+
+describe("exitCodeFromDriveResult", () => {
+  const base = {
+    cancelledBy: undefined,
+    usage: { inputTokens: undefined, outputTokens: undefined },
+    cost: undefined,
+    refusedWithoutRunning: false,
+    archivist: undefined,
+    directSummary: undefined,
+    ranAnyTurn: true,
+  };
+
+  test("plan-submitted is success", () => {
+    expect(exitCodeFromDriveResult({ ...base, doneReason: "plan-submitted" })).toBe(0);
+  });
+
+  test("no-tool-call is success unless every write was declined", () => {
+    expect(exitCodeFromDriveResult({ ...base, doneReason: "no-tool-call" })).toBe(0);
+    expect(
+      exitCodeFromDriveResult({
+        ...base,
+        doneReason: "no-tool-call",
+        refusedWithoutRunning: true,
+      }),
+    ).toBe(1);
   });
 });

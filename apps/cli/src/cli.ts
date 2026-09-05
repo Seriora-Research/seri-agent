@@ -15,12 +15,14 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
+import { createAskUserPark } from "./ask-user/park";
+import type { HumanReply } from "./ask-user/types";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
-import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
-import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
+import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
   appendBarrier,
@@ -114,6 +116,13 @@ import {
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
+import { unlinkPlanFile } from "./plan/files";
+import {
+  isPlanOverlayOn,
+  type PlanAnswers,
+  type PlanQuestion,
+  type PlanReviewDecision,
+} from "./plan/mode";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import {
@@ -165,11 +174,11 @@ import { grep as grepReal } from "./tools/grep";
 import { probeRipgrep } from "./tools/selftest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
+import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import type { CompletionSource } from "./tui/util/completion";
-import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { fetchUsageReport } from "./usage/fetch";
 
@@ -216,7 +225,7 @@ import {
   createSetupHandlers,
 } from "./tui/state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "./tui/state/reducer";
-import { estimateTokens } from "./tui/util/format";
+import { estimateTokens, formatRouteLabelFromResolved } from "./tui/util/format";
 import { withVerification } from "./verify/wrapTools";
 
 export type CliDeps = {
@@ -1592,11 +1601,12 @@ async function runTui(
   // the other half of C-1's fix, and finding 6: reads `liveState.session` (this function's own
   // comment above), not the old effect-refreshed `liveSession`, so a mid-run /mode is guaranteed
   // to be visible on the very next gate check rather than only "usually, once the effect catches
-  // up in time." `skipPermissions` still wins unconditionally, matching prepareSession's own
-  // original derivation of `prepared.permissionMode`: a run-scoped
+  // up in time." `skipPermissions` still wins over the stored session mode, matching
+  // prepareSession's own original derivation of `prepared.permissionMode`: a run-scoped
   // `--dangerously-skip-permissions` override is not something a mid-run /mode should be able to
   // undo.
   function getPermissionMode(): PermissionMode {
+    if (isPlanOverlayOn(liveState.plan)) return "read-only";
     return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
@@ -1627,6 +1637,12 @@ async function runTui(
   // aborts for an unrelated reason.
   let pendingApprovalResolve: ((answer: ApprovalAnswer) => void) | undefined;
 
+  const askUserPark = createAskUserPark({
+    dispatchOccupy: (prompt) => dispatch({ type: "ask-user-requested", prompt }),
+    dispatchVacate: () => dispatch({ type: "ask-user-resolved" }),
+    approvalOccupied: () => liveState.pendingApproval !== undefined,
+  });
+
   function tuiApprovalPrompt(
     toolName: string,
     args: unknown,
@@ -1656,6 +1672,62 @@ async function runTui(
       };
       dispatch({ type: "approval-requested", toolName, args, offersAlways });
     });
+  }
+
+  let pendingPlanQuestionsResolve: ((answers: PlanAnswers) => void) | undefined;
+
+  function tuiAskPlanQuestions(
+    questions: readonly PlanQuestion[],
+    signal?: AbortSignal,
+  ): Promise<PlanAnswers> {
+    return new Promise<PlanAnswers>((resolve) => {
+      if (signal?.aborted === true) {
+        resolve({ cancelled: true });
+        return;
+      }
+      const abort = onAbort(signal, () => {
+        pendingPlanQuestionsResolve = undefined;
+        dispatch({ type: "plan-on" });
+        resolve({ cancelled: true });
+      });
+      pendingPlanQuestionsResolve = (answers) => {
+        abort.dispose();
+        resolve(answers);
+      };
+      dispatch({ type: "plan-questions-requested", questions });
+    });
+  }
+
+  function onPlanQuestionsAnswered(answers: PlanAnswers): void {
+    const resolve = pendingPlanQuestionsResolve;
+    if (resolve === undefined) return;
+    pendingPlanQuestionsResolve = undefined;
+    dispatch({ type: "plan-on" });
+    resolve(answers);
+  }
+
+  function onPlanReview(decision: PlanReviewDecision): void {
+    const plan = liveState.plan;
+    if (plan.kind !== "reviewing") return;
+    if (decision === "request-changes") {
+      dispatch({ type: "plan-on" });
+      return;
+    }
+    if (decision === "cancel") {
+      unlinkPlanFile(plan.path, configDir);
+      dispatch({ type: "plan-off" });
+      drainQueue();
+      return;
+    }
+    const prompt = `The user approved the plan "${plan.title}" at ${plan.path}. Implement it.\n\n${plan.markdown}`;
+    dispatch({ type: "plan-off" });
+    currentTurn = runTurn(
+      {
+        ...liveState.session,
+        messages: withUserTurn(liveState.session.messages, prompt),
+      },
+      prompt,
+    );
   }
 
   // The other end of tuiApprovalPrompt — App.tsx's onApprovalAnswer prop, called from
@@ -2062,14 +2134,16 @@ async function runTui(
     // A `/name` direct dispatch passes its session through unchanged (driveLoop appends the user
     // row itself there), so this merges an identical array and changes nothing for it.
     dispatch({ type: "user-turn-committed", messages: session.messages });
-    // A rerouted OR gateway-served pair is never silent on the TUI path either — see
-    // prepareSession's own identical notice for the piped/non-interactive path, above.
     if (route.rerouted) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${rerouteNotice(route, requestedProvider)}`,
       });
-    } else if (route.credential === "gateway") {
+    } else if (
+      route.credential === "gateway" &&
+      requestedProvider !== undefined &&
+      requestedProvider !== route.provider
+    ) {
       dispatch({
         type: "transcript-append",
         line: `↻ ${gatewayNotice(route, requestedProvider)}`,
@@ -2229,7 +2303,14 @@ async function runTui(
         tuiApprovalPrompt,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
-        { directDispatch },
+        {
+          directDispatch,
+          planMode:
+            directDispatch === undefined && liveState.plan.kind !== "off"
+              ? { askQuestions: tuiAskPlanQuestions, configDir }
+              : undefined,
+          askUser: askUserPark.present,
+        },
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
@@ -2261,6 +2342,9 @@ async function runTui(
           pushTranscriptLine(dispatch, result.archivist.summary, { muted: true, markdown: true });
         }
       }
+      if (result.submittedPlan !== undefined) {
+        dispatch({ type: "plan-review-requested", plan: result.submittedPlan });
+      }
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
       // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
       // process death) — only quit()'s own resolve decides `cancelledBy` for the run as a whole,
@@ -2274,6 +2358,11 @@ async function runTui(
       // mirrors is signals.ts's, and it is only genuinely free again once this turn has actually
       // settled.
       cancelDelivered = false;
+      // If driveLoop threw without aborting, the presenter would stay occupied and the next
+      // turn's ask_user would see nested-approval. Same unpark quit() uses. Gate on the park,
+      // not the reducer mirror: present() assigns the waiter before dispatchOccupy, so a
+      // thrown occupy would leave the park live with pendingAskUser still unset.
+      askUserPark.answer({ outcome: "cancelled" });
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2351,6 +2440,8 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    askUserPark.answer({ outcome: "cancelled" });
+    if (liveState.plan.kind === "clarifying") onPlanQuestionsAnswered({ cancelled: true });
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
     // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
     // such effect at all (this function owns the renderer's lifecycle directly), so there is
@@ -2701,8 +2792,47 @@ async function runTui(
         });
       }
     },
+    "/plan": (args) => {
+      if (turnInFlight) {
+        dispatch({
+          type: "command-error",
+          message: "A turn is already running; wait for it to finish before submitting another.",
+        });
+        return;
+      }
+      const task = args.join(" ").trim();
+      if (task.length === 0) {
+        if (liveState.plan.kind === "reviewing") {
+          unlinkPlanFile(liveState.plan.path, configDir);
+          dispatch({ type: "plan-off" });
+          drainQueue();
+          return;
+        }
+        dispatch({ type: liveState.plan.kind === "off" ? "plan-on" : "plan-off" });
+        return;
+      }
+      if (liveState.plan.kind === "reviewing") {
+        dispatch({
+          type: "command-error",
+          message: "/plan: approve or cancel the current plan first.",
+        });
+        return;
+      }
+      if (liveState.plan.kind === "off") dispatch({ type: "plan-on" });
+      currentTurn = runTurn(
+        {
+          ...liveState.session,
+          messages: withUserTurn(liveState.session.messages, task),
+        },
+        task,
+      );
+    },
   };
   assertTuiHandlers(tuiHandlers);
+
+  function onTogglePlan(): void {
+    tuiHandlers["/plan"]([]);
+  }
 
   // Takes the head of the queue and re-enters onSubmit with it, rather than duplicating the
   // dispatch below: that is what makes the echo land exactly once, at the moment the message
@@ -2720,6 +2850,7 @@ async function runTui(
     // runTui with turn 2 and whatever tool children it spawned still live — precisely the
     // orphaned-child case HIGH-B exists to prevent.
     if (quitting) return;
+    if (liveState.plan.kind === "reviewing") return;
     // A message still open in the row editor has not left the user's hands yet.
     if (liveState.queue.editing) return;
     const head = liveState.queue.items[0];
@@ -2769,7 +2900,7 @@ async function runTui(
     // queued before it.
     if (
       !fromDrain &&
-      (turnInFlight || liveState.queue.items.length > 0) &&
+      (turnInFlight || liveState.queue.items.length > 0 || liveState.plan.kind === "reviewing") &&
       startsATurn(name, trimmed, prepared)
     ) {
       dispatch({ type: "queue-appended", id: nextQueueId(), text: value });
@@ -3046,6 +3177,7 @@ async function runTui(
         version: pkg.version,
         model: prepared.route.model,
         provider: prepared.route.provider,
+        via: formatRouteLabelFromResolved(prepared.route),
         cwd: prepared.session.cwd,
         home: resolveUserHome(),
       },
@@ -3054,9 +3186,13 @@ async function runTui(
       onQuit: quit,
       onEscape,
       onApprovalAnswer,
+      onAskUserAnswered: (reply: HumanReply) => askUserPark.answer(reply),
+      onPlanQuestionsAnswered,
+      onPlanReview,
       onModelSelected,
       onModelPickerCancel,
       onCycleMode,
+      onTogglePlan,
       skipPermissions,
       onSetupSelect,
       onSetupKeyEntered,

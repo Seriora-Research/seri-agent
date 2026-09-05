@@ -1,24 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import type { McpPanelRow } from "../../src/mcp/commands";
+import { theme } from "../../src/tui/theme/theme";
 import {
   DEFAULT_COLUMNS,
   estimateTokens,
   formatDoneLine,
   formatElapsed,
-  formatLiveThinkingStatus,
-  formatReasoningCaret,
   formatHomePath,
+  formatLiveThinkingStatus,
   formatMcpRow,
   formatModeDetail,
+  formatReasoningCaret,
+  formatRouteLabelFromResolved,
   formatTokenProgress,
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LEAVE_HINT,
   systemEntryFg,
   type TokenProgress,
 } from "../../src/tui/util/format";
-import { theme } from "../../src/tui/theme/theme";
 import { route } from "./helpers";
 
 describe("systemEntryFg", () => {
@@ -200,6 +202,11 @@ describe("formatDoneLine", () => {
       expected: "done",
     },
     {
+      name: "plan-submitted is the same as a finished turn",
+      reason: "plan-submitted",
+      expected: "done",
+    },
+    {
       name: "aborted missing tokens",
       reason: "aborted",
       expected: "done: aborted",
@@ -211,6 +218,7 @@ describe("formatDoneLine", () => {
       const line = formatDoneLine(row.reason, row.tokens);
       expect(line).toBe(row.expected);
       expect(line).not.toContain("no-tool-call");
+      expect(line).not.toContain("plan-submitted");
       expect(line).not.toContain("(");
       expect(line).not.toContain(")");
       if (row.tokens !== undefined) {
@@ -239,6 +247,12 @@ describe("MODE_CYCLE_HINT", () => {
   });
 });
 
+describe("PLAN_MODE_LEAVE_HINT", () => {
+  test("is the ctrl+o hint, with its own leading space", () => {
+    expect(PLAN_MODE_LEAVE_HINT).toBe(" (ctrl+o to leave)");
+  });
+});
+
 // The mode-indicator row's own model/route suffix, factored out as a pure function so leftover
 // packing is testable without mounting a renderer (formatModelRow's own extraction already used
 // this reasoning). `width` is the detail budget (space after the indicator; the caller subtracts
@@ -249,8 +263,8 @@ describe("formatModeDetail", () => {
   const nonRerouted = route();
   const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
   const modelOnly = "  claude-sonnet-5";
-  const withRoute = "  claude-sonnet-5 · your key";
-  const withEffort = "  claude-sonnet-5 · your key · high";
+  const withRoute = "  claude-sonnet-5 · anthropic";
+  const withEffort = "  claude-sonnet-5 · anthropic · high";
   const reroutedSuffix = "  claude-sonnet-5 · → openrouter";
   const gatewaySuffix = "  claude-sonnet-5 · seri";
 
@@ -266,7 +280,7 @@ describe("formatModeDetail", () => {
 
   // DEFAULT_COLUMNS is the typical terminal width, not the caller's detail budget — passing it
   // here is a generous leftover. The regression this guards is that a budget of 80 must include
-  // the route suffix (length of `  claude-sonnet-5 · your key`), not drop it.
+  // the route suffix (length of `  claude-sonnet-5 · anthropic`), not drop it.
   test("at 80 columns (DEFAULT_COLUMNS): model name and route suffix", () => {
     expect(formatModeDetail(nonRerouted, DEFAULT_COLUMNS, undefined)).toBe(withRoute);
   });
@@ -278,7 +292,7 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(nonRerouted, modelOnly.length - 1, "high")).toBe("");
   });
 
-  test("budget that fits model+route: 'your key'", () => {
+  test("budget that fits model+route: the provider name", () => {
     expect(formatModeDetail(nonRerouted, withRoute.length, undefined)).toBe(withRoute);
   });
 
@@ -323,7 +337,7 @@ describe("formatModeDetail", () => {
   test("long model id is truncated to NAME_WIDTH in both the model-only and full leftovers", () => {
     const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
     const longModelOnly = "  openrouter/deepseek/d…";
-    const longWithRoute = "  openrouter/deepseek/d… · your key";
+    const longWithRoute = "  openrouter/deepseek/d… · anthropic";
     expect(formatModeDetail(longModel, longModelOnly.length, undefined)).toBe(longModelOnly);
     expect(formatModeDetail(longModel, longWithRoute.length, undefined)).toBe(longWithRoute);
   });
@@ -347,7 +361,7 @@ describe("formatModeDetail", () => {
   });
 
   test("an effortTier longer than EFFORT_WIDTH is truncated with a trailing ellipsis", () => {
-    const truncated = "  claude-sonnet-5 · your key · extra-t…";
+    const truncated = "  claude-sonnet-5 · anthropic · extra-t…";
     expect(formatModeDetail(nonRerouted, truncated.length, "extra-thinky")).toBe(truncated);
   });
 
@@ -358,20 +372,67 @@ describe("formatModeDetail", () => {
   });
 });
 
+describe("formatRouteLabelFromResolved", () => {
+  test("a gateway credential reads seri, never the listing provider", () => {
+    expect(
+      formatRouteLabelFromResolved(
+        route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      ),
+    ).toBe("seri");
+  });
+
+  test("a keyed BYOK route names the provider", () => {
+    expect(formatRouteLabelFromResolved(route())).toBe("anthropic");
+  });
+});
+
 describe("modeRowHintVisible", () => {
   test("hint at MODE_HINT_COLS with empty detail", () => {
-    expect(modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, 0)).toBe(true);
+    expect(
+      modeRowHintVisible(
+        MODE_HINT_COLS,
+        MODE_LABEL["approve-each"].length,
+        0,
+        MODE_CYCLE_HINT.length,
+      ),
+    ).toBe(true);
   });
 
   test("hint hidden when detail+hint overflow even if remaining >= MODE_HINT_COLS", () => {
-    const detail = "  claude-sonnet-5 · your key";
+    const detail = "  claude-sonnet-5 · anthropic";
     expect(
-      modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL["approve-each"].length, detail.length),
+      modeRowHintVisible(
+        MODE_HINT_COLS,
+        MODE_LABEL["approve-each"].length,
+        detail.length,
+        MODE_CYCLE_HINT.length,
+      ),
     ).toBe(false);
     const worstDetail = `  ${"n".repeat(22)} · → openrouter · high`;
-    expect(modeRowHintVisible(DEFAULT_COLUMNS, MODE_LABEL.auto.length, worstDetail.length)).toBe(
+    expect(
+      modeRowHintVisible(
+        DEFAULT_COLUMNS,
+        MODE_LABEL.auto.length,
+        worstDetail.length,
+        MODE_CYCLE_HINT.length,
+      ),
+    ).toBe(false);
+  });
+
+  test("the leave hint can still fit when the cycle hint would overflow", () => {
+    const remaining = MODE_HINT_COLS;
+    const indicator = MODE_LABEL["approve-each"].length;
+    const detail = "x".repeat(remaining - indicator - PLAN_MODE_LEAVE_HINT.length);
+    expect(modeRowHintVisible(remaining, indicator, detail.length, MODE_CYCLE_HINT.length)).toBe(
       false,
     );
+    expect(
+      modeRowHintVisible(remaining, indicator, detail.length, PLAN_MODE_LEAVE_HINT.length),
+    ).toBe(true);
   });
 });
 

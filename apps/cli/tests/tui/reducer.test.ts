@@ -44,6 +44,7 @@ describe("initialTuiState", () => {
     expect(state.streaming).toBe("");
     expect(state.reasoning).toEqual({ expanded: false });
     expect(state.session.permissionMode).toBe("read-only");
+    expect(state.plan).toEqual({ kind: "off" });
   });
 });
 
@@ -226,6 +227,151 @@ describe("tuiReducer: transcript-cleared", () => {
     const next = tuiReducer(before, { type: "transcript-cleared" });
 
     expect(next.session).toBe(before.session);
+  });
+
+  test("turns the plan overlay off and keeps the rest of the session", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    state = tuiReducer(state, {
+      type: "plan-review-requested",
+      plan: { path: "/tmp/p.md", title: "T", markdown: "# T" },
+    });
+    expect(state.plan.kind).toBe("reviewing");
+    const next = tuiReducer(state, { type: "transcript-cleared" });
+    expect(next.plan).toEqual({ kind: "off" });
+    expect(next.session).toBe(state.session);
+  });
+});
+
+describe("tuiReducer: parent checklist", () => {
+  const items = [
+    { id: "a", content: "find compile flags", status: "done" as const },
+    { id: "b", content: "add --minify", status: "in_progress" as const },
+    { id: "c", content: "add a size test", status: "pending" as const },
+  ];
+  const first = [{ id: "a", content: "find compile flags", status: "done" as const }];
+
+  function todoCall(list: typeof items | typeof first, toolCallId: string): ModelMessage {
+    return {
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId, toolName: "todo", input: { items: list } }],
+    };
+  }
+
+  function todoResult(list: typeof items | typeof first, toolCallId: string): ModelMessage {
+    return {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "todo",
+          output: { type: "json", value: list },
+        },
+      ],
+    };
+  }
+
+  test("a session with a todo tool-call in messages seeds checklist", () => {
+    const state = initialTuiState(
+      session({ messages: [todoCall(items, "c1"), todoResult(items, "c1")] }),
+    );
+    expect(state.checklist).toEqual(items);
+  });
+
+  test("session-updated with sliced messages restores the earlier list", () => {
+    const messages = [
+      todoCall(first, "c1"),
+      todoResult(first, "c1"),
+      todoCall(items, "c2"),
+      todoResult(items, "c2"),
+    ];
+    const state = initialTuiState(session({ messages }));
+    expect(state.checklist).toEqual(items);
+
+    const rewound = tuiReducer(state, {
+      type: "session-updated",
+      session: session({ messages: messages.slice(0, 2) }),
+    });
+    expect(rewound.checklist).toEqual(first);
+  });
+
+  test("tool-result paints a valid list and tool-call does not", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    expect(state.checklist).toEqual([]);
+
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "todo", result: items },
+    });
+    expect(state.checklist).toEqual(items);
+  });
+
+  test("a thrown call does not paint from tool-call args", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "error", error: 'Tool "todo" threw during execution: duplicate' },
+    });
+    expect(state.checklist).toEqual([]);
+  });
+
+  test("a denial does not paint", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "permission-denied", name: "todo", reason: "declined" },
+    });
+    expect(state.checklist).toEqual([]);
+  });
+
+  test("transcript-cleared empties the checklist", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "todo", result: items },
+    });
+    expect(state.checklist).toEqual(items);
+    const next = tuiReducer(state, { type: "transcript-cleared" });
+    expect(next.checklist).toEqual([]);
+  });
+});
+
+describe("tuiReducer: plan overlay", () => {
+  test("plan-on / plan-off toggle the overlay", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    expect(state.plan).toEqual({ kind: "on" });
+    state = tuiReducer(state, { type: "plan-off" });
+    expect(state.plan).toEqual({ kind: "off" });
+  });
+
+  test("plan-questions-requested parks the clarifying panel", () => {
+    const questions = [{ id: "q1", prompt: "Which?", options: ["a", "b"] }];
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "plan-questions-requested",
+      questions,
+    });
+    expect(state.plan).toEqual({ kind: "clarifying", questions });
+  });
+
+  test("plan-review-requested parks the submitted plan", () => {
+    const plan = { path: "/tmp/p.md", title: "Auth", markdown: "# Auth\n" };
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "plan-review-requested",
+      plan,
+    });
+    expect(state.plan).toEqual({ kind: "reviewing", ...plan });
   });
 });
 
@@ -749,6 +895,48 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
 
     state = tuiReducer(state, { type: "approval-resolved" });
     expect(state.pendingApproval).toBeUndefined();
+  });
+});
+
+describe("tuiReducer: ask-user-requested / ask-user-resolved", () => {
+  const prompt = {
+    prompt: "Which auth?",
+    choices: ["cookies", "JWT"],
+    allowOther: true,
+  };
+
+  test("ask-user-requested sets pendingAskUser and leaves plan.kind untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    expect(state.plan.kind).toBe("on");
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingAskUser).toEqual(prompt);
+    expect(state.plan.kind).toBe("on");
+    state = tuiReducer(state, { type: "ask-user-resolved" });
+    expect(state.pendingAskUser).toBeUndefined();
+    expect(state.plan.kind).toBe("on");
+  });
+
+  test("ask-user-requested blurs the subagent roster and closes a child overlay", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    expect(state.subagentPanelFocus).toBe(false);
+    expect(state.pendingChildView).toBe("t1:0");
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingAskUser).toEqual(prompt);
+    expect(state.subagentPanelFocus).toBe(false);
+    expect(state.pendingChildView).toBeUndefined();
+  });
+
+  test("approval and ask-user can both be set", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingApproval?.toolName).toBe("write_file");
+    expect(state.pendingAskUser).toEqual(prompt);
   });
 });
 

@@ -12,6 +12,7 @@ import {
 import { startDaemon } from "../../src/daemon/server";
 import { createScheduledToolDefinitions, createToolDefinitions } from "../../src/provider/tools";
 import { SessionDatabase } from "../../src/session/database";
+import { withTodo } from "../../src/todo/tool";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -57,6 +58,27 @@ describe("scheduled toolset", () => {
   test("assertScheduledToolset rejects the normal write-capable toolset", () => {
     const dir = makeDir();
     expect(() => assertScheduledToolset(createToolDefinitions(dir))).toThrow(/write_file/);
+  });
+
+  test("assertScheduledToolset rejects ask_user", () => {
+    const dir = makeDir();
+    const tools = { ...createScheduledToolDefinitions(dir), ask_user: {} };
+    expect(() => assertScheduledToolset(tools)).toThrow(/ask_user/);
+  });
+
+  test("assertScheduledToolset rejects a scheduled set with todo injected", () => {
+    const dir = makeDir();
+    expect(() => assertScheduledToolset(withTodo(createScheduledToolDefinitions(dir)))).toThrow(
+      /todo/,
+    );
+  });
+
+  test("createRunScheduled asks buildSystemPrompt to omit parent-only tools", async () => {
+    const src = await Bun.file(new URL("../../src/daemon/scheduled.ts", import.meta.url)).text();
+    const start = src.indexOf("systemPrompt: buildSystemPrompt");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const call = src.slice(start, src.indexOf("model: route.model", start));
+    expect(call).toContain("composeSubagents: false");
   });
 });
 

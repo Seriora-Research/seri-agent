@@ -46,6 +46,7 @@ export function createRunScheduled(opts: {
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
         rules: [],
+        composeSubagents: false,
       }),
       model: route.model,
       provider: route.provider,
@@ -128,7 +129,12 @@ export function createRunScheduled(opts: {
         async () => "no",
         createArchivistState(session),
         undefined,
-        { bindProcessCancel: false, composeSubagents: false, runArchivist: false },
+        {
+          bindProcessCancel: false,
+          composeSubagents: false,
+          runArchivist: false,
+          composeAskUser: false,
+        },
       );
     } catch (caught) {
       return { error: caught instanceof Error ? caught.message : String(caught) };

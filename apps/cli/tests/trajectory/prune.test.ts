@@ -82,57 +82,69 @@ describe("pruneTrajectories", () => {
     }
   });
 
-  test("deletes database sessions older than the window and keeps keepSessionId", () => {
-    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-prune-"));
-    const dir = join(configDir, "trajectories");
-    const now = new Date("2026-08-27T00:00:00Z");
-    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
-    try {
-      const database = new SessionDatabase(configDir);
-      seedSession(database, "old", at(31));
-      seedSession(database, "mid", at(15));
-      seedSession(database, "live", at(40));
-      database.close();
-
-      const pruned = pruneTrajectories(dir, { now, retentionDays: 30, keepSessionId: "live" });
-      expect(pruned.sessions).toEqual(["old"]);
-
-      const after = new SessionDatabase(configDir);
+  // SessionDatabase's busy_timeout is 5s, the same as bun's default test timeout. On Windows,
+  // close() does not always release the sqlite file before pruneTrajectories opens a new
+  // handle, so that constructor can wait the full busy timeout. These two tests close then
+  // reopen by path and must outlive that wait.
+  test(
+    "deletes database sessions older than the window and keeps keepSessionId",
+    () => {
+      const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-prune-"));
+      const dir = join(configDir, "trajectories");
+      const now = new Date("2026-08-27T00:00:00Z");
+      const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
       try {
-        expect(after.readTrajectory("old")).toEqual([]);
-        expect(after.readTrajectory("mid")).toHaveLength(2);
-        expect(after.readTrajectory("live")).toHaveLength(2);
+        const database = new SessionDatabase(configDir);
+        seedSession(database, "old", at(31));
+        seedSession(database, "mid", at(15));
+        seedSession(database, "live", at(40));
+        database.close();
+
+        const pruned = pruneTrajectories(dir, { now, retentionDays: 30, keepSessionId: "live" });
+        expect(pruned.sessions).toEqual(["old"]);
+
+        const after = new SessionDatabase(configDir);
+        try {
+          expect(after.readTrajectory("old")).toEqual([]);
+          expect(after.readTrajectory("mid")).toHaveLength(2);
+          expect(after.readTrajectory("live")).toHaveLength(2);
+        } finally {
+          after.close();
+        }
       } finally {
-        after.close();
+        rmSync(configDir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(configDir, { recursive: true, force: true });
-    }
-  });
+    },
+    { timeout: 15_000 },
+  );
 
-  test("a session is aged out on its newest record, not its oldest", () => {
-    const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-newest-"));
-    const dir = join(configDir, "trajectories");
-    const now = new Date("2026-08-27T00:00:00Z");
-    const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
-    try {
-      const database = new SessionDatabase(configDir);
-      seedSession(database, "long-running", at(90));
-      seedSession(database, "long-running", at(1), { kind: "retry", attempt: 1 });
-      database.close();
-
-      expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual([]);
-
-      const after = new SessionDatabase(configDir);
+  test(
+    "a session is aged out on its newest record, not its oldest",
+    () => {
+      const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-newest-"));
+      const dir = join(configDir, "trajectories");
+      const now = new Date("2026-08-27T00:00:00Z");
+      const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * DAY_MS).toISOString();
       try {
-        expect(after.readTrajectory("long-running")).toHaveLength(3);
+        const database = new SessionDatabase(configDir);
+        seedSession(database, "long-running", at(90));
+        seedSession(database, "long-running", at(1), { kind: "retry", attempt: 1 });
+        database.close();
+
+        expect(pruneTrajectories(dir, { now, retentionDays: 30 }).sessions).toEqual([]);
+
+        const after = new SessionDatabase(configDir);
+        try {
+          expect(after.readTrajectory("long-running")).toHaveLength(3);
+        } finally {
+          after.close();
+        }
       } finally {
-        after.close();
+        rmSync(configDir, { recursive: true, force: true });
       }
-    } finally {
-      rmSync(configDir, { recursive: true, force: true });
-    }
-  });
+    },
+    { timeout: 15_000 },
+  );
 
   test("no database means nothing to prune and none is created", () => {
     const configDir = mkdtempSync(join(tmpdir(), "seri-traj-db-absent-"));

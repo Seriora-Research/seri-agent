@@ -23,9 +23,9 @@ repository; general assistant work is a planned direction.
 - **Checkpoints, undo, rewind, restore.** Filesystem-mutating tool calls commit to a shadow git
   ref, independent of your branch. `/undo`, `/rewind`, and `/restore` walk it back without
   touching your commit history.
-- **Subagents.** Built-in isolated-context roles (`explore`, `plan`, `code`, `test`, `oracle`)
-  plus user-defined agents in `.seri/agents/`. Dispatch with `/explore <task>` or let the model
-  pick one.
+- **Subagents.** Built-in isolated-context roles (`explore`, `plan`) plus user-defined agents in
+  `.seri/agents/`. Dispatch with `/explore <task>` or let the model pick one. `/plan [task]` is
+  the TUI plan-mode overlay, not a subagent.
 - **Persistent memory.** After a turn, an archivist can stage facts to `MEMORY.md`/`USER.md`
   outside the repo. `/memory` reviews them; nothing is applied silently.
 - **Six providers in one harness.** Groq, OpenRouter, Anthropic, OpenAI, Google, and xAI.
@@ -157,6 +157,7 @@ Everything below is a slash command inside the session.
 | Command | Does |
 | --- | --- |
 | `/mode` | cycle permission mode: `read-only` → `approve-each` → `auto` |
+| `/plan [task]` | TUI-only: research and write a plan; empty `/plan` or Ctrl+O toggles plan mode |
 | `/effort` | show, set, or clear this session's reasoning-effort override |
 | `/undo` | step back through file checkpoints |
 | `/restore` | restore a checkpoint by sha |

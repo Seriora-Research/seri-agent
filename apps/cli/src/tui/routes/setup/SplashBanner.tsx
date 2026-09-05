@@ -2,7 +2,7 @@
 // The welcome splash's identity block — product, version, and the two facts a user checks before
 // typing anything: which model this session will dispatch to, and which directory it is pointed at.
 // Rendered above WelcomeSplashPanel's own menu, inside that panel's border, so the whole intro is
-// one bordered unit rather than two stacked boxes. One row: the mark, version, model · provider,
+// one bordered unit rather than two stacked boxes. One row: the mark, version, model · via,
 // and directory, with no "model"/"directory" labels.
 //
 // Everything here is a prop, computed by `welcomeSplash.ts` — this component reads neither
@@ -26,6 +26,7 @@ export type SplashBannerInfo = {
   version: string;
   model: string;
   provider: ModelProvider;
+  via: string;
   cwd: string;
   home: string;
 };
@@ -39,7 +40,7 @@ const MARK = "▁▁▄▄▄▁▁";
 
 export function SplashBanner({ info }: { info: SplashBannerInfo }) {
   const directory = formatHomePath(info.cwd, info.home);
-  const model = `${info.model} · ${info.provider}`;
+  const model = `${info.model} · ${info.via}`;
   return (
     <box flexDirection="row" marginBottom={1}>
       <text fg={theme.text} flexShrink={0}>

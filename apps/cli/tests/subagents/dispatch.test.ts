@@ -462,11 +462,11 @@ describe("dispatch_subagents", () => {
   });
 
   // Reader/writer serialization replaces the old per-path claim/conflict/retry mechanism: it
-  // closed only one of two confirmed gaps (a `test`-only batch, which mutates via bash/powershell
+  // closed only one of two confirmed gaps (a tester-only batch, which mutates via bash/powershell
   // rather than write_file, got neither the checkpoint nor any serialization at all) and its own
   // remedy for the case it did catch was discarding a full child run. One filesystem, one writer at
   // a time is safe by construction, for every mutating tool, not just write_file.
-  test("writer-role tasks (code + test) never overlap in wall-clock time", async () => {
+  test("writer-role tasks (writer + tester) never overlap in wall-clock time", async () => {
     const { fake, calls } = fakeChildLoop((_opts, index) => ({
       events: [{ type: "done", reason: "no-tool-call" }],
       // Only the first writer sleeps — long enough that a second writer starting concurrently
@@ -474,12 +474,12 @@ describe("dispatch_subagents", () => {
       before: index === 0 ? () => sleep(30) : undefined,
     }));
 
-    const dispatchTool = createDispatchTool(makeRuntime(fake));
+    const dispatchTool = createDispatchTool(makeRuntime(fake, { agents: withMutators() }));
     await dispatchTool.execute(
       {
         tasks: [
-          { role: "code", goal: "write" },
-          { role: "test", goal: "run checks" },
+          { role: "writer", goal: "write" },
+          { role: "tester", goal: "run checks" },
         ],
       },
       dispatchOpts("t1"),
@@ -504,7 +504,7 @@ describe("dispatch_subagents", () => {
           },
         };
       }
-      // The writer (code): signals immediately, proving it started while the reader was in flight.
+      // The writer: signals immediately, proving it started while the reader was in flight.
       return {
         events: [{ type: "done", reason: "no-tool-call" }],
         before: async () => {
@@ -513,12 +513,12 @@ describe("dispatch_subagents", () => {
       };
     });
 
-    const dispatchTool = createDispatchTool(makeRuntime(fake));
+    const dispatchTool = createDispatchTool(makeRuntime(fake, { agents: withMutators() }));
     const dispatchPromise = dispatchTool.execute(
       {
         tasks: [
           { role: "explore", goal: "a" },
-          { role: "code", goal: "b" },
+          { role: "writer", goal: "b" },
         ],
       },
       dispatchOpts("t1"),
@@ -598,7 +598,7 @@ describe("dispatch_subagents", () => {
     };
 
     const result = await runSubagent({
-      tools: agentToolSet(agentSpec("code")),
+      tools: agentToolSet(withMutators().get("writer")!),
       system: "irrelevant",
       messages: [{ role: "user", content: "go" }],
       runtime,
@@ -651,10 +651,11 @@ describe("dispatch_subagents", () => {
         allowedTools: ["write_file"],
         system: "PARENT SYSTEM TIERS",
         reasoningEffort: "medium",
+        agents: withMutators(),
       }),
     );
     await dispatchTool.execute(
-      { tasks: [{ role: "test", goal: "run checks" }] },
+      { tasks: [{ role: "tester", goal: "run checks" }] },
       dispatchOpts("t1"),
     );
 
@@ -667,7 +668,7 @@ describe("dispatch_subagents", () => {
     expect(opts.catalog).toBe(catalog);
     expect(opts.contextWindowSize).toBe(12345);
     expect(opts.system?.startsWith("PARENT SYSTEM TIERS")).toBe(true);
-    expect(opts.system).toContain('"test" subagent');
+    expect(opts.system).toContain('"tester" subagent');
     expect(opts.reasoningEffort).toBe("medium");
   });
 
@@ -695,7 +696,7 @@ describe("dispatch_subagents", () => {
         modelId: "parent-model",
         reasoningEffort: "high",
         resolveRole: (role) => {
-          expect(role).toBe("oracle");
+          expect(role).toBe("explore");
           return {
             model: childModel,
             provider: "anthropic",
@@ -708,7 +709,7 @@ describe("dispatch_subagents", () => {
       }),
     );
     const result = (await dispatchTool.execute(
-      { tasks: [{ role: "oracle", goal: "advise" }] },
+      { tasks: [{ role: "explore", goal: "advise" }] },
       dispatchOpts("t1"),
     )) as DispatchResult;
 
@@ -794,7 +795,10 @@ describe("dispatch_subagents", () => {
         }),
       }),
     );
-    await dispatchTool.execute({ tasks: [{ role: "oracle", goal: "advise" }] }, dispatchOpts("t1"));
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "advise" }] },
+      dispatchOpts("t1"),
+    );
     const started = events.find((e) => e.event.type === "child-started");
     expect(started?.model).toBe("claude-sonnet-5");
     expect(started?.provider).toBe("anthropic");
@@ -828,7 +832,7 @@ describe("dispatch_subagents", () => {
       {
         tasks: [
           {
-            role: "oracle",
+            role: "explore",
             goal: "advise",
             model: "claude-sonnet-5",
             provider: "anthropic",
@@ -840,7 +844,7 @@ describe("dispatch_subagents", () => {
     )) as DispatchResult;
 
     expect(requests).toContainEqual({
-      role: "oracle",
+      role: "explore",
       request: { model: "claude-sonnet-5", provider: "anthropic", effort: "high" },
     });
     expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
@@ -866,8 +870,8 @@ describe("dispatch_subagents", () => {
     const result = (await dispatchTool.execute(
       {
         tasks: [
-          { role: "oracle", goal: "a", model: "claude-sonnet-5", provider: "anthropic" },
-          { role: "oracle", goal: "b", model: "gpt-5", provider: "openai", effort: "high" },
+          { role: "explore", goal: "a", model: "claude-sonnet-5", provider: "anthropic" },
+          { role: "explore", goal: "b", model: "gpt-5", provider: "openai", effort: "high" },
         ],
       },
       dispatchOpts("t1"),
@@ -902,7 +906,7 @@ describe("dispatch_subagents", () => {
           { role: "explore", goal: "two" },
           { role: "explore", goal: "three" },
           {
-            role: "oracle",
+            role: "explore",
             goal: "overflow",
             model: "claude-sonnet-5",
             provider: "anthropic",
@@ -920,8 +924,8 @@ describe("dispatch_subagents", () => {
     expect(result.results[3].effort).toBeUndefined();
   });
 
-  test("a hostile oracle calling write_file/edit/bash/powershell/dispatch_subagents gets Unknown tool and writes nothing", async () => {
-    const distinctivePath = join(tmpdir(), `seri-oracle-hostile-${Date.now()}.txt`);
+  test("a hostile explore calling write_file/edit/bash/powershell/dispatch_subagents gets Unknown tool and writes nothing", async () => {
+    const distinctivePath = join(tmpdir(), `seri-explore-hostile-${Date.now()}.txt`);
     const model = new MockLanguageModelV4({
       doStream: [
         streamResult(
@@ -946,7 +950,7 @@ describe("dispatch_subagents", () => {
     const events = await collect(
       realRunLoop({
         model,
-        tools: agentToolSet(agentSpec("oracle")),
+        tools: agentToolSet(agentSpec("explore")),
         messages: [{ role: "user", content: "go" }],
         permissionMode: "auto",
       }),
@@ -962,17 +966,20 @@ describe("dispatch_subagents", () => {
     expect(existsSync(distinctivePath)).toBe(false);
   });
 
-  test("a code task takes exactly one pre-dispatch checkpoint snapshot; an all-explore batch takes none", async () => {
+  test("a writer task takes exactly one pre-dispatch checkpoint snapshot; an all-explore batch takes none", async () => {
     const { fake } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],
     }));
     const snapshots: unknown[] = [];
     const dispatchTool = createDispatchTool(
-      makeRuntime(fake, { checkpointer: (context) => snapshots.push(context) }),
+      makeRuntime(fake, {
+        agents: withMutators(),
+        checkpointer: (context) => snapshots.push(context),
+      }),
     );
 
     await dispatchTool.execute(
-      { tasks: [{ role: "code", goal: "write" }] },
+      { tasks: [{ role: "writer", goal: "write" }] },
       dispatchOpts("t1", [{ role: "user", content: "hi" }]),
     );
     expect(snapshots).toEqual([
@@ -989,20 +996,23 @@ describe("dispatch_subagents", () => {
     expect(snapshots).toHaveLength(1);
   });
 
-  // The actual regression test for the confirmed gap: `test` holds bash/powershell, both in
-  // FS_MUTATING_TOOL_NAMES, so an all-`test` batch (no `code` task at all) mutates the worktree via
+  // The actual regression test for the confirmed gap: tester holds bash, which is in
+  // FS_MUTATING_TOOL_NAMES, so an all-tester batch (no writer task at all) mutates the worktree via
   // shell and must still get the pre-dispatch snapshot, not zero /undo coverage.
-  test("an all-test batch (no code) still takes exactly one checkpoint snapshot", async () => {
+  test("an all-tester batch (no writer) still takes exactly one checkpoint snapshot", async () => {
     const { fake } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],
     }));
     const snapshots: unknown[] = [];
     const dispatchTool = createDispatchTool(
-      makeRuntime(fake, { checkpointer: (context) => snapshots.push(context) }),
+      makeRuntime(fake, {
+        agents: withMutators(),
+        checkpointer: (context) => snapshots.push(context),
+      }),
     );
 
     await dispatchTool.execute(
-      { tasks: [{ role: "test", goal: "run checks" }] },
+      { tasks: [{ role: "tester", goal: "run checks" }] },
       dispatchOpts("t1", [{ role: "user", content: "hi" }]),
     );
 
@@ -1026,6 +1036,30 @@ function withCustomAgent(spec: Partial<AgentSpec> & { name: string }): AgentRegi
     source: "project",
     filePath: `/p/.seri/agents/${spec.name}.md`,
   });
+  return agents;
+}
+
+function withMutators(extra?: Partial<AgentSpec> & { name: string }): AgentRegistry {
+  const agents = new Map(extra === undefined ? builtinRegistry() : withCustomAgent(extra));
+  for (const spec of [
+    {
+      name: "writer",
+      toolNames: ["write_file", "read_file", "grep"] as const,
+      job: "write files",
+    },
+    { name: "tester", toolNames: ["read_file", "bash"] as const, job: "run checks" },
+  ]) {
+    if (agents.has(spec.name)) continue;
+    agents.set(spec.name, {
+      name: spec.name,
+      description: spec.job,
+      toolNames: spec.toolNames,
+      addendum: composeAddendum({ name: spec.name, job: spec.job, toolNames: spec.toolNames }),
+      source: "project",
+      filePath: `/p/.seri/agents/${spec.name}.md`,
+      request: undefined,
+    });
+  }
   return agents;
 }
 
@@ -1172,21 +1206,21 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(snapshots).toEqual([]);
   });
 
-  test("a custom agent holding bash serializes against a built-in writer instead of racing it", async () => {
+  test("a custom agent holding bash serializes against a file-defined writer instead of racing it", async () => {
     const { fake, calls } = fakeChildLoop((_opts, index) => ({
       events: [{ type: "done", reason: "no-tool-call" }],
       before: index === 0 ? () => sleep(30) : undefined,
     }));
     const dispatchTool = createDispatchTool(
       makeRuntime(fake, {
-        agents: withCustomAgent({ name: "fixer", toolNames: ["read_file", "bash"] }),
+        agents: withMutators({ name: "fixer", toolNames: ["read_file", "bash"] }),
       }),
     );
     await dispatchTool.execute(
       {
         tasks: [
           { role: "fixer", goal: "fix it" },
-          { role: "code", goal: "write" },
+          { role: "writer", goal: "write" },
         ],
       },
       dispatchOpts("t1"),

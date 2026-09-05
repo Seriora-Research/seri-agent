@@ -6,6 +6,7 @@ import {
   assertTuiHandlers,
   COMMAND_META,
   commandByName,
+  isCtrlOPlanToggle,
   isShiftTabModeCycle,
   isTuiClaimed,
   sessionMeta,
@@ -38,6 +39,7 @@ const EXPECTED_NAMES = [
   "/hooks",
   "/max-turns",
   "/profile",
+  "/plan",
 ] as const;
 
 const EXPECTED_TUI_CLAIMED = [
@@ -59,6 +61,7 @@ const EXPECTED_TUI_CLAIMED = [
   "/hooks",
   "/max-turns",
   "/profile",
+  "/plan",
 ] as const;
 
 const EXPECTED_SESSION = [
@@ -112,6 +115,8 @@ describe("command catalog completeness", () => {
   test("USAGE is launch-only and does not list catalog slash names", () => {
     expect(USAGE).toContain("seri serve");
     expect(USAGE).toContain("seri exec");
+    expect(USAGE).toContain("seri doctor");
+    expect(USAGE).toContain("seri update");
     expect(USAGE).not.toContain("seri config");
     expect(USAGE).not.toContain("seri login");
     expect(USAGE).not.toContain("seri usage");
@@ -142,6 +147,10 @@ describe("command catalog completeness", () => {
     expect(commandByName("/mode")?.shortcut?.chord).toBe("shift+tab");
   });
 
+  test("/plan shortcut is ctrl+o", () => {
+    expect(commandByName("/plan")?.shortcut?.chord).toBe("ctrl+o");
+  });
+
   test("tuiClaimedNames is the TUI surface plus /effort and /memory", () => {
     expect(tuiClaimedNames()).toEqual([...EXPECTED_TUI_CLAIMED]);
   });
@@ -158,6 +167,15 @@ describe("command catalog completeness", () => {
     expect(isShiftTabModeCycle({ name: "tab", shift: true })).toBe(true);
     expect(isShiftTabModeCycle({ name: "tab", shift: false })).toBe(false);
     expect(isShiftTabModeCycle({ name: "enter", shift: true })).toBe(false);
+  });
+
+  test("isCtrlOPlanToggle matches ctrl+o only when /plan's chord is ctrl+o", () => {
+    expect(commandByName("/plan")?.shortcut?.chord).toBe("ctrl+o");
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true })).toBe(true);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: false })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "p", ctrl: true })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true, shift: true })).toBe(false);
+    expect(isCtrlOPlanToggle({ name: "o", ctrl: true, meta: true })).toBe(false);
   });
 });
 
@@ -196,6 +214,10 @@ describe("startsATurn", () => {
     for (const meta of COMMAND_META) {
       expect(startsATurn(meta.name, meta.name, registries)).toBe(false);
     }
+  });
+
+  test("/plan with a task still does not start a turn via the queue", () => {
+    expect(startsATurn("/plan", "/plan this", registries)).toBe(false);
   });
 
   test("an unrecognised slash name does not, so its error stays immediate too", () => {

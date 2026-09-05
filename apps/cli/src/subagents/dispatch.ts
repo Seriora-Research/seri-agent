@@ -15,7 +15,6 @@ import {
   agentMutatesFilesystem,
   agentRouteRequest,
   agentToolSet,
-  BUILTIN_AGENTS,
   describeAgent,
 } from "./registry";
 import type { TaskRouteRequest } from "./routes";
@@ -334,24 +333,17 @@ export function dispatchDescription(agents: AgentRegistry): string {
 }
 
 // Built per compose (once per turn) rather than at module load, because the registry is
-// per-session. Destructured rather than asserted: BUILTIN_AGENTS is a non-empty tuple, so the head
-// is an AgentSpec by type and z.enum gets the `[string, ...string[]]` it needs with no cast.
-//
-// The description filter is the same one dispatchDescription applies, for the same reason and it
-// has to be both: a name the model is never told about must not be a name it may pass either, or
-// "never told this agent exists" is only true of the prose. Built-ins are unfiltered because every
-// one of them carries a description by construction. An agent left out here is still reachable by
-// an explicit `/name`, which runs dispatchDirect and never consults this schema.
+// per-session. Names come from the live map — the same filter dispatchDescription applies — so a
+// name the model is never told about is not a name it may pass either. An agent left out here is
+// still reachable by an explicit `/name`, which runs dispatchDirect and never consults this schema.
 export function dispatchSchema(agents: AgentRegistry) {
-  const [first, ...rest] = BUILTIN_AGENTS;
-  const custom = [...agents.values()]
-    .filter(
-      (spec) =>
-        spec.description.length > 0 &&
-        !BUILTIN_AGENTS.some((builtin) => builtin.name === spec.name),
-    )
+  const names = [...agents.values()]
+    .filter((spec) => spec.description.length > 0)
     .map((spec) => spec.name);
-  const names: [string, ...string[]] = [first.name, ...rest.map((spec) => spec.name), ...custom];
+  const [first, ...rest] = names;
+  if (first === undefined) {
+    throw new Error("dispatch schema requires at least one named agent");
+  }
   return z.object({
     tasks: z
       .array(
@@ -462,9 +454,9 @@ export function createDispatchTool(
       // withCheckpoints would append a child-derived rewindTo to the PARENT session's rewind log
       // (checkpoint.ts's newestDistinct), corrupting /rewind. The anchor is the parent's own
       // message array, which is why this call sits here instead of inside a child. Keyed on the
-      // same predicate the serialization below uses (agentMutatesFilesystem), not on `role ===
-      // "code"`: a `test`-only batch holds bash/powershell (both in FS_MUTATING_TOOL_NAMES) and
-      // needs the same snapshot, or its shell writes have zero /undo coverage.
+      // same predicate the serialization below uses (agentMutatesFilesystem), not on a role name:
+      // a file-defined agent that grants itself bash still needs the snapshot, or its shell writes
+      // have zero /undo coverage.
       if (runnable.some(({ spec }) => agentMutatesFilesystem(spec)) && runtime.checkpointer) {
         const context: MutationContext = {
           tool: DISPATCH_TOOL_NAME,
@@ -492,12 +484,12 @@ export function createDispatchTool(
         });
       }
 
-      // Readers (explore/plan/oracle) run concurrently with each other and with the writer chain
-      // below — this is the fan-out the dispatch exists for. Writers (any agent holding a mutating
-      // tool: code, test) run one at a time, in call order: one filesystem, one writer at a time.
-      // This is what makes a `code` child's write through bash/powershell safe by construction, not
+      // Readers (agents holding no mutating tool) run concurrently with each other and with the
+      // writer chain below — this is the fan-out the dispatch exists for. Writers (any agent
+      // holding a mutating tool) run one at a time, in call order: one filesystem, one writer at a
+      // time. This is what makes a child's write through bash/powershell safe by construction, not
       // by tracking which path a call touched — no per-path check could see through an arbitrary
-      // shell command anyway. Trade-off, accepted deliberately: two `code` tasks writing to
+      // shell command anyway. Trade-off, accepted deliberately: two writer tasks writing to
       // different paths no longer run concurrently either; the prior per-path mechanism's own
       // remedy for the one case it caught was discarding a full child run, which was already a bad
       // trade.

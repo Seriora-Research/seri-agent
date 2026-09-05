@@ -3,7 +3,7 @@ import { mcpCommandAccepts } from "../mcp/commands";
 import { memoryCommandAccepts } from "../memory/commands";
 import { skillsCommandAccepts } from "../skills/commands";
 
-export type CommandShortcut = { chord: "shift+tab" };
+export type CommandShortcut = { chord: "shift+tab" | "ctrl+o" };
 
 export type CommandMeta = {
   name: `/${string}`;
@@ -230,6 +230,14 @@ export const COMMAND_META: readonly CommandMeta[] = [
     // Always claims the name; decideProfileCreate still throws on a bad argument.
     accepts: () => true,
   },
+  {
+    name: "/plan",
+    surface: "tui",
+    description: "toggle plan mode (ctrl+o), or research a plan for a task",
+    argsUsage: "[task]",
+    accepts: () => true,
+    shortcut: { chord: "ctrl+o" },
+  },
 ];
 
 const BY_NAME = new Map<string, CommandMeta>(COMMAND_META.map((meta) => [meta.name, meta]));
@@ -305,4 +313,14 @@ export function assertTuiHandlers(handlers: Record<string, unknown>): void {
 export function isShiftTabModeCycle(key: { name: string; shift: boolean }): boolean {
   if (commandByName("/mode")?.shortcut?.chord !== "shift+tab") return false;
   return key.name === "tab" && key.shift;
+}
+
+export function isCtrlOPlanToggle(key: {
+  name: string;
+  ctrl: boolean;
+  shift?: boolean;
+  meta?: boolean;
+}): boolean {
+  if (commandByName("/plan")?.shortcut?.chord !== "ctrl+o") return false;
+  return key.ctrl && key.name === "o" && key.shift !== true && key.meta !== true;
 }

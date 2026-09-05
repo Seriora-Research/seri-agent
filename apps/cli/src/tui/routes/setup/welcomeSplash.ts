@@ -12,13 +12,18 @@ import { createElement } from "react";
 import pkg from "../../../../package.json";
 import type { CliDeps } from "../../../cli";
 import { loadConfig } from "../../../config/config";
+import { hostedPlanUsable } from "../../../auth/seriIgnore";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "../../../provider/defaults";
 import { DEFAULT_MODEL } from "../../../provider/groq";
+import { configuredProviders } from "../../../provider/keys";
+import { GATEWAY_PROVIDER } from "../../../provider/planCoverage";
+import { subscribedProviders } from "../../../provider/subscriptions";
 import { App } from "../../app";
 import { getTuiRenderer } from "../../runtime/renderer";
 import { decideAuthOffer } from "../../state/commands";
 import { createAuthHandlers } from "../../state/handlers";
 import { type Dispatch, initialTuiState, type TuiState, tuiReducer } from "../../state/reducer";
+import { formatRouteLabel } from "../../util/format";
 
 export async function runWelcomeSplash(
   configDir: string,
@@ -119,6 +124,20 @@ export async function runWelcomeSplash(
     defaultModel = { model: DEFAULT_MODEL, provider: undefined };
   }
 
+  const provider = defaultModel.provider ?? DEFAULT_PROVIDER;
+  const configured = configuredProviders(configDir);
+  const subscribed = subscribedProviders(configDir);
+  const hosted = hostedPlanUsable(configDir);
+  const via = formatRouteLabel({
+    keyConfigured: configured.has(provider),
+    subscriptionCovered: subscribed.has(provider),
+    gatewayReachable:
+      hosted &&
+      !subscribed.has(provider) &&
+      (!configured.has(provider) || provider === GATEWAY_PROVIDER),
+    provider,
+  });
+
   root.render(
     createElement(App, {
       session: liveState.session,
@@ -128,7 +147,8 @@ export async function runWelcomeSplash(
       splashBanner: {
         version: pkg.version,
         model: defaultModel.model,
-        provider: defaultModel.provider ?? DEFAULT_PROVIDER,
+        provider,
+        via,
         cwd: process.cwd(),
         home: resolveUserHome(),
       },

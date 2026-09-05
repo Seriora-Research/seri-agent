@@ -6,6 +6,9 @@ import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
+import { createAskUserPark } from "../../src/ask-user/park";
+import { withAskUser } from "../../src/ask-user/tool";
+import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
@@ -697,6 +700,57 @@ describe("runLoop", () => {
       ]);
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
       expect(executed).toEqual([]);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    test("a cancel during ask_user is recorded as a cancel, not as a declined answer", async () => {
+      const controller = new AbortController();
+      const after: string[] = [];
+      const phase: string[][] = [];
+      const park = createAskUserPark({
+        dispatchOccupy: () => {},
+        dispatchVacate: () => {},
+        approvalOccupied: () => false,
+      });
+      const tools = withAskUser({}, park.present);
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", ASK_USER_TOOL_NAME, {
+              prompt: "Which?",
+              choices: ["a", "b"],
+            }),
+          ),
+        ],
+      });
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        signal: controller.signal,
+        onAfterTool: async (subject) => {
+          after.push(subject);
+          return [];
+        },
+        onToolPhaseEnd: (executed) => {
+          phase.push(executed.map((row) => row.toolName));
+          return undefined;
+        },
+      })) {
+        events.push(event);
+        if (event.type === "tool-call") controller.abort();
+      }
+      expect(toolRowOf(events).outputs).toEqual([
+        {
+          type: "execution-denied",
+          reason: `Tool "${ASK_USER_TOOL_NAME}" was cancelled by the user before it completed.`,
+        },
+      ]);
+      expect(JSON.stringify(events)).not.toContain('"outcome":"cancelled"');
+      expect(after).toEqual([]);
+      expect(phase).toEqual([]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
   });
@@ -1497,6 +1551,49 @@ describe("runLoop", () => {
       expect(second.start).toBeGreaterThanOrEqual(first.end);
     });
 
+    test("two ask_user calls in one step still do not overlap", async () => {
+      const intervals: { start: number; end: number }[] = [];
+      const tools: ToolSet = {
+        ask_user: tool({
+          description: "ask",
+          inputSchema: z.object({ prompt: z.string(), choices: z.array(z.string()) }),
+          execute: async () => {
+            const start = performance.now();
+            await sleep(30);
+            intervals.push({ start, end: performance.now() });
+            return { outcome: "unavailable", reason: "no-human" };
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            multiToolCallChunks([
+              {
+                toolCallId: "call-1",
+                toolName: "ask_user",
+                input: { prompt: "One?", choices: ["a", "b"] },
+              },
+              {
+                toolCallId: "call-2",
+                toolName: "ask_user",
+                input: { prompt: "Two?", choices: ["c", "d"] },
+              },
+            ]),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+      expect(intervals).toHaveLength(2);
+      const first = intervals[0];
+      const second = intervals[1];
+      if (first === undefined || second === undefined) {
+        throw new Error("expected two ask_user intervals");
+      }
+      expect(second.start).toBeGreaterThanOrEqual(first.end);
+    });
+
     test("a write_file between two reads is a barrier", async () => {
       const marks: { name: string; at: "start" | "end"; t: number }[] = [];
       const stamp = (name: string, at: "start" | "end") => {
@@ -1685,6 +1782,107 @@ describe("runLoop", () => {
         "tool-call",
         "tool-result",
       ]);
+    });
+  });
+
+  describe("terminalTools", () => {
+    const submitPlan = tool({
+      description: "submit a plan",
+      inputSchema: z.object({ title: z.string(), markdown: z.string() }),
+      execute: async () => ({ path: "/tmp/p.md", title: "T", markdown: "# T" }),
+    });
+
+    test("a successful terminal tool ends the turn plan-submitted after the round finishes", async () => {
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: { submit_plan: submitPlan },
+          messages: baseMessages,
+          permissionMode: "auto",
+          terminalTools: new Set(["submit_plan"]),
+        }),
+      );
+      expect(events).toContainEqual({
+        type: "tool-result",
+        name: "submit_plan",
+        result: { path: "/tmp/p.md", title: "T", markdown: "# T" },
+      });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "plan-submitted" });
+      expect(model.doStreamCalls).toHaveLength(1);
+    });
+
+    test("a thrown terminal execute does not end the turn", async () => {
+      const throwing = tool({
+        description: "submit a plan",
+        inputSchema: z.object({ title: z.string(), markdown: z.string() }),
+        execute: async (): Promise<{ path: string; title: string; markdown: string }> => {
+          throw new Error("disk full");
+        },
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
+          streamResult(textOnlyChunks("kept going")),
+        ],
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: { submit_plan: throwing },
+          messages: baseMessages,
+          permissionMode: "auto",
+          terminalTools: new Set(["submit_plan"]),
+        }),
+      );
+      expect(events.some((e) => e.type === "error")).toBe(true);
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    });
+
+    test("an unanswered abort still wins over a terminal tool that already succeeded in the same batch", async () => {
+      const controller = new AbortController();
+      const hang = tool({
+        description: "hang until cancelled",
+        inputSchema: z.object({}),
+        execute: async (_input, options) =>
+          await new Promise<string>((_resolve, reject) => {
+            const cancel = (): void => reject(new Error("cancelled"));
+            options.abortSignal?.addEventListener("abort", cancel, { once: true });
+            if (options.abortSignal?.aborted === true) cancel();
+          }),
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            multiToolCallChunks([
+              { toolCallId: "c1", toolName: "submit_plan", input: { title: "T", markdown: "# T" } },
+              { toolCallId: "c2", toolName: "hang", input: {} },
+            ]),
+          ),
+        ],
+      });
+      const events: LoopEvent[] = [];
+      for await (const event of runLoop({
+        model,
+        tools: { submit_plan: submitPlan, hang },
+        messages: baseMessages,
+        permissionMode: "auto",
+        terminalTools: new Set(["submit_plan"]),
+        signal: controller.signal,
+      })) {
+        events.push(event);
+        if (event.type === "tool-call" && event.name === "hang") controller.abort();
+      }
+      expect(events).toContainEqual({
+        type: "tool-result",
+        name: "submit_plan",
+        result: { path: "/tmp/p.md", title: "T", markdown: "# T" },
+      });
+      expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
   });
 });

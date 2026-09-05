@@ -100,7 +100,13 @@ import { renderSkillsTier, type SkillSpec } from "../skills/registry";
 // has model-visible skills or a cataloged MCP server; naming them here would tell the model
 // to call a tool that is not in the array. When they exist, the context-tier "# Skills" block
 // and the mcp tool's own description are the index.
-const SYSTEM_PROMPT = `You are seri, a coding agent. You have tools to help the user, and you answer directly when a task doesn't need one.
+function buildStableTier(composeSubagents: boolean): string {
+  const parentOnlyTools = composeSubagents
+    ? `- \`dispatch_subagents\` — run one or more subagents in parallel on separate goals; costs several times the tokens of doing the work yourself, so use it for genuinely parallel or isolable work, not something you could just do directly. See the tool's own description for roles, limits, and optional per-task model, provider, and effort.
+- \`todo\` — replace-all checklist for multi-step work; keep item ids stable across calls.
+`
+    : "";
+  return `You are seri, a coding agent. You have tools to help the user, and you answer directly when a task doesn't need one.
 
 # Tone
 Be short and direct. No superlatives, no emojis unless the user asks for them. Refer to code as \`file_path:line_number\`. Before multi-step work, say your plan in one short sentence and start the first tool call in the same response; do not end on a promise. Report results and decisions, not your reasoning about them.
@@ -113,8 +119,7 @@ Be short and direct. No superlatives, no emojis unless the user asks for them. R
 - \`glob\` — list files matching a pattern.
 - \`bash\` — run a shell command via bash.
 - \`powershell\` — run a shell command via PowerShell. The harness does not translate between \`bash\` and \`powershell\`.
-- \`dispatch_subagents\` — run one or more subagents in parallel on separate goals; costs several times the tokens of doing the work yourself, so use it for genuinely parallel or isolable work, not something you could just do directly. See the tool's own description for roles, limits, and optional per-task model, provider, and effort.
-
+${parentOnlyTools}
 # What needs a tool
 Not everything you're told needs a tool call. A question, or something to keep in mind for the rest of this conversation, is answered in text — the conversation itself already carries it forward turn to turn, so there is nothing to write down. The same is true across sessions: you have no tool to save something for later — a background pass reviews finished turns and decides on its own what's worth keeping, so a request like "remember this" needs nothing from you beyond answering normally. Reach for a tool when the task itself requires touching the project: reading, changing, or running something. This does not relax "Calling tools" below — once a task does need a tool, calling it is mandatory, not optional.
 
@@ -139,10 +144,6 @@ Never pass \`edit\` content you did not just read from the file. \`edit\` cannot
 
 # Verifying
 After you change code, run the project's own checks — its tests, typecheck or build — where you reasonably can, and fix what you broke.`;
-
-// Never within a session: identity, tool guidance, the read->edit->write sequence.
-function buildStableTier(): string {
-  return SYSTEM_PROMPT;
 }
 
 // At session start: AGENTS.md is appended, never a substitute — a project without one used to get
@@ -160,19 +161,9 @@ function buildContextTier(
   return joinTiers(agentsContent, renderRulesTier(rules), renderSkillsTier(skills));
 }
 
-// Per turn: tells the model which model/provider it is actually running as this turn, so a live
-// `/model` switch is reflected instead of confabulated. Composed outside buildSystemPrompt, at the
-// driveLoop call site in runtime/drive.ts, where the resolved route and the catalog's own lookup
-// for this turn are already in scope — kept last-in-string there too, so this is the only tier that
-// invalidates a cached prefix. The machine line and family overlay live here for the same reason:
-// platform is a process fact, not a session-frozen one, and a /model switch must be able to add or
-// drop the llama narration overlay without rewriting the stable prefix.
-//
 // Takes already-resolved `displayName` and `family` rather than a catalog to look up itself: the
 // caller (driveLoop) needs the same catalog entry for the loop's own contextWindowSize, so it does
 // that lookup once and hands this function the fields instead of each doing an identical scan.
-// `displayName || modelId`, not `??`: a catalog entry whose `name` came back `""` (present but
-// empty) must still fall back to the raw id — `??` only catches null/undefined, not empty string.
 // `memory` is required: the one production call site always has one. Composed through joinTiers,
 // not string-concatenated, so an all-empty LoadedMemory renders "" (renderMemoryTier's own empty
 // guarantee) and joinTiers' filter(Boolean) drops it — a session with no memory yet gets identity
@@ -187,8 +178,10 @@ export function buildVolatileTier(
   memory: LoadedMemory,
   opts?: { family?: string | null; platform?: NodeJS.Platform },
 ): string {
-  const label = displayName || modelId;
-  const identityLine = `You are powered by the model named ${label}. The exact model ID is ${provider}/${modelId}.`;
+  const slash = modelId.lastIndexOf("/");
+  const label = displayName || modelId.slice(slash + 1);
+  void provider;
+  const identityLine = `You are powered by the model named ${label}.`;
   return joinTiers(
     identityLine,
     platformLine(opts?.platform ?? process.platform),
@@ -241,9 +234,10 @@ export function buildSystemPrompt(opts: {
    *  through the turn instead (rules/match.ts), which is what keeps this string byte-stable for the
    *  whole session. */
   rules: readonly RuleSpec[];
+  composeSubagents?: boolean;
 }): string {
   return joinTiers(
-    buildStableTier(),
+    buildStableTier(opts.composeSubagents !== false),
     buildContextTier(opts.agentsContent, opts.skills, opts.rules),
   );
 }

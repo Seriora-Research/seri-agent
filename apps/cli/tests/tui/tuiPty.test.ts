@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -13,7 +14,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { Database } from "bun:sqlite";
 import type { ModelMessage } from "ai";
 import { checkpointStoreDir } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, resolveRef } from "../../src/checkpoint/shadowGit";
@@ -486,14 +486,6 @@ function childScriptPlanClearedOnLogout(dir: string): string {
   ].join("\n");
 }
 
-// Regression: runTui's own runTurn appended a transcript notice for `route.rerouted` but had no
-// counterpart for `route.credential` — so a live TUI turn served through the gateway printed no
-// per-turn indication it was billing the user's seri plan, unlike a BYOK reroute (childScriptReroute's
-// own test proves that one already gets a "↻ routing…" line every turn). Same pinned pair as
-// childScriptPlanClearedOnLogout (~openai/gpt-latest via openrouter, no groq sibling to reroute to,
-// GROQ_API_KEY only a decoy past the guided-setup gate), but this script actually lets turn 1 run
-// (childScriptPlanClearedOnLogout's own runLoopFake never resolves) and injects `getGatewayModel` so
-// dispatchModel never attempts a real request to the fake SERI_GATEWAY_URL.
 function childScriptGatewayNoticeTui(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -564,7 +556,8 @@ function childScriptModelSwitch(dir: string): string {
     `let calls = 0;`,
     `async function* runLoopFake(opts) {`,
     `  calls++;`,
-    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " systemHasModelId=" + opts.system.includes(opts.model.id));`,
+    `  const named = (opts.system.match(/You are powered by the model named ([^\\n]+)\\./) || [])[1];`,
+    `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " identity=" + named + " hasExactId=" + /exact model ID/i.test(opts.system));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
     // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
     // rendered done line, is the reliable per-turn completion signal.
@@ -1916,7 +1909,7 @@ const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 // applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
 // for "no real size available," not a real terminal's dimensions. `formatModeDetail` leftover-packs
 // the mode row's model/route/effort suffix into whatever columns remain after the indicator, so a
-// typical model name's ` · your key` suffix IS visible at that 80-column default. `terminalSize`,
+// typical model name's ` · groq` suffix IS visible at that 80-column default. `terminalSize`,
 // below, still widens the pty when a test needs a guaranteed-wide row (a NAME_WIDTH model plus
 // reroute plus effort, or an assertion that must not depend on leftover packing): it prefixes an
 // `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before exec'ing
@@ -2747,7 +2740,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-plan-cleared-on-logout.mjs");
     writeFileSync(scriptPath, childScriptPlanClearedOnLogout(dir));
 
-    const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine, sawInFrameTimes, lastFrame } = pty;
     try {
       await sawLine("RUNLOOP_READY");
 
@@ -2777,42 +2771,24 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // A real wait on the picker's own chrome in `lastFrame`, not sawLine("GPT OSS 120B")
-      // and not a flat 100ms sleep: that line already appeared during the FIRST picker open,
-      // so the cumulative check would resolve instantly here too, and 100ms under macOS CI
-      // load is not always enough for the filter's useKeyboard to be mounted. Typing before
-      // that commit drops the filter text.
-      await sawInFrameTimes("Type to filter", 1);
-      child.stdin?.write("gpt-latest");
-      await sawInFrameTimes("gpt-latest", 1);
-      // The regression: without cli.ts's own /logout handler clearing prepared.plan, this row would
-      // still read as a seri-plan route here, from the plan a session that no longer exists once had.
-      expect(lastFrame()).toContain("no key");
+      await typePickerFilter(pty, "gpt-latest");
+      await sawInFrameTimes("no key", 1);
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // Regression: a live turn served through the gateway must announce itself in the transcript
-  // exactly like a BYOK reroute already does (childScriptReroute's own "a routing-priority reroute
-  // active from session start..." test, above) — a user reading the transcript otherwise has no
-  // per-turn indication their own seri plan, not a key they brought, is what answered.
-  test("a live turn served through the gateway announces itself in the transcript, once", async () => {
+  test("a live turn served through the gateway does not append a same-route routing line", async () => {
     const scriptPath = join(dir, "child-gateway-notice.mjs");
     writeFileSync(scriptPath, childScriptGatewayNoticeTui(dir));
 
-    const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
+    const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL model=~openai/gpt-latest provider=openrouter");
-      const noticePrefix = "↻ routing ~openai/gpt-latest on your seri plan";
-      await sawLine(noticePrefix);
       await sawLine("done ·");
 
-      // Exactly one transcript notice for this one turn, and no console-only "⚠ routing" line
-      // (prepareSession's own !isTTY-gated notice, dead on a real pty) — the same pair of checks
-      // childScriptReroute's own test makes for the BYOK-reroute case.
-      expect(frameOccurrences(noticePrefix)).toBe(1);
-      expect(rawOccurrences("⚠ routing")).toBe(0);
+      expect(rawOccurrences("↻ routing")).toBe(0);
+      expect(rawOccurrences("on your seri plan")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }
@@ -2828,27 +2804,23 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
       // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
       // any switch.
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine(
+        "RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false",
+      );
       await sawLine("done ·");
 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // The picker replaces the input box (App.tsx's own three-way mutual exclusion) — the bundled
-      // fallback manifest's own default model is one of the 6 groq entries, always inside the
-      // picker's default (unfiltered) top-10 window regardless of catalog ordering, so this is a
-      // reliable sync point proving the picker actually mounted before typing a filter.
-      await sawLine("GPT OSS 120B");
-
-      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) — verified
-      // directly against the bundled catalog-manifest.json before writing this string; "3.3-70b"
-      // alone also matches an OpenRouter entry, "70b-versatile" does not.
-      child.stdin?.write("70b-versatile");
-      await sawLine("70b-versatile");
+      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) —
+      // verified directly against the bundled catalog-manifest.json before writing this string;
+      // "3.3-70b" alone also matches an OpenRouter entry, "70b-versatile" does not.
+      await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
       // The Enter keypress resolves synchronously (App.tsx's own dispatch wrapper updates
       // `liveState` in the same tick), but the actual React unmount of ModelPicker and mount of
@@ -2864,12 +2836,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
-      // message) — the switch changed WHICH model answers, not what it was handed. The trailing
-      // systemHasModelId=true proves the system prompt sent for THIS call names the NEW model
-      // (llama-3.3-70b-versatile) — not the one the session started on — i.e. the identity line is
-      // recomputed every driveLoop call rather than captured once at session start.
+      // message) — the switch changed WHICH model answers, not what it was handed.
       await sawLine(
-        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
 
       // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
@@ -3037,7 +3006,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=low");
       await sawLine("RUNLOOP_DONE 1");
-      await sawLine("reasoning-model · your key · low");
+      await sawLine("reasoning-model · groq · low");
 
       child.stdin?.write("/effort high");
       await sawLine("/effort high");
@@ -3068,7 +3037,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // own dispatch, the header falls back to `state.config`'s STALE mount-time value ("low"),
       // not what config.json now actually holds ("high").
       await sawInFrameTimes("Reasoning effort: auto (falls back to the config default).", 1);
-      expect(lastFrame()).toContain("reasoning-model · your key · high");
+      expect(lastFrame()).toContain("reasoning-model · groq · high");
       expect(lastFrame()).not.toContain("· low");
     } finally {
       child.kill("SIGKILL");
@@ -3082,7 +3051,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-multiroute.mjs");
     writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("done ·");
@@ -3090,19 +3060,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // The Route column header — present regardless of catalog ordering, unlike a specific row.
-      await sawLine("Route");
 
-      // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (verified
-      // directly against catalog-manifest.json before writing this string): the native Anthropic
-      // entry (bare id "claude-sonnet-5") and the OpenRouter entry ("anthropic/claude-sonnet-5",
-      // which also contains this substring).
-      child.stdin?.write("claude-sonnet-5");
-      await sawLine("claude-sonnet-5");
-      // Both routes visible — the actual proof decideModelPickerOpen's own unit tests can't give:
-      // a real picker, on a real pty, showing both rows for one filtered query.
-      await sawLine("anthropic");
-      await sawLine("openrouter");
+      await typePickerFilter(pty, "claude-sonnet-5");
+      await pty.sawInFrameTimes("Claude Sonnet 5", 2);
+      await pty.sawInFrameTimes("no key", 2);
 
       // byRoutePriority (D2) sorts native before aggregator WITHIN a route group, so the
       // Anthropic row is already the top/default-selected one for this filtered query — no Down
@@ -3218,9 +3179,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
-      await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 systemHasModelId=true");
+      await sawLine(
+        "RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false",
+      );
       await sawLine("done ·");
 
       // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
@@ -3239,10 +3203,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      await sawLine("GPT OSS 120B");
-
-      child.stdin?.write("70b-versatile");
-      await sawLine("70b-versatile");
+      await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
       await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -3253,7 +3214,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       // The switch DID take effect live, and the turn itself succeeded — this failure is
       // entirely in the persist attempt behind it, not in the model call.
       await sawLine(
-        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 systemHasModelId=true",
+        "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
       await sawLine("could not save the default model:");
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
@@ -3267,7 +3228,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine(
-        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 systemHasModelId=true",
+        "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 identity=Llama 3.3 70B hasExactId=false",
       );
       // RUNLOOP_DONE, not a count of the rendered done line — see
       // childScriptMultiTurn's own comment for why.
@@ -3411,7 +3372,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     writeFileSync(scriptPath, childScriptModelPickKeyless(dir));
     const sessionsDir = join(dir, "sessions");
 
-    const { child, sawLine } = await startChild(scriptPath, dir);
+    const pty = await startChild(scriptPath, dir);
+    const { child, sawLine } = pty;
     try {
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("done ·");
@@ -3421,12 +3383,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("GPT OSS 120B");
 
-      // Narrows to exactly the two claude-sonnet-5 routes (same fixture as
-      // childScriptModelMultiRoute's own test) — the native Anthropic row sorts first (byRoutePriority),
-      // so it is already the highlighted row this Enter picks, same as that test's own comment explains.
-      child.stdin?.write("claude-sonnet-5");
-      await sawLine("claude-sonnet-5");
-      await sawLine("anthropic");
+      await typePickerFilter(pty, "claude-sonnet-5");
+      await pty.sawInFrameTimes("no key", 1);
       child.stdin?.write("\r");
       // The mandatory wait after any keypress that swaps the mounted component (picker -> input
       // box) — childScriptModelSwitch's own test has the full measured story for this.
@@ -5608,6 +5566,42 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
+    test("ctrl+o and empty /plan share one overlay, keeping liveState in step with the indicator", async () => {
+      const scriptPath = join(dir, "child-plan-toggle.mjs");
+      writeFileSync(scriptPath, childScriptBare(dir));
+
+      const { child, sawLine, lastFrame, rawOccurrences } = await startChild(scriptPath, dir, {
+        terminalSize: { cols: 100, rows: 30 },
+      });
+      try {
+        await sawLine("approve-each mode on");
+        await wait100ms();
+        expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
+
+        child.stdin?.write("\x0f");
+        await sawLine("plan mode on");
+        expect(lastFrame()).toContain("plan mode on");
+        expect(lastFrame()).not.toContain("approve-each mode on");
+        expect(lastFrame()).toContain("ctrl+o to leave");
+        expect(lastFrame()).not.toContain("shift+tab to cycle");
+
+        child.stdin?.write("/plan");
+        await sawLine("/plan");
+        child.stdin?.write("\r");
+
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const frame = lastFrame();
+          if (frame.includes("approve-each mode on") && !frame.includes("plan mode on")) break;
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(lastFrame()).toContain("approve-each mode on");
+        expect(lastFrame()).not.toContain("plan mode on");
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }, 60_000);
+
     // Regression coverage for the mount-time counterpart of `config-updated`
     // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
     // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
@@ -5623,7 +5617,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         terminalSize: { cols: 100, rows: 30 },
       });
       try {
-        await sawLine("reasoning-model · your key · medium");
+        await sawLine("reasoning-model · groq · medium");
         // Negative control: this is the mount-time seed, not a turn-triggered one.
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
@@ -5943,16 +5937,27 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
       writeFileSync(scriptPath, childScriptLoggedInZeroKeys(dir));
 
-      const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
-        dismissSplash: false,
-      });
+      const { child, sawLine, rawOccurrences, lastFrame, sawInFrameTimes } = await startChild(
+        scriptPath,
+        dir,
+        {
+          dismissSplash: false,
+        },
+      );
       try {
         await sawLine(SPLASH_MARK);
         await sawLine("> Continue");
+        await sawLine(" · seri");
+        expect(rawOccurrences("openrouter")).toBe(0);
         child.stdin?.write("\r");
 
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("/setup — provider API keys")).toBe(0);
+        // done · only exists on the main TUI. lastFrame at RUNLOOP_READY can still be the
+        // cleared splash grid that startChild's dismissSplash wait already names.
+        await sawInFrameTimes("done ·", 1);
+        expect(lastFrame()).toContain(" · seri");
+        expect(lastFrame()).not.toContain("openrouter");
       } finally {
         child.kill("SIGKILL");
       }

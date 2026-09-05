@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseColor, RGBA, type Renderable, ScrollBoxRenderable } from "@opentui/core";
+import { parseColor, type Renderable, RGBA, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -37,6 +37,8 @@ import {
   MODE_LABEL,
   matchesFilter,
   NAME_WIDTH,
+  PLAN_MODE_LABEL,
+  PLAN_MODE_LEAVE_HINT,
   pickerLabelWidth,
   singleLine,
   slideWindow,
@@ -2061,6 +2063,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2118,6 +2121,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2144,6 +2148,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "groq",
+          via: "groq",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2170,6 +2175,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2204,6 +2210,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2232,6 +2239,7 @@ describe("App", () => {
           version: "0.4.2",
           model: "openai/gpt-oss-120b",
           provider: "openrouter",
+          via: "openrouter",
           cwd: "/home/lion/code/seri",
           home: "/home/lion",
         },
@@ -2256,11 +2264,58 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       const banner = frame.split("\n").find((l) => l.includes("seri v0.4.2"));
       const mode = frame.split("\n").find((l) => l.includes(MODE_LABEL["approve-each"]));
-      expect(banner).toContain("minimax/minimax-m3:free · openrouter");
+      expect(banner).toContain("minimax/minimax-m3:free · seri");
       expect(banner).not.toContain("openai/gpt-oss-120b");
+      expect(banner).not.toContain("openrouter");
       expect(mode).toContain("minimax/minimax-m3:fr");
       expect(mode).toContain("seri");
       expect(mode).not.toContain("openai/gpt-oss-120b");
+    });
+
+    test("a hosted session banner names seri, never the gateway listing", async () => {
+      const { setup } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          via: "seri",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+        route: route({
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          credential: "gateway",
+        }),
+      });
+
+      const banner = setup
+        .captureCharFrame()
+        .split("\n")
+        .find((l) => l.includes("seri v0.4.2"));
+      expect(banner).toContain("minimax/minimax-m3:free · seri");
+      expect(banner).not.toContain("openrouter");
+    });
+
+    test("a hosted splash banner names seri even before a route exists", async () => {
+      const { setup, dispatch } = await connect({
+        splashBanner: {
+          version: "0.4.2",
+          model: "minimax/minimax-m3:free",
+          provider: "openrouter",
+          via: "seri",
+          cwd: "/home/lion/code/seri",
+          home: "/home/lion",
+        },
+      });
+
+      dispatch({ type: "auth-offer", show: true });
+      dispatch({ type: "splash-requested" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("minimax/minimax-m3:free · seri");
+      expect(frame).not.toContain("openrouter");
     });
 
     // The pre-session window used to render a dead placeholder, so a task typed while
@@ -3323,22 +3378,23 @@ describe("App", () => {
       expect(formatCost(undefined)).toBe("—");
     });
 
-    test("formatModelRow includes name, provider, context and cost, in that order", () => {
+    test("formatModelRow includes name, context, cost and route, in that order", () => {
       const row = formatModelRow(pickerRow());
       const nameIndex = row.indexOf("Llama 3.3 70B");
-      const providerIndex = row.indexOf("groq");
       const contextIndex = row.indexOf("128K");
       const costIndex = row.indexOf("$0.59/$0.79");
+      const routeIndex = row.indexOf("groq");
       expect(nameIndex).toBeGreaterThanOrEqual(0);
-      expect(providerIndex).toBeGreaterThan(nameIndex);
-      expect(contextIndex).toBeGreaterThan(providerIndex);
+      expect(contextIndex).toBeGreaterThan(nameIndex);
       expect(costIndex).toBeGreaterThan(contextIndex);
+      expect(routeIndex).toBeGreaterThan(costIndex);
+      expect(row).not.toContain("your key");
     });
 
-    // D1/D2 (feature-plan.md): the trailing Route column.
-    test("formatModelRow renders 'your key' or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
+    test("formatModelRow renders the provider as Route for a keyed row, or 'no key', and a '+N route(s)' suffix only when alternatives > 0", () => {
       const configured = formatModelRow(pickerRow({ keyConfigured: true, alternatives: 0 }));
-      expect(configured).toContain("your key");
+      expect(configured).toContain("groq");
+      expect(configured).not.toContain("your key");
       expect(configured).not.toContain("no key");
       expect(configured).not.toContain("route");
 
@@ -3386,8 +3442,7 @@ describe("App", () => {
       expect(row.indexOf("A".repeat(40))).toBe(-1);
     });
 
-    // Unbounded form: five columns (74) plus ` +1 route` is what ListRow middle-truncates at 80.
-    test("formatModelRow unbounded with +1 route is longer than 74 and still carries cost", () => {
+    test("formatModelRow unbounded with +1 route is longer than the four columns and still carries cost", () => {
       const row = formatModelRow(
         pickerRow({
           alternatives: 1,
@@ -3397,7 +3452,7 @@ describe("App", () => {
           }),
         }),
       );
-      expect(row.length).toBeGreaterThan(74);
+      expect(row.length).toBeGreaterThan(63);
       expect(row).toContain("+1 route");
       expect(row).toContain("$0.15/$0.60");
     });
@@ -3407,7 +3462,7 @@ describe("App", () => {
       expect(pickerLabelWidth(0)).toBe(pickerLabelWidth(80));
     });
 
-    test("formatModelRow at pickerLabelWidth(80) drops the suffix but keeps Context and Cost", () => {
+    test("formatModelRow at pickerLabelWidth(80) keeps Context, Cost, Route and the +1 route suffix", () => {
       const priced = pickerRow({
         alternatives: 1,
         entry: entry({
@@ -3418,8 +3473,22 @@ describe("App", () => {
       const row = formatModelRow(priced, pickerLabelWidth(80));
       expect(row).toContain("128K");
       expect(row).toContain("$0.15/$0.60");
-      expect(row).not.toContain("+1 route");
+      expect(row).toContain("+1 route");
       expect(row.length).toBeLessThanOrEqual(74);
+    });
+
+    test("formatModelRow at pickerLabelWidth(70) drops the suffix but keeps Route", () => {
+      const priced = pickerRow({
+        alternatives: 1,
+        entry: entry({
+          pricing: { inputPerMTok: 0.15, outputPerMTok: 0.6 },
+          contextWindow: 131_072,
+        }),
+      });
+      const row = formatModelRow(priced, pickerLabelWidth(70));
+      expect(row).toContain("128K");
+      expect(row).toContain("$0.15/$0.60");
+      expect(row).not.toContain("+1 route");
     });
 
     test("formatModelRow at pickerLabelWidth(100) keeps the +1 route suffix", () => {
@@ -3438,8 +3507,8 @@ describe("App", () => {
       expect(formatModelPickerHeader(pickerLabelWidth(80))).toContain("Route");
     });
 
-    test("formatModelPickerHeader at pickerLabelWidth(70) drops Route; the row keeps Context and Cost", () => {
-      expect(formatModelPickerHeader(pickerLabelWidth(70))).not.toContain("Route");
+    test("formatModelPickerHeader at pickerLabelWidth(60) drops Route; the row keeps Context and Cost", () => {
+      expect(formatModelPickerHeader(pickerLabelWidth(60))).not.toContain("Route");
       const priced = pickerRow({
         alternatives: 1,
         entry: entry({
@@ -3447,7 +3516,7 @@ describe("App", () => {
           contextWindow: 131_072,
         }),
       });
-      const row = formatModelRow(priced, pickerLabelWidth(70));
+      const row = formatModelRow(priced, pickerLabelWidth(60));
       expect(row).toContain("128K");
       expect(row).toContain("$0.15/$0.60");
       expect(row).not.toContain("your key");
@@ -3581,7 +3650,10 @@ describe("App", () => {
   // all 5 branches, so the persistent indicator below (which calls it directly, not through a
   // ModelPickerEntry) has its own direct coverage too.
   describe("formatRouteLabel", () => {
-    test("keyConfigured wins outright: 'your key'", () => {
+    test("keyConfigured names the provider, not 'your key'", () => {
+      expect(
+        formatRouteLabel({ keyConfigured: true, provider: "anthropic", rerouteTo: "openrouter" }),
+      ).toBe("anthropic");
       expect(formatRouteLabel({ keyConfigured: true, rerouteTo: "openrouter" })).toBe("your key");
     });
 
@@ -3608,7 +3680,7 @@ describe("App", () => {
       expect(formatRouteLabel({ keyConfigured: false, subscriptionCovered: true })).toBe("plan");
     });
 
-    test("a leftover OpenRouter key under gateway coverage still reads 'seri'", () => {
+    test("a leftover gateway listing key under coverage still reads 'seri'", () => {
       expect(
         formatRouteLabel({
           keyConfigured: true,
@@ -3687,7 +3759,7 @@ describe("App", () => {
     // row end-to-end.
     test("renders the model+route label at the default width, and drops it after a resize too narrow for the model", async () => {
       const { setup } = await connect();
-      expect(setup.captureCharFrame()).toContain("your key");
+      expect(setup.captureCharFrame()).toContain("anthropic");
 
       // 30: approve-each (22) + `  claude-sonnet-5` (17) = 39, which cannot fit. 40 would now
       // show the model (22 + 17 = 39 <= 40).
@@ -3748,7 +3820,7 @@ describe("App", () => {
     test("a /model pick with no configured key leaves the status bar on the old route, not a fabricated one", async () => {
       const { setup, dispatch } = await connect();
       expect(setup.captureCharFrame()).toContain("claude-sonnet-5");
-      expect(setup.captureCharFrame()).toContain("your key");
+      expect(setup.captureCharFrame()).toContain("anthropic");
 
       dispatch({
         type: "model-picker-resolved",
@@ -3783,7 +3855,7 @@ describe("App", () => {
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     test("/effort auto (a session-updated dispatch clearing reasoningEffort) removes the tier from the mode row", async () => {
@@ -3802,7 +3874,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // A tier surviving a model switch onto a model with no reasoningOptions at all (the reducer
@@ -3819,7 +3891,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
 
       dispatch({ type: "session-updated", session: session({ reasoningEffort: undefined }) });
       await flush(setup);
@@ -3827,7 +3899,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // Fresh session (no `effort-resolved` ever dispatched) with a config default present: the
@@ -3845,7 +3917,7 @@ describe("App", () => {
       dispatch({ type: "config-updated", config: { SERI_REASONING_EFFORT: "high" } });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     // The mount-time counterpart of the dispatch-based test above, and the actual regression guard
@@ -3865,7 +3937,7 @@ describe("App", () => {
         config: { SERI_REASONING_EFFORT: "high" },
       });
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
     });
 
     // Fresh session, no config default dispatched either: confirms the existing no-tier behavior
@@ -3881,7 +3953,7 @@ describe("App", () => {
       });
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
 
     // A session override (`/effort`) must keep winning outright over a config default present at
@@ -3901,7 +3973,7 @@ describe("App", () => {
       dispatch({ type: "effort-resolved", tier: "high" });
       await flush(setup);
 
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key · high");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic · high");
       expect(modeRow(setup)).not.toContain("· low");
     });
 
@@ -3914,7 +3986,7 @@ describe("App", () => {
       await flush(setup);
 
       expect(modeRow(setup)).not.toContain("· high");
-      expect(modeRow(setup)).toContain("claude-sonnet-5 · your key");
+      expect(modeRow(setup)).toContain("claude-sonnet-5 · anthropic");
     });
   });
 
@@ -3974,7 +4046,7 @@ describe("App", () => {
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(MODE_LABEL["approve-each"]));
       expect(modeLine).toBeDefined();
-      expect(modeLine).toContain("your key");
+      expect(modeLine).toContain("anthropic");
       expect(modeLine).toContain("(shift+tab to cycle)");
       expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(DEFAULT_COLUMNS);
     });
@@ -4018,7 +4090,7 @@ describe("App", () => {
       });
       await resize(setup, DEFAULT_COLUMNS, DEFAULT_HEIGHT);
 
-      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · your key`;
+      const expectedRow = `${MODE_LABEL.auto}${MODE_CYCLE_HINT}  claude-sonnet-5 · anthropic`;
       const lines = setup.captureCharFrame().split("\n");
       const modeLine = lines.find((l) => l.includes(expectedRow));
       expect(modeLine).toBeDefined();
@@ -4292,6 +4364,205 @@ describe("App", () => {
       await flush(setup);
 
       expect(calls).toBe(0);
+    });
+  });
+
+  describe("plan mode overlay", () => {
+    const questions = [
+      { id: "q1", prompt: "Target runtime?", options: ["Bun", "Node"] },
+      { id: "q2", prompt: "Scope?", options: ["CLI only", "monorepo"] },
+    ];
+    const submitted = {
+      path: "/home/user/.seri/plans/auth-rewrite.md",
+      title: "Auth rewrite",
+      markdown: "# Auth rewrite\n\nReplace the login flow.\n",
+    };
+
+    test("the shift+tab cycle hint is absent while the overlay is on, and the leave hint is present", async () => {
+      const { setup, dispatch } = await connect({ route: undefined });
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+      expect(setup.captureCharFrame()).not.toContain("(ctrl+o to leave)");
+
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain(PLAN_MODE_LABEL);
+      expect(frame).toContain(PLAN_MODE_LEAVE_HINT.trim());
+      expect(frame).not.toContain("(shift+tab to cycle)");
+    });
+
+    test("shift+tab does not call onCycleMode while the overlay is on", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onCycleMode: () => calls++,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
+    test("ctrl+o calls onTogglePlan when the overlay is off", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        onTogglePlan: () => calls++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("ctrl+o calls onTogglePlan when the overlay is on", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onTogglePlan: () => calls++,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("ctrl+o does not call onCycleMode", async () => {
+      let cycle = 0;
+      let toggle = 0;
+      const { setup } = await connect({
+        onCycleMode: () => cycle++,
+        onTogglePlan: () => toggle++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(toggle).toBe(1);
+      expect(cycle).toBe(0);
+    });
+
+    test("ctrl+o does nothing while a panel is open", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onTogglePlan: () => calls++,
+      });
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: {},
+        offersAlways: false,
+      });
+      await flush(setup);
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
+    test("ctrl+o still calls onTogglePlan under skipPermissions", async () => {
+      let calls = 0;
+      const { setup } = await connect({
+        skipPermissions: true,
+        onTogglePlan: () => calls++,
+      });
+
+      setup.mockInput.pressKey("o", { ctrl: true });
+      await flush(setup);
+
+      expect(calls).toBe(1);
+    });
+
+    test("plain o does not toggle and still reaches the input buffer", async () => {
+      let calls = 0;
+      const submittedTasks: string[] = [];
+      const { setup } = await connect({
+        onTogglePlan: () => calls++,
+        onSubmit: (v) => submittedTasks.push(v),
+      });
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("o");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submittedTasks).toEqual(["helloo"]);
+    });
+
+    test("the indicator reads plan mode on in the read-only hue, even under skipPermissions", async () => {
+      const { setup, dispatch } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain(PLAN_MODE_LABEL);
+      expect(setup.captureCharFrame()).not.toContain("bypass permissions on");
+      expect(setup.captureCharFrame()).not.toContain("approve-each mode on");
+
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(PLAN_MODE_LABEL)));
+      const span = line?.spans.find((s) => s.text.includes(PLAN_MODE_LABEL));
+      expect(span?.fg.equals(parseColor(theme.mode["read-only"]))).toBe(true);
+    });
+
+    test("plain TAB with the overlay on and no panel still does not cycle the mode", async () => {
+      let calls = 0;
+      const submittedTasks: string[] = [];
+      const { setup, dispatch } = await connect({
+        onCycleMode: () => calls++,
+        onSubmit: (v) => submittedTasks.push(v),
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("\t");
+      await setup.mockInput.typeText(" world");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submittedTasks).toEqual(["hello world"]);
+    });
+
+    test("the questions panel mounts and PageUp does not scroll behind it", async () => {
+      const { setup, dispatch } = await connect();
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "plan-questions-requested", questions });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("plan questions");
+      expect(frame).toContain("Target runtime?");
+      expect(frame).toContain("[Q1]");
+
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("the review panel mounts with approve / request-changes / cancel", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({ type: "plan-review-requested", plan: submitted });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Auth rewrite");
+      expect(frame).toContain("Approve");
+      expect(frame).toContain("Request changes");
+      expect(frame).toContain("Cancel");
+      expect(frame).toContain(PLAN_MODE_LABEL);
     });
   });
 
@@ -5145,11 +5416,53 @@ describe("App", () => {
     });
   });
 
-  // Render-ternary precedence (app.tsx's own comment): pendingApproval → pendingModelPicker →
-  // pendingSetup → pendingAuth → pendingConfig → pendingPermissions → pendingEffort → InputBox.
-  // Each test below seeds one adjacent pair at once and checks the earlier-in-the-chain branch
-  // wins, extending the existing pendingSetup-vs-InputBox precedence test above to the three new
-  // Stage A branches, and pendingEffort at the tail of the chain.
+  describe("ask_user panel", () => {
+    const prompt = {
+      prompt: "Which auth?",
+      choices: ["cookies", "JWT"],
+      allowOther: true,
+    };
+
+    test("mounts as question, not plan questions or always, and PageUp does not scroll behind it", async () => {
+      const { setup, dispatch } = await connect();
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "ask-user-requested", prompt });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("question");
+      expect(frame).toContain("Which auth?");
+      expect(frame).toContain("cookies");
+      expect(frame).not.toContain("plan questions");
+      expect(frame).not.toMatch(/\balways\b/i);
+
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("pendingApproval wins over pendingAskUser", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({ type: "ask-user-requested", prompt });
+      await flush(setup);
+      expect(setup.captureCharFrame()).toContain("Which auth?");
+
+      dispatch({
+        type: "approval-requested",
+        toolName: "write_file",
+        args: { path: "a.txt" },
+        offersAlways: true,
+      });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Write a.txt?");
+      expect(frame).not.toContain("Which auth?");
+    });
+  });
+
   describe("render precedence: pendingApproval / pendingSetup / pendingAuth / pendingConfig / pendingPermissions / pendingEffort", () => {
     test("pendingApproval wins over pendingAuth", async () => {
       const { setup, dispatch } = await connect();
@@ -5824,6 +6137,82 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("line one line two");
       expect(rowOf(frame, "line one")).toBe(rowOf(frame, "line two"));
+    });
+  });
+
+  describe("parent checklist", () => {
+    function rowOf(frame: string, needle: string): number {
+      return frame.split(String.fromCharCode(10)).findIndex((line) => line.includes(needle));
+    }
+
+    const items = [
+      { id: "a", content: "find compile flags", status: "done" as const },
+      { id: "b", content: "add --minify", status: "in_progress" as const },
+      { id: "c", content: "add a size test", status: "pending" as const },
+    ];
+
+    test("an empty list draws nothing", async () => {
+      const { setup } = await connect();
+      const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("find compile flags");
+      expect(frame).not.toContain("in progress");
+    });
+
+    test("a session snapshot paints the issue example below the transcript and above the input box", async () => {
+      const { setup, dispatch } = await connect({
+        session: session({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "c1",
+                  toolName: "todo",
+                  input: { items },
+                },
+              ],
+            },
+            {
+              role: "tool",
+              content: [
+                {
+                  type: "tool-result",
+                  toolCallId: "c1",
+                  toolName: "todo",
+                  output: { type: "json", value: items },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      dispatch({ type: "transcript-append", line: "> earlier task", role: "user" });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1. find compile flags (done)");
+      expect(frame).toContain("2. add --minify (in progress)");
+      expect(frame).toContain("3. add a size test (pending)");
+      const transcript = rowOf(frame, "earlier task");
+      const first = rowOf(frame, "1. find compile flags (done)");
+      const inputBox = rowOf(frame, "⏸ approve-each mode on");
+      expect(transcript).toBeGreaterThanOrEqual(0);
+      expect(transcript).toBeLessThan(first);
+      expect(first).toBeLessThan(inputBox);
+    });
+
+    test("a successful todo result paints live before messages-updated", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "todo", result: items },
+      });
+      await flush(setup);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1. find compile flags (done)");
+      expect(frame).toContain("2. add --minify (in progress)");
+      expect(frame).toContain("3. add a size test (pending)");
     });
   });
 });

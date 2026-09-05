@@ -14,6 +14,8 @@ import type { ArchivistReport } from "../memory/archivist";
 import type { CostReport } from "../provider/cost";
 import type { DispatchResult } from "../subagents/dispatch";
 import { ARCHIVIST_MARK } from "../tui/theme/theme";
+import { formatTodoLines, parseTodoList } from "../todo/list";
+import { TODO_TOOL_NAME } from "../todo/tool";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 // stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
@@ -235,6 +237,13 @@ function dispatchSummary(
 
 export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
   if (event.name === "edit") return "✓ edit done (text returned, nothing written)";
+  if (event.name === TODO_TOOL_NAME) {
+    const list = parseTodoList(event.result);
+    if (list !== undefined) {
+      const lines = formatTodoLines(list);
+      return lines.length === 0 ? "→ todo" : `→ todo\n${lines.join("\n")}`;
+    }
+  }
   const dispatch = event.name === "dispatch_subagents" ? dispatchSummary(event.result) : undefined;
   if (dispatch !== undefined) {
     const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;

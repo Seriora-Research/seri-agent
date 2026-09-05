@@ -51,7 +51,10 @@ export type TrajectoryKind =
       source: "turn" | "compaction" | "child" | "archivist";
       servedProvider?: string;
     }
-  | { kind: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" }
+  | {
+      kind: "done";
+      reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted";
+    }
   | { kind: "error"; error: string; errorElided?: Elision }
   | { kind: "retry"; attempt: number }
   | { kind: "tool_allowed"; name: string }

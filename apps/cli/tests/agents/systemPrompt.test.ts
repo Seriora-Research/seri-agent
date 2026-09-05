@@ -79,9 +79,11 @@ describe("buildSystemPrompt", () => {
       "bash",
       "powershell",
       "dispatch_subagents",
+      "todo",
     ]) {
       expect(prompt).toContain(`\`${name}\``);
     }
+    expect(prompt).not.toContain("`ask_user`");
   });
 
   test("the assembled system prompt tells the model write_file and the shells can destroy work, and to investigate before overwriting unfamiliar state", () => {
@@ -154,6 +156,25 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toMatch(/`mcp`/);
   });
 
+  test("composeSubagents false omits parent-only tools from # Tools, and still names the builtins", () => {
+    const attended = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+    const scheduled = buildSystemPrompt({
+      agentsContent: "",
+      skills: [],
+      rules: [],
+      composeSubagents: false,
+    });
+
+    expect(attended).toContain("`todo`");
+    expect(attended).toContain("`dispatch_subagents`");
+
+    expect(scheduled).not.toContain("`todo`");
+    expect(scheduled).not.toContain("`dispatch_subagents`");
+    expect(scheduled).toContain("`read_file`");
+    expect(scheduled).toContain("`grep`");
+    expect(scheduled).toContain("`glob`");
+  });
+
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
   // assembled output, and the join between them must match today's separator shape exactly — a
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
@@ -182,7 +203,10 @@ describe("buildVolatileTier", () => {
     );
 
     expect(line).toContain("GPT OSS 120B");
-    expect(line).toContain("groq/openai/gpt-oss-120b");
+    expect(line).toMatch(/^You are powered by the model named GPT OSS 120B\./m);
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
+    expect(line).not.toContain("openai/gpt-oss-120b");
   });
 
   test("an uncataloged model (no displayName) still gets an identity line, using the raw id", () => {
@@ -190,6 +214,8 @@ describe("buildVolatileTier", () => {
 
     expect(line.length).toBeGreaterThan(0);
     expect(line).toContain("some-raw-id");
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
   });
 
   // code-review finding on PR #66: a catalog entry whose `name` came back "" (present but empty,
@@ -199,6 +225,21 @@ describe("buildVolatileTier", () => {
 
     expect(line).not.toContain("named . ");
     expect(line).toContain("some-raw-id");
+    expect(line).not.toContain("exact model ID");
+    expect(line).not.toContain("groq");
+  });
+
+  test("an uncataloged slashed id uses the last path segment, not a provider prefix", () => {
+    const line = buildVolatileTier(
+      "minimax/minimax-m3:free",
+      "openrouter",
+      undefined,
+      loadMemory(emptyMemoryCtx()),
+    );
+
+    expect(line).toContain("minimax-m3:free");
+    expect(line).not.toContain("openrouter");
+    expect(line).not.toContain("minimax/minimax-m3:free");
   });
 
   // B2: an all-empty LoadedMemory must render no visible memory section at all — this is what

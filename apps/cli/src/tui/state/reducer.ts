@@ -3,6 +3,13 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import { isQuotaExhaustedNotice } from "@seri/plans";
 import type { ModelProvider } from "@seri/model-catalog";
+import {
+  PLAN_OVERLAY_OFF,
+  type PlanOverlay,
+  type PlanQuestion,
+  type SubmittedPlan,
+} from "../../plan/mode";
+import type { AskPrompt } from "../../ask-user/types";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
@@ -10,6 +17,12 @@ import type { McpPanelRow } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import {
+  parseTodoList,
+  TODO_TOOL_NAME,
+  todoListFromMessages,
+  type TodoList,
+} from "../../todo/list";
 import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
@@ -182,6 +195,11 @@ export type TuiState = {
   // exclusive, matching how the non-interactive CLI already blocks on this same question before
   // reading anything else from stdin.
   pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
+  // Occupancy snapshot for ask_user. The park in cli.ts owns the resolve; this field is what
+  // App.tsx paints. Not parked on `plan.kind`. The reducer can hold this next to
+  // `pendingApproval` (ApprovalBox still wins the ternary), but no production path sets
+  // both: `runLoop` runs `ask_user` only on the sequential branch after `flushReadBatch`.
+  pendingAskUser: AskPrompt | undefined;
   // /model's own live state, mirroring pendingApproval's shape exactly: set when the picker opens
   // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
   // its own ModelPicker instead of InputBox whenever this is set — the same three-way mutual
@@ -241,6 +259,7 @@ export type TuiState = {
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
   pendingChrome: ChromePanelState | undefined;
+  plan: PlanOverlay;
   // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
   // which App forwards from its `showSplash` prop so the first committed frame is already the
   // splash. `splash-requested` (runWelcomeSplash's connectDispatch) still sets it true after mount,
@@ -266,6 +285,7 @@ export type TuiState = {
   // message has not been said to the model yet, and a session resumed with one still pending
   // would replay it with no way for the user to see it coming.
   queue: MessageQueue;
+  checklist: TodoList;
   // In-memory live rows for the in-flight dispatch. Cleared when the parent
   // dispatch_subagents tool-result lands (the summaries are already in the parent
   // context), on transcript-cleared (`/clear`), and on turn-started. Not session JSON.
@@ -369,12 +389,14 @@ export function initialTuiState(
     route: opts?.route,
     config: opts?.config ?? {},
     queue: EMPTY_QUEUE,
+    checklist: todoListFromMessages(session.messages),
     ...EMPTY_TRANSCRIPT,
     status: "",
     turn: undefined,
     pendingTool: undefined,
     commandError: undefined,
     pendingApproval: undefined,
+    pendingAskUser: undefined,
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
     pendingSetup: undefined,
@@ -387,6 +409,7 @@ export function initialTuiState(
     pendingMemory: undefined,
     pendingEffort: undefined,
     pendingChrome: undefined,
+    plan: PLAN_OVERLAY_OFF,
     pendingSplash: opts?.showSplash ?? false,
     splashDone: false,
     ...EMPTY_ROSTER,
@@ -421,6 +444,12 @@ export type TuiAction =
   | { type: "command-error-cleared" }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
+  | { type: "ask-user-requested"; prompt: AskPrompt }
+  | { type: "ask-user-resolved" }
+  | { type: "plan-on" }
+  | { type: "plan-off" }
+  | { type: "plan-questions-requested"; questions: readonly PlanQuestion[] }
+  | { type: "plan-review-requested"; plan: SubmittedPlan }
   | { type: "model-picker-requested"; entries: ModelPickerEntry[] }
   // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
   // second dispatch — so there is never a one-frame render where the session already switched
@@ -707,9 +736,17 @@ function applyChildEvent(
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
-      return { ...state, session: action.session };
+      return {
+        ...state,
+        session: action.session,
+        checklist: todoListFromMessages(action.session.messages),
+      };
     case "user-turn-committed":
-      return { ...state, session: { ...state.session, messages: action.messages } };
+      return {
+        ...state,
+        session: { ...state.session, messages: action.messages },
+        checklist: todoListFromMessages(action.messages),
+      };
     // pushLine, not a bare append: this used to be harmless when transcript-append had no real
     // callers, but tuiPresenter.message, undoPlanLines/recoveryLines and quit()'s own "quitting -
     // cancelling..." line all go through this case now, and the last of those fires specifically
@@ -729,6 +766,8 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         ...EMPTY_TRANSCRIPT,
         ...EMPTY_ROSTER,
+        plan: PLAN_OVERLAY_OFF,
+        checklist: [],
       };
     case "loop-event":
       return applyLoopEvent(state, action.event);
@@ -747,6 +786,23 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
+    case "ask-user-requested":
+      return {
+        ...state,
+        pendingAskUser: action.prompt,
+        subagentPanelFocus: false,
+        pendingChildView: undefined,
+      };
+    case "ask-user-resolved":
+      return { ...state, pendingAskUser: undefined };
+    case "plan-on":
+      return { ...state, plan: { kind: "on" } };
+    case "plan-off":
+      return { ...state, plan: PLAN_OVERLAY_OFF };
+    case "plan-questions-requested":
+      return { ...state, plan: { kind: "clarifying", questions: action.questions } };
+    case "plan-review-requested":
+      return { ...state, plan: { kind: "reviewing", ...action.plan } };
     case "model-picker-requested":
       return { ...state, pendingModelPicker: { entries: action.entries } };
     case "model-picker-resolved":
@@ -1201,16 +1257,20 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       const settled = settleReasoning(state, Date.now());
       return {
         ...flushStreaming(settled),
-        // dispatch_subagents' live surface is the child panel, not a footer raw-id string.
-        status: event.name === "dispatch_subagents" ? "" : `Running ${event.name}…`,
+        status:
+          event.name === "dispatch_subagents" || event.name === TODO_TOOL_NAME
+            ? ""
+            : `Running ${event.name}…`,
         pendingTool: { name: event.name, args: event.args },
         toolActivity: recordCall(settled.toolActivity, event.name, event.args),
       };
     }
-    case "tool-result":
+    case "tool-result": {
+      const nextList = event.name === TODO_TOOL_NAME ? parseTodoList(event.result) : undefined;
       return {
         ...state,
         ...(event.name === "dispatch_subagents" ? EMPTY_ROSTER : {}),
+        ...(nextList !== undefined ? { checklist: nextList } : {}),
         toolActivity: recordResult(
           state.toolActivity,
           event.name,
@@ -1220,6 +1280,7 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
         status: "",
         pendingTool: undefined,
       };
+    }
     case "permission-denied":
       return {
         ...state,
@@ -1265,7 +1326,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     // single source of truth for both the live session state and (via App.tsx's own persistence
     // effect watching `state.session`) what actually lands on disk.
     case "messages-updated":
-      return { ...state, session: { ...state.session, messages: event.messages } };
+      return {
+        ...state,
+        session: { ...state.session, messages: event.messages },
+        checklist: todoListFromMessages(event.messages),
+      };
     case "done": {
       const settled = settleReasoning(state, Date.now());
       return {

@@ -54,22 +54,35 @@ import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react"
 import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isShiftTabModeCycle } from "../cli/commandCatalog";
+import { isCtrlOPlanToggle, isShiftTabModeCycle } from "../cli/commandCatalog";
+import type { HumanReply } from "../ask-user/types";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
+import {
+  isPlanOverlayOn,
+  isPlanPanelOpen,
+  type PlanAnswers,
+  type PlanReviewDecision,
+} from "../plan/mode";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
+import type { ChromeTabId } from "./chrome/tabs";
 import { ApprovalBox } from "./components/ApprovalBox";
+import { AskUserPanel } from "./components/AskUserPanel";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
+import { PlanReviewPanel } from "./components/PlanReviewPanel";
+import { ChecklistBlock } from "./components/ChecklistBlock";
 import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
+import { ChromePanel } from "./routes/chrome/ChromePanel";
 import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
@@ -80,25 +93,26 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
-import { ChromePanel } from "./routes/chrome/ChromePanel";
-import type { ChromeTabId } from "./chrome/tabs";
 import type { SetupProviderRow } from "./state/commands";
 import { type Dispatch, initialTuiState } from "./state/reducer";
 import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore } from "./theme/spacing";
-import { approvalCopy } from "./util/approvalCopy";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
+import { approvalCopy } from "./util/approvalCopy";
 import type { CompletionSource } from "./util/completion";
 import {
   DEFAULT_COLUMNS,
   DEFAULT_ROWS,
   FALLBACK_CHROME_ROWS,
   formatModeDetail,
+  formatRouteLabelFromResolved,
   MODE_CYCLE_HINT,
   MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LABEL,
+  PLAN_MODE_LEAVE_HINT,
 } from "./util/format";
 import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 
@@ -162,6 +176,9 @@ export type AppProps = {
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
   // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  onAskUserAnswered?: (reply: HumanReply) => void;
+  onPlanQuestionsAnswered?: (answers: PlanAnswers) => void;
+  onPlanReview?: (decision: PlanReviewDecision) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
   // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
   // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
@@ -270,6 +287,7 @@ export type AppProps = {
   // mode while this component's own state (and the indicator it renders) already showed the new
   // one — the exact desync `onSessionChange`'s own comment above already describes for persistence.
   onCycleMode?: () => void;
+  onTogglePlan?: () => void;
   // `--dangerously-skip-permissions` (already a `runTui` parameter, cli.ts) overrides
   // `getPermissionMode()` (cli.ts) to `"auto"` regardless of what `session.permissionMode` says —
   // this is the single render-time mirror of that override: the indicator must not claim a mode
@@ -328,6 +346,9 @@ export function App({
   onQuit,
   onEscape,
   onApprovalAnswer,
+  onAskUserAnswered,
+  onPlanQuestionsAnswered,
+  onPlanReview,
   onModelSelected,
   onModelPickerCancel,
   onSetupSelect,
@@ -364,6 +385,7 @@ export function App({
   splashBanner,
   onPreSessionSubmit,
   onCycleMode,
+  onTogglePlan,
   skipPermissions,
   showSplash,
   authOffer,
@@ -376,7 +398,12 @@ export function App({
   const sessionBanner =
     splashBanner === undefined || state.route === undefined
       ? splashBanner
-      : { ...splashBanner, model: state.route.model, provider: state.route.provider };
+      : {
+          ...splashBanner,
+          model: state.route.model,
+          provider: state.route.provider,
+          via: formatRouteLabelFromResolved(state.route),
+        };
   const [pendingReasoning, setPendingReasoning] = useState("");
   useEffect(
     () => stream.subscribe(() => setPendingReasoning(stream.getPendingReasoning())),
@@ -385,13 +412,13 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s own
-  // comment. One derived value, not two: `indicatorText` reads off `displayMode` rather than
-  // carrying its own separate `skipPermissions` ternary, so the hue and the label can't disagree
-  // about which mode is showing.
-  const displayMode: PermissionMode =
-    skipPermissions === true ? "auto" : state.session.permissionMode;
-  const indicatorText = MODE_LABEL[displayMode];
+  const planOn = isPlanOverlayOn(state.plan);
+  const displayMode: PermissionMode = planOn
+    ? "read-only"
+    : skipPermissions === true
+      ? "auto"
+      : state.session.permissionMode;
+  const indicatorText = planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
@@ -530,7 +557,9 @@ export function App({
   const pagingPanelOpen =
     state.pendingSplash ||
     (state.pendingApproval === undefined &&
-      (state.pendingModelPicker !== undefined ||
+      (state.pendingAskUser !== undefined ||
+        isPlanPanelOpen(state.plan) ||
+        state.pendingModelPicker !== undefined ||
         state.pendingSetup !== undefined ||
         state.pendingAuth !== undefined ||
         state.pendingConfig !== undefined ||
@@ -581,18 +610,22 @@ export function App({
     Math.max(0, remaining - indicatorText.length),
     effortTier,
   );
-  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
+  const modeHint = planOn ? PLAN_MODE_LEAVE_HINT : MODE_CYCLE_HINT;
+  const showModeHint = modeRowHintVisible(
+    remaining,
+    indicatorText.length,
+    modeDetail.length,
+    modeHint.length,
+  );
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
   // independent registration is the idiomatic way to keep two unrelated concerns from having to
   // reason about each other's ordering/guards, the same shape InputBox's own handler already uses.
-  // Inert under skipPermissions (AppProps.skipPermissions's own comment): the indicator is pinned
-  // to bypass regardless of what a cycle would compute, so a functioning binding here would
-  // silently mutate and persist a session field the gate is already ignoring.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
+    if (isShiftTabModeCycle(key) && skipPermissions !== true && !planOn) onCycleMode?.();
+    if (isCtrlOPlanToggle(key)) onTogglePlan?.();
     // Mouse reporting is off, so the live pin cannot be clicked. ctrl+t does
     // not steal ↑/↓ or shift+tab; InputBox already ignores key.ctrl.
     if (key.ctrl && key.name === "t") dispatch({ type: "reasoning-toggled" });
@@ -720,9 +753,6 @@ export function App({
         >
           {state.pendingChildView === undefined ? (
             <>
-              {/* Session header inside the scrollbox so it holds the top of an empty
-              transcript and scrolls away once conversation accumulates. Model and
-              provider follow `state.route`, the same source as the mode row. */}
               {sessionBanner !== undefined && <SplashBanner info={sessionBanner} />}
               <TranscriptList
                 transcript={state.transcript}
@@ -793,6 +823,7 @@ export function App({
         )}
       </box>
       {state.pendingTool !== undefined &&
+        state.pendingTool.name !== "todo" &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
         (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
           <WritePreview name={state.pendingTool.name} args={state.pendingTool.args} />
@@ -802,15 +833,7 @@ export function App({
           </text>
         ))}
       <ErrorLine message={state.commandError} />
-      {/* Directly above the input box and below TurnStatus, which is where the issue's own
-      simulation puts it: a queued message has already left the user's hands as far as the box is
-      concerned, so it sits on the transcript's side of it. Outside the render ternary below, not a
-      branch of it — like SubagentPanel it accompanies whatever is mounted there
-      rather than replacing it, so the depth stays visible while a panel or an ApprovalBox owns the
-      keyboard. `noPanelOpen` is what tells it its keys are dead in that state, so it can drop the
-      key legend rather than name keys that will not reach it. It draws nothing at depth zero, and
-      the transcript box above is `flexGrow`, so the rows it does draw come out of the scrollbox
-      with no height budget to thread through here. */}
+      <ChecklistBlock items={state.checklist} />
       <QueueBlock
         queue={state.queue}
         width={width}
@@ -820,11 +843,8 @@ export function App({
       />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
-      means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
-      "only this input means anything right now" question, checked in this same order (approval,
-      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Child
-      inspect keeps InputBox mounted and inert. Every branch here — including
+      means anything until it clears. Child inspect keeps InputBox mounted
+      and inert. Every branch here — including
       AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
@@ -834,6 +854,16 @@ export function App({
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
         />
+      ) : state.pendingAskUser !== undefined ? (
+        <AskUserPanel prompt={state.pendingAskUser} onAnswer={onAskUserAnswered} onQuit={onQuit} />
+      ) : state.plan.kind === "clarifying" ? (
+        <PlanQuestionsPanel
+          questions={state.plan.questions}
+          onAnswer={onPlanQuestionsAnswered}
+          onQuit={onQuit}
+        />
+      ) : state.plan.kind === "reviewing" ? (
+        <PlanReviewPanel plan={state.plan} onDecision={onPlanReview} onQuit={onQuit} />
       ) : state.pendingModelPicker !== undefined ? (
         <ModelPicker
           entries={state.pendingModelPicker.entries}
@@ -997,12 +1027,9 @@ export function App({
         />
       )}
       <box flexDirection="row" justifyContent="space-between">
-        {/* No `gap` — all spacing between these three is carried inside the strings themselves
-        (MODE_CYCLE_HINT's own leading space, `modeDetail`'s own leading two spaces), so the mode
-        hue never bleeds onto the hint/model/route by way of an inserted gap cell. */}
         <box flexDirection="row">
           <text fg={theme.mode[displayMode]}>{indicatorText}</text>
-          {showModeHint && <text fg={theme.muted}>{MODE_CYCLE_HINT}</text>}
+          {showModeHint && <text fg={theme.muted}>{modeHint}</text>}
           <text fg={theme.muted}>{modeDetail}</text>
         </box>
         <box flexDirection="row" gap={1}>
