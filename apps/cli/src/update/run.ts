@@ -101,11 +101,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     if (deps.platform !== "win32") chmodSync(tmpPath, 0o755);
     const smoke = deps.smoke ?? defaultSmoke;
     await smoke(tmpPath);
-    try {
-      unlinkSync(backupPath);
-    } catch {
-      // no leftover .old from a previous Windows replace
-    }
+    unlinkIfExists(backupPath);
     renameSync(deps.execPath, backupPath);
     try {
       renameSync(tmpPath, deps.execPath);
@@ -119,11 +115,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       // Windows may keep the running image until the next start
     }
   } catch (error) {
-    try {
-      unlinkSync(tmpPath);
-    } catch {
-      // tmp already gone or never created
-    }
+    unlinkIfExists(tmpPath);
     return { code: 1, lines: [messageOf(error)] };
   }
   return {
@@ -167,6 +159,14 @@ async function downloadText(fetchFn: UpdateFetch, url: string): Promise<string> 
   const response = await fetchFn(url);
   if (!response.ok) throw new Error(`download failed ${response.status} ${url}`);
   return await response.text();
+}
+
+function unlinkIfExists(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 async function defaultSmoke(binaryPath: string): Promise<void> {
