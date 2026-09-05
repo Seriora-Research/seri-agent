@@ -28,25 +28,32 @@ export type ApprovalCopy = {
   question: string;
   headline: string;
   detail: string;
+  classifierReason?: string;
 };
 
-// TUI-only prose for an approval or an in-flight write. The non-interactive CLI path keeps
-// approvalPromptText's JSON line so a piped `seri <task>` prompt stays one readline row.
-export function approvalCopy(toolName: string, args: unknown): ApprovalCopy {
+export function approvalCopy(
+  toolName: string,
+  args: unknown,
+  classifierReason?: string,
+): ApprovalCopy {
   const fields = asRecord(args);
   const filePath = str(fields.path);
+  const reason =
+    classifierReason !== undefined && classifierReason.length > 0
+      ? { classifierReason: escapeControlChars(classifierReason) }
+      : {};
   if ((toolName === "write_file" || toolName === "edit") && filePath !== undefined) {
     const verb = toolName === "edit" ? "Edit" : "Write";
     const headline = `${verb} ${escapeControlChars(path.basename(filePath))}`;
-    return { question: `${headline}?`, headline, detail: parentDirDisplay(filePath) };
+    return { question: `${headline}?`, headline, detail: parentDirDisplay(filePath), ...reason };
   }
   if (toolName === "bash" || toolName === "powershell") {
     const cmd = str(fields.command) ?? "";
     const headline = `Run ${escapeControlChars(cmd)}`;
-    return { question: `${headline}?`, headline, detail: "" };
+    return { question: `${headline}?`, headline, detail: "", ...reason };
   }
   const label = escapeControlChars(toolName);
-  return { question: `Approve ${label}?`, headline: label, detail: "" };
+  return { question: `Approve ${label}?`, headline: label, detail: "", ...reason };
 }
 
 export function optionLabels(offersAlways: boolean): readonly string[] {

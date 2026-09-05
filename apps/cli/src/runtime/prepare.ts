@@ -18,6 +18,11 @@ import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../co
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
+import {
+  classifyToolCall as allowAllClassifier,
+  type AutoModeOnBlock,
+  type ToolCallClassifier,
+} from "../gate/classifier";
 import { type HooksLoad, loadHookRegistry } from "../hooks/registry";
 import {
   closeMcpClients,
@@ -36,7 +41,7 @@ import {
 import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
-import { effectiveTools, loadGrants } from "../permissions/store";
+import { effectiveTools, loadAutoModeOnBlock, loadGrants } from "../permissions/store";
 import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { fetchAccountPlan } from "../provider/accountStatus";
 import { getModelCatalog } from "../provider/catalog";
@@ -352,6 +357,11 @@ export type PreparedRun = {
   // fact the loop is driven with, carried on this object so driveLoop has nothing to re-derive and
   // nothing to assign into `session`.
   allowedTools: readonly string[];
+  // From permissions.yaml. Missing or garbage is deny. `--dangerously-skip-permissions` still
+  // loads the value but omits `classifyToolCall` below so a later blocking classifier cannot
+  // fire on a true bypass.
+  autoModeOnBlock?: AutoModeOnBlock;
+  classifyToolCall?: ToolCallClassifier;
   // Loaded once here (@seri/model-catalog caches it for the rest of the process anyway) and carried
   // on this object so runTui's own per-turn model re-resolution (runTurn, below — the /model fix)
   // has it without loading it again every turn.
@@ -702,6 +712,7 @@ export function bindSession(
   prepared.mcpClients = createMcpClients(createSessionDial(configDir));
   const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);
   prepared.allowedTools = filterMcpGrants(effectiveTools(grants), prepared.mcp, onWarning);
+  prepared.autoModeOnBlock = loadAutoModeOnBlock(permissionsDir, onWarning);
   prepared.session = session;
   prepared.trajectory = trajectory;
   return createArchivistState(session);
@@ -930,6 +941,9 @@ export async function prepareSession(
       printWarning(msg, warnSink),
     );
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;
+    const autoModeOnBlock = loadAutoModeOnBlock(ctx.permissionsDir, (msg) =>
+      printWarning(msg, warnSink),
+    );
     // approve-each only: in read-only the gate blocks these tools before it ever consults the
     // allowlist (gate.ts:14), and in auto everything is allowed anyway — printing "pre-approved" in
     // either would be a sentence the run does not honour. `isTTY ? emit : undefined`, not
@@ -1013,6 +1027,8 @@ export async function prepareSession(
       permissionMode,
       worktree,
       allowedTools,
+      autoModeOnBlock,
+      classifyToolCall: skipPermissions ? undefined : allowAllClassifier,
       catalog,
       catalogEntry,
       route,

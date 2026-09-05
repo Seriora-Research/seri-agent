@@ -403,10 +403,13 @@ export async function driveLoop(
     checkpointer,
     reasoningEffort,
     cwd: worktree,
-    // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
-    // these two for why a child gets the hooks even though it deliberately does not get the rules.
+    // Hooks and the classifier both have to ride down: a child never sees the parent's
+    // approvalPrompt, and SubagentRuntime's own comments on each pair say why omitting either
+    // would punch a hole through auto.
     onBeforeTool: hookRunner?.onBeforeTool,
     onAfterTool: hookRunner?.onAfterTool,
+    classifyToolCall: prepared.classifyToolCall,
+    autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
     resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
@@ -517,6 +520,8 @@ export async function driveLoop(
           // unchanged for anything that isn't literally "mcp".
           callSubject: mcpCallSubject,
           approvalPrompt,
+          classifyToolCall: prepared.classifyToolCall,
+          autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
           system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and
@@ -668,11 +673,13 @@ export async function driveLoop(
         signal: controller.signal,
         onWarning: printWarning,
         reasoningEffort: archivistOverlay.reasoningEffort,
-        // The archivist builds its own SubagentRuntime rather than reusing `subagentRuntime` above,
-        // so wiring the pair there does not reach it — and it is the child that most needs them:
-        // it runs on a hardcoded "auto" permission mode.
+        // The archivist builds its own SubagentRuntime rather than reusing `subagentRuntime`
+        // above, so wiring hooks and the classifier there does not reach it — and it is the
+        // child that most needs them: it runs on a hardcoded "auto" permission mode.
         onBeforeTool: hookRunner?.onBeforeTool,
         onAfterTool: hookRunner?.onAfterTool,
+        classifyToolCall: prepared.classifyToolCall,
+        autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
       });
       prepared.trajectory.recordArchivist(archivist);
     }

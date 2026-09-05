@@ -9,6 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
+import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
 import { checkPermission, type PermissionMode } from "../gate/gate";
 import { withCodexStoreOption } from "../provider/codex";
 import {
@@ -21,7 +22,7 @@ import {
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
-import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
+import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import { streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
@@ -105,10 +106,15 @@ export type LoopEvent =
 // recorded as a denial.
 export type ApprovalAnswer = "once" | "always" | "no";
 
+export type ApprovalDetail = {
+  readonly classifierReason?: string;
+};
+
 export type ApprovalPrompt = (
   toolName: string,
   args: unknown,
   signal?: AbortSignal,
+  detail?: ApprovalDetail,
 ) => Promise<ApprovalAnswer>;
 
 // Hermes' documented default (see docs-tmp research); now reachable from the CLI via
@@ -116,11 +122,11 @@ export type ApprovalPrompt = (
 const DEFAULT_MAX_ITERATIONS = 500;
 // Consecutive DECLINED calls — a live "no" at the prompt, never a mode block — reset by any
 // approved call, after which the run stops instead of continuing to the iteration cap. Counting
-// only declines (not blocks) is what confines this stop to approve-each: checkPermission returns
-// "block" for every write in read-only, never "needs-approval", so a read-only session can never
-// produce a decline at all — a session that probes a write three times, a hundred turns apart,
-// stays entirely unaffected by this constant no matter how many times it happens. In approve-each,
-// where a decline means a human answered "no" to a live question, three in a row is a real signal.
+// only declines (not blocks) is what keeps a read-only session from ever hitting this stop:
+// checkPermission returns "block" for every write in read-only, never "needs-approval". Auto can
+// produce a decline when autoModeOnBlock is ask and a classifier block falls through to the
+// ordinary prompt — a human answering no three times in a row is the same signal there as in
+// approve-each.
 // The trade this accepts: a model COULD pad declined retries with an approved read to keep
 // resetting the counter and never trip this stop. That evasion is theoretical, not measured —
 // nothing has observed a real model doing it — and two things already sit under it if it ever
@@ -183,6 +189,48 @@ function errorText(err: unknown): string {
   }
 }
 
+type PermissionDecision =
+  | { readonly verdict: "allow" }
+  | { readonly verdict: "allow-new" }
+  | { readonly verdict: "deny-blocked"; readonly classifierReason?: string }
+  | { readonly verdict: "deny-declined"; readonly classifierReason?: string };
+
+function executionDeniedReason(
+  subject: string,
+  mode: PermissionMode,
+  classifierReason: string | undefined,
+): string {
+  if (classifierReason !== undefined) {
+    return (
+      `Tool "${subject}" was blocked by the auto-mode classifier: ${classifierReason} ` +
+      `Do not retry this call.`
+    );
+  }
+  return (
+    `Tool "${subject}" was not permitted to run (permission mode: ${mode}). ` +
+    `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+    `/mode to change the permission mode.`
+  );
+}
+
+async function promptForApproval(
+  toolName: string,
+  input: unknown,
+  allowedTools: Set<string>,
+  approvalPrompt: ApprovalPrompt,
+  signal: AbortSignal | undefined,
+  detail?: ApprovalDetail,
+): Promise<PermissionDecision> {
+  const answer = await approvalPrompt(toolName, input, signal, detail);
+  if (answer === "always") {
+    allowedTools.add(toolName);
+    return { verdict: "allow-new" };
+  }
+  return answer === "no"
+    ? { verdict: "deny-declined", classifierReason: detail?.classifierReason }
+    : { verdict: "allow" };
+}
+
 // "allow-new" rather than a boolean-plus-flag: a fresh grant needs to reach the loop as a single
 // fact ("this call is allowed, AND it is the first time"), and this is the one place that fact is
 // produced, so it owns the gate check, the prompt call and the allowedTools.add together instead
@@ -193,10 +241,9 @@ function errorText(err: unknown): string {
 // verdict, which is exactly the reordering that guarantee depends on not happening.
 // Two ways to "deny", carried out as two verdicts rather than one so the loop can count only the
 // one that is a signal about the run: "deny-blocked" is the mode doing its job (checkPermission
-// returned "block", or there was no approvalPrompt to ask at all — the same as block, just
-// arrived at differently, because there is still no one to ask); "deny-declined" is a real
-// refusal — a live prompt that answered "no". Only the second should ever increment a denial
-// counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
+// returned "block", a classifier deny, or there was no approvalPrompt to ask at all); "deny-declined"
+// is a real refusal — a live prompt that answered "no". Only the second should ever increment a
+// denial counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
 async function decidePermission(
   toolName: string,
   input: unknown,
@@ -204,17 +251,27 @@ async function decidePermission(
   allowedTools: Set<string>,
   approvalPrompt: ApprovalPrompt | undefined,
   signal: AbortSignal | undefined,
-): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
+  classifyToolCall: ToolCallClassifier | undefined,
+  autoModeOnBlock: AutoModeOnBlock,
+): Promise<PermissionDecision> {
   const permission = checkPermission(toolName, mode, allowedTools);
-  if (permission === "allow") return "allow";
-  if (permission === "block") return "deny-blocked";
-  if (approvalPrompt === undefined) return "deny-blocked";
-  const answer = await approvalPrompt(toolName, input, signal);
-  if (answer === "always") {
-    allowedTools.add(toolName);
-    return "allow-new";
+  if (permission === "block") return { verdict: "deny-blocked" };
+
+  if (mode === "auto" && classifyBuiltin(toolName) !== "read" && !allowedTools.has(toolName)) {
+    const classified = classifyToolCall?.(toolName, input) ?? { kind: "allow" };
+    if (classified.kind === "block") {
+      if (autoModeOnBlock === "ask" && approvalPrompt !== undefined) {
+        return promptForApproval(toolName, input, allowedTools, approvalPrompt, signal, {
+          classifierReason: classified.reason,
+        });
+      }
+      return { verdict: "deny-blocked", classifierReason: classified.reason };
+    }
   }
-  return answer === "no" ? "deny-declined" : "allow";
+
+  if (permission === "allow") return { verdict: "allow" };
+  if (approvalPrompt === undefined) return { verdict: "deny-blocked" };
+  return promptForApproval(toolName, input, allowedTools, approvalPrompt, signal);
 }
 
 function isConcurrentReadTool(name: string): boolean {
@@ -307,6 +364,8 @@ export async function* runLoop(opts: {
   temperature?: number;
   seed?: number;
   terminalTools?: ReadonlySet<string>;
+  classifyToolCall?: ToolCallClassifier;
+  autoModeOnBlock?: AutoModeOnBlock;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -785,13 +844,15 @@ export async function* runLoop(opts: {
         }
       }
 
-      const verdict = await decidePermission(
+      const decision = await decidePermission(
         subject,
         call.input,
         opts.permissionMode,
         allowedTools,
         opts.approvalPrompt,
         opts.signal,
+        opts.classifyToolCall,
+        opts.autoModeOnBlock ?? "deny",
       );
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
@@ -804,17 +865,17 @@ export async function* runLoop(opts: {
       // inside decidePermission on purpose — see that function's own comment.
       if (opts.signal?.aborted) break;
 
-      if (verdict === "allow-new") yield { type: "tool-allowed", name: subject };
+      if (decision.verdict === "allow-new") yield { type: "tool-allowed", name: subject };
 
-      if (verdict === "deny-blocked" || verdict === "deny-declined") {
+      if (decision.verdict === "deny-blocked" || decision.verdict === "deny-declined") {
         if ((yield* flushReadBatch()) === "aborted") break;
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
         // the user asked. See MAX_CONSECUTIVE_DENIALS.
-        if (verdict === "deny-declined") consecutiveDenials++;
+        if (decision.verdict === "deny-declined") consecutiveDenials++;
         yield {
           type: "permission-denied",
           name: subject,
-          reason: verdict === "deny-blocked" ? "blocked" : "declined",
+          reason: decision.verdict === "deny-blocked" ? "blocked" : "declined",
         };
         toolResults.push({
           type: "tool-result",
@@ -822,10 +883,7 @@ export async function* runLoop(opts: {
           toolName: call.toolName,
           output: {
             type: "execution-denied",
-            reason:
-              `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
-              `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
-              `/mode to change the permission mode.`,
+            reason: executionDeniedReason(subject, opts.permissionMode, decision.classifierReason),
           },
         });
         continue;

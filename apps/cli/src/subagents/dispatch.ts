@@ -5,6 +5,7 @@ import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
 import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
 import type { PermissionMode } from "../gate/gate";
+import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import type { RouteCredential } from "../provider/routing";
@@ -136,6 +137,11 @@ export type SubagentRuntime = {
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
+  // Same inheritance argument as the hooks: a child in auto with no prompt must still see a
+  // classifier block, or `dispatch_subagents` is a hole around it. ask becomes a hard deny
+  // because this runtime has no approvalPrompt — see fallbackSummary's deny-blocked note.
+  classifyToolCall?: ToolCallClassifier;
+  autoModeOnBlock?: AutoModeOnBlock;
 };
 
 // Sum what showed up, like cli.ts's own addTokens — not imported from there because cli.ts
@@ -258,6 +264,8 @@ export async function runSubagent(opts: {
     seed: runtime.seed,
     onBeforeTool: runtime.onBeforeTool,
     onAfterTool: runtime.onAfterTool,
+    classifyToolCall: runtime.classifyToolCall,
+    autoModeOnBlock: runtime.autoModeOnBlock,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;

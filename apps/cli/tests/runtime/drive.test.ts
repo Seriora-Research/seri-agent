@@ -550,6 +550,37 @@ describe("driveLoop directDispatch", () => {
     });
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
   });
+
+  test("a session classifier is handed down to the child loop", async () => {
+    const classify = () => ({ kind: "allow" as const });
+    const prepared = preparedStub();
+    prepared.classifyToolCall = classify;
+    prepared.autoModeOnBlock = "ask";
+    let childClassify: RunLoopOpts["classifyToolCall"];
+    let childDisposition: RunLoopOpts["autoModeOnBlock"];
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          childClassify = opts.classifyToolCall;
+          childDisposition = opts.autoModeOnBlock;
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(childClassify).toBe(classify);
+    expect(childDisposition).toBe("ask");
+  });
 });
 
 describe("driveLoop mcp composition", () => {
