@@ -46,6 +46,7 @@ export function createRunScheduled(opts: {
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
         rules: [],
+        composeSubagents: false,
       }),
       model: route.model,
       provider: route.provider,
