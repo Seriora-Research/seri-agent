@@ -17,6 +17,7 @@ import {
   getDatabasePath,
   getMemoriesDir,
   getPendingDir,
+  getPlansDir,
   getReservedProfileNames,
   getTrajectoriesDir,
   profileNameError,
@@ -240,6 +241,7 @@ describe("profileNameError", () => {
       "memories",
       "pending",
       "trajectories",
+      "plans",
       DATABASE_FILENAME,
       DAEMON_DESCRIPTOR_FILENAME,
       DAEMON_LOCK_FILENAME,
@@ -248,7 +250,7 @@ describe("profileNameError", () => {
   });
 
   // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
-  test.each(["agents", "skills", "rules", "mcp", "hooks", "memories", "pending", "trajectories"])(
+  test.each(["agents", "skills", "rules", "mcp", "hooks", "memories", "pending", "trajectories", "plans"])(
     "%s is reserved",
     (name) => {
       expect(profileNameError(name)).toBeDefined();
@@ -327,13 +329,14 @@ describe("resolveProfile precedence (D1)", () => {
   });
 });
 
-describe("getMemoriesDir / getPendingDir / getTrajectoriesDir", () => {
+describe("getMemoriesDir / getPendingDir / getTrajectoriesDir / getPlansDir", () => {
   test("join under getConfigDir() by default", () => {
     setPlatform("linux");
     process.env.HOME = "/home/test";
     expect(getMemoriesDir()).toBe(join(getConfigDir(), "memories"));
     expect(getPendingDir()).toBe(join(getConfigDir(), "pending"));
     expect(getTrajectoriesDir()).toBe(join(getConfigDir(), "trajectories"));
+    expect(getPlansDir()).toBe(join(getConfigDir(), "plans"));
     expect(getDatabasePath()).toBe(join(getConfigDir(), DATABASE_FILENAME));
     expect(getDaemonDescriptorPath()).toBe(join(getConfigDir(), DAEMON_DESCRIPTOR_FILENAME));
     expect(getDaemonLockPath()).toBe(join(getConfigDir(), DAEMON_LOCK_FILENAME));
@@ -343,6 +346,7 @@ describe("getMemoriesDir / getPendingDir / getTrajectoriesDir", () => {
     expect(getMemoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "memories"));
     expect(getPendingDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "pending"));
     expect(getTrajectoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "trajectories"));
+    expect(getPlansDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "plans"));
     expect(getDatabasePath("/tmp/some-dir")).toBe(join("/tmp/some-dir", DATABASE_FILENAME));
     expect(getDaemonDescriptorPath("/tmp/some-dir")).toBe(
       join("/tmp/some-dir", DAEMON_DESCRIPTOR_FILENAME),
