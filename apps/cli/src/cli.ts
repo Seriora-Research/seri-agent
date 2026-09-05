@@ -121,6 +121,7 @@ import {
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
+import { parsePromptChannel, type PromptChannel } from "./permissions/promptChannel";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { unlinkPlanFile } from "./plan/files";
 import {
@@ -898,6 +899,7 @@ const PARSE_OPTIONS = {
   continue: { type: "boolean" },
   "max-turns": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
+  "permission-prompts": { type: "string" },
   profile: { type: "string" },
 } as const;
 
@@ -910,11 +912,13 @@ type ParsedArgs = {
     continue?: boolean;
     "max-turns"?: string;
     "dangerously-skip-permissions"?: boolean;
+    "permission-prompts"?: string;
     profile?: string;
   };
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
+  promptChannel: PromptChannel;
   // True when positionals[0] came from AFTER a `--` terminator: `seri -- serve` means the task
   // text "serve", not the daemon verb — AGENTS.md's "`--` is the documented escape for a task
   // that contains what looks like a flag" applies to verbs too, not just `--foo`-shaped words.
@@ -988,6 +992,9 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     maxTurns = Number(maxTurnsRaw);
   }
 
+  const promptChannel = parsePromptChannel(values["permission-prompts"]);
+  if (typeof promptChannel === "object") return usageError(promptChannel.error);
+
   // Validated here too, right after the parse: an invalid profile from either source is a usage
   // error, not a silent fallback to "default" — the alternative would write a user's sessions and
   // auth into the tree they believed they were isolated from.
@@ -1019,6 +1026,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     positionals,
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
+    promptChannel,
     verbEscaped,
   };
 }
@@ -1099,6 +1107,7 @@ async function handleServeCommand(
 async function handleExecCommand(
   positionals: string[],
   deps: CliDeps,
+  promptChannel: PromptChannel,
 ): Promise<number | undefined> {
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
@@ -1122,7 +1131,11 @@ async function handleExecCommand(
     if (turnId !== undefined) void client.cancel(turnId).catch(() => {});
   });
   try {
-    for await (const event of client.startTurn({ task, cwd: process.cwd() })) {
+    for await (const event of client.startTurn({
+      task,
+      cwd: process.cwd(),
+      ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
+    })) {
       turnId = event.turnId;
       if (cancelRequested) {
         await client.cancel(turnId);
@@ -1350,6 +1363,7 @@ async function runTui(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
+  promptChannel: PromptChannel,
   // A task typed during the pre-session window (App's own `onPreSessionSubmit` branch), carried
   // here by `run()`. Submitted through `onSubmit` rather than `runTurn` directly, so a queued
   // `/model` or `/mode` behaves exactly as it would typed a second later.
@@ -2323,7 +2337,7 @@ async function runTui(
         },
         getPermissionMode,
         () => {},
-        tuiApprovalPrompt,
+        promptChannel === "live" ? tuiApprovalPrompt : undefined,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
         {
@@ -3346,7 +3360,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions, verbEscaped } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, promptChannel, verbEscaped } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -3408,7 +3422,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
+  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps, promptChannel);
   if (exec !== undefined) return exec;
 
   const doctor = verbEscaped ? undefined : await handleDoctorCommand(positionals, deps);
@@ -3425,7 +3439,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     if (database.configDir === configDirForStore(trajectoriesDir, "trajectories")) {
       database.importLegacyTrajectories(trajectoriesDir);
     }
-    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, isTTY);
+    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, promptChannel, isTTY);
   } finally {
     database.close();
   }
@@ -3436,6 +3450,7 @@ async function finishCliRun(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
+  promptChannel: PromptChannel,
   isTTY: boolean,
 ): Promise<number> {
   // Below every early-return above it, so `--help`, `--version` and `--selftest` never start a fetch
@@ -3510,7 +3525,15 @@ async function finishCliRun(
     // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
     // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
-      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions, queuedTask);
+      runResult = await runTui(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        skipPermissions,
+        promptChannel,
+        queuedTask,
+      );
     } catch (err) {
       return fatalDuringTui(err, prepared.preMountMessages);
     }
@@ -3532,7 +3555,9 @@ async function finishCliRun(
         printEvent,
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir, ctx.database),
-        makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd),
+        promptChannel === "live"
+          ? makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd)
+          : undefined,
         createArchivistState(prepared.session),
       );
     } else {

@@ -209,12 +209,13 @@ export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
 // readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
 // path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
 // signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
-// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
-// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
+// path still passes `makeApprovalPrompt(deps.createInterface)`; the TUI
+// path (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
 // (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
 // readline.question, which is what the research spec's own "Command migration" section already
 // said a TUI would supply: "a different function of the identical signature... with zero change
-// to loop.ts/gate.ts."
+// to loop.ts/gate.ts." Omitting the function is the no-prompt-channel path: decidePermission
+// returns deny-blocked instead of asking.
 export async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -223,7 +224,7 @@ export async function driveLoop(
   onEvent: (event: LoopEvent) => void,
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
-  approvalPrompt: ApprovalPrompt,
+  approvalPrompt: ApprovalPrompt | undefined,
   // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
   // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
   // so the counter accumulates across every turn of that session rather than resetting on each
