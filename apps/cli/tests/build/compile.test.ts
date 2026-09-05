@@ -28,6 +28,7 @@ describe("compileArgs", () => {
     ).toEqual([
       "build",
       "--compile",
+      "--minify",
       "./src/cli.ts",
       "--outfile",
       "dist/seri",
@@ -38,7 +39,14 @@ describe("compileArgs", () => {
 
   test("omits --define when no commit is known — the compiled-binary gap", () => {
     const args = compileArgs({ entry: "./src/cli.ts", outfile: "dist/seri" });
-    expect(args).toEqual(["build", "--compile", "./src/cli.ts", "--outfile", "dist/seri"]);
+    expect(args).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri",
+    ]);
     expect(args.join(" ")).not.toContain("--define");
   });
 
