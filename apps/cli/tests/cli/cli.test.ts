@@ -648,6 +648,34 @@ describe("run (task invocation)", () => {
     expect(capture()?.messages).toEqual([{ role: "user", content: "do a task" }]);
   });
 
+  // Negative control: `seri -- "plan this"` is a non-interactive task. Plan mode is TUI-only, so
+  // this path must not compose plan tools and must not write under ~/.seri/plans. Seen red by
+  // temporarily composing planMode on the argv driveLoop call; restored, this stays green.
+  test('seri -- "plan this" does not enter plan mode', async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+    const plansDir = join(tmpConfigRoot, ".seri", "plans");
+
+    const { code } = await captureLogs(() =>
+      run(["--", "plan this"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.tools?.ask_plan_questions).toBeUndefined();
+    expect(capture()?.tools?.submit_plan).toBeUndefined();
+    expect(capture()?.system).not.toContain("You are in plan mode");
+    expect(existsSync(plansDir)).toBe(false);
+  });
+
   // Two assertions, because the one at :153 above would pass if the mode reached the loop but
   // never made it to the session file on disk.
   test("a new session is created in approve-each, and the file on disk says so too", async () => {

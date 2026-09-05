@@ -201,6 +201,11 @@ describe("formatDoneLine", () => {
       expected: "done",
     },
     {
+      name: "plan-submitted is the same as a finished turn",
+      reason: "plan-submitted",
+      expected: "done",
+    },
+    {
       name: "aborted missing tokens",
       reason: "aborted",
       expected: "done: aborted",
@@ -212,6 +217,7 @@ describe("formatDoneLine", () => {
       const line = formatDoneLine(row.reason, row.tokens);
       expect(line).toBe(row.expected);
       expect(line).not.toContain("no-tool-call");
+      expect(line).not.toContain("plan-submitted");
       expect(line).not.toContain("(");
       expect(line).not.toContain(")");
       if (row.tokens !== undefined) {

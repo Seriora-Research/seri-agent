@@ -44,6 +44,7 @@ describe("initialTuiState", () => {
     expect(state.streaming).toBe("");
     expect(state.reasoning).toEqual({ expanded: false });
     expect(state.session.permissionMode).toBe("read-only");
+    expect(state.plan).toEqual({ kind: "off" });
   });
 });
 
@@ -226,6 +227,45 @@ describe("tuiReducer: transcript-cleared", () => {
     const next = tuiReducer(before, { type: "transcript-cleared" });
 
     expect(next.session).toBe(before.session);
+  });
+
+  test("turns the plan overlay off and keeps the rest of the session", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    state = tuiReducer(state, {
+      type: "plan-review-requested",
+      plan: { path: "/tmp/p.md", title: "T", markdown: "# T" },
+    });
+    expect(state.plan.kind).toBe("reviewing");
+    const next = tuiReducer(state, { type: "transcript-cleared" });
+    expect(next.plan).toEqual({ kind: "off" });
+    expect(next.session).toBe(state.session);
+  });
+});
+
+describe("tuiReducer: plan overlay", () => {
+  test("plan-on / plan-off toggle the overlay", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    expect(state.plan).toEqual({ kind: "on" });
+    state = tuiReducer(state, { type: "plan-off" });
+    expect(state.plan).toEqual({ kind: "off" });
+  });
+
+  test("plan-questions-requested parks the clarifying panel", () => {
+    const questions = [{ id: "q1", prompt: "Which?", options: ["a", "b"] }];
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "plan-questions-requested",
+      questions,
+    });
+    expect(state.plan).toEqual({ kind: "clarifying", questions });
+  });
+
+  test("plan-review-requested parks the submitted plan", () => {
+    const plan = { path: "/tmp/p.md", title: "Auth", markdown: "# Auth\n" };
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "plan-review-requested",
+      plan,
+    });
+    expect(state.plan).toEqual({ kind: "reviewing", ...plan });
   });
 });
 

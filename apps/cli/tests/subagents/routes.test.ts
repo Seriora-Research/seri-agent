@@ -413,9 +413,10 @@ describe("realizedRoute", () => {
 });
 
 describe("BUILTIN_AGENTS vs RoutableRole", () => {
-  test("oracle is dispatchable; archivist is only routable", () => {
-    expect(BUILTIN_AGENTS.map((spec) => spec.name)).toContain("oracle");
+  test("explore and plan are dispatchable; dropped names stay routable so a file cannot reclaim them", () => {
+    expect(BUILTIN_AGENTS.map((spec) => spec.name)).toEqual(["explore", "plan"]);
     expect(BUILTIN_AGENTS.some((spec) => spec.name === "archivist")).toBe(false);
+    expect(BUILTIN_AGENTS.some((spec) => spec.name === "oracle")).toBe(false);
     expect(ROUTABLE_ROLES).toEqual(["explore", "plan", "code", "test", "oracle", "archivist"]);
     const _archivist: RoutableRole = "archivist";
     expect(_archivist).toBe("archivist");

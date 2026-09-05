@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
+import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import {
   classifyBuiltin,
   DISPATCH_TOOL_NAME,
@@ -179,9 +180,11 @@ describe("classifyBuiltin", () => {
   // does not import skills/. SKILL_TOOL_NAME is imported HERE, where the layering does not apply, so
   // this assertion is the only thing standing between renaming that constant and silently making
   // every read-only session unable to load a skill.
-  test("classifies the two composed tool names read", () => {
-    expect(classifyBuiltin(DISPATCH_TOOL_NAME)).toBe("read");
-    expect(classifyBuiltin(SKILL_TOOL_NAME)).toBe("read");
+  test("plan tools are read-class but not concurrent-read batch members", () => {
+    expect(classifyBuiltin(ASK_PLAN_QUESTIONS_TOOL_NAME)).toBe("read");
+    expect(classifyBuiltin(SUBMIT_PLAN_TOOL_NAME)).toBe("read");
+    expect(READ_ONLY_TOOL_NAMES).not.toContain(ASK_PLAN_QUESTIONS_TOOL_NAME);
+    expect(READ_ONLY_TOOL_NAMES).not.toContain(SUBMIT_PLAN_TOOL_NAME);
   });
 
   // The point of enumerating the read class rather than the write one: MCP makes the tool set open,

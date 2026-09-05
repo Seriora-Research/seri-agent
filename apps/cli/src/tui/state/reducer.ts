@@ -3,6 +3,12 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import { isQuotaExhaustedNotice } from "@seri/plans";
 import type { ModelProvider } from "@seri/model-catalog";
+import {
+  PLAN_OVERLAY_OFF,
+  type PlanOverlay,
+  type PlanQuestion,
+  type SubmittedPlan,
+} from "../../plan/mode";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
@@ -241,6 +247,7 @@ export type TuiState = {
   // cleared once resolved.
   pendingEffort: EffortPanelState | undefined;
   pendingChrome: ChromePanelState | undefined;
+  plan: PlanOverlay;
   // The welcome-splash mount's own blocking panel. Seeded by `initialTuiState`'s `showSplash` opt,
   // which App forwards from its `showSplash` prop so the first committed frame is already the
   // splash. `splash-requested` (runWelcomeSplash's connectDispatch) still sets it true after mount,
@@ -387,6 +394,7 @@ export function initialTuiState(
     pendingMemory: undefined,
     pendingEffort: undefined,
     pendingChrome: undefined,
+    plan: PLAN_OVERLAY_OFF,
     pendingSplash: opts?.showSplash ?? false,
     splashDone: false,
     ...EMPTY_ROSTER,
@@ -421,6 +429,10 @@ export type TuiAction =
   | { type: "command-error-cleared" }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
+  | { type: "plan-on" }
+  | { type: "plan-off" }
+  | { type: "plan-questions-requested"; questions: readonly PlanQuestion[] }
+  | { type: "plan-review-requested"; plan: SubmittedPlan }
   | { type: "model-picker-requested"; entries: ModelPickerEntry[] }
   // `pick`, when present, is the SAME atomic transition as clearing pendingModelPicker — not a
   // second dispatch — so there is never a one-frame render where the session already switched
@@ -729,6 +741,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
         ...state,
         ...EMPTY_TRANSCRIPT,
         ...EMPTY_ROSTER,
+        plan: PLAN_OVERLAY_OFF,
       };
     case "loop-event":
       return applyLoopEvent(state, action.event);
@@ -747,6 +760,14 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
+    case "plan-on":
+      return { ...state, plan: { kind: "on" } };
+    case "plan-off":
+      return { ...state, plan: PLAN_OVERLAY_OFF };
+    case "plan-questions-requested":
+      return { ...state, plan: { kind: "clarifying", questions: action.questions } };
+    case "plan-review-requested":
+      return { ...state, plan: { kind: "reviewing", ...action.plan } };
     case "model-picker-requested":
       return { ...state, pendingModelPicker: { entries: action.entries } };
     case "model-picker-resolved":

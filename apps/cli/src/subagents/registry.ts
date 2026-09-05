@@ -12,7 +12,6 @@ import {
   FS_MUTATING_TOOL_NAMES,
   READ_ONLY_TOOL_NAMES,
   type ToolName,
-  toolDefinitions,
 } from "../provider/tools";
 import { parseAgentFile } from "./agentFile";
 import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
@@ -21,7 +20,7 @@ import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest }
 export type AgentSource = "builtin" | ExtensionSource;
 
 /**
- * One dispatchable seat. Produced ONLY by this module — the built-in table below for the five
+ * One dispatchable seat. Produced ONLY by this module — the built-in table below for the two
  * fixed roles, parseAgentFile (agentFile.ts) for a discovered file — which is what makes every
  * field an invariant rather than a hope:
  *   - `toolNames` is keyed out of `toolDefinitions`, so DISPATCH_TOOL_NAME is unrepresentable here
@@ -73,7 +72,7 @@ export function composeAddendum(opts: {
 // built-in here that has no SERI_ROLE_<NAME>_* pin, or adding the archivist, is a compile error
 // rather than a silently unpinnable agent.
 function builtinAgent(opts: {
-  name: Exclude<RoutableRole, "archivist">;
+  name: Extract<RoutableRole, "explore" | "plan">;
   description: string;
   job: string;
   toolNames: readonly ToolName[];
@@ -89,9 +88,8 @@ function builtinAgent(opts: {
   };
 }
 
-// `plan` and `oracle` share `explore`'s array by reference: read access is identical among the
-// three. Oracle is still a distinct seat — isolated context and a different addendum — not a
-// second explorer.
+// `plan` shares `explore`'s array by reference: read access is identical. Plan is still a
+// distinct seat — isolated context and a different addendum — not a second explorer.
 //
 // Non-empty by type, which is what lets the dispatch tool's own z.enum be built from registry keys
 // without a cast (dispatch.ts destructures this rather than asserting the array is populated).
@@ -104,27 +102,8 @@ export const BUILTIN_AGENTS: readonly [AgentSpec, ...AgentSpec[]] = [
   }),
   builtinAgent({
     name: "plan",
-    description:
-      "Reasons toward a change and describes it in text. Never writes it — that is a separate agent.",
-    job: "reason toward a change and describe it in text. You cannot write it — that is a separate role.",
-    toolNames: READ_ONLY_TOOL_NAMES,
-  }),
-  builtinAgent({
-    name: "code",
-    description: "Makes the change: reads, writes and runs commands.",
-    job: "read, write and run commands to make the change.",
-    toolNames: Object.keys(toolDefinitions) as ToolName[],
-  }),
-  builtinAgent({
-    name: "test",
-    description: "Runs the project's own checks and reports a verdict. Never fixes what fails.",
-    job: "run the project's own checks and report a verdict in text. You cannot fix what fails.",
-    toolNames: [...READ_ONLY_TOOL_NAMES, "bash", "powershell"],
-  }),
-  builtinAgent({
-    name: "oracle",
-    description: "Advises as a senior engineer. Never writes or runs commands.",
-    job: "advise as a senior engineer. You cannot write or run commands.",
+    description: "Reasons toward a change and describes it in text. Never writes it.",
+    job: "reason toward a change and describe it in text. You cannot write it.",
     toolNames: READ_ONLY_TOOL_NAMES,
   }),
 ];
@@ -135,7 +114,7 @@ export function builtinRegistry(): AgentRegistry {
 
 // Definitions passed by reference, never wrapped with the full withCheckpoints — same non-mutating
 // idiom as checkpoint/wrapTools.ts's read-only branch. Deliberately NOT withVerification either: a
-// `code` child's write_file therefore skips the parent's verify-on-write check, the same way it
+// child that holds write_file therefore skips the parent's verify-on-write check, the same way it
 // skips withCheckpoints' pre-mutation snapshot (dispatch.ts's own pre-dispatch-snapshot comment
 // explains that half). Composing verification into a child's ToolSet is a real design question of
 // its own — whether a failure should read like the parent's near-miss report, whether it needs its

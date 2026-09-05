@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseColor, RGBA, type Renderable, ScrollBoxRenderable } from "@opentui/core";
+import { parseColor, type Renderable, RGBA, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -37,6 +37,7 @@ import {
   MODE_LABEL,
   matchesFilter,
   NAME_WIDTH,
+  PLAN_MODE_LABEL,
   pickerLabelWidth,
   singleLine,
   slideWindow,
@@ -4362,6 +4363,87 @@ describe("App", () => {
       await flush(setup);
 
       expect(calls).toBe(0);
+    });
+  });
+
+  describe("plan mode overlay", () => {
+    const questions = [
+      { id: "q1", prompt: "Target runtime?", options: ["Bun", "Node"] },
+      { id: "q2", prompt: "Scope?", options: ["CLI only", "monorepo"] },
+    ];
+    const submitted = {
+      path: "/home/user/.seri/plans/auth-rewrite.md",
+      title: "Auth rewrite",
+      markdown: "# Auth rewrite\n\nReplace the login flow.\n",
+    };
+
+    test("the indicator reads plan mode on in the read-only hue, even under skipPermissions", async () => {
+      const { setup, dispatch } = await connect({
+        session: session({ permissionMode: "approve-each" }),
+        skipPermissions: true,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain(PLAN_MODE_LABEL);
+      expect(setup.captureCharFrame()).not.toContain("bypass permissions on");
+      expect(setup.captureCharFrame()).not.toContain("approve-each mode on");
+
+      const frame = setup.captureSpans();
+      const line = frame.lines.find((l) => l.spans.some((s) => s.text.includes(PLAN_MODE_LABEL)));
+      const span = line?.spans.find((s) => s.text.includes(PLAN_MODE_LABEL));
+      expect(span?.fg.equals(parseColor(theme.mode["read-only"]))).toBe(true);
+    });
+
+    test("plain TAB with the overlay on and no panel still does not cycle the mode", async () => {
+      let calls = 0;
+      const submittedTasks: string[] = [];
+      const { setup, dispatch } = await connect({
+        onCycleMode: () => calls++,
+        onSubmit: (v) => submittedTasks.push(v),
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      await setup.mockInput.typeText("hello");
+      setup.mockInput.pressKey("\t");
+      await setup.mockInput.typeText(" world");
+      setup.mockInput.pressEnter();
+      await flush(setup);
+
+      expect(calls).toBe(0);
+      expect(submittedTasks).toEqual(["hello world"]);
+    });
+
+    test("the questions panel mounts and PageUp does not scroll behind it", async () => {
+      const { setup, dispatch } = await connect();
+      for (let i = 0; i < 300; i++) {
+        dispatch({ type: "transcript-append", line: `line ${i}` });
+      }
+      dispatch({ type: "plan-questions-requested", questions });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("plan questions");
+      expect(frame).toContain("Target runtime?");
+      expect(frame).toContain("[Q1]");
+
+      setup.mockInput.pressKey(PAGE_UP);
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("↑ scrolled");
+    });
+
+    test("the review panel mounts with approve / request-changes / cancel", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({ type: "plan-review-requested", plan: submitted });
+      await flush(setup);
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Auth rewrite");
+      expect(frame).toContain("Approve");
+      expect(frame).toContain("Request changes");
+      expect(frame).toContain("Cancel");
+      expect(frame).toContain(PLAN_MODE_LABEL);
     });
   });
 

@@ -38,6 +38,7 @@ const EXPECTED_NAMES = [
   "/hooks",
   "/max-turns",
   "/profile",
+  "/plan",
 ] as const;
 
 const EXPECTED_TUI_CLAIMED = [
@@ -59,6 +60,7 @@ const EXPECTED_TUI_CLAIMED = [
   "/hooks",
   "/max-turns",
   "/profile",
+  "/plan",
 ] as const;
 
 const EXPECTED_SESSION = [
@@ -202,6 +204,10 @@ describe("startsATurn", () => {
     for (const meta of COMMAND_META) {
       expect(startsATurn(meta.name, meta.name, registries)).toBe(false);
     }
+  });
+
+  test("/plan with a task still does not start a turn via the queue", () => {
+    expect(startsATurn("/plan", "/plan this", registries)).toBe(false);
   });
 
   test("an unrecognised slash name does not, so its error stays immediate too", () => {

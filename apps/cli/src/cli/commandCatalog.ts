@@ -230,6 +230,13 @@ export const COMMAND_META: readonly CommandMeta[] = [
     // Always claims the name; decideProfileCreate still throws on a bad argument.
     accepts: () => true,
   },
+  {
+    name: "/plan",
+    surface: "tui",
+    description: "enter plan mode, or research a plan for a task",
+    argsUsage: "[task]",
+    accepts: () => true,
+  },
 ];
 
 const BY_NAME = new Map<string, CommandMeta>(COMMAND_META.map((meta) => [meta.name, meta]));

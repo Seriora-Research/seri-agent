@@ -6,7 +6,7 @@ import type { ModelCatalog } from "@seri/model-catalog";
 import type { ToolExecutionOptions } from "ai";
 import { foldsCase } from "../../src/caseFold";
 import type { MutationContext } from "../../src/checkpoint/wrapTools";
-import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
+import { DISPATCH_TOOL_NAME, type ToolName, toolDefinitions } from "../../src/provider/tools";
 import {
   type AgentRegistry,
   type AgentSpec,
@@ -30,6 +30,18 @@ function agent(name: string): AgentSpec {
   return spec;
 }
 
+function fileAgent(name: string, toolNames: readonly ToolName[]): AgentSpec {
+  return {
+    name,
+    description: `${name} agent`,
+    toolNames,
+    addendum: composeAddendum({ name, job: "", toolNames }),
+    request: undefined,
+    source: "project",
+    filePath: `/p/.seri/agents/${name}.md`,
+  };
+}
+
 describe("agentToolSet", () => {
   test("explore and plan are both exactly read_file/grep/glob, and identical to each other", () => {
     expect(Object.keys(agentToolSet(agent("explore"))).sort()).toEqual([
@@ -40,27 +52,21 @@ describe("agentToolSet", () => {
     expect(Object.keys(agentToolSet(agent("plan"))).sort()).toEqual(["glob", "grep", "read_file"]);
   });
 
-  test("oracle is exactly the read-only set and has no write_file/edit/bash/powershell", () => {
-    const tools = agentToolSet(agent("oracle"));
-    expect(Object.keys(tools).sort()).toEqual(["glob", "grep", "read_file"]);
-    expect(tools.write_file).toBeUndefined();
-    expect(tools.edit).toBeUndefined();
-    expect(tools.bash).toBeUndefined();
-    expect(tools.powershell).toBeUndefined();
-    expect(tools[DISPATCH_TOOL_NAME]).toBeUndefined();
+  test("a file-defined writer has every key it named and no dispatch_subagents", () => {
+    const spec = fileAgent("writer", ["write_file", "read_file", "grep", "glob"]);
+    expect(Object.keys(agentToolSet(spec)).sort()).toEqual(
+      ["glob", "grep", "read_file", "write_file"].sort(),
+    );
+    expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
   });
 
-  test("test adds bash/powershell to the read-only set and has no write_file/edit", () => {
-    const tools = agentToolSet(agent("test"));
+  test("a file-defined tester adds bash/powershell to the read-only set and has no write_file/edit", () => {
+    const tools = agentToolSet(
+      fileAgent("tester", ["bash", "powershell", "read_file", "grep", "glob"]),
+    );
     expect(Object.keys(tools).sort()).toEqual(["bash", "glob", "grep", "powershell", "read_file"]);
     expect(tools.write_file).toBeUndefined();
     expect(tools.edit).toBeUndefined();
-  });
-
-  test("code has every key of toolDefinitions", () => {
-    expect(Object.keys(agentToolSet(agent("code"))).sort()).toEqual(
-      Object.keys(toolDefinitions).sort(),
-    );
   });
 
   test("recursion guard: no built-in agent's ToolSet contains dispatch_subagents", () => {
@@ -88,7 +94,9 @@ describe("agentToolSet", () => {
   // withMutationRecording for the full mechanism this closes.
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
-    const tools = agentToolSet(agent("code"), (context) => calls.push(context));
+    const tools = agentToolSet(fileAgent("writer", ["write_file", "read_file"]), (context) =>
+      calls.push(context),
+    );
 
     const root = mkdtempSync(join(tmpdir(), "seri-agent-tools-test-"));
     const path = join(root, "a.txt");
@@ -115,16 +123,8 @@ describe("composeAddendum", () => {
     }
   });
 
-  test("plan is never told to write; test is never told to fix", () => {
+  test("plan is never told to write", () => {
     expect(agent("plan").addendum).toMatch(/cannot write/i);
-    expect(agent("test").addendum).toMatch(/cannot fix/i);
-  });
-
-  test("oracle is an advisor, not an explorer, and cannot write or run commands", () => {
-    const text = agent("oracle").addendum;
-    expect(text).toMatch(/senior engineer|advis/i);
-    expect(text).toMatch(/cannot write/i);
-    expect(text).not.toMatch(/report what you find/i);
   });
 
   test("an agent whose own prompt states no limits still gets the whitelist sentence", () => {
@@ -136,26 +136,22 @@ describe("composeAddendum", () => {
 
 describe("agentMutatesFilesystem", () => {
   // The predicate dispatch.ts keys both its pre-dispatch checkpoint and its writer-serialization
-  // on: explore/plan hold no tool in FS_MUTATING_TOOL_NAMES, code/test both do (test via
-  // bash/powershell, not write_file) and must be treated the same way as a result.
+  // on: explore/plan hold no tool in FS_MUTATING_TOOL_NAMES; a file-defined agent that grants
+  // write_file or bash must be treated the same way as a result.
   test("explore and plan do not mutate the filesystem", () => {
     expect(agentMutatesFilesystem(agent("explore"))).toBe(false);
     expect(agentMutatesFilesystem(agent("plan"))).toBe(false);
   });
 
-  test("oracle does not mutate the filesystem", () => {
-    expect(agentMutatesFilesystem(agent("oracle"))).toBe(false);
-  });
-
-  test("code and test both mutate the filesystem", () => {
-    expect(agentMutatesFilesystem(agent("code"))).toBe(true);
-    expect(agentMutatesFilesystem(agent("test"))).toBe(true);
+  test("a file-defined writer or tester mutates the filesystem", () => {
+    expect(agentMutatesFilesystem(fileAgent("writer", ["write_file", "read_file"]))).toBe(true);
+    expect(agentMutatesFilesystem(fileAgent("tester", ["bash", "read_file"]))).toBe(true);
   });
 });
 
 describe("builtinRegistry", () => {
-  test("holds exactly the five parent-callable agents; the archivist is not one of them", () => {
-    expect([...builtinRegistry().keys()]).toEqual(["explore", "plan", "code", "test", "oracle"]);
+  test("holds exactly the two parent-callable agents; the archivist is not one of them", () => {
+    expect([...builtinRegistry().keys()]).toEqual(["explore", "plan"]);
     expect(builtinRegistry().has("archivist")).toBe(false);
   });
 
@@ -170,9 +166,10 @@ describe("builtinRegistry", () => {
 
 describe("describeAgent", () => {
   test("the tool grant in the prose is read off the same toolNames the ToolSet is built from", () => {
-    const line = describeAgent(agent("test"));
-    expect(line).toContain('"test"');
-    for (const name of Object.keys(agentToolSet(agent("test")))) expect(line).toContain(name);
+    const spec = fileAgent("tester", ["bash", "read_file", "grep"]);
+    const line = describeAgent(spec);
+    expect(line).toContain('"tester"');
+    for (const name of Object.keys(agentToolSet(spec))) expect(line).toContain(name);
     expect(line).not.toContain("write_file");
   });
 });
@@ -256,7 +253,7 @@ describe("loadAgentRegistry", () => {
   });
 
   test("with no agents directory anywhere, the registry is exactly the built-ins", () => {
-    expect([...load({}).agents.keys()]).toEqual(["explore", "plan", "code", "test", "oracle"]);
+    expect([...load({}).agents.keys()]).toEqual(["explore", "plan"]);
   });
 
   test("a project file is found by walking up from the worktree, not only in it", () => {
@@ -355,11 +352,11 @@ describe("loadAgentRegistry", () => {
     expect(shadow.warnings.find((w) => w.includes("both name"))).toBeUndefined();
   });
 
-  test("a file taking a built-in's name is skipped and the built-in survives untouched", () => {
+  test("a file taking a dropped built-in name is skipped and does not become an agent", () => {
     const { agents, warnings } = load({
       "project/.seri/agents/code.md": "---\ndescription: impostor\ntools: Read\n---\nb\n",
     });
-    expect(agents.get("code")?.source).toBe("builtin");
+    expect(agents.has("code")).toBe(false);
     expect(warnings.join(" ")).toContain("code.md");
   });
 
@@ -396,7 +393,7 @@ describe("loadAgentRegistry", () => {
       "project/.seri/agents/notes.txt": "not an agent",
       "project/.seri/agents/README": "not an agent either",
     });
-    expect([...agents.keys()]).toEqual(["explore", "plan", "code", "test", "oracle"]);
+    expect([...agents.keys()]).toEqual(["explore", "plan"]);
     expect(warnings).toEqual([]);
   });
 

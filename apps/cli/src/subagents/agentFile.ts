@@ -119,7 +119,7 @@ export function parseAgentFile(opts: {
   }
 
   // Grant precedence: an explicit `tools` list wins, else `readonly: true` is the read-only set,
-  // else everything — the same grant the built-in `code` agent holds.
+  // else every key of toolDefinitions.
   const entries = readToolEntries(fields.tools);
   let toolNames: readonly ToolName[];
   if (entries === undefined) {

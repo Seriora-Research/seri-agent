@@ -59,17 +59,27 @@ import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
+import {
+  isPlanOverlayOn,
+  isPlanPanelOpen,
+  type PlanAnswers,
+  type PlanReviewDecision,
+} from "../plan/mode";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
+import type { ChromeTabId } from "./chrome/tabs";
 import { ApprovalBox } from "./components/ApprovalBox";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
+import { PlanReviewPanel } from "./components/PlanReviewPanel";
 import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
+import { ChromePanel } from "./routes/chrome/ChromePanel";
 import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
@@ -80,16 +90,14 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
-import { ChromePanel } from "./routes/chrome/ChromePanel";
-import type { ChromeTabId } from "./chrome/tabs";
 import type { SetupProviderRow } from "./state/commands";
 import { type Dispatch, initialTuiState } from "./state/reducer";
 import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore } from "./theme/spacing";
-import { approvalCopy } from "./util/approvalCopy";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
+import { approvalCopy } from "./util/approvalCopy";
 import type { CompletionSource } from "./util/completion";
 import {
   DEFAULT_COLUMNS,
@@ -100,6 +108,7 @@ import {
   MODE_CYCLE_HINT,
   MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LABEL,
 } from "./util/format";
 import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 
@@ -163,6 +172,8 @@ export type AppProps = {
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
   // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  onPlanQuestionsAnswered?: (answers: PlanAnswers) => void;
+  onPlanReview?: (decision: PlanReviewDecision) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
   // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
   // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
@@ -329,6 +340,8 @@ export function App({
   onQuit,
   onEscape,
   onApprovalAnswer,
+  onPlanQuestionsAnswered,
+  onPlanReview,
   onModelSelected,
   onModelPickerCancel,
   onSetupSelect,
@@ -391,13 +404,13 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s own
-  // comment. One derived value, not two: `indicatorText` reads off `displayMode` rather than
-  // carrying its own separate `skipPermissions` ternary, so the hue and the label can't disagree
-  // about which mode is showing.
-  const displayMode: PermissionMode =
-    skipPermissions === true ? "auto" : state.session.permissionMode;
-  const indicatorText = MODE_LABEL[displayMode];
+  const planOn = isPlanOverlayOn(state.plan);
+  const displayMode: PermissionMode = planOn
+    ? "read-only"
+    : skipPermissions === true
+      ? "auto"
+      : state.session.permissionMode;
+  const indicatorText = planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
@@ -536,7 +549,8 @@ export function App({
   const pagingPanelOpen =
     state.pendingSplash ||
     (state.pendingApproval === undefined &&
-      (state.pendingModelPicker !== undefined ||
+      (isPlanPanelOpen(state.plan) ||
+        state.pendingModelPicker !== undefined ||
         state.pendingSetup !== undefined ||
         state.pendingAuth !== undefined ||
         state.pendingConfig !== undefined ||
@@ -823,11 +837,8 @@ export function App({
       />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
-      means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
-      "only this input means anything right now" question, checked in this same order (approval,
-      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Child
-      inspect keeps InputBox mounted and inert. Every branch here — including
+      means anything until it clears. Child inspect keeps InputBox mounted
+      and inert. Every branch here — including
       AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
@@ -837,6 +848,14 @@ export function App({
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
         />
+      ) : state.plan.kind === "clarifying" ? (
+        <PlanQuestionsPanel
+          questions={state.plan.questions}
+          onAnswer={onPlanQuestionsAnswered}
+          onQuit={onQuit}
+        />
+      ) : state.plan.kind === "reviewing" ? (
+        <PlanReviewPanel plan={state.plan} onDecision={onPlanReview} onQuit={onQuit} />
       ) : state.pendingModelPicker !== undefined ? (
         <ModelPicker
           entries={state.pendingModelPicker.entries}
