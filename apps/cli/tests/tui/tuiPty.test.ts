@@ -2772,8 +2772,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/model");
       child.stdin?.write("\r");
       await typePickerFilter(pty, "gpt-latest");
-      // Filter text can paint before the list re-renders. Wait for the Route cell itself —
-      // lastFrame() right after "gpt-latest" still shows the unfiltered groq window.
       await sawInFrameTimes("no key", 1);
     } finally {
       child.kill("SIGKILL");
@@ -3063,11 +3061,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/model");
       child.stdin?.write("\r");
 
-      // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (verified
-      // directly against catalog-manifest.json before writing this string): the native Anthropic
-      // entry (bare id "claude-sonnet-5") and the OpenRouter entry ("anthropic/claude-sonnet-5").
-      // Route paints "no key" here, not the provider id: this fixture only sets GROQ_API_KEY, and
-      // formatRouteLabel names a provider only when that row's own key is configured.
       await typePickerFilter(pty, "claude-sonnet-5");
       await pty.sawInFrameTimes("Claude Sonnet 5", 2);
       await pty.sawInFrameTimes("no key", 2);
@@ -3390,11 +3383,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("GPT OSS 120B");
 
-      // Narrows to exactly the two claude-sonnet-5 routes (same fixture as
-      // childScriptModelMultiRoute's own test) — the native Anthropic row sorts first (byRoutePriority),
-      // so it is already the highlighted row this Enter picks, same as that test's own comment explains.
-      // Route is "no key": this fixture has no Anthropic/OpenRouter key, so formatRouteLabel
-      // does not paint the provider id. The missing-key error after Enter is what names Anthropic.
       await typePickerFilter(pty, "claude-sonnet-5");
       await pty.sawInFrameTimes("no key", 1);
       child.stdin?.write("\r");
