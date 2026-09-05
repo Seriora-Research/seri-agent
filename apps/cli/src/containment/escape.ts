@@ -218,7 +218,6 @@ export function screenCall(subject: string, input: unknown, expected: boolean): 
     return { outcome: "block", reason: { kind: "unparseable", detail: extracted.detail } };
   }
   if (extracted.status === "empty") return { outcome: "pass" };
-  // Expected skips the table only. Unparseable already returned: the annotation cannot launder junk.
   if (expected) return { outcome: "pass" };
 
   const raw = extracted.text;

@@ -14,10 +14,9 @@ export type PublicLoopEvent =
   | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; name: string; args: unknown }
   | { type: "tool-result"; name: string; result: unknown }
-  // Mirrors loop.ts's own reason union, including "hook" and "containment". Not caught by the
-  // compiler: the daemon launders a LoopEvent through `as PublicLoopEvent` (daemon/sessionManager.ts),
-  // so a value this type says cannot occur still goes out on the wire. Add a member here whenever
-  // one is added there.
+  // Mirrors loop.ts's own reason union. Not caught by the compiler: the daemon launders a
+  // LoopEvent through `as PublicLoopEvent` (daemon/sessionManager.ts), so a value this type says
+  // cannot occur still goes out on the wire. Add a member here whenever one is added there.
   | {
       type: "permission-denied";
       name: string;

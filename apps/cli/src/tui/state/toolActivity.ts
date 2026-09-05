@@ -302,9 +302,6 @@ export function anomalyLineForResult(
 export function anomalyLineForDenial(
   reason: "blocked" | "declined" | "hook" | "containment",
 ): string {
-  // "blocked" and "declined" each read as a complete statement about the call. "hook" and
-  // "containment" name the rail, so on their own they tell a reader which one fired and not
-  // what was done. They need the verb the other two carry implicitly.
   if (reason === "hook") return "blocked by hook";
   if (reason === "containment") return "blocked by containment";
   return reason;
