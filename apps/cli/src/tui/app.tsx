@@ -601,7 +601,8 @@ export function App({
     Math.max(0, remaining - indicatorText.length),
     effortTier,
   );
-  const showModeHint = modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
+  const showModeHint =
+    !planOn && modeRowHintVisible(remaining, indicatorText.length, modeDetail.length);
 
   // Its own useKeyboard, separate from the scroll handler below — OpenTUI delivers the same
   // keypress to every registered handler (that handler's own comment explains this), so a second,
@@ -612,7 +613,7 @@ export function App({
   // silently mutate and persist a session field the gate is already ignoring.
   useKeyboard((key) => {
     if (!noPanelOpen) return;
-    if (isShiftTabModeCycle(key) && skipPermissions !== true) onCycleMode?.();
+    if (isShiftTabModeCycle(key) && skipPermissions !== true && !planOn) onCycleMode?.();
     // Mouse reporting is off, so the live pin cannot be clicked. ctrl+t does
     // not steal ↑/↓ or shift+tab; InputBox already ignores key.ctrl.
     if (key.ctrl && key.name === "t") dispatch({ type: "reasoning-toggled" });

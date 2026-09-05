@@ -4377,6 +4377,31 @@ describe("App", () => {
       markdown: "# Auth rewrite\n\nReplace the login flow.\n",
     };
 
+    test("the shift+tab cycle hint is absent while the overlay is on", async () => {
+      const { setup, dispatch } = await connect({ route: undefined });
+      expect(setup.captureCharFrame()).toContain("(shift+tab to cycle)");
+
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      expect(setup.captureCharFrame()).toContain(PLAN_MODE_LABEL);
+      expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
+    });
+
+    test("shift+tab does not call onCycleMode while the overlay is on", async () => {
+      let calls = 0;
+      const { setup, dispatch } = await connect({
+        onCycleMode: () => calls++,
+      });
+      dispatch({ type: "plan-on" });
+      await flush(setup);
+
+      setup.mockInput.pressKey(SHIFT_TAB);
+      await flush(setup);
+
+      expect(calls).toBe(0);
+    });
+
     test("the indicator reads plan mode on in the read-only hue, even under skipPermissions", async () => {
       const { setup, dispatch } = await connect({
         session: session({ permissionMode: "approve-each" }),
