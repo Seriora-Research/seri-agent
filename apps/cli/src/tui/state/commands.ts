@@ -491,6 +491,15 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
     },
   ],
   [
+    "SERI_ALLOW_UNSANDBOXED_COMMANDS",
+    {
+      label: "Unsandboxed bang",
+      description: "Allow ! shell to leave the OS sandbox. Off refuses it when unsandboxed.",
+      kind: "boolean",
+      takesEffectNextRun: false,
+    },
+  ],
+  [
     BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
     {
       label: "Outside working dir",

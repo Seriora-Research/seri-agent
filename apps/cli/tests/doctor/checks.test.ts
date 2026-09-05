@@ -223,4 +223,29 @@ describe("runDoctorChecks", () => {
     expect(ioUring.detail).toBe("dlopen failed");
     expect(doctorExitCode([ioUring])).toBe(1);
   });
+
+  test("includes a sandbox row that names the declared bang tier", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd(),
+    });
+    const sandbox = checks.find((check) => check.name === "sandbox");
+    expect(sandbox).toBeDefined();
+    expect(sandbox?.detail).toMatch(/base|os|unsandboxed/);
+    expect(sandbox?.detail).toContain("bang");
+  });
 });

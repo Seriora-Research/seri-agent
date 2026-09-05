@@ -209,6 +209,19 @@ export function persistDefaultReasoningEffort(tier: string, configDir?: string):
   setConfigValue("SERI_REASONING_EFFORT", tier, configDir);
 }
 
+export const ALLOW_UNSANDBOXED_COMMANDS_KEY = "SERI_ALLOW_UNSANDBOXED_COMMANDS";
+
+export type SandboxConfig = { allowUnsandboxedCommands: boolean };
+
+export function loadSandboxConfig(configDir?: string): SandboxConfig {
+  const config = loadConfig(configDir);
+  return {
+    allowUnsandboxedCommands: configBoolean(
+      configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, config),
+    ),
+  };
+}
+
 // configDir is threaded through rather than always resolved internally so that a caller
 // which writes with an explicit dir (`seri config set`) reads back from that same dir.
 export function getApiKey(name: string, configDir?: string): string | undefined {

@@ -402,6 +402,29 @@ describe("modeRowHintVisible", () => {
     ).toBe(true);
   });
 
+  test("longest label plus cycle hint still fits MODE_HINT_COLS when leftover-packed detail is empty", () => {
+    expect(MODE_LABEL.auto.length + MODE_CYCLE_HINT.length).toBeLessThanOrEqual(MODE_HINT_COLS);
+    expect(
+      modeRowHintVisible(MODE_HINT_COLS, MODE_LABEL.auto.length, 0, MODE_CYCLE_HINT.length),
+    ).toBe(true);
+  });
+
+  test("hint yields at MODE_HINT_COLS when leftover-packed sandbox claims space", () => {
+    const sandbox = " · unsandboxed";
+    expect(
+      modeRowHintVisible(
+        MODE_HINT_COLS,
+        MODE_LABEL.auto.length,
+        sandbox.length,
+        MODE_CYCLE_HINT.length,
+      ),
+    ).toBe(false);
+    const bothFit = MODE_LABEL.auto.length + sandbox.length + MODE_CYCLE_HINT.length;
+    expect(
+      modeRowHintVisible(bothFit, MODE_LABEL.auto.length, sandbox.length, MODE_CYCLE_HINT.length),
+    ).toBe(true);
+  });
+
   test("hint hidden when detail+hint overflow even if remaining >= MODE_HINT_COLS", () => {
     const detail = "  claude-sonnet-5 · anthropic";
     expect(

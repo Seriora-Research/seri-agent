@@ -61,6 +61,7 @@ import {
 import {
   loadConfig,
   loadReasoningEffortConfig,
+  loadSandboxConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
@@ -79,6 +80,9 @@ import { readDaemonDescriptorFile } from "./daemon/descriptor";
 import type { RunScheduled } from "./daemon/scheduler";
 import { runDoctorChecks } from "./doctor/checks";
 import { doctorExitCode, printDoctorReport } from "./doctor/report";
+import { defaultBangRunners, submitBang } from "./sandbox/bang";
+import { probeConfinement } from "./sandbox/confine";
+import { parseBangLine, resolveShellLaunch } from "./sandbox/policy";
 import { runUpdate } from "./update/run";
 import {
   type ExecuteTurn,
@@ -2906,6 +2910,26 @@ async function runTui(
     }
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    const bangCommand = parseBangLine(trimmed);
+    if (bangCommand !== undefined) {
+      echoUserInput(value);
+      const confinement = { available: probeConfinement() };
+      const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
+      const launch = resolveShellLaunch(
+        "bang",
+        { allowUnsandboxedCommands, root: liveState.session.cwd },
+        confinement,
+      );
+      try {
+        await submitBang(bangCommand, launch, defaultBangRunners(), liveState.session.cwd, {
+          error: (message) => dispatch({ type: "command-error", message }),
+          output: (text) => dispatch({ type: "transcript-append", line: text }),
+        });
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+      return;
+    }
     // Hoisted above `echoUserInput`, where the split used to sit below it: the queue gate needs
     // `name`, and a queued message must not be echoed. The move is safe because the parse is pure
     // — nothing between here and the echo has a side effect — and every branch further down still
@@ -3213,6 +3237,7 @@ async function runTui(
       onCycleMode,
       onTogglePlan,
       skipPermissions,
+      confinementAvailable: probeConfinement(),
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,
