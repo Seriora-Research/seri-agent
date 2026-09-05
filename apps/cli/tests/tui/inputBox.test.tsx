@@ -12,7 +12,7 @@ import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
 import { InputBox } from "../../src/tui/components/InputBox";
-import { INPUT_PLACEHOLDER } from "../../src/tui/util/format";
+import { DEFAULT_COLUMNS, INPUT_PLACEHOLDER } from "../../src/tui/util/format";
 
 const THROTTLE_MS = 50;
 
@@ -285,11 +285,12 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> already typed");
   });
 
-  // 60 columns, not this file's usual 40: the placeholder renders with `truncate`, so a narrower
-  // box would clip it and `toContain` on the whole string would fail for a reason the test does
-  // not mean to assert.
+  // DEFAULT_COLUMNS, not this file's usual 40 and not 60: the placeholder renders with
+  // `truncate`, and after bang lengthened INPUT_PLACEHOLDER a 60-column box clips it
+  // (`describe a task · / for ...s · ! shell · @ for files`). `toContain` on the whole
+  // string would then fail for a reason the test does not mean to assert.
   test("the placeholder renders on an empty input and is gone after one character", async () => {
-    const setup = await createTestRenderer({ width: 60, height: 5 });
+    const setup = await createTestRenderer({ width: DEFAULT_COLUMNS, height: 5 });
     await mount(setup, <InputBox onSubmit={() => {}} />);
 
     expect(setup.captureCharFrame()).toContain(INPUT_PLACEHOLDER);
