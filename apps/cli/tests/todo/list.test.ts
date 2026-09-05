@@ -114,6 +114,17 @@ describe("todoListFromMessages", () => {
     expect(todoListFromMessages(messages.slice(0, 2))).toEqual([COMPILE]);
   });
 
+  test("a tool-call without a successful result does not paint", () => {
+    expect(todoListFromMessages([assistantTodo([MINIFY])])).toEqual([]);
+    expect(
+      todoListFromMessages([
+        assistantTodo([COMPILE], "c1"),
+        todoJsonResult([COMPILE], "c1"),
+        assistantTodo([MINIFY, SIZE], "c2"),
+      ]),
+    ).toEqual([COMPILE]);
+  });
+
   test("a thrown call does not replace the previous list", () => {
     const failed = [{ id: "x", content: "should not paint", status: "pending" as const }];
     const messages: ModelMessage[] = [
