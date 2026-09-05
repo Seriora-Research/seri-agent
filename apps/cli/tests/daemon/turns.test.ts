@@ -152,9 +152,7 @@ describe("daemon turns", () => {
         }
       }
       await client.approve(liveApproval.turnId, liveApproval.requestId, "once");
-      for await (const _event of { [Symbol.asyncIterator]: () => liveIter }) {
-        /* drain */
-      }
+      await collect({ [Symbol.asyncIterator]: () => liveIter });
       const events = await collect(
         client.startTurn({ task: "write none", permissionPrompts: "none" }),
       );

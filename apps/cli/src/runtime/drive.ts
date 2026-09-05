@@ -200,7 +200,7 @@ export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
 // readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
 // path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
 // signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
-// path still passes `makeApprovalPrompt(deps.createInterface)` when a human can answer; the TUI
+// path still passes `makeApprovalPrompt(deps.createInterface)`; the TUI
 // path (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
 // (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
 // readline.question, which is what the research spec's own "Command migration" section already
