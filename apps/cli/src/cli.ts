@@ -2321,8 +2321,10 @@ async function runTui(
       // settled.
       cancelDelivered = false;
       // If driveLoop threw without aborting, the presenter would stay occupied and the next
-      // turn's ask_user would see nested-approval. Same unpark quit() uses.
-      if (liveState.pendingAskUser !== undefined) askUserPark.answer({ outcome: "cancelled" });
+      // turn's ask_user would see nested-approval. Same unpark quit() uses. Gate on the park,
+      // not the reducer mirror: present() assigns the waiter before dispatchOccupy, so a
+      // thrown occupy would leave the park live with pendingAskUser still unset.
+      askUserPark.answer({ outcome: "cancelled" });
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2400,7 +2402,7 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
-    if (liveState.pendingAskUser !== undefined) askUserPark.answer({ outcome: "cancelled" });
+    askUserPark.answer({ outcome: "cancelled" });
     if (liveState.plan.kind === "clarifying") onPlanQuestionsAnswered({ cancelled: true });
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
     // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no

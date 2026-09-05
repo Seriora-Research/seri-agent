@@ -78,6 +78,27 @@ describe("AskUserPanel", () => {
     expect(answers).toEqual([{ outcome: "picked", choice: "cookies" }]);
   });
 
+  test("two printable keys without a settle both land in Other", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 12 });
+    await mount(setup, <AskUserPanel prompt={prompt} onAnswer={() => {}} />);
+    setup.mockInput.pressKey("a");
+    setup.mockInput.pressKey("b");
+    await settle(setup);
+    expect(setup.captureCharFrame()).toContain("type your own: ab");
+  });
+
+  test("Backspace on a choice does not jump to empty Other", async () => {
+    const answers: HumanReply[] = [];
+    const setup = await createTestRenderer({ width: 60, height: 12 });
+    await mount(setup, <AskUserPanel prompt={prompt} onAnswer={(a) => answers.push(a)} />);
+    setup.mockInput.pressBackspace();
+    await settle(setup);
+    const press = () => setup.mockInput.pressEnter();
+    press();
+    await waitUntil(setup, () => answers.length > 0, "Enter never answered", press);
+    expect(answers).toEqual([{ outcome: "picked", choice: "cookies" }]);
+  });
+
   test("Enter on empty Other does not submit", async () => {
     const answers: HumanReply[] = [];
     const setup = await createTestRenderer({ width: 60, height: 12 });

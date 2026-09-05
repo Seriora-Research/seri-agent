@@ -190,8 +190,9 @@ export type TuiState = {
   // reading anything else from stdin.
   pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
   // Occupancy snapshot for ask_user. The park in cli.ts owns the resolve; this field is what
-  // App.tsx paints. Not parked on `plan.kind`. Can coexist with `pendingApproval`; the render
-  // ternary still shows ApprovalBox first.
+  // App.tsx paints. Not parked on `plan.kind`. The reducer can hold this next to
+  // `pendingApproval` (ApprovalBox still wins the ternary), but no production path sets
+  // both: `runLoop` runs `ask_user` only on the sequential branch after `flushReadBatch`.
   pendingAskUser: AskPrompt | undefined;
   // /model's own live state, mirroring pendingApproval's shape exactly: set when the picker opens
   // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
@@ -769,7 +770,12 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
     case "ask-user-requested":
-      return { ...state, pendingAskUser: action.prompt, subagentPanelFocus: false };
+      return {
+        ...state,
+        pendingAskUser: action.prompt,
+        subagentPanelFocus: false,
+        pendingChildView: undefined,
+      };
     case "ask-user-resolved":
       return { ...state, pendingAskUser: undefined };
     case "plan-on":

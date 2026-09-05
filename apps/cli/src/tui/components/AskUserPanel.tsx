@@ -39,9 +39,9 @@ export function AskUserPanel({
     onAnswer?.({ outcome: "picked", choice });
   }
 
-  function typeIntoOther(next: string): void {
+  function typeIntoOther(update: (current: string) => string): void {
     if (!prompt.allowOther) return;
-    setCustom(next);
+    setCustom(update);
     setSelected(otherIndex);
   }
 
@@ -64,17 +64,22 @@ export function AskUserPanel({
       return;
     }
     if (key.name === "backspace" || key.name === "delete") {
-      typeIntoOther(custom.slice(0, -1));
+      if (!prompt.allowOther) return;
+      setCustom((current) => {
+        if (current.length === 0) return current;
+        setSelected(otherIndex);
+        return current.slice(0, -1);
+      });
       return;
     }
     if (!isPrintableKey(key)) return;
-    typeIntoOther(custom + key.sequence);
+    typeIntoOther((current) => current + key.sequence);
   });
 
   function insertPastedText(text: string): void {
     const cleaned = text.replace(/[\r\n]/g, "");
     if (cleaned.length === 0) return;
-    typeIntoOther(custom + cleaned);
+    typeIntoOther((current) => current + cleaned);
   }
 
   usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
