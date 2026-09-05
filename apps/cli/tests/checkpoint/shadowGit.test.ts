@@ -11,7 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
+import { gitArgv } from "../../src/checkpoint/gitArgv";
 import {
   applyRestore,
   commitTree,
@@ -21,10 +22,13 @@ import {
   isGitAvailable,
   isIgnored,
   listSessionRefs,
+  mirrorLocalExcludes,
   planRestore,
+  projectRoot,
   updateRef,
   writeTree,
 } from "../../src/checkpoint/shadowGit";
+import { readGitHead } from "../../src/trajectory/harnessId";
 
 // The cold first snapshot of a real repo measured 300 ms on Windows, and every test here takes
 // several snapshots plus a restore. bun's default is comfortably too tight on a loaded runner.
@@ -410,6 +414,82 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
 
       restore(first.tree);
       expect(readFileSync(join(workTree, "lf.txt"), "utf8")).toBe("line1\nline2\n");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "does not execute a repo-local core.fsmonitor helper",
+    () => {
+      // git status refreshes the index and runs core.fsmonitor. A handed-over `.git/config` can
+      // set that to an arbitrary program. The negative control (bare `git status`) proves the
+      // canary actually fires; gitArgv and every spawnGit caller then have to go through the same
+      // folder without executing it. Global config is the other source of the same helper:
+      // `--git-dir` pointed at the shadow store still reads it.
+      const repo = join(root, "handed-over");
+      mkdirSync(repo);
+      writeFileSync(join(repo, "a.txt"), "hello\n");
+      const fired = join(root, "fsmonitor-fired");
+      const script = join(root, "fsmonitor-canary.cjs");
+      writeFileSync(
+        script,
+        `"use strict";\nrequire("fs").writeFileSync(${JSON.stringify(fired)}, "fired");\n`,
+      );
+      const canary = `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`;
+      spawnSync("git", ["init", "-q"], { cwd: repo, windowsHide: true });
+      spawnSync("git", ["config", "core.fsmonitor", canary], { cwd: repo, windowsHide: true });
+
+      const unsanitized = spawnSync("git", ["status", "--porcelain"], {
+        cwd: repo,
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(unsanitized.status, unsanitized.stderr).toBe(0);
+      expect(existsSync(fired)).toBe(true);
+      rmSync(fired, { force: true });
+
+      spawnSync("git", gitArgv(["status", "--porcelain"]), {
+        cwd: repo,
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(existsSync(fired)).toBe(false);
+
+      expect(basename(projectRoot(repo))).toBe("handed-over");
+      expect(existsSync(fired)).toBe(false);
+
+      const cwd = process.cwd();
+      try {
+        process.chdir(repo);
+        readGitHead();
+      } finally {
+        process.chdir(cwd);
+      }
+      expect(existsSync(fired)).toBe(false);
+
+      initShadow(gitDir);
+      mirrorLocalExcludes(gitDir, repo);
+      writeTree(gitDir, repo);
+      expect(existsSync(fired)).toBe(false);
+
+      const globalConfig = join(root, "global.gitconfig");
+      spawnSync("git", ["config", "-f", globalConfig, "core.fsmonitor", canary], {
+        windowsHide: true,
+      });
+      const originalGlobal = process.env.GIT_CONFIG_GLOBAL;
+      const originalNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+      try {
+        process.env.GIT_CONFIG_GLOBAL = globalConfig;
+        process.env.GIT_CONFIG_NOSYSTEM = "1";
+        seedWorktree(workTree);
+        writeTree(gitDir, workTree);
+        expect(existsSync(fired)).toBe(false);
+      } finally {
+        if (originalGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+        else process.env.GIT_CONFIG_GLOBAL = originalGlobal;
+        if (originalNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+        else process.env.GIT_CONFIG_NOSYSTEM = originalNoSystem;
+      }
     },
     GIT_TEST_TIMEOUT_MS,
   );
