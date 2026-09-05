@@ -153,6 +153,15 @@ describe("checkPermission", () => {
         }),
       ).toBe("allow");
     });
+
+    test("a trailing /** pattern also blocks the directory itself", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, undefined, {
+          input: { path: "/tmp/seri-does-not-exist", pattern: "*.txt" },
+          denials: [{ tool: "glob", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+    });
   });
 });
 

@@ -41,10 +41,13 @@ export function denialBlocks(
   const path = pathFromToolInput(input);
   if (path === undefined) return false;
   const candidate = posixPath(path);
-  return denials.some(
-    (denial) =>
-      denial.tool === toolName && new Bun.Glob(posixPath(denial.pattern)).match(candidate),
-  );
+  return denials.some((denial) => {
+    if (denial.tool !== toolName) return false;
+    const pattern = posixPath(denial.pattern);
+    if (new Bun.Glob(pattern).match(candidate)) return true;
+    // Bun.Glob("dir/**") matches "dir/" and "dir/file", not "dir".
+    return pattern.endsWith("/**") && candidate === pattern.slice(0, -3);
+  });
 }
 
 export function checkPermission(
