@@ -5,13 +5,7 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { runLoop } from "../../src/loop/loop";
 import { createToolDefinitions } from "../../src/provider/tools";
-import {
-  baseMessages,
-  collect,
-  streamResult,
-  textOnlyChunks,
-  toolCallChunks,
-} from "./fixtures";
+import { baseMessages, collect, streamResult, textOnlyChunks, toolCallChunks } from "./fixtures";
 
 let tmpDir: string;
 let missing: string;
@@ -177,6 +171,54 @@ describe("runLoop path denials", () => {
     expect(reason).toContain("deny rule");
     expect(reason).not.toContain("/mode");
     expect(reason).not.toContain("does not write");
+  });
+
+  test("a path deny never reaches execute", async () => {
+    const tools = createToolDefinitions(tmpDir);
+    const original = tools.read_file;
+    if (original === undefined || original.execute === undefined) {
+      throw new Error("expected read_file.execute");
+    }
+    let probed = 0;
+    const sentinel = {
+      ...original,
+      execute: async () => {
+        probed++;
+        throw new Error("probed");
+      },
+    };
+    const sentinelTools = { ...tools, read_file: sentinel };
+
+    const withoutDeny = await collect(
+      runLoop({
+        model: oneCallThenText("read_file", { path: missing }),
+        tools: sentinelTools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: tmpDir,
+      }),
+    );
+    expect(probed).toBe(1);
+    expect(errorText(withoutDeny)).toContain("probed");
+
+    probed = 0;
+    const withDeny = await collect(
+      runLoop({
+        model: oneCallThenText("read_file", { path: missing }),
+        tools: sentinelTools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: tmpDir,
+        pathDenials: [{ tool: "read_file", pattern: `${tmpDir.replaceAll("\\", "/")}/**` }],
+      }),
+    );
+    expect(probed).toBe(0);
+    expect(errorText(withDeny)).not.toContain("probed");
+    expect(withDeny).toContainEqual({
+      type: "permission-denied",
+      name: "read_file",
+      reason: "blocked",
+    });
   });
 
   test("a path deny does not invoke PreToolUse", async () => {

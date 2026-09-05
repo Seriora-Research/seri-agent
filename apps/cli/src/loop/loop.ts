@@ -207,7 +207,7 @@ async function decidePermission(
   denials: readonly PathDenial[] | undefined,
   cwd: string | undefined,
 ): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
-  const permission = checkPermission(toolName, mode, allowedTools, undefined, {
+  const permission = checkPermission(toolName, mode, allowedTools, {
     input,
     denials,
     cwd,

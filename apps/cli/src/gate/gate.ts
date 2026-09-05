@@ -12,6 +12,7 @@ export type PermissionCheck = {
   readonly input?: unknown;
   readonly denials?: readonly PathDenial[];
   readonly cwd?: string;
+  readonly classify?: (name: string) => ToolClass;
 };
 
 export function pathFromToolInput(input: unknown): string | undefined {
@@ -62,10 +63,10 @@ export function checkPermission(
   toolName: string,
   mode: PermissionMode,
   allowedTools?: ReadonlySet<string>,
-  classify: (name: string) => ToolClass = classifyBuiltin,
   check?: PermissionCheck,
 ): "allow" | "block" | "needs-approval" {
   if (denialBlocks(check?.denials, toolName, check?.input, check?.cwd)) return "block";
+  const classify = check?.classify ?? classifyBuiltin;
   if (classify(toolName) === "read") return "allow";
   if (mode === "auto") return "allow";
   if (mode === "read-only") return "block";
