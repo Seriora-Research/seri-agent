@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import {
-  IO_URING_SYSCALLS,
   classifyIoUringSetup,
+  IO_URING_SYSCALLS,
   ioUringDenyFilter,
   ioUringDoctorCheck,
 } from "../../src/sandbox/ioUring";
