@@ -7,6 +7,7 @@ export type TurnRequest = {
   sessionId?: string;
   cwd?: string;
   permissionMode?: PermissionModeWire;
+  permissionPrompts?: "none";
 };
 
 export type PublicLoopEvent =

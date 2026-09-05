@@ -7,6 +7,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
@@ -26,6 +27,7 @@ import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -61,6 +63,7 @@ function preparedStub(): PreparedRun {
     permissionMode: "read-only",
     worktree: dir,
     allowedTools: [],
+    pathDenials: [],
     catalog: { fetchedAt: "", entries: [] },
     catalogEntry: undefined,
     route: {
@@ -146,6 +149,46 @@ describe("driveLoop options", () => {
     );
     expect(DISPATCH_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
     expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
+  });
+
+  test("passes session.cwd as workingDirectory and treats the approvalPrompt as a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(capture.capture()?.workingDirectory).toBe(prepared.session.cwd);
+    expect(capture.capture()?.askOutsideFs).toBe(true);
+    expect(capture.capture()?.outsideConsent?.current).toBe("unasked");
+  });
+
+  test("askOutsideFs false reaches the loop so a dummy prompt is not a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false, askOutsideFs: false },
+    );
+    expect(capture.capture()?.askOutsideFs).toBe(false);
   });
 
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {
@@ -600,6 +643,93 @@ describe("driveLoop directDispatch", () => {
       else process.env[key] = original;
     }
   });
+
+  test("a child's runLoop receives the prepared path denials and cwd", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "glob", pattern: "/secret/**" }],
+      cwd: prepared.worktree,
+    });
+  });
+
+  test("the parent runLoop receives session cwd with the path denials", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "read_file", pattern: ".env" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "read_file", pattern: ".env" }],
+      cwd: prepared.session.cwd,
+    });
+  });
+
+  test("a session classifier is handed down to the child loop", async () => {
+    const classify = () => ({ kind: "allow" as const });
+    const prepared = preparedStub();
+    prepared.classifyToolCall = classify;
+    prepared.autoModeOnBlock = "ask";
+    let childClassify: RunLoopOpts["classifyToolCall"];
+    let childDisposition: RunLoopOpts["autoModeOnBlock"];
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          childClassify = opts.classifyToolCall;
+          childDisposition = opts.autoModeOnBlock;
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(childClassify).toBe(classify);
+    expect(childDisposition).toBe("ask");
+  });
 });
 
 describe("driveLoop mcp composition", () => {
@@ -745,6 +875,53 @@ describe("driveLoop mcp composition", () => {
       { composeSubagents: false, bindProcessCancel: false },
     );
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
+  });
+
+  test("permission mode does not change the assembled system or messages", async () => {
+    const modes = [
+      "read-only",
+      "approve-each",
+      "auto",
+    ] as const satisfies readonly PermissionMode[];
+    const _allModes: Record<PermissionMode, true> = {
+      "read-only": true,
+      "approve-each": true,
+      auto: true,
+    };
+    void _allModes;
+
+    const captured: { system: string; messages: RunLoopOpts["messages"] }[] = [];
+    for (const mode of modes) {
+      const prepared = preparedStub();
+      prepared.permissionMode = mode;
+      prepared.session.permissionMode = mode;
+      const capture = fakeRunLoop();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        { runLoop: capture.fake },
+        1,
+        () => {},
+        () => mode,
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+      );
+      const opts = capture.capture();
+      expect(opts?.system).toBeDefined();
+      expect(opts?.messages).toBeDefined();
+      expectNoBashFirstSteer(opts?.system ?? "");
+      captured.push({ system: opts?.system as string, messages: opts!.messages });
+    }
+
+    const [first, ...rest] = captured;
+    expect(first).toBeDefined();
+    for (const row of rest) {
+      expect(row.system).toBe(first!.system);
+      expect(row.messages).toEqual(first!.messages);
+    }
   });
 });
 

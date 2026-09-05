@@ -27,6 +27,7 @@ import {
   prepareSession,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
+import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",
@@ -169,6 +170,13 @@ describe("prepareSession + mcp", () => {
     expect(entry?.catalog).toBeUndefined();
   });
 
+  test("skipPermissions seeds the outside-cwd latch for this run only", async () => {
+    const attended = (await prepareSession(baseCtx(makeDir()), deps, false, false)) as PreparedRun;
+    expect(attended.outsideConsent?.current).toBe("unasked");
+    const skipped = (await prepareSession(baseCtx(makeDir()), deps, true, false)) as PreparedRun;
+    expect(skipped.outsideConsent?.current).toBe("allowed-this-run");
+  });
+
   test("a stored MCP grant whose digest matches the session catalog enters allowedTools as the bare name", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
     const tool: McpToolInfo = {
@@ -224,6 +232,81 @@ describe("prepareSession + mcp", () => {
         (m) => m.text.includes("mcp_exa_web_search") && m.text.includes("asked again"),
       ),
     ).toBe(true);
+  });
+
+  test("skip-permissions does not change the assembled system prompt or invert dedicated file tools", async () => {
+    const attended = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const bypass = await prepareSession(baseCtx(makeDir()), deps, true, false);
+    expect(typeof attended).not.toBe("number");
+    expect(typeof bypass).not.toBe("number");
+    const attendedRun = attended as PreparedRun;
+    const bypassRun = bypass as PreparedRun;
+    expect(attendedRun.session.systemPrompt).toBe(bypassRun.session.systemPrompt);
+    expect(attendedRun.permissionMode).not.toBe("auto");
+    expect(bypassRun.permissionMode).toBe("auto");
+    expectDedicatedFileTools(attendedRun.session.systemPrompt);
+    expectNoBashFirstSteer(attendedRun.session.systemPrompt);
+  });
+
+  test("prepareSession loads path denials from permissions.yaml", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n  - read_file(.env)\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    expect(typeof result).not.toBe("number");
+    expect((result as PreparedRun).pathDenials).toEqual([
+      { tool: "glob", pattern: "/secret/**" },
+      { tool: "read_file", pattern: ".env" },
+    ]);
+  });
+
+  test("permissions.yaml ask loads onto PreparedRun with the allow-all classifier", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("ask");
+    expect(prepared.classifyToolCall).toBeDefined();
+    expect(prepared.classifyToolCall?.("bash", { command: "git push origin v0.42.0" })).toEqual({
+      kind: "allow",
+    });
+  });
+
+  test("a missing permissions.yaml is deny and still installs the classifier", async () => {
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    expect(prepared.classifyToolCall).toBeDefined();
+  });
+
+  test("a non-TTY run is deny even when YAML says ask", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
+    const prepared = result as PreparedRun;
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    expect(prepared.classifyToolCall).toBeDefined();
+  });
+
+  test("skipPermissions omits the classifier so a YAML ask cannot fire", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    const result = await prepareSession(baseCtx(makeDir()), deps, true, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.permissionMode).toBe("auto");
+    expect(prepared.autoModeOnBlock).toBe("ask");
+    expect(prepared.classifyToolCall).toBeUndefined();
   });
 });
 
@@ -371,6 +454,42 @@ describe("bindSession + mcp", () => {
 
     expect(prepared.mcp.get("exa")).toBeDefined();
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
+  });
+
+  test("bindSession reloads path denials from disk", async () => {
+    const prepared = await freshPrepared();
+    expect(prepared.pathDenials).toEqual([]);
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - grep(/hidden/**)\n",
+    );
+    bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      mcpConfigDirFor(tmpConfigRoot),
+      permissionsDir,
+      () => {},
+    );
+    expect(prepared.pathDenials).toEqual([{ tool: "grep", pattern: "/hidden/**" }]);
+  });
+
+  test("bindSession reloads autoModeOnBlock from disk", async () => {
+    const prepared = await freshPrepared();
+    expect(prepared.autoModeOnBlock).toBe("deny");
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
+    );
+    bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      mcpConfigDirFor(tmpConfigRoot),
+      permissionsDir,
+      () => {},
+    );
+    expect(prepared.autoModeOnBlock).toBe("ask");
   });
 
   // Asserted through preMountMessages rather than a captured console.error, because that queue IS

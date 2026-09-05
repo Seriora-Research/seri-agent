@@ -20,7 +20,7 @@ import {
   disconnectGrok as disconnectGrokReal,
 } from "../../auth/xaiConnect";
 import type { CliDeps } from "../../cli";
-import { configBoolean, loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
+import { loadConfig, setConfigValue, unsetConfigValue } from "../../config/config";
 import { messageOf } from "../../errors";
 import { forgetGrant, loadGrants } from "../../permissions/store";
 import {
@@ -31,6 +31,7 @@ import {
 import { validateProviderKey } from "../../provider/validate";
 import {
   configKeyInfo,
+  booleanRowOn,
   decideAuthOffer,
   decideConfigOpen,
   decidePermissionsOpen,
@@ -626,7 +627,7 @@ export function createConfigHandlers(opts: {
       // reasoning as onConfigUnset's own confirm branch, just below. Toggling the EFFECTIVE value
       // instead would make every press a no-op under a truthy env var: config.json would keep
       // getting overwritten with the same value the env var was already forcing.
-      nextOn = !configBoolean(loadConfig(configDir)[key]);
+      nextOn = !booleanRowOn(key, loadConfig(configDir)[key]);
       setConfigValue(key, String(nextOn), configDir);
     } catch (err) {
       dispatch({

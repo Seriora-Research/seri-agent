@@ -10,6 +10,7 @@ import { loadVerifyConfig } from "../config/config";
 import { createMcpClients, createSessionDial } from "../mcp/client";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
+import { loadDenials } from "../permissions/store";
 import { resolveDefaultModel } from "../provider/defaults";
 import { createRulesState } from "../rules/match";
 import { driveLoop } from "../runtime/drive";
@@ -22,6 +23,7 @@ import { assertScheduledToolset, type RunScheduled } from "./scheduler";
 export function createRunScheduled(opts: {
   configDir: string;
   sessionsDir: string;
+  permissionsDir: string;
   deps: CliDeps;
   database: SessionDatabase;
 }): RunScheduled {
@@ -69,6 +71,7 @@ export function createRunScheduled(opts: {
       permissionMode: input.policy.permissionMode,
       worktree: session.cwd,
       allowedTools: input.policy.allowedTools,
+      pathDenials: loadDenials(opts.permissionsDir, onWarning),
       catalog,
       catalogEntry,
       route,
@@ -103,7 +106,7 @@ export function createRunScheduled(opts: {
       taskText: "",
       sessionsDir: opts.sessionsDir,
       checkpointsDir,
-      permissionsDir: opts.configDir,
+      permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
       cwd: session.cwd,
       database: opts.database,
@@ -134,6 +137,7 @@ export function createRunScheduled(opts: {
           composeSubagents: false,
           runArchivist: false,
           composeAskUser: false,
+          askOutsideFs: false,
         },
       );
     } catch (caught) {

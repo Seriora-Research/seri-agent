@@ -3,9 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-client";
+import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
 import { SessionDatabase } from "../../src/session/database";
+import { fakeRunLoop } from "../cli/fakeRunLoop";
+import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -106,6 +109,62 @@ describe("daemon turns", () => {
     expect(answer).toBe("no");
     expect(aborted).toBe(false);
     expect(finished).toBe(true);
+  });
+
+  test("startTurn with permissionPrompts none never emits approval-request when executeTurn would have requested one", async () => {
+    const configDir = makeDir();
+    const originalKey = process.env.GROQ_API_KEY;
+    const originalDisable = process.env.SERI_DISABLE_MODELS_FETCH;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const { fake, capture } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
+    async function* wouldPrompt(opts: Parameters<typeof fake>[0]) {
+      const gen = fake(opts);
+      if (opts.approvalPrompt !== undefined) {
+        await opts.approvalPrompt("write_file", { path: "a.txt" }, opts.signal);
+      }
+      yield* gen;
+    }
+    try {
+      const daemon = await startDaemon({
+        configDir,
+        idleMs: 0,
+        deps: {
+          runLoop: wouldPrompt,
+          getGroqModel: () =>
+            new MockLanguageModelV4({
+              doStream: async () => streamResult(textOnlyChunks("ready")),
+            }),
+          loadAgentsFile: () => "",
+        },
+      });
+      stop = daemon.stop;
+      const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+      const live = client.startTurn({ task: "write live" });
+      const liveIter = live[Symbol.asyncIterator]();
+      let liveApproval: { turnId: string; requestId: string } | undefined;
+      while (liveApproval === undefined) {
+        const next = await liveIter.next();
+        expect(next.done).toBe(false);
+        const event = next.value!;
+        if (event.event.type === "approval-request" && typeof event.event.requestId === "string") {
+          liveApproval = { turnId: event.turnId, requestId: event.event.requestId };
+        }
+      }
+      await client.approve(liveApproval.turnId, liveApproval.requestId, "once");
+      await collect({ [Symbol.asyncIterator]: () => liveIter });
+      const events = await collect(
+        client.startTurn({ task: "write none", permissionPrompts: "none" }),
+      );
+      expect(events.some((event) => event.event.type === "approval-request")).toBe(false);
+      expect(capture()?.approvalPrompt).toBeUndefined();
+      expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    } finally {
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+      if (originalDisable === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+      else process.env.SERI_DISABLE_MODELS_FETCH = originalDisable;
+    }
   });
 
   test("matching approval resumes a turn; a mismatched pair returns 404", async () => {

@@ -1418,6 +1418,8 @@ describe("decideConfigOpen", () => {
     "SERI_SEED",
     "SERI_OPENROUTER_PROVIDER",
     "SERI_TUI_BACKGROUND",
+    "SERI_ALLOW_UNSANDBOXED_COMMANDS",
+    "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES",
   ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -1448,6 +1450,8 @@ describe("decideConfigOpen", () => {
       "SERI_SEED",
       "SERI_OPENROUTER_PROVIDER",
       "SERI_TUI_BACKGROUND",
+      "SERI_ALLOW_UNSANDBOXED_COMMANDS",
+      "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES",
     ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
@@ -1581,6 +1585,25 @@ describe("decideConfigOpen", () => {
 
     // A mistyped value must not silently disable the feature.
     setConfigValue("SERI_VERIFY_ENABLED", "yes", configConfigDir);
+    expect(on()).toBe(true);
+  });
+
+  test("SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES's on matrix: unset/'false'/'yes' → false; 'true' → true", () => {
+    const on = (): boolean | undefined => {
+      const row = decideConfigOpen(configConfigDir).find(
+        (r) => r.key === "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES",
+      );
+      return row?.kind === "boolean" ? row.on : undefined;
+    };
+    expect(on()).toBe(false);
+
+    setConfigValue("SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES", "false", configConfigDir);
+    expect(on()).toBe(false);
+
+    setConfigValue("SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES", "yes", configConfigDir);
+    expect(on()).toBe(false);
+
+    setConfigValue("SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES", "true", configConfigDir);
     expect(on()).toBe(true);
   });
 

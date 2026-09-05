@@ -449,6 +449,95 @@ describe("run (argv and usage errors)", () => {
     expect(logs.join("\n")).toContain("--dangerously-skip-permissions");
   });
 
+  test("`--permission-prompts none` is accepted and reaches runLoop", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--permission-prompts", "none", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).not.toBe(2);
+    expect(capture()).toBeDefined();
+  });
+
+  test("`--permission-prompts live` is accepted and reaches runLoop", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--permission-prompts", "live", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).not.toBe(2);
+    expect(capture()).toBeDefined();
+  });
+
+  test("`--permission-prompts` with an invalid value is a usage error, and creates no session", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let code: number;
+    try {
+      code = await run(["--permission-prompts", "always", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("Invalid --permission-prompts value: always");
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
+  test("`--permission-prompts` with no value is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--permission-prompts"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+  });
+
+  test("`--help` output documents `--permission-prompts`", async () => {
+    const { logs } = await captureLogs(() => run(["--help"], { sessionsDir }));
+
+    expect(logs.join("\n")).toContain("--permission-prompts");
+  });
+
+  test("`--permission-prompts none` with no task is a usage error, and creates no session", async () => {
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--permission-prompts", "none"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+  });
+
   test("`permissions list` is a task, not an argv verb", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake, capture } = fakeRunLoop();
@@ -1030,6 +1119,53 @@ describe("run (serve / exec)", () => {
     }
     expect(code).toBe(0);
     expect(approvals).toEqual([{ answer: "no" }]);
+  });
+
+  test("`seri exec --permission-prompts none` POSTs permissionPrompts none", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const turnBodies: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["exec", "--permission-prompts", "none", "write"], {
+        fetch: fetchImpl,
+        authConfigDir: getConfigDir(),
+      });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(0);
+    expect(JSON.stringify(turnBodies[0])).toContain('"permissionPrompts":"none"');
   });
 
   test("`seri exec` cancels the daemon turn on the first SIGINT", async () => {

@@ -1,3 +1,4 @@
+import { canonicalizeLoopbackHost } from "@seri/daemon-client";
 import { MCP_CALLBACK_PATH, MCP_CALLBACK_PORTS, mcpCallbackUri } from "./authProvider";
 
 // Every way one login can end. `denied` carries the authorization server's own error_description,
@@ -78,7 +79,7 @@ type ActiveWait = {
 export const startCallbackServer: StartCallbackServer = async (opts) => {
   const ports = opts?.ports ?? MCP_CALLBACK_PORTS;
   const callbackPath = opts?.path ?? MCP_CALLBACK_PATH;
-  const redirectHost = opts?.redirectHost ?? "127.0.0.1";
+  const redirectHost = canonicalizeLoopbackHost(opts?.redirectHost ?? "127.0.0.1");
   let active: ActiveWait | undefined;
   let stopped = false;
   // Carries the port alongside the server because Server.port is `number | undefined` (a

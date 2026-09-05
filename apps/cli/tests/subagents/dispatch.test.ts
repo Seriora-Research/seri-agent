@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
@@ -90,6 +90,7 @@ function makeRuntime(
     agents: builtinRegistry(),
     permissionMode: () => "auto",
     allowedTools: [],
+    pathDenials: [],
     reasoningEffort: undefined,
     ...overrides,
   };
@@ -593,6 +594,7 @@ describe("dispatch_subagents", () => {
       catalog: { fetchedAt: "", entries: [] },
       permissionMode: () => "approve-each",
       allowedTools: [],
+      pathDenials: [],
       maxIterations: 3,
       reasoningEffort: undefined,
     };
@@ -628,6 +630,56 @@ describe("dispatch_subagents", () => {
     expect(result.summary).toContain("containment block");
     expect(result.summary).toContain('"auto"');
     expect(result.summary).not.toContain("it can only write in auto mode");
+  });
+
+  test("a child's denied missing path is a permission denial, not a missing-path probe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "seri-child-deny-"));
+    const app = join(root, "app");
+    mkdirSync(app);
+    const events: LoopEvent[] = [];
+    try {
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", "glob", { pattern: "*.txt", path: "../secret/missing" }),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      const runtime: SubagentRuntime = {
+        runLoop: async function* (opts) {
+          for await (const event of realRunLoop(opts)) {
+            events.push(event);
+            yield event;
+          }
+        } as typeof realRunLoop,
+        model,
+        provider: "groq",
+        modelId: "test-model",
+        catalog: { fetchedAt: "", entries: [] },
+        permissionMode: () => "auto",
+        allowedTools: [],
+        pathDenials: [{ tool: "glob", pattern: `${root.replaceAll("\\", "/")}/secret/**` }],
+        cwd: app,
+        reasoningEffort: undefined,
+      };
+      await runSubagent({
+        tools: agentToolSet(agentSpec("explore"), undefined, app),
+        system: "irrelevant",
+        messages: [{ role: "user", content: "go" }],
+        runtime,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "glob",
+      reason: "blocked",
+    });
+    const error = events.find((event) => event.type === "error");
+    expect(error?.type === "error" ? error.error : "").not.toContain("Path not found");
   });
 
   test("batch cap: only the first 3 tasks run, the rest come back as not-run rows", async () => {
@@ -690,6 +742,31 @@ describe("dispatch_subagents", () => {
     expect(opts.system?.startsWith("PARENT SYSTEM TIERS")).toBe(true);
     expect(opts.system).toContain('"tester" subagent');
     expect(opts.reasoningEffort).toBe("medium");
+  });
+
+  test("a child shares the parent's outside-cwd latch but is never a live human", async () => {
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    const outsideConsent = { current: "allowed-this-run" as const };
+    const dispatchTool = createDispatchTool(
+      makeRuntime(fake, {
+        cwd: "/tmp/parent-wd",
+        blockReadsOutsideWorkingDirectories: true,
+        outsideConsent,
+        agents: withMutators(),
+      }),
+    );
+    await dispatchTool.execute(
+      { tasks: [{ role: "tester", goal: "run checks" }] },
+      dispatchOpts("t1"),
+    );
+
+    const opts = calls[0].opts;
+    expect(opts.workingDirectory).toBe("/tmp/parent-wd");
+    expect(opts.blockReadsOutsideWorkingDirectories).toBe(true);
+    expect(opts.askOutsideFs).toBe(false);
+    expect(opts.outsideConsent).toBe(outsideConsent);
   });
 
   test("a default runtime leaves nested opts.reasoningEffort undefined", async () => {

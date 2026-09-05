@@ -61,6 +61,7 @@ import {
 import {
   loadConfig,
   loadReasoningEffortConfig,
+  loadSandboxConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
@@ -79,6 +80,9 @@ import { readDaemonDescriptorFile } from "./daemon/descriptor";
 import type { RunScheduled } from "./daemon/scheduler";
 import { runDoctorChecks } from "./doctor/checks";
 import { doctorExitCode, printDoctorReport } from "./doctor/report";
+import { defaultBangRunners, submitBang } from "./sandbox/bang";
+import { probeConfinement } from "./sandbox/confine";
+import { parseBangLine, resolveShellLaunch } from "./sandbox/policy";
 import { runUpdate } from "./update/run";
 import {
   type ExecuteTurn,
@@ -87,11 +91,13 @@ import {
 } from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
+import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
+  type ApprovalDetail,
   type ApprovalPrompt,
   DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
@@ -115,6 +121,7 @@ import {
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
+import { parsePromptChannel, type PromptChannel } from "./permissions/promptChannel";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { unlinkPlanFile } from "./plan/files";
 import {
@@ -806,6 +813,7 @@ function makeApprovalPrompt(
   // Reads only from `input`, unchanged.
   openInterface: () => Interface = () =>
     createInterface({ input: process.stdin, output: chooseInterfaceOutput() }),
+  cwd: () => string = () => process.cwd(),
 ): ApprovalPrompt {
   // Once true, no further prompt in this run touches stdin at all. `process.stdin` is a single
   // shared stream that only ever emits 'end' once: the FIRST prompt's Interface is what actually
@@ -821,7 +829,7 @@ function makeApprovalPrompt(
   // reads and needs no approval at all; this only engages once stdin has actually ended.
   let ended = false;
 
-  return (toolName, args, signal) =>
+  return (toolName, args, signal, detail) =>
     new Promise<ApprovalAnswer>((resolve) => {
       if (signal?.aborted === true || ended) {
         resolve("no");
@@ -829,8 +837,10 @@ function makeApprovalPrompt(
       }
       // isPersistableTool (permissions/store.ts) is the single answer to "may this be remembered
       // permanently" — this prompt's offer and rememberGrant's own acceptance read the same
-      // function so the two cannot drift out of agreement with each other.
-      const offersAlways = isPersistableTool(toolName);
+      // function so the two cannot drift out of agreement with each other. An outside-cwd path
+      // is a one-shot for this run, never a persisted grant, so [a]lways stays off there.
+      const offersAlways =
+        isPersistableTool(toolName) && locationForCall(cwd(), toolName, args) !== "outside";
       let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
@@ -854,17 +864,20 @@ function makeApprovalPrompt(
         }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(approvalPromptText(toolName, args, offersAlways), (answer) => {
-        answered = true;
-        abort.dispose();
-        rl.close();
-        const typed = answer.trim().toLowerCase();
-        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-        // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-        // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
-        const wantsAlways = offersAlways && (typed === "a" || typed === "always");
-        resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
-      });
+      rl.question(
+        approvalPromptText(toolName, args, offersAlways, detail?.classifierReason),
+        (answer) => {
+          answered = true;
+          abort.dispose();
+          rl.close();
+          const typed = answer.trim().toLowerCase();
+          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+          // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
+          // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
+          const wantsAlways = offersAlways && (typed === "a" || typed === "always");
+          resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
+        },
+      );
     });
 }
 
@@ -886,6 +899,7 @@ const PARSE_OPTIONS = {
   continue: { type: "boolean" },
   "max-turns": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
+  "permission-prompts": { type: "string" },
   profile: { type: "string" },
 } as const;
 
@@ -898,11 +912,13 @@ type ParsedArgs = {
     continue?: boolean;
     "max-turns"?: string;
     "dangerously-skip-permissions"?: boolean;
+    "permission-prompts"?: string;
     profile?: string;
   };
   positionals: string[];
   maxTurns: number | undefined;
   skipPermissions: boolean;
+  promptChannel: PromptChannel;
   // True when positionals[0] came from AFTER a `--` terminator: `seri -- serve` means the task
   // text "serve", not the daemon verb — AGENTS.md's "`--` is the documented escape for a task
   // that contains what looks like a flag" applies to verbs too, not just `--foo`-shaped words.
@@ -976,6 +992,9 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     maxTurns = Number(maxTurnsRaw);
   }
 
+  const promptChannel = parsePromptChannel(values["permission-prompts"]);
+  if (typeof promptChannel === "object") return usageError(promptChannel.error);
+
   // Validated here too, right after the parse: an invalid profile from either source is a usage
   // error, not a silent fallback to "default" — the alternative would write a user's sessions and
   // auth into the tree they believed they were isolated from.
@@ -1007,6 +1026,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     positionals,
     maxTurns,
     skipPermissions: values["dangerously-skip-permissions"] === true,
+    promptChannel,
     verbEscaped,
   };
 }
@@ -1087,6 +1107,7 @@ async function handleServeCommand(
 async function handleExecCommand(
   positionals: string[],
   deps: CliDeps,
+  promptChannel: PromptChannel,
 ): Promise<number | undefined> {
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
@@ -1110,7 +1131,11 @@ async function handleExecCommand(
     if (turnId !== undefined) void client.cancel(turnId).catch(() => {});
   });
   try {
-    for await (const event of client.startTurn({ task, cwd: process.cwd() })) {
+    for await (const event of client.startTurn({
+      task,
+      cwd: process.cwd(),
+      ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
+    })) {
       turnId = event.turnId;
       if (cancelRequested) {
         await client.cancel(turnId);
@@ -1338,6 +1363,7 @@ async function runTui(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
+  promptChannel: PromptChannel,
   // A task typed during the pre-session window (App's own `onPreSessionSubmit` branch), carried
   // here by `run()`. Submitted through `onSubmit` rather than `runTurn` directly, so a queued
   // `/model` or `/mode` behaves exactly as it would typed a second later.
@@ -1647,6 +1673,7 @@ async function runTui(
     toolName: string,
     args: unknown,
     signal?: AbortSignal,
+    detail?: ApprovalDetail,
   ): Promise<ApprovalAnswer> {
     return new Promise<ApprovalAnswer>((resolve) => {
       // Mirrors makeApprovalPrompt's own already-aborted check: a turn already cancelled before
@@ -1656,7 +1683,9 @@ async function runTui(
         return;
       }
       // See makeApprovalPrompt's own comment on this same expression.
-      const offersAlways = isPersistableTool(toolName);
+      const offersAlways =
+        isPersistableTool(toolName) &&
+        locationForCall(liveState.session.cwd, toolName, args) !== "outside";
       // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
       // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
       // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
@@ -1670,7 +1699,15 @@ async function runTui(
         abort.dispose();
         resolve(answer);
       };
-      dispatch({ type: "approval-requested", toolName, args, offersAlways });
+      dispatch({
+        type: "approval-requested",
+        toolName,
+        args,
+        offersAlways,
+        ...(detail?.classifierReason !== undefined
+          ? { classifierReason: detail.classifierReason }
+          : {}),
+      });
     });
   }
 
@@ -2300,7 +2337,7 @@ async function runTui(
         },
         getPermissionMode,
         () => {},
-        tuiApprovalPrompt,
+        promptChannel === "live" ? tuiApprovalPrompt : undefined,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
         {
@@ -2887,6 +2924,26 @@ async function runTui(
     }
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    const bangCommand = parseBangLine(trimmed);
+    if (bangCommand !== undefined) {
+      echoUserInput(value);
+      const confinement = { available: probeConfinement() };
+      const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
+      const launch = resolveShellLaunch(
+        "bang",
+        { allowUnsandboxedCommands, root: liveState.session.cwd },
+        confinement,
+      );
+      try {
+        await submitBang(bangCommand, launch, defaultBangRunners(), liveState.session.cwd, {
+          error: (message) => dispatch({ type: "command-error", message }),
+          output: (text) => dispatch({ type: "transcript-append", line: text }),
+        });
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+      return;
+    }
     // Hoisted above `echoUserInput`, where the split used to sit below it: the queue gate needs
     // `name`, and a queued message must not be echoed. The move is safe because the parse is pure
     // — nothing between here and the echo has a side effect — and every branch further down still
@@ -3194,6 +3251,7 @@ async function runTui(
       onCycleMode,
       onTogglePlan,
       skipPermissions,
+      confinementAvailable: probeConfinement(),
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,
@@ -3302,7 +3360,7 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions, verbEscaped } = parsed;
+  const { values, positionals, maxTurns, skipPermissions, promptChannel, verbEscaped } = parsed;
   // The override is already set — parseCliArgs does it before any of its own validation can
   // short-circuit with a usage error (see the comment there). Nothing to do here except rely on
   // it having happened before handleInfoFlags, runSelftest and all seven getConfigDir() consumers.
@@ -3364,7 +3422,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps);
+  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps, promptChannel);
   if (exec !== undefined) return exec;
 
   const doctor = verbEscaped ? undefined : await handleDoctorCommand(positionals, deps);
@@ -3381,7 +3439,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     if (database.configDir === configDirForStore(trajectoriesDir, "trajectories")) {
       database.importLegacyTrajectories(trajectoriesDir);
     }
-    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, isTTY);
+    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, promptChannel, isTTY);
   } finally {
     database.close();
   }
@@ -3392,6 +3450,7 @@ async function finishCliRun(
   deps: CliDeps,
   maxTurns: number | undefined,
   skipPermissions: boolean,
+  promptChannel: PromptChannel,
   isTTY: boolean,
 ): Promise<number> {
   // Below every early-return above it, so `--help`, `--version` and `--selftest` never start a fetch
@@ -3466,7 +3525,15 @@ async function finishCliRun(
     // reason `prepareSession`'s own catches flush it: this IS the only other path that can end the
     // run before runTui's own `connectDispatch` ever gets a chance to.
     try {
-      runResult = await runTui(prepared, ctx, deps, maxTurns, skipPermissions, queuedTask);
+      runResult = await runTui(
+        prepared,
+        ctx,
+        deps,
+        maxTurns,
+        skipPermissions,
+        promptChannel,
+        queuedTask,
+      );
     } catch (err) {
       return fatalDuringTui(err, prepared.preMountMessages);
     }
@@ -3488,7 +3555,9 @@ async function finishCliRun(
         printEvent,
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir, ctx.database),
-        makeApprovalPrompt(deps.createInterface),
+        promptChannel === "live"
+          ? makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd)
+          : undefined,
         createArchivistState(prepared.session),
       );
     } else {

@@ -896,6 +896,22 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
     state = tuiReducer(state, { type: "approval-resolved" });
     expect(state.pendingApproval).toBeUndefined();
   });
+
+  test("approval-requested carries a classifier reason when one is given", () => {
+    const state = tuiReducer(initialTuiState(session()), {
+      type: "approval-requested",
+      toolName: "bash",
+      args: { command: "git push origin v0.42.0" },
+      offersAlways: false,
+      classifierReason: "tag push publishes the package",
+    });
+    expect(state.pendingApproval).toEqual({
+      toolName: "bash",
+      args: { command: "git push origin v0.42.0" },
+      offersAlways: false,
+      classifierReason: "tag push publishes the package",
+    });
+  });
 });
 
 describe("tuiReducer: ask-user-requested / ask-user-resolved", () => {

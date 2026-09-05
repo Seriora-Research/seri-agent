@@ -229,12 +229,15 @@ export async function runArchivist(args: {
   onWarning: (message: string) => void;
   forceStage?: boolean;
   // Handed down from the parent's own runner rather than rebuilt here — SubagentRuntime's own
-  // comment on this pair argues why a child gets them at all. The archivist needs them more than
-  // any dispatched agent does: its runtime below pins `permissionMode: () => "auto"`, so a
-  // PreToolUse hook is the only thing left in front of a write it decides to make.
+  // comments on the hooks and the classifier argue why a child gets them at all. The archivist
+  // needs them more than any dispatched agent does: its runtime below pins
+  // `permissionMode: () => "auto"`, so a PreToolUse hook and a classifier block are what still
+  // sit in front of a write it decides to make.
   onBeforeTool?: SubagentRuntime["onBeforeTool"];
   onAfterTool?: SubagentRuntime["onAfterTool"];
   containmentEscapeExpected?: boolean;
+  classifyToolCall?: SubagentRuntime["classifyToolCall"];
+  autoModeOnBlock?: SubagentRuntime["autoModeOnBlock"];
   // Overridable only for tests (fakeChildLoop, the same seam subagents/dispatch.test.ts's own
   // makeRuntime already uses) — every production call (maybeRunArchivist, below) leaves this at
   // its default, the real runLoop.
@@ -287,10 +290,13 @@ export async function runArchivist(args: {
     contextWindowSize: args.contextWindow,
     permissionMode: () => "auto",
     allowedTools: [],
+    pathDenials: [],
     reasoningEffort: args.reasoningEffort,
     onBeforeTool: args.onBeforeTool,
     onAfterTool: args.onAfterTool,
     containmentEscapeExpected: args.containmentEscapeExpected,
+    classifyToolCall: args.classifyToolCall,
+    autoModeOnBlock: args.autoModeOnBlock,
   };
 
   let result: Awaited<ReturnType<typeof runSubagent>>;
@@ -358,10 +364,12 @@ export async function maybeRunArchivist(args: {
   signal: AbortSignal;
   onWarning: (message: string) => void;
   reasoningEffort?: string;
-  // Passed straight through to runArchivist — see its own comment on this pair.
+  // Passed straight through to runArchivist — see its own comment on the hooks and the classifier.
   onBeforeTool?: SubagentRuntime["onBeforeTool"];
   onAfterTool?: SubagentRuntime["onAfterTool"];
   containmentEscapeExpected?: boolean;
+  classifyToolCall?: SubagentRuntime["classifyToolCall"];
+  autoModeOnBlock?: SubagentRuntime["autoModeOnBlock"];
   // Overridable only for tests (fakeChildLoop). Production callers omit it.
   runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
@@ -407,6 +415,8 @@ export async function maybeRunArchivist(args: {
     onBeforeTool: args.onBeforeTool,
     onAfterTool: args.onAfterTool,
     containmentEscapeExpected: args.containmentEscapeExpected,
+    classifyToolCall: args.classifyToolCall,
+    autoModeOnBlock: args.autoModeOnBlock,
     runLoop: args.runLoop,
   });
 }

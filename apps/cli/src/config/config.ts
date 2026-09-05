@@ -111,6 +111,15 @@ export function configBoolean(value: string | undefined): boolean {
   return value !== "false";
 }
 
+export const BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY =
+  "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES";
+
+// Unset and every spelling other than the exact string "true" stay off.
+// configBoolean is value !== "false", so unset would become a standing deny.
+export function standingDenyReadsOutside(value: string | undefined): boolean {
+  return value === "true";
+}
+
 // The ground the TUI paints, or nothing. `#rrggbb` only — `#rgb`, `rgb()` and named colors each
 // cost a validator no caller needs. Everything else, the documented `terminal` spelling included,
 // resolves to undefined and leaves the terminal's own background alone: this runs while the
@@ -198,6 +207,19 @@ export function loadTrajectoryConfig(configDir?: string): TrajectoryConfig {
 // never from /effort's own handler directly.
 export function persistDefaultReasoningEffort(tier: string, configDir?: string): void {
   setConfigValue("SERI_REASONING_EFFORT", tier, configDir);
+}
+
+export const ALLOW_UNSANDBOXED_COMMANDS_KEY = "SERI_ALLOW_UNSANDBOXED_COMMANDS";
+
+export type SandboxConfig = { allowUnsandboxedCommands: boolean };
+
+export function loadSandboxConfig(configDir?: string): SandboxConfig {
+  const config = loadConfig(configDir);
+  return {
+    allowUnsandboxedCommands: configBoolean(
+      configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, config),
+    ),
+  };
 }
 
 // configDir is threaded through rather than always resolved internally so that a caller

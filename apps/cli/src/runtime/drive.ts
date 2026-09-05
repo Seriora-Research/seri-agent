@@ -5,7 +5,12 @@ import { buildVolatileTier, joinTiers } from "../agents/systemPrompt";
 import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output";
-import { loadConfig } from "../config/config";
+import {
+  BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
+  configValue,
+  loadConfig,
+  standingDenyReadsOutside,
+} from "../config/config";
 import { loadContainmentExpected } from "../containment/escape";
 import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
@@ -156,6 +161,10 @@ export type DriveLoopOptions = {
   askUser?: AskUserPresenter;
   // Default true. Scheduled runs pass false so the tool and overlay are both absent.
   composeAskUser?: boolean;
+  // Default true. A live human can answer the one-shot outside-cwd question. Scheduled
+  // runs pass false: they already supply a dummy approvalPrompt that answers "no", and
+  // treating that function's existence as a human would decline a question nobody saw.
+  askOutsideFs?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -201,12 +210,13 @@ export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
 // readline.Interface on process.stdin and has its own `rl.on("SIGINT", ...)`, which on the TUI
 // path fights Ink for stdin ownership (Ink's own useInput already owns raw mode there) and races
 // signals.ts's single cancel slot with a second, independent SIGINT route. The non-interactive
-// path still passes `makeApprovalPrompt(deps.createInterface)`, unchanged; the TUI path
-// (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
+// path still passes `makeApprovalPrompt(deps.createInterface)`; the TUI
+// path (runTui, further down) passes its own tuiApprovalPrompt — the SAME ApprovalPrompt contract
 // (loop.ts), resolved via the reducer's own pendingApproval state and a keypress instead of
 // readline.question, which is what the research spec's own "Command migration" section already
 // said a TUI would supply: "a different function of the identical signature... with zero change
-// to loop.ts/gate.ts."
+// to loop.ts/gate.ts." Omitting the function is the no-prompt-channel path: decidePermission
+// returns deny-blocked instead of asking.
 export async function driveLoop(
   prepared: PreparedRun,
   ctx: RunContext,
@@ -215,7 +225,7 @@ export async function driveLoop(
   onEvent: (event: LoopEvent) => void,
   getPermissionMode: () => PermissionMode,
   persist: (session: SessionState<ModelMessage>) => void,
-  approvalPrompt: ApprovalPrompt,
+  approvalPrompt: ApprovalPrompt | undefined,
   // The tool-call counter/message cursor the archivist trigger reads and advances — one instance
   // per SESSION, created by this function's two callers (createArchivistState), not rebuilt here,
   // so the counter accumulates across every turn of that session rather than resetting on each
@@ -235,6 +245,7 @@ export async function driveLoop(
     model,
     worktree,
     allowedTools,
+    pathDenials,
     catalog,
     catalogEntry,
     route,
@@ -242,9 +253,16 @@ export async function driveLoop(
     memory,
   } = prepared;
   const runLoopFn = deps.runLoop ?? runLoopReal;
-  const loadedConfig = loadConfig(ctx.configDir);
-  const reasoningEffort = resolveReasoningEffort(session, loadedConfig);
+  const config = loadConfig(ctx.configDir);
+  const reasoningEffort = resolveReasoningEffort(session, config);
   const samplingConfig = loadSamplingConfig(ctx.configDir);
+  const standingDeny = standingDenyReadsOutside(
+    configValue(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, config),
+  );
+  const askOutsideFs = driveOpts.askOutsideFs !== false;
+  if (prepared.outsideConsent === undefined) {
+    prepared.outsideConsent = { current: "unasked" };
+  }
   prepared.trajectory.setStepCeiling(maxTurns ?? 500);
 
   // The controller lives here, not in the loop: runLoop is a library that is handed a signal, and
@@ -295,7 +313,7 @@ export async function driveLoop(
   // wins over those defaults. Construction failures warn and reuse the session model rather than
   // failing the parent turn. Computed even when composeSubagents is false: maybeRunArchivist
   // still needs the archivist overlay.
-  const pins = parseRolePins(process.env, loadedConfig);
+  const pins = parseRolePins(process.env, config);
   const configured = configuredProviders(ctx.configDir);
   type RoleOverlay = {
     model: LanguageModel;
@@ -384,7 +402,7 @@ export async function driveLoop(
     cwd: session.cwd,
     signal: controller.signal,
   });
-  const containmentEscapeExpected = loadContainmentExpected(loadedConfig);
+  const containmentEscapeExpected = loadContainmentExpected(config);
   // Hoisted rather than built inline in the composition below, because directDispatch (further
   // down) runs its one child against this exact same runtime: same overlay resolution, same
   // checkpointer, same usage fold, same child-event forwarding. A `/name` child and a
@@ -403,14 +421,20 @@ export async function driveLoop(
     agents: prepared.agents,
     permissionMode: getPermissionMode,
     allowedTools,
+    pathDenials,
     checkpointer,
     reasoningEffort,
     cwd: worktree,
-    // The same pair the parent loop below is driven with — see SubagentRuntime's own comment on
-    // these two for why a child gets the hooks even though it deliberately does not get the rules.
+    blockReadsOutsideWorkingDirectories: standingDeny,
+    outsideConsent: prepared.outsideConsent,
+    // Hooks and the classifier both have to ride down: a child never sees the parent's
+    // approvalPrompt, and SubagentRuntime's own comments on each pair say why omitting either
+    // would punch a hole through auto.
     onBeforeTool: hookRunner?.onBeforeTool,
     onAfterTool: hookRunner?.onAfterTool,
     containmentEscapeExpected,
+    classifyToolCall: prepared.classifyToolCall,
+    autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
     resolveRole: (role: string, request?: TaskRouteRequest) => overlayFor(role, request),
     // Folds every child's usage/cost into the SAME accumulators the runLoopFn loop below uses, so
     // subagent tokens land in the run's own reported total instead of vanishing.
@@ -513,6 +537,8 @@ export async function driveLoop(
           // handle: the loop copies it (loop.ts:211) and growth comes back out as `tool-allowed`,
           // below.
           allowedTools,
+          pathDenials,
+          cwd: session.cwd,
           // The `mcp` tool composed above is one ToolSet key standing in for every tool on every
           // configured server — mcpCallSubject is what tells the gate, the approval prompt and
           // every rendered event which one a given call actually means, resolving to the umbrella
@@ -521,6 +547,12 @@ export async function driveLoop(
           // unchanged for anything that isn't literally "mcp".
           callSubject: mcpCallSubject,
           approvalPrompt,
+          classifyToolCall: prepared.classifyToolCall,
+          autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
+          workingDirectory: session.cwd,
+          blockReadsOutsideWorkingDirectories: standingDeny,
+          askOutsideFs,
+          outsideConsent: prepared.outsideConsent,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
           system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and
@@ -679,6 +711,8 @@ export async function driveLoop(
         onBeforeTool: hookRunner?.onBeforeTool,
         onAfterTool: hookRunner?.onAfterTool,
         containmentEscapeExpected,
+        classifyToolCall: prepared.classifyToolCall,
+        autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
       });
       prepared.trajectory.recordArchivist(archivist);
     }

@@ -4036,6 +4036,98 @@ describe("App", () => {
       expect(setup.captureCharFrame()).not.toContain("(shift+tab to cycle)");
     });
 
+    test("at MODE_HINT_COLS with confinement, leftover-packed sandbox stays and the hint yields", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      try {
+        const { setup } = await connect({ confinementAvailable: true, route: undefined });
+        await resize(setup, MODE_HINT_COLS, DEFAULT_HEIGHT);
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain(" · unsandboxed");
+        expect(frame).not.toContain("(shift+tab to cycle)");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
+    test("sandbox suffix and cycle hint both fit once remaining covers label + suffix + hint", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      try {
+        const { setup } = await connect({
+          confinementAvailable: true,
+          route: undefined,
+          session: session({ permissionMode: "auto" }),
+        });
+        const bothFit = MODE_LABEL.auto.length + " · unsandboxed".length + MODE_CYCLE_HINT.length;
+        await resize(setup, bothFit, DEFAULT_HEIGHT);
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain(" · unsandboxed");
+        expect(frame).toContain("(shift+tab to cycle)");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
+    test("sandbox suffix drops when leftover after the mode label is shorter than the suffix", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      try {
+        const { setup } = await connect({
+          confinementAvailable: true,
+          route: undefined,
+          session: session({ permissionMode: "auto" }),
+        });
+        const suffix = " · unsandboxed";
+        const tooNarrow = MODE_LABEL.auto.length + suffix.length - 1;
+        await resize(setup, tooNarrow, DEFAULT_HEIGHT);
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain(MODE_LABEL.auto);
+        expect(frame).not.toContain("unsandboxed");
+        const modeLine = frame.split("\n").find((l) => l.includes(MODE_LABEL.auto));
+        expect(modeLine?.trimEnd().length).toBeLessThanOrEqual(tooNarrow);
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
+    test("the mode row does not claim an OS sandbox when confinement was not passed in", async () => {
+      const { setup } = await connect();
+      expect(setup.captureCharFrame()).not.toContain("os sandbox");
+      expect(setup.captureCharFrame()).not.toContain("unsandboxed");
+    });
+
+    test("the mode row names unsandboxed when bang may leave a real OS sandbox", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      try {
+        const { setup } = await connect({ confinementAvailable: true });
+        expect(setup.captureCharFrame()).toContain(" · unsandboxed");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
+    test("the mode row names os sandbox when the strict floor is on and confinement exists", async () => {
+      const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+      process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "false";
+      try {
+        const { setup } = await connect({
+          confinementAvailable: true,
+          config: { SERI_ALLOW_UNSANDBOXED_COMMANDS: "false" },
+        });
+        expect(setup.captureCharFrame()).toContain(" · os sandbox");
+        expect(setup.captureCharFrame()).not.toContain("unsandboxed");
+      } finally {
+        if (original === undefined) delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+        else process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = original;
+      }
+    });
+
     test("at 80 columns, the idle mode row keeps the route suffix without wrapping", async () => {
       const { setup } = await connect({
         session: session({ permissionMode: "approve-each" }),

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import pkg from "../../package.json";
+import { gitArgv } from "../checkpoint/gitArgv";
 
 // `bun build --define SERI_BAKED_COMMIT='"…"'` replaces this identifier with a
 // string literal. `typeof` on the undeclared name is safe and yields
@@ -33,7 +34,7 @@ export function harnessId(
 
 export function readGitHead(): string | undefined {
   try {
-    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+    const sha = execFileSync("git", gitArgv(["rev-parse", "HEAD"]), {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
