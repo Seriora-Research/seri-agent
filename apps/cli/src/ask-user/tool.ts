@@ -25,8 +25,8 @@ export function withAskUser(tools: ToolSet, presenter: AskUserPresenter | undefi
         "Ask the user one multiple-choice product or clarification question. " +
         "Pass 2–6 short choices. allowOther (default true) adds a free-text Other. " +
         "Call this only when the worktree cannot answer the question. " +
-        "If the result is unavailable, do not retry — state an assumption and continue. " +
-        "If the result is cancelled, do not ask again; proceed or say what is blocked.",
+        "If the result is unavailable, cancelled, or invalid, do not retry — " +
+        "state an assumption and continue, or say what is blocked.",
       inputSchema: askUserSchema,
       execute: (input, opts) => executeAskUser(input, presenter, opts.abortSignal),
     }),
@@ -41,7 +41,7 @@ export async function executeAskUser(
   const parsed = parseAskPrompt(input);
   if (!parsed.ok) return { outcome: "invalid", issues: parsed.issues };
   if (presenter === undefined) return { outcome: "unavailable", reason: "no-human" };
-  if (signal?.aborted === true) return { outcome: "unavailable", reason: "no-human" };
+  if (signal?.aborted === true) return { outcome: "cancelled" };
   const raw = await presenter(parsed.prompt, signal);
   if (raw.outcome === "picked" || raw.outcome === "other") {
     return assertReplyMatchesPrompt(parsed.prompt, raw);

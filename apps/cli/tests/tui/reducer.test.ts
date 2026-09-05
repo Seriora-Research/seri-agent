@@ -810,6 +810,14 @@ describe("tuiReducer: ask-user-requested / ask-user-resolved", () => {
     expect(state.plan.kind).toBe("on");
   });
 
+  test("ask-user-requested blurs the subagent roster", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "subagent-panel-focus" });
+    expect(state.subagentPanelFocus).toBe(true);
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingAskUser).toEqual(prompt);
+    expect(state.subagentPanelFocus).toBe(false);
+  });
+
   test("approval and ask-user can both be set", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "approval-requested",

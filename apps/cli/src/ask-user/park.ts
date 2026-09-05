@@ -26,7 +26,7 @@ export function createAskUserPark(deps: AskUserParkDeps): AskUserPark {
   async function present(prompt: AskPrompt, signal?: AbortSignal): Promise<AskUserResult> {
     if (deps.approvalOccupied()) return { outcome: "unavailable", reason: "nested-approval" };
     if (resolve !== undefined) return { outcome: "unavailable", reason: "nested-approval" };
-    if (signal?.aborted === true) return { outcome: "unavailable", reason: "no-human" };
+    if (signal?.aborted === true) return { outcome: "cancelled" };
     return await new Promise<AskUserResult>((ok) => {
       let abort: ReturnType<typeof onAbort> | undefined;
       resolve = (result) => {
@@ -34,7 +34,10 @@ export function createAskUserPark(deps: AskUserParkDeps): AskUserPark {
         ok(result);
       };
       abort = onAbort(signal, () => answer({ outcome: "cancelled" }));
-      if (resolve === undefined) return;
+      if (resolve === undefined) {
+        abort.dispose();
+        return;
+      }
       deps.dispatchOccupy(prompt);
     });
   }

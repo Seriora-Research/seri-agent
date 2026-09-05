@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { executeAskUser, withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME, type AskUserPresenter } from "../../src/ask-user/types";
 import { toolDefinitions } from "../../src/provider/tools";
@@ -21,14 +22,19 @@ describe("executeAskUser", () => {
     expect(result.outcome).not.toBe("cancelled");
   });
 
-  test("an already-aborted signal fails closed without parking", async () => {
+  test("an already-aborted signal with a presenter is cancelled, not no-human", async () => {
     let called = false;
     const presenter: AskUserPresenter = async () => {
       called = true;
-      return { outcome: "cancelled" };
+      return { outcome: "picked", choice: "JWT" };
     };
     const result = await executeAskUser(valid, presenter, AbortSignal.abort());
     expect(called).toBe(false);
+    expect(result).toEqual({ outcome: "cancelled" });
+  });
+
+  test("an already-aborted signal without a presenter is still no-human", async () => {
+    const result = await executeAskUser(valid, undefined, AbortSignal.abort());
     expect(result).toEqual({ outcome: "unavailable", reason: "no-human" });
   });
 
@@ -63,5 +69,13 @@ describe("withAskUser", () => {
     const tools = withAskUser(toolDefinitions, undefined);
     expect(ASK_USER_TOOL_NAME in tools).toBe(true);
     expect(Object.keys(toolDefinitions)).not.toContain(ASK_USER_TOOL_NAME);
+  });
+});
+
+describe("ASK_USER_OVERLAY", () => {
+  test("says Other is on by default and not to retry invalid", () => {
+    expect(ASK_USER_OVERLAY).toMatch(/default/i);
+    expect(ASK_USER_OVERLAY).toContain("invalid");
+    expect(ASK_USER_OVERLAY).not.toMatch(/Set allowOther/);
   });
 });

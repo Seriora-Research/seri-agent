@@ -2320,6 +2320,9 @@ async function runTui(
       // mirrors is signals.ts's, and it is only genuinely free again once this turn has actually
       // settled.
       cancelDelivered = false;
+      // If driveLoop threw without aborting, the presenter would stay occupied and the next
+      // turn's ask_user would see nested-approval. Same unpark quit() uses.
+      if (liveState.pendingAskUser !== undefined) askUserPark.answer({ outcome: "cancelled" });
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call

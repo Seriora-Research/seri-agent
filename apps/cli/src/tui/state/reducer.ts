@@ -769,7 +769,7 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
     case "ask-user-requested":
-      return { ...state, pendingAskUser: action.prompt };
+      return { ...state, pendingAskUser: action.prompt, subagentPanelFocus: false };
     case "ask-user-resolved":
       return { ...state, pendingAskUser: undefined };
     case "plan-on":

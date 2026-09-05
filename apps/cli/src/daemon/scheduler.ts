@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { ScheduleRequest, ScheduleTiming } from "@seri/daemon-client";
-import { ASK_USER_TOOL_NAME } from "../ask-user/types";
 import {
   createScheduledToolDefinitions,
   DISPATCH_TOOL_NAME,
@@ -54,9 +53,6 @@ export function assertScheduledToolset(
   }
   if (DISPATCH_TOOL_NAME in tools) {
     throw new Error("scheduled tools must not include dispatch_subagents");
-  }
-  if (ASK_USER_TOOL_NAME in tools) {
-    throw new Error("scheduled tools must not include ask_user");
   }
   if ("memory_write" in tools) {
     throw new Error("scheduled tools must not include memory_write");

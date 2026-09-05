@@ -72,19 +72,22 @@ describe("createAskUserPark", () => {
     expect(vacated).toBe(1);
   });
 
-  test("an already-aborted signal does not occupy", async () => {
+  test("an already-aborted signal does not occupy and is cancelled, not no-human", async () => {
     let occupied = 0;
+    let vacated = 0;
     const park = createAskUserPark({
       dispatchOccupy: () => {
         occupied += 1;
       },
-      dispatchVacate: () => {},
+      dispatchVacate: () => {
+        vacated += 1;
+      },
       approvalOccupied: () => false,
     });
     await expect(park.present(prompt, AbortSignal.abort())).resolves.toEqual({
-      outcome: "unavailable",
-      reason: "no-human",
+      outcome: "cancelled",
     });
     expect(occupied).toBe(0);
+    expect(vacated).toBe(0);
   });
 });

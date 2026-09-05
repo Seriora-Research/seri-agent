@@ -1497,6 +1497,49 @@ describe("runLoop", () => {
       expect(second.start).toBeGreaterThanOrEqual(first.end);
     });
 
+    test("two ask_user calls in one step still do not overlap", async () => {
+      const intervals: { start: number; end: number }[] = [];
+      const tools: ToolSet = {
+        ask_user: tool({
+          description: "ask",
+          inputSchema: z.object({ prompt: z.string(), choices: z.array(z.string()) }),
+          execute: async () => {
+            const start = performance.now();
+            await sleep(30);
+            intervals.push({ start, end: performance.now() });
+            return { outcome: "unavailable", reason: "no-human" };
+          },
+        }),
+      };
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            multiToolCallChunks([
+              {
+                toolCallId: "call-1",
+                toolName: "ask_user",
+                input: { prompt: "One?", choices: ["a", "b"] },
+              },
+              {
+                toolCallId: "call-2",
+                toolName: "ask_user",
+                input: { prompt: "Two?", choices: ["c", "d"] },
+              },
+            ]),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+      expect(intervals).toHaveLength(2);
+      const first = intervals[0];
+      const second = intervals[1];
+      if (first === undefined || second === undefined) {
+        throw new Error("expected two ask_user intervals");
+      }
+      expect(second.start).toBeGreaterThanOrEqual(first.end);
+    });
+
     test("a write_file between two reads is a barrier", async () => {
       const marks: { name: string; at: "start" | "end"; t: number }[] = [];
       const stamp = (name: string, at: "start" | "end") => {
