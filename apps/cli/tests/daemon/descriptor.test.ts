@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDaemonDescriptorPath, getDaemonLockPath } from "../../src/config/paths";
@@ -102,6 +110,34 @@ describe("daemon descriptor and lock", () => {
     });
     await daemon.stop();
     expect(readDaemonDescriptorFile(configDir)).toBeUndefined();
+  });
+
+  test("mapped loopback endpoints are stored and read as 127.0.0.1", () => {
+    const configDir = makeDir();
+    writeDaemonDescriptor(configDir, {
+      v: 1,
+      endpoint: "http://[::ffff:127.0.0.1]:9",
+      token: "t",
+      pid: 1,
+      startedAt: "now",
+    });
+    expect(readDaemonDescriptorFile(configDir)?.endpoint).toBe("http://127.0.0.1:9");
+    const stored = JSON.parse(readFileSync(getDaemonDescriptorPath(configDir), "utf8")) as {
+      endpoint: string;
+    };
+    expect(stored.endpoint).toBe("http://127.0.0.1:9");
+
+    writeFileSync(
+      getDaemonDescriptorPath(configDir),
+      `${JSON.stringify({
+        v: 1,
+        endpoint: "http://[::ffff:127.0.0.1]:9",
+        token: "t",
+        pid: 1,
+        startedAt: "now",
+      })}\n`,
+    );
+    expect(readDaemonDescriptorFile(configDir)?.endpoint).toBe("http://127.0.0.1:9");
   });
 
   test("a truncated descriptor is treated as absent", () => {
