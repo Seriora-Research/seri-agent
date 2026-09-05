@@ -520,9 +520,9 @@ describe("run (argv and usage errors)", () => {
         loadAgentsFile: () => "",
         sessionsDir,
         grep: grepFn,
-        fetch: async () => {
+        fetch: (async () => {
           throw new Error("doctor must not fetch");
-        },
+        }) as unknown as typeof fetch,
       }),
     );
 
@@ -572,9 +572,9 @@ describe("run (argv and usage errors)", () => {
         runLoop: fake,
         loadAgentsFile: () => "",
         sessionsDir,
-        fetch: async () => {
+        fetch: (async () => {
           throw new Error("update from source must not fetch");
-        },
+        }) as unknown as typeof fetch,
       });
     } finally {
       console.error = originalError;

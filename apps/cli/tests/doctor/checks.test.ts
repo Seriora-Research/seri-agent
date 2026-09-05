@@ -7,6 +7,10 @@ import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
 
+function asFetch(fn: () => Promise<never>): typeof fetch {
+  return fn as unknown as typeof fetch;
+}
+
 const originalHome = process.env.HOME;
 const originalGroq = process.env.GROQ_API_KEY;
 const originalDisableFetch = process.env.SERI_DISABLE_MODELS_FETCH;
@@ -77,9 +81,9 @@ describe("runDoctorChecks", () => {
         matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
         truncated: false,
       }),
-      fetch: async () => {
+      fetch: asFetch(async () => {
         throw new Error("doctor must not fetch");
-      },
+      }),
       execPath: "/usr/bin/bun",
       env: process.env,
       platform: process.platform,
@@ -107,9 +111,9 @@ describe("runDoctorChecks", () => {
         matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
         truncated: false,
       }),
-      fetch: async () => {
+      fetch: asFetch(async () => {
         throw new Error("doctor must not fetch");
-      },
+      }),
       execPath: "/usr/bin/bun",
       env: process.env,
       platform: process.platform,
@@ -129,9 +133,9 @@ describe("runDoctorChecks", () => {
         matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
         truncated: false,
       }),
-      fetch: async () => {
+      fetch: asFetch(async () => {
         throw new Error("doctor must not fetch");
-      },
+      }),
       execPath: "/usr/bin/bun",
       env: process.env,
       platform: process.platform,

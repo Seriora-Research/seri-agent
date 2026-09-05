@@ -11,8 +11,10 @@ export type UpdateResult = {
   lines: string[];
 };
 
+export type UpdateFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
 export type UpdateDeps = {
-  fetch: typeof fetch;
+  fetch: UpdateFetch;
   execPath: string;
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
@@ -155,13 +157,13 @@ async function fetchLatestTag(deps: UpdateDeps): Promise<string> {
   return tagName;
 }
 
-async function downloadBytes(fetchFn: typeof fetch, url: string): Promise<Uint8Array> {
+async function downloadBytes(fetchFn: UpdateFetch, url: string): Promise<Uint8Array> {
   const response = await fetchFn(url);
   if (!response.ok) throw new Error(`download failed ${response.status} ${url}`);
   return new Uint8Array(await response.arrayBuffer());
 }
 
-async function downloadText(fetchFn: typeof fetch, url: string): Promise<string> {
+async function downloadText(fetchFn: UpdateFetch, url: string): Promise<string> {
   const response = await fetchFn(url);
   if (!response.ok) throw new Error(`download failed ${response.status} ${url}`);
   return await response.text();
