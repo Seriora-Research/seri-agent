@@ -70,7 +70,7 @@ function deniedBySandbox(result: { exitCode: number; stderr: string }): boolean 
   return (
     result.stderr.includes("Operation not permitted") ||
     result.stderr.includes("EPERM") ||
-    /\b1\b/.test(result.stderr)
+    result.stderr.startsWith("1 ")
   );
 }
 

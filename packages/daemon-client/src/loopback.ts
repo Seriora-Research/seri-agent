@@ -56,8 +56,12 @@ export function canonicalizeLoopbackUrl(endpoint: string): string {
   } catch {
     return endpoint;
   }
+  const nextHost = canonicalizeLoopbackHost(url.hostname);
+  if (nextHost === url.hostname || nextHost === stripIpv6Brackets(url.hostname)) {
+    return endpoint;
+  }
   const hadTrailingSlash = endpoint.endsWith("/");
-  url.hostname = canonicalizeLoopbackHost(url.hostname);
+  url.hostname = nextHost;
   let href = url.href;
   if (!hadTrailingSlash && href.endsWith("/") && url.pathname === "/") {
     href = href.slice(0, -1);

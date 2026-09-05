@@ -55,6 +55,9 @@ describe("canonicalizeLoopbackUrl", () => {
 
   test("leaves a non-loopback host unchanged", () => {
     expect(canonicalizeLoopbackUrl("http://example.com:9/v1")).toBe("http://example.com:9/v1");
+    expect(canonicalizeLoopbackUrl("http://Example.COM:9/v1?x=%2F")).toBe(
+      "http://Example.COM:9/v1?x=%2F",
+    );
   });
 
   test("returns invalid input unchanged", () => {
