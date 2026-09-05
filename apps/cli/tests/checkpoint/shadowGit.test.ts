@@ -420,11 +420,6 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
   test(
     "does not execute a repo-local core.fsmonitor helper",
     () => {
-      // git status refreshes the index and runs core.fsmonitor. A handed-over `.git/config` can
-      // set that to an arbitrary program. The negative control (bare `git status`) proves the
-      // canary actually fires; gitArgv and every spawnGit caller then have to go through the same
-      // folder without executing it. Global config is the other source of the same helper:
-      // `--git-dir` pointed at the shadow store still reads it.
       const repo = join(root, "handed-over");
       mkdirSync(repo);
       writeFileSync(join(repo, "a.txt"), "hello\n");
