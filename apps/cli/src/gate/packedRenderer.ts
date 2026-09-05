@@ -1,4 +1,5 @@
 import type { ModelMessage } from "ai";
+import { classifyBuiltin } from "../provider/tools";
 
 export const PACKED_RENDERER_UPLOAD = "packed-renderer-upload";
 
@@ -89,6 +90,13 @@ function flattenInput(input: unknown): string {
   }
 }
 
+// Local file writes can contain a renderer URL without sending it. bash, powershell, and an
+// unknown write name (an MCP fetch) can.
+export function packedUploadAppliesTo(toolName: string): boolean {
+  if (toolName === "write_file" || toolName === "edit") return false;
+  return classifyBuiltin(toolName) === "write";
+}
+
 export function findPackedRendererUpload(input: unknown): PackedRendererHit | null {
   for (const raw of extractUrls(flattenInput(input))) {
     let url: URL;
@@ -104,7 +112,9 @@ export function findPackedRendererUpload(input: unknown): PackedRendererHit | nu
 }
 
 const RENDERER_TOKEN = /\b(mermaid(?:\.ink)?|kroki(?:\.io)?|plantuml)\b/i;
-const RENDER_EXPORT_TOKEN = /\b(render|export|preview|draw)\b/i;
+// Inflections listed rather than `\w*`: "rendered" is the human asking, "renderer" is not, and
+// a false positive here is an upload.
+const RENDER_EXPORT_TOKEN = /\b(render|export|preview|draw)(s|ed|ing|n)?\b/i;
 
 export function humanAskedForPackedRender(text: string): boolean {
   return RENDERER_TOKEN.test(text) && RENDER_EXPORT_TOKEN.test(text);

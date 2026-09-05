@@ -14,7 +14,7 @@ import {
   findPackedRendererUpload,
   humanAskedForPackedRender,
   lastUserText,
-  PACKED_RENDERER_UPLOAD,
+  packedUploadAppliesTo,
 } from "../gate/packedRenderer";
 import { withCodexStoreOption } from "../provider/codex";
 import {
@@ -57,7 +57,8 @@ export type LoopEvent =
   // a PreToolUse hook is configuration the user installed, refusing the call it was installed to
   // refuse, which is the mode argument again in another shape. It must therefore never increment
   // MAX_CONSECUTIVE_DENIALS — that streak counts a human answering no to a live question three
-  // times, and there is no human anywhere in a hook's path to answer even once.
+  // times, and there is no human anywhere in a hook's path to answer even once. A
+  // packed-renderer-upload refused in auto (decidePermission) is "blocked" for the same reason.
   | { type: "permission-denied"; name: string; reason: "blocked" | "declined" | "hook" }
   | { type: "messages-updated"; messages: ModelMessage[] }
   | {
@@ -203,6 +204,18 @@ function errorText(err: unknown): string {
 // arrived at differently, because there is still no one to ask); "deny-declined" is a real
 // refusal — a live prompt that answered "no". Only the second should ever increment a denial
 // counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
+// A third way to arrive at "deny-blocked", and the only one that reads the call's INPUT: in auto,
+// an input that packs content into a public diagram-renderer URL (gate/packedRenderer.ts) is an
+// upload to that host, refused unless this turn's human text asked for the render. A block, not a
+// decline, for the reason a hook block is — no human answered anything. The deny verdicts carry
+// the text the model reads because the two blocks need different remedies (/mode cures a mode
+// block and cannot cure this one, auto already being the widest mode) and only this function
+// knows which it produced; deciding it again in the loop body would run the classifier a second
+// time on every denial in every mode.
+type PermissionVerdict =
+  | { kind: "allow" | "allow-new" }
+  | { kind: "deny-blocked" | "deny-declined"; reason: string };
+
 async function decidePermission(
   toolName: string,
   input: unknown,
@@ -211,24 +224,37 @@ async function decidePermission(
   approvalPrompt: ApprovalPrompt | undefined,
   signal: AbortSignal | undefined,
   turnUserText: string,
-): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
-  if (
-    mode === "auto" &&
-    findPackedRendererUpload(input) !== null &&
-    !humanAskedForPackedRender(turnUserText)
-  ) {
-    return "deny-blocked";
+): Promise<PermissionVerdict> {
+  if (mode === "auto" && packedUploadAppliesTo(toolName)) {
+    const upload = findPackedRendererUpload(input);
+    if (upload !== null && !humanAskedForPackedRender(turnUserText)) {
+      return {
+        kind: "deny-blocked",
+        reason:
+          `Tool "${toolName}" was not permitted to run: packing repo or user content into a public ` +
+          `diagram-renderer URL is a ${upload.class} to ${upload.host}, and auto mode does not ` +
+          `approve that unless the user asked for the render or export this turn. Do not retry ` +
+          `this call.`,
+      };
+    }
   }
+  const byMode = (kind: "deny-blocked" | "deny-declined"): PermissionVerdict => ({
+    kind,
+    reason:
+      `Tool "${toolName}" was not permitted to run (permission mode: ${mode}). ` +
+      `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+      `/mode to change the permission mode.`,
+  });
   const permission = checkPermission(toolName, mode, allowedTools);
-  if (permission === "allow") return "allow";
-  if (permission === "block") return "deny-blocked";
-  if (approvalPrompt === undefined) return "deny-blocked";
+  if (permission === "allow") return { kind: "allow" };
+  if (permission === "block") return byMode("deny-blocked");
+  if (approvalPrompt === undefined) return byMode("deny-blocked");
   const answer = await approvalPrompt(toolName, input, signal);
   if (answer === "always") {
     allowedTools.add(toolName);
-    return "allow-new";
+    return { kind: "allow-new" };
   }
-  return answer === "no" ? "deny-declined" : "allow";
+  return answer === "no" ? byMode("deny-declined") : { kind: "allow" };
 }
 
 function isConcurrentReadTool(name: string): boolean {
@@ -820,37 +846,23 @@ export async function* runLoop(opts: {
       // inside decidePermission on purpose — see that function's own comment.
       if (opts.signal?.aborted) break;
 
-      if (verdict === "allow-new") yield { type: "tool-allowed", name: subject };
+      if (verdict.kind === "allow-new") yield { type: "tool-allowed", name: subject };
 
-      if (verdict === "deny-blocked" || verdict === "deny-declined") {
+      if (verdict.kind === "deny-blocked" || verdict.kind === "deny-declined") {
         if ((yield* flushReadBatch()) === "aborted") break;
         // Only a declined call is a signal about the RUN — a blocked one is the mode working as
         // the user asked. See MAX_CONSECUTIVE_DENIALS.
-        if (verdict === "deny-declined") consecutiveDenials++;
+        if (verdict.kind === "deny-declined") consecutiveDenials++;
         yield {
           type: "permission-denied",
           name: subject,
-          reason: verdict === "deny-blocked" ? "blocked" : "declined",
+          reason: verdict.kind === "deny-blocked" ? "blocked" : "declined",
         };
-        const packed = findPackedRendererUpload(call.input);
-        const packedAutoBlock =
-          verdict === "deny-blocked" &&
-          opts.permissionMode === "auto" &&
-          packed !== null &&
-          !humanAskedForPackedRender(turnUserText);
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: {
-            type: "execution-denied",
-            reason:
-              packedAutoBlock && packed !== null
-                ? `Tool "${subject}" was not permitted to run: packing repo or user content into a public diagram-renderer URL is a ${PACKED_RENDERER_UPLOAD} to ${packed.host}. Auto mode does not approve that unless you were asked to render or export it this turn. Do not retry this call.`
-                : `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
-                  `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
-                  `/mode to change the permission mode.`,
-          },
+          output: { type: "execution-denied", reason: verdict.reason },
         });
         continue;
       }

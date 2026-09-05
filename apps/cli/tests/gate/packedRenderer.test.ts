@@ -6,6 +6,7 @@ import {
   lastUserText,
   MIN_PACKED_PAYLOAD_CHARS,
   PACKED_RENDERER_UPLOAD,
+  packedUploadAppliesTo,
 } from "../../src/gate/packedRenderer";
 
 const SECRET = "sk-live-fixture-do-not-upload";
@@ -53,6 +54,40 @@ describe("findPackedRendererUpload", () => {
     });
   });
 
+  test("hits both plantuml.com hosts on a png|svg|txt path", () => {
+    expect(
+      findPackedRendererUpload(`https://www.plantuml.com/plantuml/png/${PACKED_PAYLOAD}`),
+    ).toEqual({ class: PACKED_RENDERER_UPLOAD, host: "www.plantuml.com" });
+    expect(findPackedRendererUpload(`https://plantuml.com/plantuml/txt/${PACKED_PAYLOAD}`)).toEqual(
+      { class: PACKED_RENDERER_UPLOAD, host: "plantuml.com" },
+    );
+  });
+
+  // Both sides of the constant, so raising it past the fixture and lowering it under a short id
+  // each turn a line red. The fixtures above derive from the same import and would follow a
+  // changed value silently.
+  test("the payload threshold is MIN_PACKED_PAYLOAD_CHARS, inclusive", () => {
+    const atMin = "A".repeat(MIN_PACKED_PAYLOAD_CHARS);
+    expect(findPackedRendererUpload(`https://kroki.io/plantuml/png/${atMin}`)).toEqual({
+      class: PACKED_RENDERER_UPLOAD,
+      host: "kroki.io",
+    });
+    expect(findPackedRendererUpload(`https://kroki.io/plantuml/png/${atMin.slice(1)}`)).toBeNull();
+  });
+
+  test("a short path segment on a renderer host is not a payload", () => {
+    expect(findPackedRendererUpload("https://mermaid.ink/img/abc")).toBeNull();
+  });
+
+  test("measures a mermaid.ink pako: payload after stripping the prefix", () => {
+    const body = "e".repeat(MIN_PACKED_PAYLOAD_CHARS);
+    expect(findPackedRendererUpload(`https://mermaid.ink/svg/pako:${body}`)).toEqual({
+      class: PACKED_RENDERER_UPLOAD,
+      host: "mermaid.ink",
+    });
+    expect(findPackedRendererUpload(`https://mermaid.ink/svg/pako:${body.slice(1)}`)).toBeNull();
+  });
+
   test("does not hit a mermaid.ink URL with no packed payload", () => {
     expect(findPackedRendererUpload({ command: "curl https://mermaid.ink/" })).toBeNull();
   });
@@ -91,6 +126,21 @@ describe("humanAskedForPackedRender", () => {
   test("is true when this turn asks to export a kroki chart", () => {
     expect(humanAskedForPackedRender("export this kroki chart")).toBe(true);
   });
+
+  test("accepts an inflected render verb", () => {
+    expect(humanAskedForPackedRender("I want this mermaid diagram rendered as a PNG")).toBe(true);
+    expect(humanAskedForPackedRender("Exporting the plantuml as SVG would help")).toBe(true);
+  });
+
+  test("is false for a render verb with no renderer named", () => {
+    expect(humanAskedForPackedRender("render the README as HTML")).toBe(false);
+  });
+
+  // The false-positive direction is the one that uploads, so a verb embedded in another word must
+  // not count.
+  test("is false when render is only a prefix of another word", () => {
+    expect(humanAskedForPackedRender("the mermaid renderer crashed")).toBe(false);
+  });
 });
 
 describe("lastUserText", () => {
@@ -126,5 +176,21 @@ describe("lastUserText", () => {
 
   test("is empty when there is no user message", () => {
     expect(lastUserText([{ role: "assistant", content: "hi" }])).toBe("");
+  });
+});
+
+describe("packedUploadAppliesTo", () => {
+  test("applies to bash, powershell, and an unknown write name", () => {
+    expect(packedUploadAppliesTo("bash")).toBe(true);
+    expect(packedUploadAppliesTo("powershell")).toBe(true);
+    expect(packedUploadAppliesTo("mcp_exa_web_search")).toBe(true);
+  });
+
+  test("does not apply to reads or local file writes", () => {
+    expect(packedUploadAppliesTo("grep")).toBe(false);
+    expect(packedUploadAppliesTo("read_file")).toBe(false);
+    expect(packedUploadAppliesTo("write_file")).toBe(false);
+    expect(packedUploadAppliesTo("edit")).toBe(false);
+    expect(packedUploadAppliesTo("todo")).toBe(false);
   });
 });

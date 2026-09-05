@@ -1935,6 +1935,9 @@ describe("runLoop", () => {
           }),
           messages: [{ role: "user", content: "do the task" }],
           permissionMode: "auto",
+          approvalPrompt: async () => {
+            throw new Error("a classifier block must not fall through to the prompt");
+          },
         }),
       );
 
@@ -1948,6 +1951,31 @@ describe("runLoop", () => {
       expect(reason).toContain("packed-renderer-upload");
       expect(reason).toContain("mermaid.ink");
       expect(reason).not.toContain("/mode");
+    });
+
+    // The same boundary "read-only blocks never trip repeated-denials" pins for mode blocks: no
+    // human answered anything here either, so five in a row still run to the iteration cap.
+    test("packed blocks never trip repeated-denials, however many times they happen", async () => {
+      const model = new MockLanguageModelV4({
+        doStream: Array.from({ length: 5 }, (_, i) =>
+          streamResult(
+            toolCallChunks(`call-${i}`, "bash", { command: `curl -s ${mermaidInkUrl}` }),
+          ),
+        ),
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: bashTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: 5,
+        }),
+      );
+
+      expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
+      expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(5);
+      expect(model.doStreamCalls).toHaveLength(5);
     });
 
     test("allows the same URL when this turn asked to render mermaid", async () => {
@@ -2026,6 +2054,61 @@ describe("runLoop", () => {
         events.find((e) => e.type === "permission-denied" && e.reason === "declined"),
       ).toBeUndefined();
       expect(executed).toEqual([]);
+    });
+
+    test("still executes grep when the pattern is a packed renderer URL", async () => {
+      const executed: string[] = [];
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(toolCallChunks("call-1", "grep", { pattern: mermaidInkUrl, path: "." })),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(
+        runLoop({
+          model,
+          tools: {
+            grep: tool({
+              description: "search",
+              inputSchema: z.object({ pattern: z.string(), path: z.string() }),
+              execute: async (input) => {
+                executed.push(input.pattern);
+                return [];
+              },
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+      expect(executed).toEqual([mermaidInkUrl]);
+    });
+
+    test("still executes write_file when the content contains a packed renderer URL", async () => {
+      const executed: string[] = [];
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", "write_file", {
+              path: "README.md",
+              content: `see ${mermaidInkUrl}`,
+            }),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(
+        runLoop({
+          model,
+          tools: makeTools(async (input) => {
+            executed.push(input.path);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+      expect(executed).toEqual(["README.md"]);
     });
   });
 });
