@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
@@ -696,6 +697,49 @@ describe("driveLoop mcp composition", () => {
     );
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
   });
+
+  test("permission mode does not change the assembled system or invert dedicated file tools", async () => {
+    const bashFirstPhrases = [
+      "Do your work through the Bash tool",
+      "rather than using the dedicated",
+      "While bypass permissions mode is active",
+    ] as const;
+    const systemPrompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+
+    async function driveWith(mode: "auto" | "approve-each" | "read-only"): Promise<string> {
+      const prepared = preparedStub();
+      prepared.session.systemPrompt = systemPrompt;
+      const capture = fakeRunLoop();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        { runLoop: capture.fake },
+        1,
+        () => {},
+        () => mode,
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+      );
+      const system = capture.capture()?.system;
+      expect(system).toBeDefined();
+      return system as string;
+    }
+
+    const auto = await driveWith("auto");
+    const approveEach = await driveWith("approve-each");
+    expect(auto).toBe(approveEach);
+    expect(auto).toMatch(/prefer[\s\S]{0,80}dedicated tools[\s\S]{0,80}shell/i);
+    expect(auto).toMatch(/read_file[\s\S]{0,40}instead of[\s\S]{0,20}cat/i);
+    for (const phrase of bashFirstPhrases) {
+      expect(auto).not.toMatch(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    }
+
+    const readOnly = await driveWith("read-only");
+    expect(auto).toBe(readOnly);
+  });
 });
 
 describe("driveLoop planMode", () => {
@@ -738,6 +782,9 @@ describe("driveLoop planMode", () => {
     expect(opts?.tools.write_file).toBeUndefined();
     expect(opts?.tools.read_file).toBeDefined();
     expect(opts?.system).toContain(PLAN_MODE_OVERLAY.slice(0, 40));
+    expect(PLAN_MODE_OVERLAY).not.toMatch(/do your work through the bash tool/i);
+    expect(PLAN_MODE_OVERLAY).not.toMatch(/rather than using the dedicated/i);
+    expect(PLAN_MODE_OVERLAY).not.toMatch(/while bypass permissions mode is active/i);
     expect(opts?.terminalTools).toEqual(new Set([SUBMIT_PLAN_TOOL_NAME]));
   });
 

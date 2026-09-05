@@ -79,4 +79,10 @@ describe("ASK_USER_OVERLAY", () => {
     expect(ASK_USER_OVERLAY).toContain("invalid");
     expect(ASK_USER_OVERLAY).not.toMatch(/Set allowOther/);
   });
+
+  test("does not steer file I/O onto bash", () => {
+    expect(ASK_USER_OVERLAY).not.toMatch(/do your work through the bash tool/i);
+    expect(ASK_USER_OVERLAY).not.toMatch(/rather than using the dedicated/i);
+    expect(ASK_USER_OVERLAY).not.toMatch(/while bypass permissions mode is active/i);
+  });
 });
