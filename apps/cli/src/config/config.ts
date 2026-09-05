@@ -216,9 +216,7 @@ export type SandboxConfig = { allowUnsandboxedCommands: boolean };
 export function loadSandboxConfig(configDir?: string): SandboxConfig {
   const config = loadConfig(configDir);
   return {
-    allowUnsandboxedCommands: configBoolean(
-      configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, config),
-    ),
+    allowUnsandboxedCommands: configBoolean(configValue(ALLOW_UNSANDBOXED_COMMANDS_KEY, config)),
   };
 }
 

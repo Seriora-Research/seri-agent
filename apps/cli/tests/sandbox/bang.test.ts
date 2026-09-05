@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { executeBang, submitBang, BANG_USAGE, type BangRunners } from "../../src/sandbox/bang";
-import { BANG_REFUSED_REASON, resolveShellLaunch, type SandboxPolicy } from "../../src/sandbox/policy";
+import {
+  BANG_REFUSED_REASON,
+  resolveShellLaunch,
+  type SandboxPolicy,
+} from "../../src/sandbox/policy";
 import type { ProcessResult } from "../../src/tools/spawnCollect";
 
 const empty: ProcessResult = {
@@ -42,7 +46,10 @@ function touchPath(command: string): string | undefined {
   return match?.[1];
 }
 
-function confinedRunners(root: string, outside: string): BangRunners & { unsandboxedCalls: number } {
+function confinedRunners(
+  root: string,
+  outside: string,
+): BangRunners & { unsandboxedCalls: number } {
   const state = { unsandboxedCalls: 0 };
   return {
     get unsandboxedCalls() {
