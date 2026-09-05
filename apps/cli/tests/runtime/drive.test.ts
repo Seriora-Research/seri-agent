@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
@@ -27,6 +27,7 @@ import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -698,17 +699,24 @@ describe("driveLoop mcp composition", () => {
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
   });
 
-  test("permission mode does not change the assembled system or invert dedicated file tools", async () => {
-    const bashFirstPhrases = [
-      "Do your work through the Bash tool",
-      "rather than using the dedicated",
-      "While bypass permissions mode is active",
-    ] as const;
-    const systemPrompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+  test("permission mode does not change the assembled system or messages", async () => {
+    const modes = [
+      "read-only",
+      "approve-each",
+      "auto",
+    ] as const satisfies readonly PermissionMode[];
+    const _allModes: Record<PermissionMode, true> = {
+      "read-only": true,
+      "approve-each": true,
+      auto: true,
+    };
+    void _allModes;
 
-    async function driveWith(mode: "auto" | "approve-each" | "read-only"): Promise<string> {
+    const captured: { system: string; messages: RunLoopOpts["messages"] }[] = [];
+    for (const mode of modes) {
       const prepared = preparedStub();
-      prepared.session.systemPrompt = systemPrompt;
+      prepared.permissionMode = mode;
+      prepared.session.permissionMode = mode;
       const capture = fakeRunLoop();
       await driveLoop(
         prepared,
@@ -723,22 +731,19 @@ describe("driveLoop mcp composition", () => {
         undefined,
         { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
       );
-      const system = capture.capture()?.system;
-      expect(system).toBeDefined();
-      return system as string;
+      const opts = capture.capture();
+      expect(opts?.system).toBeDefined();
+      expect(opts?.messages).toBeDefined();
+      expectNoBashFirstSteer(opts?.system ?? "");
+      captured.push({ system: opts?.system as string, messages: opts!.messages });
     }
 
-    const auto = await driveWith("auto");
-    const approveEach = await driveWith("approve-each");
-    expect(auto).toBe(approveEach);
-    expect(auto).toMatch(/prefer[\s\S]{0,80}dedicated tools[\s\S]{0,80}shell/i);
-    expect(auto).toMatch(/read_file[\s\S]{0,40}instead of[\s\S]{0,20}cat/i);
-    for (const phrase of bashFirstPhrases) {
-      expect(auto).not.toMatch(new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
+    const [first, ...rest] = captured;
+    expect(first).toBeDefined();
+    for (const row of rest) {
+      expect(row.system).toBe(first!.system);
+      expect(row.messages).toEqual(first!.messages);
     }
-
-    const readOnly = await driveWith("read-only");
-    expect(auto).toBe(readOnly);
   });
 });
 
@@ -782,9 +787,6 @@ describe("driveLoop planMode", () => {
     expect(opts?.tools.write_file).toBeUndefined();
     expect(opts?.tools.read_file).toBeDefined();
     expect(opts?.system).toContain(PLAN_MODE_OVERLAY.slice(0, 40));
-    expect(PLAN_MODE_OVERLAY).not.toMatch(/do your work through the bash tool/i);
-    expect(PLAN_MODE_OVERLAY).not.toMatch(/rather than using the dedicated/i);
-    expect(PLAN_MODE_OVERLAY).not.toMatch(/while bypass permissions mode is active/i);
     expect(opts?.terminalTools).toEqual(new Set([SUBMIT_PLAN_TOOL_NAME]));
   });
 

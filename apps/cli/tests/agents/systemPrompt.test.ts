@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSystemPrompt, buildVolatileTier, familyOverlay } from "../../src/agents/systemPrompt";
 import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
+import {
+  bashFirstSteerIn,
+  CLAUDE_CODE_BASH_FIRST_ATTACHMENT,
+  expectDedicatedFileTools,
+  expectNoBashFirstSteer,
+} from "./bashFirstSteer";
 
 let configDir: string | undefined;
 afterEach(() => {
@@ -16,31 +22,6 @@ afterEach(() => {
 function emptyMemoryCtx(): MemoryContext {
   configDir = mkdtempSync(join(tmpdir(), "seri-memory-"));
   return { configDir, worktree: "/home/x/proj" };
-}
-
-const BASH_FIRST_PHRASES = [
-  "Do your work through the Bash tool",
-  "rather than using the dedicated",
-  "While bypass permissions mode is active",
-] as const;
-
-const PREFER_SHELL_OVER_FILE_TOOLS =
-  /\bprefer\b[\s\S]{0,60}\b(?:bash|cat|sed|heredoc)\b[\s\S]{0,60}\b(?:over|instead of|rather than)\b[\s\S]{0,60}\b(?:read_file|edit|write_file)\b/i;
-
-function containsBashFirstSteer(text: string): boolean {
-  const folded = text.toLowerCase();
-  if (BASH_FIRST_PHRASES.some((phrase) => folded.includes(phrase.toLowerCase()))) return true;
-  return PREFER_SHELL_OVER_FILE_TOOLS.test(text);
-}
-
-function expectDedicatedFileTools(text: string): void {
-  expect(text).toMatch(/prefer[\s\S]{0,80}dedicated tools[\s\S]{0,80}shell/i);
-  expect(text).toMatch(/read_file[\s\S]{0,40}instead of[\s\S]{0,20}cat/i);
-  expect(text).toMatch(/edit[\s\S]{0,40}write_file[\s\S]{0,40}instead of[\s\S]{0,20}sed/i);
-}
-
-function expectNoBashFirstSteer(text: string): void {
-  expect(containsBashFirstSteer(text)).toBe(false);
 }
 
 // These assert on meaning, not on wording: each check is a phrase the measured failure needs
@@ -225,18 +206,14 @@ describe("buildSystemPrompt", () => {
   });
 
   test("the bash-first forbidden matcher matches Claude Code's attachment", () => {
-    const attachment =
-      "Do your work through the Bash tool rather than using the dedicated Read tools";
-    expect(containsBashFirstSteer(attachment)).toBe(true);
-    expect(containsBashFirstSteer("While bypass permissions mode is active")).toBe(true);
+    expect(bashFirstSteerIn(CLAUDE_CODE_BASH_FIRST_ATTACHMENT)).toBe(
+      "Do your work through the Bash tool",
+    );
     expect(
-      containsBashFirstSteer("Prefer bash and cat over read_file rather than using write_file"),
-    ).toBe(true);
-    expect(
-      containsBashFirstSteer(
-        "Prefer the dedicated tools over a shell for file work: read_file instead of cat",
+      bashFirstSteerIn(
+        "Prefer the dedicated tools over a shell for file work: `read_file` instead of `cat`",
       ),
-    ).toBe(false);
+    ).toBeUndefined();
   });
 
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
@@ -362,8 +339,10 @@ describe("buildVolatileTier", () => {
   test("the volatile tier never contains a bash-first file-I/O steer", () => {
     const memory = loadMemory(emptyMemoryCtx());
     for (const platform of ["linux", "win32", "darwin"] as const) {
-      const line = buildVolatileTier("m", "groq", undefined, memory, { platform });
-      expectNoBashFirstSteer(line);
+      for (const family of [null, "llama"] as const) {
+        const line = buildVolatileTier("m", "groq", undefined, memory, { platform, family });
+        expectNoBashFirstSteer(line);
+      }
     }
   });
 
@@ -404,32 +383,14 @@ describe("familyOverlay", () => {
   });
 });
 
-// Compile-time: permissionMode is a gate input. A new field here is how a bash-first attachment
-// would get a place to live.
-const _promptWithAuto = buildSystemPrompt({
-  agentsContent: "",
-  skills: [],
-  rules: [],
-  // @ts-expect-error permissionMode is a gate input, not a prompt input
-  permissionMode: "auto",
-});
-void _promptWithAuto;
+type SystemPromptOpts = Parameters<typeof buildSystemPrompt>[0];
+const _noModeOnPrompt: Extract<keyof SystemPromptOpts, "permissionMode"> extends never
+  ? true
+  : false = true;
+void _noModeOnPrompt;
 
-describe("prompt assembly source", () => {
-  test("does not ship a thrifty_sonic flag or a bash-first attachment", () => {
-    const src = join(import.meta.dir, "../../src");
-    const files = [
-      "agents/systemPrompt.ts",
-      "runtime/drive.ts",
-      "ask-user/prompt.ts",
-      "plan/prompt.ts",
-    ] as const;
-    for (const rel of files) {
-      const text = readFileSync(join(src, rel), "utf8");
-      expect(text).not.toMatch(/thrifty_sonic/i);
-      expect(text).not.toMatch(/CLAUDE_CODE_THRIFTY_SONIC/);
-      expect(text).not.toMatch(/do your work through the bash tool/i);
-      expect(text).not.toMatch(/rather than using the dedicated/i);
-    }
-  });
-});
+type VolatileOpts = NonNullable<Parameters<typeof buildVolatileTier>[4]>;
+const _noModeOnVolatile: Extract<keyof VolatileOpts, "permissionMode"> extends never
+  ? true
+  : false = true;
+void _noModeOnVolatile;

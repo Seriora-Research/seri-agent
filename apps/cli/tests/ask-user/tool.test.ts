@@ -3,6 +3,7 @@ import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { executeAskUser, withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME, type AskUserPresenter } from "../../src/ask-user/types";
 import { toolDefinitions } from "../../src/provider/tools";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const valid = { prompt: "Which auth?", choices: ["cookies", "JWT"] };
 
@@ -81,8 +82,6 @@ describe("ASK_USER_OVERLAY", () => {
   });
 
   test("does not steer file I/O onto bash", () => {
-    expect(ASK_USER_OVERLAY).not.toMatch(/do your work through the bash tool/i);
-    expect(ASK_USER_OVERLAY).not.toMatch(/rather than using the dedicated/i);
-    expect(ASK_USER_OVERLAY).not.toMatch(/while bypass permissions mode is active/i);
+    expectNoBashFirstSteer(ASK_USER_OVERLAY);
   });
 });
