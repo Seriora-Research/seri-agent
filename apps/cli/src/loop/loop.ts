@@ -9,7 +9,7 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
-import { checkPermission, type PermissionMode } from "../gate/gate";
+import { checkPermission, type PathDenial, type PermissionMode } from "../gate/gate";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
@@ -307,6 +307,7 @@ export async function* runLoop(opts: {
   temperature?: number;
   seed?: number;
   terminalTools?: ReadonlySet<string>;
+  pathDenials?: readonly PathDenial[];
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =

@@ -105,6 +105,55 @@ describe("checkPermission", () => {
       expect(checkPermission("read_file", "read-only", undefined, () => "write")).toBe("block");
     });
   });
+
+  describe("path denials", () => {
+    const missing = "/tmp/seri-does-not-exist/secret.txt";
+    const denials = [{ tool: "read_file", pattern: "/tmp/seri-does-not-exist/**" }];
+
+    test("a deny rule blocks a missing path in every mode, before the read short-circuit", () => {
+      for (const mode of ["read-only", "approve-each", "auto"] as const) {
+        expect(
+          checkPermission("read_file", mode, undefined, undefined, {
+            input: { path: missing },
+            denials,
+          }),
+        ).toBe("block");
+      }
+    });
+
+    test("a deny rule for glob or grep blocks a missing search path", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, undefined, {
+          input: { path: missing, pattern: "*.txt" },
+          denials: [{ tool: "glob", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+      expect(
+        checkPermission("grep", "auto", undefined, undefined, {
+          input: { path: missing, pattern: "secret" },
+          denials: [{ tool: "grep", pattern: "/tmp/seri-does-not-exist/**" }],
+        }),
+      ).toBe("block");
+    });
+
+    test("a deny for one tool does not block another tool on the same path", () => {
+      expect(
+        checkPermission("glob", "auto", undefined, undefined, {
+          input: { path: missing, pattern: "*.txt" },
+          denials,
+        }),
+      ).toBe("allow");
+    });
+
+    test("a path that does not match the pattern is still allowed", () => {
+      expect(
+        checkPermission("read_file", "auto", undefined, undefined, {
+          input: { path: "/tmp/other/file.txt" },
+          denials,
+        }),
+      ).toBe("allow");
+    });
+  });
 });
 
 describe("cycleMode", () => {
