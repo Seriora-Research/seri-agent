@@ -46,7 +46,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     bashCheck(),
     sessionStoreCheck(configDir),
     await daemonCheck(configDir, deps.fetch),
-    ioUringCheck(deps),
+    ioUringDoctorCheck((deps.probeIoUring ?? probeIoUringSetup)(), deps.platform),
   ];
 }
 
@@ -230,14 +230,6 @@ function sessionStoreCheck(configDir: string): CheckResult {
   } finally {
     database?.close();
   }
-}
-
-function ioUringCheck(deps: DoctorDeps): CheckResult {
-  if (deps.platform !== "linux") {
-    return ioUringDoctorCheck({ status: "unsupported" }, deps.platform);
-  }
-  const probe = (deps.probeIoUring ?? probeIoUringSetup)();
-  return ioUringDoctorCheck(probe, deps.platform);
 }
 
 async function daemonCheck(configDir: string, fetchFn: typeof fetch): Promise<CheckResult> {

@@ -72,8 +72,6 @@ function linuxArch(arch: string): LinuxArch | undefined {
   return undefined;
 }
 
-type Libc = ReturnType<typeof openLibc>;
-
 function openLibc() {
   return dlopen("libc.so.6", {
     syscall: { args: [FFIType.i64, FFIType.u32, FFIType.ptr], returns: FFIType.i64 },
@@ -85,22 +83,17 @@ function openLibc() {
   });
 }
 
-function withLibc<T>(fn: (libc: Libc) => T): T {
-  return fn(openLibc());
-}
-
 export function probeIoUringSetup(): IoUringProbe {
   if (process.platform !== "linux") return { status: "unsupported" };
   try {
-    return withLibc((libc) => {
-      const params = new Uint8Array(128);
-      const fd = libc.symbols.syscall(BigInt(SYSCALL_NR.io_uring_setup), 1, ptr(params));
-      if (fd >= 0n) {
-        libc.symbols.close(Number(fd));
-        return { status: "allow" };
-      }
-      return { status: "deny" };
-    });
+    const libc = openLibc();
+    const params = new Uint8Array(128);
+    const fd = libc.symbols.syscall(BigInt(SYSCALL_NR.io_uring_setup), 1, ptr(params));
+    if (fd >= 0n) {
+      libc.symbols.close(Number(fd));
+      return { status: "allow" };
+    }
+    return { status: "deny" };
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : String(error) };
   }
@@ -115,20 +108,17 @@ export function installIoUringDeny(): void {
     throw new Error(`io_uring deny has no filter for arch ${process.arch}`);
   }
   const filter = ioUringDenyFilter(arch);
-  withLibc((libc) => {
-    const program = new Uint8Array(16);
-    const view = new DataView(program.buffer);
-    view.setUint16(0, filter.length / 8, true);
-    view.setBigUint64(8, BigInt(ptr(filter)), true);
-    if (libc.symbols.prctl(PR_SET_NO_NEW_PRIVS, 1n, null, 0n, 0n) !== 0) {
-      throw new Error("PR_SET_NO_NEW_PRIVS failed");
-    }
-    if (
-      libc.symbols.prctl(PR_SET_SECCOMP, BigInt(SECCOMP_MODE_FILTER), ptr(program), 0n, 0n) !== 0
-    ) {
-      throw new Error("PR_SET_SECCOMP failed");
-    }
-  });
+  const libc = openLibc();
+  const program = new Uint8Array(16);
+  const view = new DataView(program.buffer);
+  view.setUint16(0, filter.length / 8, true);
+  view.setBigUint64(8, BigInt(ptr(filter)), true);
+  if (libc.symbols.prctl(PR_SET_NO_NEW_PRIVS, 1n, null, 0n, 0n) !== 0) {
+    throw new Error("PR_SET_NO_NEW_PRIVS failed");
+  }
+  if (libc.symbols.prctl(PR_SET_SECCOMP, BigInt(SECCOMP_MODE_FILTER), ptr(program), 0n, 0n) !== 0) {
+    throw new Error("PR_SET_SECCOMP failed");
+  }
 }
 
 export function ioUringDoctorCheck(probe: IoUringProbe, platform: NodeJS.Platform): CheckResult {
@@ -145,7 +135,7 @@ export function ioUringDoctorCheck(probe: IoUringProbe, platform: NodeJS.Platfor
       name: "io_uring",
       status: "warn",
       detail: `kernel allows io_uring_setup; a seccomp filter that omits ${names} is bypassable`,
-      fix: `deny ${names} in the Linux seccomp filter`,
+      fix: "sysctl kernel.io_uring_disabled=2 (Linux 6.6+) turns io_uring off host-wide",
     };
   }
   if (probe.status === "deny") {

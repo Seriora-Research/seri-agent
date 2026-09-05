@@ -58,7 +58,7 @@ describe("ioUringDoctorCheck", () => {
     expect(check.detail).toContain("io_uring_setup");
     expect(check.detail).toContain("io_uring_enter");
     expect(check.detail).toContain("io_uring_register");
-    expect(check.fix).toContain("io_uring_setup");
+    expect(check.fix).toContain("io_uring_disabled=2");
   });
 
   test("is ok when the kernel rejects io_uring_setup", () => {
@@ -73,6 +73,10 @@ describe("ioUringDoctorCheck", () => {
     const check = ioUringDoctorCheck({ status: "allow" }, "darwin");
     expect(check.status).toBe("info");
     expect(check.detail).toContain("darwin");
+  });
+
+  test("is info when the probe is unsupported", () => {
+    expect(ioUringDoctorCheck({ status: "unsupported" }, "linux").status).toBe("info");
   });
 
   test("never fails the doctor run", () => {
