@@ -148,7 +148,7 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
     pattern: /\baws\b[\s\S]*\bsts\b[\s\S]*\bassume-role\b/i,
     label: "aws sts assume-role",
   },
-  { kind: "cross-tenant", pattern: /\bassume-role\b/i, label: "assume-role" },
+  { kind: "cross-tenant", pattern: /assume[-_]role\b/i, label: "assume-role" },
   { kind: "cross-tenant", pattern: /--role-arn\b/i, label: "--role-arn" },
   {
     kind: "cross-tenant",
@@ -180,8 +180,8 @@ function decodeOnce(text: string): string {
     .replace(/\\x([0-9a-fA-F]{2})/gi, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
 }
 
-function normalize(text: string): string {
-  let out = text.toLowerCase();
+function decodeAll(text: string): string {
+  let out = text;
   for (let i = 0; i < 3; i++) {
     const next = decodeOnce(out);
     if (next === out) break;
@@ -248,9 +248,11 @@ export function screenCall(subject: string, input: unknown, expected: boolean): 
   if (expected) return { outcome: "pass" };
 
   const raw = extracted.text;
-  const normalized = normalize(raw);
+  const decoded = decodeAll(raw);
+  const folded = decoded.toLowerCase();
   for (const row of ESCAPE_TABLE) {
-    if (row.pattern.test(raw) || row.pattern.test(normalized)) {
+    const extra = row.pattern.ignoreCase ? folded : decoded;
+    if (row.pattern.test(raw) || row.pattern.test(extra)) {
       return { outcome: "block", reason: { kind: "escape", class: row.kind, label: row.label } };
     }
   }
