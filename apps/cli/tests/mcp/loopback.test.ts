@@ -107,6 +107,27 @@ describe("close", () => {
   });
 });
 
+describe("a mapped redirect host is advertised as 127.0.0.1", () => {
+  test("startCallbackServer rewrites ::ffff:127.0.0.1 on the redirect URI", async () => {
+    const server = await startCallbackServer({
+      ports: freePorts(1),
+      redirectHost: "::ffff:127.0.0.1",
+    });
+    opened.push(server);
+    expect(new URL(server.redirectUri).hostname).toBe("127.0.0.1");
+    expect(server.redirectUri).not.toContain("ffff");
+  });
+
+  test("localhost stays localhost so a registered Codex redirect URI still matches", async () => {
+    const server = await startCallbackServer({
+      ports: freePorts(1),
+      redirectHost: "localhost",
+    });
+    opened.push(server);
+    expect(new URL(server.redirectUri).hostname).toBe("localhost");
+  });
+});
+
 describe("a taken port falls through to the next candidate", () => {
   test("the redirect URI names the port that actually bound", async () => {
     const [busy, spare] = freePorts(2) as [number, number];
