@@ -3,7 +3,12 @@
 // import — a plain, standalone reducer, testable without a terminal.
 import { isQuotaExhaustedNotice } from "@seri/plans";
 import type { ModelProvider } from "@seri/model-catalog";
-import { PLAN_OVERLAY_OFF, type PlanOverlay, type PlanQuestion, type SubmittedPlan } from "../../plan/mode";
+import {
+  PLAN_OVERLAY_OFF,
+  type PlanOverlay,
+  type PlanQuestion,
+  type SubmittedPlan,
+} from "../../plan/mode";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";

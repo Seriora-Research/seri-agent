@@ -250,12 +250,19 @@ describe("profileNameError", () => {
   });
 
   // Stage 6b: memories/ and pending/ join the reserved set the same way sessions/checkpoints did.
-  test.each(["agents", "skills", "rules", "mcp", "hooks", "memories", "pending", "trajectories", "plans"])(
-    "%s is reserved",
-    (name) => {
-      expect(profileNameError(name)).toBeDefined();
-    },
-  );
+  test.each([
+    "agents",
+    "skills",
+    "rules",
+    "mcp",
+    "hooks",
+    "memories",
+    "pending",
+    "trajectories",
+    "plans",
+  ])("%s is reserved", (name) => {
+    expect(profileNameError(name)).toBeDefined();
+  });
 
   test.each(["Memories", "Pending"])("%s is reserved case-folded on win32/darwin", (name) => {
     setPlatform("win32");

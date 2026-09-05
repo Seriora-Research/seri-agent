@@ -94,9 +94,8 @@ describe("agentToolSet", () => {
   // withMutationRecording for the full mechanism this closes.
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
-    const tools = agentToolSet(
-      fileAgent("writer", ["write_file", "read_file"]),
-      (context) => calls.push(context),
+    const tools = agentToolSet(fileAgent("writer", ["write_file", "read_file"]), (context) =>
+      calls.push(context),
     );
 
     const root = mkdtempSync(join(tmpdir(), "seri-agent-tools-test-"));
