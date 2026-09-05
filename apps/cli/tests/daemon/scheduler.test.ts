@@ -12,6 +12,7 @@ import {
 import { startDaemon } from "../../src/daemon/server";
 import { createScheduledToolDefinitions, createToolDefinitions } from "../../src/provider/tools";
 import { SessionDatabase } from "../../src/session/database";
+import { withTodo } from "../../src/todo/tool";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -57,6 +58,13 @@ describe("scheduled toolset", () => {
   test("assertScheduledToolset rejects the normal write-capable toolset", () => {
     const dir = makeDir();
     expect(() => assertScheduledToolset(createToolDefinitions(dir))).toThrow(/write_file/);
+  });
+
+  test("assertScheduledToolset rejects a scheduled set with todo injected", () => {
+    const dir = makeDir();
+    expect(() => assertScheduledToolset(withTodo(createScheduledToolDefinitions(dir)))).toThrow(
+      /todo/,
+    );
   });
 });
 

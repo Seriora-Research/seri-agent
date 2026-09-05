@@ -31,6 +31,7 @@ import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
 import { withSkills } from "../skills/tool";
+import { withTodo } from "../todo/tool";
 import { PLAN_MODE_OVERLAY } from "../plan/prompt";
 import {
   isSubmittedPlan,
@@ -130,7 +131,8 @@ export type DriveLoopOptions = {
   // fatal). The daemon sets this false so a Ctrl-C at `seri serve` is not stolen by an in-flight
   // turn's slot.
   bindProcessCancel?: boolean;
-  // Default true: wrap tools with dispatch_subagents. Scheduled runs never compose that tool.
+  // Default true: wrap tools with dispatch_subagents and the parent-only `todo` checklist.
+  // Scheduled runs pass false so neither tool exists on the unattended path.
   composeSubagents?: boolean;
   // Scheduled runs omit this child. maybeRunArchivist's only tool is memory_write, which is
   // not in the read-only scheduled toolset. Default remains true for attended CLI and TUI.
@@ -409,11 +411,10 @@ export async function driveLoop(
       onChildEvent?.(payload);
     },
   };
-  // The one composition that enables dispatch_subagents; deleting this call (tools -> baseTools)
-  // is the whole rollback, matching withCheckpoints/withVerification's own comment in prepareSession.
-  // Scheduled runs pass composeSubagents: false so that tool never exists on the unattended path.
   const dispatchable =
-    driveOpts.composeSubagents === false ? baseTools : withSubagents(baseTools, subagentRuntime);
+    driveOpts.composeSubagents === false
+      ? baseTools
+      : withTodo(withSubagents(baseTools, subagentRuntime));
   // Needs no flag of its own: withSkills adds nothing when the registry holds no model-visible
   // skill, and the one path that must never see this tool — a scheduled run — is built with an
   // empty registry, so its absence there is structural rather than conditional. withMcp composes

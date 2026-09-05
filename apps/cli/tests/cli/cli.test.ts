@@ -609,6 +609,7 @@ describe("run (task invocation)", () => {
     expect(Object.keys(capture()?.tools ?? {})).toEqual([
       ...Object.keys(toolDefinitions),
       "dispatch_subagents",
+      "todo",
     ]);
     expect(capture()?.tools.write_file).not.toBe(toolDefinitions.write_file);
     expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "write hello.txt" });

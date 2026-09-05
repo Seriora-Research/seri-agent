@@ -17,6 +17,7 @@ import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
@@ -108,7 +109,7 @@ function unusedCtx(configDir: string) {
 }
 
 describe("driveLoop options", () => {
-  test("composeSubagents false omits dispatch_subagents; the default still adds it", async () => {
+  test("composeSubagents false omits dispatch_subagents and todo; the default still adds both", async () => {
     const prepared = preparedStub();
     const ctx = unusedCtx(prepared.session.cwd);
     const emptyArchivist = createArchivistState(prepared.session);
@@ -125,6 +126,7 @@ describe("driveLoop options", () => {
       emptyArchivist,
     );
     expect(DISPATCH_TOOL_NAME in (withDispatch.capture()?.tools ?? {})).toBe(true);
+    expect(TODO_TOOL_NAME in (withDispatch.capture()?.tools ?? {})).toBe(true);
 
     const withoutDispatch = fakeRunLoop();
     await driveLoop(
@@ -141,6 +143,7 @@ describe("driveLoop options", () => {
       { composeSubagents: false },
     );
     expect(DISPATCH_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
+    expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
   });
 
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {

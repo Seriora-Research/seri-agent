@@ -622,6 +622,20 @@ describe("recordCall / recordResult / recordDenial", () => {
     expect(entries).toEqual([]);
   });
 
+  test("todo is never aggregated", () => {
+    const items = [{ id: "a", content: "x", status: "pending" }];
+    let entries = recordCall([], "todo", { items });
+    entries = recordResult(entries, "todo", { items }, items);
+    expect(entries).toEqual([]);
+  });
+
+  test("a denied todo reads as a labelled group, not as the wire name", () => {
+    const entries = recordDenial([], "todo", "declined");
+    const rendered = renderToolActivity(entries)[0] ?? "";
+    expect(rendered).toContain("Checklist");
+    expect(rendered).not.toContain("todo");
+  });
+
   test("recordDenial appends an anomaly line", () => {
     const entries = recordDenial([], "write_file", "declined");
     expect(entries[0].anomalyLines).toEqual(["declined"]);

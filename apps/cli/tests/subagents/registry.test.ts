@@ -7,6 +7,7 @@ import type { ToolExecutionOptions } from "ai";
 import { foldsCase } from "../../src/caseFold";
 import type { MutationContext } from "../../src/checkpoint/wrapTools";
 import { DISPATCH_TOOL_NAME, type ToolName, toolDefinitions } from "../../src/provider/tools";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import {
   type AgentRegistry,
   type AgentSpec,
@@ -58,6 +59,7 @@ describe("agentToolSet", () => {
       ["glob", "grep", "read_file", "write_file"].sort(),
     );
     expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
+    expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
   });
 
   test("a file-defined tester adds bash/powershell to the read-only set and has no write_file/edit", () => {
@@ -69,9 +71,10 @@ describe("agentToolSet", () => {
     expect(tools.edit).toBeUndefined();
   });
 
-  test("recursion guard: no built-in agent's ToolSet contains dispatch_subagents", () => {
+  test("recursion guard: no built-in agent's ToolSet contains dispatch_subagents or todo", () => {
     for (const spec of BUILTIN_AGENTS) {
       expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
+      expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
     }
   });
 
@@ -454,5 +457,6 @@ describe("loadAgentRegistry", () => {
     if (spec === undefined) return;
     expect(Object.keys(agentToolSet(spec))).toEqual(["read_file"]);
     expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
+    expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
   });
 });

@@ -79,6 +79,7 @@ describe("buildSystemPrompt", () => {
       "bash",
       "powershell",
       "dispatch_subagents",
+      "todo",
     ]) {
       expect(prompt).toContain(`\`${name}\``);
     }

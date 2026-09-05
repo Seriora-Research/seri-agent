@@ -6,6 +6,7 @@ import {
   READ_ONLY_TOOL_NAMES,
   WRITE_TOOL_NAMES,
 } from "../provider/tools";
+import { TODO_TOOL_NAME } from "../todo/tool";
 import type { RunPolicy } from "../runtime/types";
 import type { ScheduleRecord, SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
@@ -53,6 +54,9 @@ export function assertScheduledToolset(
   }
   if (DISPATCH_TOOL_NAME in tools) {
     throw new Error("scheduled tools must not include dispatch_subagents");
+  }
+  if (TODO_TOOL_NAME in tools) {
+    throw new Error("scheduled tools must not include todo");
   }
   if ("memory_write" in tools) {
     throw new Error("scheduled tools must not include memory_write");
