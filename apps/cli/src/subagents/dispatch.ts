@@ -120,6 +120,7 @@ export type SubagentRuntime = {
   };
   // Session worktree. Children must not fall back to process.cwd().
   cwd?: string;
+  blockReadsOutsideWorkingDirectories?: boolean;
   // The parent's hook callbacks, handed down deliberately — and note that this is the opposite of
   // what `createRuleInjector` does, which drive.ts keeps parent-only on purpose. The two are not
   // inconsistent, because a rule and a hook are not the same kind of thing. A rule is CONTEXT: it
@@ -258,6 +259,9 @@ export async function runSubagent(opts: {
     seed: runtime.seed,
     onBeforeTool: runtime.onBeforeTool,
     onAfterTool: runtime.onAfterTool,
+    workingDirectory: runtime.cwd,
+    blockReadsOutsideWorkingDirectories: runtime.blockReadsOutsideWorkingDirectories === true,
+    askOutsideFs: false,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;

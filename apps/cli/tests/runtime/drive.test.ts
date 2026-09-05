@@ -148,6 +148,46 @@ describe("driveLoop options", () => {
     expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
   });
 
+  test("passes session.cwd as workingDirectory and treats the approvalPrompt as a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(capture.capture()?.workingDirectory).toBe(prepared.session.cwd);
+    expect(capture.capture()?.askOutsideFs).toBe(true);
+    expect(capture.capture()?.outsideConsent?.current).toBe("unasked");
+  });
+
+  test("askOutsideFs false reaches the loop so a dummy prompt is not a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false, askOutsideFs: false },
+    );
+    expect(capture.capture()?.askOutsideFs).toBe(false);
+  });
+
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {
     let preserved = false;
     const unregister = onSignalCancel(() => {
