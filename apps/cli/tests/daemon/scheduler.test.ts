@@ -72,6 +72,14 @@ describe("scheduled toolset", () => {
       /todo/,
     );
   });
+
+  test("createRunScheduled asks buildSystemPrompt to omit parent-only tools", async () => {
+    const src = await Bun.file(new URL("../../src/daemon/scheduled.ts", import.meta.url)).text();
+    const start = src.indexOf("systemPrompt: buildSystemPrompt");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const call = src.slice(start, src.indexOf("model: route.model", start));
+    expect(call).toContain("composeSubagents: false");
+  });
 });
 
 describe("schedule validation", () => {

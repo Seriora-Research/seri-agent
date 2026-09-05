@@ -156,6 +156,25 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toMatch(/`mcp`/);
   });
 
+  test("composeSubagents false omits parent-only tools from # Tools, and still names the builtins", () => {
+    const attended = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
+    const scheduled = buildSystemPrompt({
+      agentsContent: "",
+      skills: [],
+      rules: [],
+      composeSubagents: false,
+    });
+
+    expect(attended).toContain("`todo`");
+    expect(attended).toContain("`dispatch_subagents`");
+
+    expect(scheduled).not.toContain("`todo`");
+    expect(scheduled).not.toContain("`dispatch_subagents`");
+    expect(scheduled).toContain("`read_file`");
+    expect(scheduled).toContain("`grep`");
+    expect(scheduled).toContain("`glob`");
+  });
+
   // Stage B2: the stable tier (tool guidance) must precede the context tier (AGENTS.md) in the
   // assembled output, and the join between them must match today's separator shape exactly — a
   // naive three-operand join can add an extra "\n\n" that today's conditional two-operand join
