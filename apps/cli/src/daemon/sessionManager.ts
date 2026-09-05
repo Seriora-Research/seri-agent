@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ApprovalAnswer, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
+import type { PromptChannel } from "../permissions/promptChannel";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
@@ -29,6 +30,7 @@ export type ExecuteTurnInput = {
   task: string;
   cwd: string;
   permissionMode: PermissionMode;
+  promptChannel?: PromptChannel;
   signal: AbortSignal;
   emitLoop: (event: { type: string } & Record<string, unknown>) => void;
   requestApproval: (requestId: string, toolName: string, args: unknown) => Promise<ApprovalAnswer>;
@@ -93,6 +95,7 @@ export class DaemonSessionManager {
     sessionId?: string;
     cwd?: string;
     permissionMode?: PermissionMode;
+    promptChannel?: PromptChannel;
   }): Promise<{ turnId: string; sessionId: string; subscribe: (send: Subscriber) => () => void }> {
     const session = this.resolveSession(request);
     const turnId = randomUUID();
@@ -118,7 +121,14 @@ export class DaemonSessionManager {
     sessionHandle.tail = sessionHandle.tail
       .then(async () => {
         await gate.promise;
-        await this.runTurn(turnId, handle, session, request.task, request.permissionMode);
+        await this.runTurn(
+          turnId,
+          handle,
+          session,
+          request.task,
+          request.permissionMode,
+          request.promptChannel,
+        );
       })
       .catch(() => {});
 
@@ -216,6 +226,7 @@ export class DaemonSessionManager {
     session: SessionState,
     task: string,
     permissionMode: PermissionMode | undefined,
+    promptChannel: PromptChannel | undefined,
   ): Promise<void> {
     const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
@@ -237,6 +248,7 @@ export class DaemonSessionManager {
         task,
         cwd: session.cwd,
         permissionMode: permissionMode ?? session.permissionMode,
+        promptChannel,
         signal: handle.abort.signal,
         emitLoop: (value) => {
           if (value.type === "messages-updated") return;

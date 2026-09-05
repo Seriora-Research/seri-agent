@@ -22,12 +22,17 @@ export function ApprovalBox({
   onAnswer,
   onQuit,
 }: {
-  pendingApproval: { toolName: string; args: unknown; offersAlways: boolean };
+  pendingApproval: {
+    toolName: string;
+    args: unknown;
+    offersAlways: boolean;
+    classifierReason?: string;
+  };
   onAnswer?: (answer: ApprovalAnswer) => void;
   onQuit?: () => void;
 }) {
-  const { toolName, args, offersAlways } = pendingApproval;
-  const copy = approvalCopy(toolName, args);
+  const { toolName, args, offersAlways, classifierReason } = pendingApproval;
+  const copy = approvalCopy(toolName, args, classifierReason);
 
   useKeyboard((key) => {
     // Ctrl-D used to do nothing while this component was mounted instead of InputBox — quit()
@@ -61,6 +66,7 @@ export function ApprovalBox({
 
   return (
     <PanelBox title="approve" right="">
+      {copy.classifierReason !== undefined && <text fg={theme.muted}>{copy.classifierReason}</text>}
       <text fg={theme.text}>{copy.question}</text>
       {copy.detail.length > 0 && <text fg={theme.muted}>{copy.detail}</text>}
       <OptionKeys labels={optionLabels(offersAlways)} />

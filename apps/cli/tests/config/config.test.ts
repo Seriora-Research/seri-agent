@@ -4,14 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
+  BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
   CONFIG_FILENAME,
   getApiKey,
   inspectConfig,
   loadConfig,
+  loadSandboxConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   setConfigValue,
   setConfigValues,
+  standingDenyReadsOutside,
   tuiBackgroundColor,
 } from "../../src/config/config";
 
@@ -208,6 +211,31 @@ describe("loadVerifyConfig", () => {
   });
 });
 
+describe("loadSandboxConfig", () => {
+  const original = process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+
+  afterEach(() => {
+    restoreEnv("SERI_ALLOW_UNSANDBOXED_COMMANDS", original);
+  });
+
+  test("allows unsandboxed bang when nothing is configured", () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(true);
+  });
+
+  test('turns off on exactly "false"', () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "false";
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(false);
+  });
+
+  test("any other value leaves it on, so a typo cannot silently disable the floor", () => {
+    delete process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS;
+    process.env.SERI_ALLOW_UNSANDBOXED_COMMANDS = "no";
+    expect(loadSandboxConfig().allowUnsandboxedCommands).toBe(true);
+  });
+});
+
 describe("loadTrajectoryConfig", () => {
   const originalEnabled = process.env.SERI_TRAJECTORY_ENABLED;
   const originalDays = process.env.SERI_TRAJECTORY_RETENTION_DAYS;
@@ -241,6 +269,23 @@ describe("loadTrajectoryConfig", () => {
     delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
     expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
+});
+
+describe("standingDenyReadsOutside", () => {
+  const original = process.env[BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY];
+
+  afterEach(() => {
+    restoreEnv(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, original);
+  });
+
+  test("unset, empty, false, yes, and a typo stay off; only the exact string true is on", () => {
+    expect(standingDenyReadsOutside(undefined)).toBe(false);
+    expect(standingDenyReadsOutside("")).toBe(false);
+    expect(standingDenyReadsOutside("false")).toBe(false);
+    expect(standingDenyReadsOutside("yes")).toBe(false);
+    expect(standingDenyReadsOutside("TRUE")).toBe(false);
+    expect(standingDenyReadsOutside("true")).toBe(true);
   });
 });
 

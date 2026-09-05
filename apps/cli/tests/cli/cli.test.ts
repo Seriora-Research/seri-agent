@@ -775,6 +775,98 @@ describe("run (task invocation)", () => {
     expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
   });
 
+  test("--permission-prompts none does not change permissionMode", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop();
+
+    await captureLogs(() =>
+      run(["--permission-prompts", "none", "write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    expect(capture()?.permissionMode).toBe("approve-each");
+  });
+
+  test("--permission-prompts none is not persisted to the session file", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake } = fakeRunLoop(answeredTurn);
+
+    await captureLogs(() =>
+      run(["--permission-prompts", "none", "write", "hello.txt"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    const createdId = listSessionIds(sessionsDir)[0]!;
+    const session = loadSession(createdId, sessionsDir);
+    expect(session.permissionMode).toBe("approve-each");
+    expect(JSON.stringify(session)).not.toContain("promptChannel");
+    expect(JSON.stringify(session)).not.toContain("permissionPrompts");
+  });
+
+  test("--permission-prompts none with --dangerously-skip-permissions reaches runLoop as auto and is not persisted", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const { fake, capture } = fakeRunLoop(answeredTurn);
+
+    await captureLogs(() =>
+      run(
+        ["--permission-prompts", "none", "--dangerously-skip-permissions", "write", "hello.txt"],
+        {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
+        },
+      ),
+    );
+
+    expect(capture()?.permissionMode).toBe("auto");
+    const createdId = listSessionIds(sessionsDir)[0]!;
+    expect(loadSession(createdId, sessionsDir).permissionMode).toBe("approve-each");
+  });
+
+  test("--permission-prompts none omits approvalPrompt; omitting the flag keeps it", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const none = fakeRunLoop();
+    const live = fakeRunLoop();
+    const deps = {
+      loadAgentsFile: () => "",
+      loadExtensions: () => ({
+        skills: new Map(),
+        rules: new Map(),
+        hooks: { registry: new Map() },
+      }),
+      sessionsDir,
+    };
+
+    await captureLogs(() =>
+      run(["--permission-prompts", "none", "write", "hello.txt"], { ...deps, runLoop: none.fake }),
+    );
+    expect(none.capture()?.approvalPrompt).toBeUndefined();
+
+    await captureLogs(() => run(["write", "hello.txt"], { ...deps, runLoop: live.fake }));
+    expect(typeof live.capture()?.approvalPrompt).toBe("function");
+  });
+
   test("the tool-allowed event prints which tool was approved for the rest of the run", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const { fake } = fakeRunLoop([

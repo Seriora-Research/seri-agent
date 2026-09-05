@@ -37,6 +37,7 @@ Options:
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
+  --permission-prompts <mode>     none denies anything that would prompt; the permission mode still decides
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
 
@@ -93,10 +94,17 @@ export function truncateArgsDisplay(args: unknown): string {
 // toolResultLine/toolAllowedLine (below) already exist to prevent elsewhere. One shared function
 // instead, used by both. `offersAlways` gates the "[a]lways" option — PERSISTABLE_TOOLS decides
 // it at each call site, not here, so this file stays free of a permissions/store.ts import.
-export function approvalPromptText(toolName: string, args: unknown, offersAlways: boolean): string {
-  return `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
+export function approvalPromptText(
+  toolName: string,
+  args: unknown,
+  offersAlways: boolean,
+  classifierReason?: string,
+): string {
+  const question = `Approve ${escapeControlChars(toolName)}(${truncateArgsDisplay(args)})? ${
     offersAlways ? "[y]es / [a]lways (saved for this project) / [N]o" : "[y]es / [N]o"
   } `;
+  if (classifierReason === undefined || classifierReason.length === 0) return question;
+  return `Classifier: ${escapeControlChars(classifierReason)}\n${question}`;
 }
 
 // stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning

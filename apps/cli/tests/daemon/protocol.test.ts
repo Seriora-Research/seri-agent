@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { turnRequestSchema } from "../../src/daemon/protocol";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { SessionDatabase } from "../../src/session/database";
 
@@ -36,6 +37,21 @@ const ROUTES: { method: string; path: string; body?: string }[] = [
   { method: "POST", path: "/v1/turns/x/cancel" },
   { method: "GET", path: "/v1/sessions/search?q=hi" },
 ];
+
+describe("turnRequestSchema permissionPrompts", () => {
+  test("omit and none parse; live and other values do not", () => {
+    expect(turnRequestSchema.safeParse({ task: "hi" }).success).toBe(true);
+    expect(turnRequestSchema.safeParse({ task: "hi", permissionPrompts: "none" }).success).toBe(
+      true,
+    );
+    expect(turnRequestSchema.safeParse({ task: "hi", permissionPrompts: "live" }).success).toBe(
+      false,
+    );
+    expect(turnRequestSchema.safeParse({ task: "hi", permissionPrompts: "auto" }).success).toBe(
+      false,
+    );
+  });
+});
 
 describe("daemon protocol auth", () => {
   test("missing or wrong bearer returns 401 on every route before a malformed body is parsed", async () => {
