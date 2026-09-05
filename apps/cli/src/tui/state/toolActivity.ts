@@ -6,13 +6,15 @@
 // name, which folds into one bucket (`groupKey` below): the model's tool array already
 // collapses every MCP call behind the single `mcp` dispatcher (mcp/tool.ts), so the transcript
 // reads the same way, one line naming how many, with each call's own composed name as a child.
-// `dispatch_subagents` is never recorded here: recordCall and recordResult both early-return, so
-// the TUI does not paint a dispatch settled line. `alwaysAppend` stays on mapEntry's other
-// callers so a later regression cannot merge a dispatch row into another group.
+// `dispatch_subagents` and `todo` are never recorded here: recordCall and recordResult both
+// early-return, so the TUI does not paint a settled line for either. `todo`'s surface is the
+// checklist block. `alwaysAppend` stays on mapEntry's other callers so a later regression
+// cannot merge a dispatch or todo row into another group.
 import path from "node:path";
 import { escapeControlChars, toolResultLine } from "../../cli/output";
 import { isMcpToolName } from "../../mcp/types";
 import type { DispatchResult } from "../../subagents/dispatch";
+import { TODO_TOOL_NAME } from "../../todo/tool";
 import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
 import type { ProcessResult } from "../../tools/spawnCollect";
@@ -83,6 +85,12 @@ export const TOOL_LABELS: Record<
     verb: "Dispatched",
     one: "subagent",
     many: "subagents",
+  },
+  todo: {
+    display: "Checklist",
+    verb: "Updated",
+    one: "checklist",
+    many: "checklists",
   },
 };
 
@@ -386,7 +394,7 @@ export function recordCall(
 ): ToolActivityEntry[] {
   // dispatch_subagents is never recorded; its TUI surface is the child roster, not a
   // settled transcript line. Recording the call here would append a second alwaysAppend entry.
-  if (name === "dispatch_subagents") return entries;
+  if (name === "dispatch_subagents" || name === TODO_TOOL_NAME) return entries;
   return mapEntry(
     entries,
     groupKey(name),
@@ -425,7 +433,7 @@ export function recordResult(
   args: unknown,
   result: unknown,
 ): ToolActivityEntry[] {
-  if (name === "dispatch_subagents") return entries;
+  if (name === "dispatch_subagents" || name === TODO_TOOL_NAME) return entries;
   const anomaly = anomalyLineForResult(name, args, result);
   const details = detailLinesForResult(name, result);
   return mapEntry(

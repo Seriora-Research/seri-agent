@@ -242,6 +242,53 @@ describe("tuiReducer: transcript-cleared", () => {
   });
 });
 
+describe("tuiReducer: parent checklist", () => {
+  const items = [
+    { id: "a", content: "find compile flags", status: "done" as const },
+    { id: "b", content: "add --minify", status: "in_progress" as const },
+    { id: "c", content: "add a size test", status: "pending" as const },
+  ];
+
+  test("tool-result paints a valid list and tool-call does not", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    expect(state.checklist).toEqual([]);
+
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "todo", result: items },
+    });
+    expect(state.checklist).toEqual(items);
+  });
+
+  test("a thrown call does not paint from tool-call args", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "todo", args: { items } },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "error", error: 'Tool "todo" threw during execution: duplicate' },
+    });
+    expect(state.checklist).toEqual([]);
+  });
+
+  test("transcript-cleared empties the checklist", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "todo", result: items },
+    });
+    expect(state.checklist).toEqual(items);
+    const next = tuiReducer(state, { type: "transcript-cleared" });
+    expect(next.checklist).toEqual([]);
+  });
+});
+
 describe("tuiReducer: plan overlay", () => {
   test("plan-on / plan-off toggle the overlay", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });

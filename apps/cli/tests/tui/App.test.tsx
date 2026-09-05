@@ -6097,4 +6097,40 @@ describe("App", () => {
       expect(rowOf(frame, "line one")).toBe(rowOf(frame, "line two"));
     });
   });
+
+  describe("parent checklist", () => {
+    function rowOf(frame: string, needle: string): number {
+      return frame.split(String.fromCharCode(10)).findIndex((line) => line.includes(needle));
+    }
+
+    const items = [
+      { id: "a", content: "find compile flags", status: "done" as const },
+      { id: "b", content: "add --minify", status: "in_progress" as const },
+      { id: "c", content: "add a size test", status: "pending" as const },
+    ];
+
+    test("an empty list draws nothing", async () => {
+      const { setup } = await connect();
+      const frame = setup.captureCharFrame();
+      expect(frame).not.toContain("find compile flags");
+      expect(frame).not.toContain("in progress");
+    });
+
+    test("a successful todo result paints the issue example above the input box", async () => {
+      const { setup, dispatch } = await connect();
+      dispatch({
+        type: "loop-event",
+        event: { type: "tool-result", name: "todo", result: items },
+      });
+      await flush(setup);
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("1. find compile flags (done)");
+      expect(frame).toContain("2. add --minify (in progress)");
+      expect(frame).toContain("3. add a size test (pending)");
+      const first = rowOf(frame, "1. find compile flags (done)");
+      const inputBox = rowOf(frame, "⏸ approve-each mode on");
+      expect(first).toBeGreaterThanOrEqual(0);
+      expect(first).toBeLessThan(inputBox);
+    });
+  });
 });
