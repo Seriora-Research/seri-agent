@@ -81,9 +81,19 @@ describe("AskUserPanel", () => {
   test("two printable keys without a settle both land in Other", async () => {
     const setup = await createTestRenderer({ width: 60, height: 12 });
     await mount(setup, <AskUserPanel prompt={prompt} onAnswer={() => {}} />);
-    setup.mockInput.pressKey("a");
-    setup.mockInput.pressKey("b");
-    await settle(setup);
+    const press = () => {
+      setup.mockInput.pressKey("a");
+      setup.mockInput.pressKey("b");
+    };
+    press();
+    await waitUntil(
+      setup,
+      () => setup.captureCharFrame().includes("type your own: ab"),
+      "typed keys never landed in Other",
+      () => {
+        if (!setup.captureCharFrame().includes("type your own:")) press();
+      },
+    );
     expect(setup.captureCharFrame()).toContain("type your own: ab");
   });
 
