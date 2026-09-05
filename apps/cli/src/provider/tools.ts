@@ -1,6 +1,9 @@
-import { resolve } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
+import { resolveAgainstCwd } from "../gate/workingDir";
+
+export { resolveAgainstCwd };
+
 import { isBashAvailable, runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
@@ -15,10 +18,6 @@ import { writeFile } from "../tools/writeFile";
 // `resolve`, including for an absolute input: `isAbsolute ? path : resolve(cwd, path)` would
 // leave `/abs/other/../secret` un-normalized, and the permission matcher has to judge the
 // same string the tool will probe.
-export function resolveAgainstCwd(cwd: string, path: string): string {
-  return resolve(cwd, path);
-}
-
 export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
     description: "Read a file's contents as text.",

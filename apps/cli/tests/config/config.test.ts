@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
+  BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
   CONFIG_FILENAME,
   getApiKey,
   inspectConfig,
@@ -12,6 +13,7 @@ import {
   loadVerifyConfig,
   setConfigValue,
   setConfigValues,
+  standingDenyReadsOutside,
   tuiBackgroundColor,
 } from "../../src/config/config";
 
@@ -241,6 +243,23 @@ describe("loadTrajectoryConfig", () => {
     delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
     expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
+});
+
+describe("standingDenyReadsOutside", () => {
+  const original = process.env[BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY];
+
+  afterEach(() => {
+    restoreEnv(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, original);
+  });
+
+  test("unset, empty, false, yes, and a typo stay off; only the exact string true is on", () => {
+    expect(standingDenyReadsOutside(undefined)).toBe(false);
+    expect(standingDenyReadsOutside("")).toBe(false);
+    expect(standingDenyReadsOutside("false")).toBe(false);
+    expect(standingDenyReadsOutside("yes")).toBe(false);
+    expect(standingDenyReadsOutside("TRUE")).toBe(false);
+    expect(standingDenyReadsOutside("true")).toBe(true);
   });
 });
 

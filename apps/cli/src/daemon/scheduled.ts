@@ -137,6 +137,7 @@ export function createRunScheduled(opts: {
           composeSubagents: false,
           runArchivist: false,
           composeAskUser: false,
+          askOutsideFs: false,
         },
       );
     } catch (caught) {

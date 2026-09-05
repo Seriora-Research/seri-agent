@@ -169,6 +169,13 @@ describe("prepareSession + mcp", () => {
     expect(entry?.catalog).toBeUndefined();
   });
 
+  test("skipPermissions seeds the outside-cwd latch for this run only", async () => {
+    const attended = (await prepareSession(baseCtx(makeDir()), deps, false, false)) as PreparedRun;
+    expect(attended.outsideConsent?.current).toBe("unasked");
+    const skipped = (await prepareSession(baseCtx(makeDir()), deps, true, false)) as PreparedRun;
+    expect(skipped.outsideConsent?.current).toBe("allowed-this-run");
+  });
+
   test("a stored MCP grant whose digest matches the session catalog enters allowedTools as the bare name", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
     const tool: McpToolInfo = {

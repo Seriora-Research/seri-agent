@@ -4,6 +4,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
 import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
+import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
@@ -123,6 +124,10 @@ export type SubagentRuntime = {
   };
   // Session worktree. Children must not fall back to process.cwd().
   cwd?: string;
+  blockReadsOutsideWorkingDirectories?: boolean;
+  // The parent's latch, shared by reference. A child has no human to ask, so it can only read
+  // the answer the parent already got (or the skip-permissions seed); it never writes the box.
+  outsideConsent?: { current: Consent };
   // The parent's hook callbacks, handed down deliberately — and note that this is the opposite of
   // what `createRuleInjector` does, which drive.ts keeps parent-only on purpose. The two are not
   // inconsistent, because a rule and a hook are not the same kind of thing. A rule is CONTEXT: it
@@ -263,6 +268,10 @@ export async function runSubagent(opts: {
     seed: runtime.seed,
     onBeforeTool: runtime.onBeforeTool,
     onAfterTool: runtime.onAfterTool,
+    workingDirectory: runtime.cwd,
+    blockReadsOutsideWorkingDirectories: runtime.blockReadsOutsideWorkingDirectories === true,
+    askOutsideFs: false,
+    outsideConsent: runtime.outsideConsent,
   })) {
     if (event.type === "text-delta") {
       segment += event.text;
