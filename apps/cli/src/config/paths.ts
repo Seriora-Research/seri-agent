@@ -27,6 +27,7 @@ export const HOOKS_DIRNAME = "hooks";
 export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
+export const PLANS_DIRNAME = "plans";
 export const DATABASE_FILENAME = "seri.db";
 export const DAEMON_DESCRIPTOR_FILENAME = "daemon.json";
 export const DAEMON_LOCK_FILENAME = "daemon.lock";
@@ -69,6 +70,7 @@ export function getReservedProfileNames(): ReadonlySet<string> {
     MEMORIES_DIRNAME,
     PENDING_DIRNAME,
     TRAJECTORIES_DIRNAME,
+    PLANS_DIRNAME,
     DATABASE_FILENAME,
     DAEMON_DESCRIPTOR_FILENAME,
     DAEMON_LOCK_FILENAME,
@@ -210,6 +212,12 @@ export function getPendingDir(configDir: string = getConfigDir()): string {
 
 export function getTrajectoriesDir(configDir: string = getConfigDir()): string {
   return join(configDir, TRAJECTORIES_DIRNAME);
+}
+
+// Always under the profile root, never the worktree: a default-profile user puts plans in
+// ~/.seri/plans/, a `--profile work` user in ~/.seri/work/plans/.
+export function getPlansDir(configDir: string = getConfigDir()): string {
+  return join(configDir, PLANS_DIRNAME);
 }
 
 export function getDatabasePath(configDir: string = getConfigDir()): string {

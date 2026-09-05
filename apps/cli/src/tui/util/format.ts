@@ -173,6 +173,10 @@ export const MODE_LABEL = {
   auto: "⏵⏵ bypass permissions on",
 } satisfies Record<PermissionMode, string>;
 
+// Plan mode is an overlay, not a PermissionMode. Same pause glyph and read-only hue; a distinct
+// string so the indicator cannot be mistaken for `/mode` having cycled to read-only.
+export const PLAN_MODE_LABEL = "⏸ plan mode on";
+
 // Persistent (shown on every render, not just right after a cycle) — a transient hint would not
 // help a user who has never pressed the key yet.
 export const MODE_CYCLE_HINT = " (shift+tab to cycle)";
@@ -330,6 +334,7 @@ export function formatDoneLine(
   let head: string;
   switch (reason) {
     case "no-tool-call":
+    case "plan-submitted":
       head = "done";
       break;
     case "aborted":

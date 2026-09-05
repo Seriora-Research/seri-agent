@@ -31,6 +31,14 @@ import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
 import { withSkills } from "../skills/tool";
+import { PLAN_MODE_OVERLAY } from "../plan/prompt";
+import {
+  isSubmittedPlan,
+  type PlanAnswers,
+  type PlanQuestion,
+  type SubmittedPlan,
+} from "../plan/mode";
+import { SUBMIT_PLAN_TOOL_NAME, stripWriteTools, withPlanTools } from "../plan/tools";
 import { type ChildEventPayload, dispatchDirect, withSubagents } from "../subagents/dispatch";
 import type { AgentSpec } from "../subagents/registry";
 import {
@@ -110,6 +118,8 @@ export type DriveLoopResult = {
   // it unconditionally is what makes `false` mean exactly one thing (nothing ever ran) instead of
   // also being read as "the caller didn't bother to set the field."
   ranAnyTurn: boolean;
+  // Set when this turn ended because `submit_plan` ran. Undefined on every other reason.
+  submittedPlan?: SubmittedPlan;
 };
 
 export type DriveLoopOptions = {
@@ -130,11 +140,21 @@ export type DriveLoopOptions = {
   // model. Everything above the engine — route resolution, overlays, the checkpointer, the system
   // tier, the usage fold — is shared with an ordinary turn; only the engine differs.
   directDispatch?: { agent: AgentSpec; goal: string };
+  // TUI plan-mode parent turns only. Direct `/explore` dispatch and the non-interactive path omit
+  // this, so they never see `ask_plan_questions` / `submit_plan` and never join the overlay.
+  planMode?: {
+    askQuestions: (
+      questions: readonly PlanQuestion[],
+      signal?: AbortSignal,
+    ) => Promise<PlanAnswers>;
+    configDir: string;
+  };
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
   if (!result.ranAnyTurn) return 0;
   if (result.doneReason === "no-tool-call") return result.refusedWithoutRunning ? 1 : 0;
+  if (result.doneReason === "plan-submitted") return 0;
   return 1;
 }
 
@@ -256,6 +276,10 @@ export async function driveLoop(
       family: catalogEntry?.family ?? null,
     }),
   );
+  // Parent-only: a `plan`/`explore` child inherits the read-only getter, not this overlay, so it
+  // cannot call `submit_plan` (it does not have that tool).
+  const parentSystem =
+    driveOpts.planMode === undefined ? system : joinTiers(system, PLAN_MODE_OVERLAY);
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
   // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
   // wins over those defaults. Construction failures warn and reuse the session model rather than
@@ -400,11 +424,15 @@ export async function driveLoop(
   // empty registry, so its absence there is structural rather than conditional. withMcp composes
   // the same way, on the same terms: it adds nothing for a registry with no cataloged tool, which
   // is what a fresh install or an unpreviewed server both look like.
-  const tools = withMcp(
+  const composed = withMcp(
     withSkills(dispatchable, prepared.skills),
     prepared.mcp,
     prepared.mcpClients,
   );
+  const tools =
+    driveOpts.planMode === undefined
+      ? composed
+      : withPlanTools(stripWriteTools(composed), driveOpts.planMode);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a
@@ -419,6 +447,7 @@ export async function driveLoop(
   let ranTool = false;
   let archivist: ArchivistReport | undefined;
   let directSummary: string | undefined;
+  let submittedPlan: SubmittedPlan | undefined;
 
   // `/name <task>`: one agent the USER picked, run in place of a parent model call. It yields the
   // same LoopEvent stream the loop would for a dispatch the model itself issued — tool-call,
@@ -481,7 +510,8 @@ export async function driveLoop(
           callSubject: mcpCallSubject,
           approvalPrompt,
           // Computed once above, so a live /model switch or reroute reaches subagents identically.
-          system,
+          // Parent-only overlay lives on `parentSystem`; children still get `system`.
+          system: parentSystem,
           // undefined when this session defines no glob-scoped rule, which is the common case and
           // costs the loop nothing. The parent loop only: a subagent builds its own message array
           // (subagents/dispatch.ts), and a child still inherits every `alwaysApply` rule through
@@ -518,6 +548,8 @@ export async function driveLoop(
           reasoningEffort,
           temperature: samplingConfig.temperature,
           seed: samplingConfig.seed,
+          terminalTools:
+            driveOpts.planMode === undefined ? undefined : new Set([SUBMIT_PLAN_TOOL_NAME]),
         })) {
       // The archivist's entire view of this turn — its own module owns what each event means to
       // it (memory/archivist.ts's own comment on observeArchivistEvent), so nothing else in this
@@ -536,6 +568,13 @@ export async function driveLoop(
       }
       if (event.type === "permission-denied" && event.reason === "declined") hadDenial = true;
       if (event.type === "tool-call") ranTool = true;
+      if (
+        event.type === "tool-result" &&
+        event.name === SUBMIT_PLAN_TOOL_NAME &&
+        isSubmittedPlan(event.result)
+      ) {
+        submittedPlan = event.result;
+      }
       // Compaction splices the whole message array, so every rewind anchor recorded before this
       // point indexes into an array that no longer exists. The barrier is what lets `/rewind` say
       // so instead of silently slicing garbage. A session that never checkpointed has no log, and
@@ -646,5 +685,6 @@ export async function driveLoop(
     archivist,
     directSummary,
     ranAnyTurn: true,
+    submittedPlan,
   };
 }

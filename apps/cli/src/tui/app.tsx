@@ -57,12 +57,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
+import { isPlanOverlayOn, isPlanPanelOpen, type PlanAnswers, type PlanReviewDecision } from "../plan/mode";
 import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import { ApprovalBox } from "./components/ApprovalBox";
+import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
+import { PlanReviewPanel } from "./components/PlanReviewPanel";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
@@ -99,6 +102,7 @@ import {
   formatRouteLabelFromResolved,
   MODE_CYCLE_HINT,
   MODE_LABEL,
+  PLAN_MODE_LABEL,
   modeRowHintVisible,
 } from "./util/format";
 import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
@@ -163,6 +167,8 @@ export type AppProps = {
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
   // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  onPlanQuestionsAnswered?: (answers: PlanAnswers) => void;
+  onPlanReview?: (decision: PlanReviewDecision) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
   // keypress handler, wired by runTui to dispatch model-picker-resolved (with or without a pick)
   // into the SAME reducer everything else here already shares. `onModelSelected` takes just the
@@ -279,6 +285,8 @@ export type AppProps = {
   // Also makes Shift+Tab inert while set, checked inside this component rather than left to every
   // caller to remember: a functioning binding would silently mutate and persist a session field
   // the gate is ignoring, with zero visible feedback.
+  // The `/plan` overlay beats this flag: plan mode is read-only even under skip-permissions, and
+  // the indicator follows the overlay rather than claiming bypass.
   skipPermissions?: boolean;
 };
 
@@ -329,6 +337,8 @@ export function App({
   onQuit,
   onEscape,
   onApprovalAnswer,
+  onPlanQuestionsAnswered,
+  onPlanReview,
   onModelSelected,
   onModelPickerCancel,
   onSetupSelect,
@@ -391,13 +401,16 @@ export function App({
   const { width: rawWidth, height: rawRows } = useTerminalDimensions();
   const width = resolveWidth(rawWidth);
   const rows = resolveHeight(rawRows);
-  // The single render-time override `skipPermissions` needs — see `AppProps.skipPermissions`'s own
-  // comment. One derived value, not two: `indicatorText` reads off `displayMode` rather than
-  // carrying its own separate `skipPermissions` ternary, so the hue and the label can't disagree
-  // about which mode is showing.
-  const displayMode: PermissionMode =
-    skipPermissions === true ? "auto" : state.session.permissionMode;
-  const indicatorText = MODE_LABEL[displayMode];
+  // The `/plan` overlay wins even under `skipPermissions`: the gate is read-only for that
+  // overlay, so the indicator must not claim bypass. Hue reuses read-only; the label is distinct
+  // so it cannot be mistaken for `/mode` having cycled there.
+  const planOn = isPlanOverlayOn(state.plan);
+  const displayMode: PermissionMode = planOn
+    ? "read-only"
+    : skipPermissions === true
+      ? "auto"
+      : state.session.permissionMode;
+  const indicatorText = planOn ? PLAN_MODE_LABEL : MODE_LABEL[displayMode];
 
   const transcriptRef = useRef<ScrollBoxRenderable>(null);
   // InputBox sets this while its completion popup owns Up/Down, so a wheel-as-arrow notch over
@@ -536,7 +549,8 @@ export function App({
   const pagingPanelOpen =
     state.pendingSplash ||
     (state.pendingApproval === undefined &&
-      (state.pendingModelPicker !== undefined ||
+      (isPlanPanelOpen(state.plan) ||
+        state.pendingModelPicker !== undefined ||
         state.pendingSetup !== undefined ||
         state.pendingAuth !== undefined ||
         state.pendingConfig !== undefined ||
@@ -823,11 +837,10 @@ export function App({
       />
       {/* Mutually exclusive with InputBox — a pending approval question is the only thing this run
       is waiting on, and answering it (not typing a task or slash command) is the only input that
-      means anything until it clears. Extended to a third state for /model, a fourth for /setup,
-      four more for /login /signup, /config, /permissions and /effort: each is the same kind of
-      "only this input means anything right now" question, checked in this same order (approval,
-      /model, /setup, /login /signup, /config, /permissions, /effort, then InputBox). Child
-      inspect keeps InputBox mounted and inert. Every branch here — including
+      means anything until it clears. Plan-mode Q&A and review sit immediately after approval, then
+      /model, /setup, /login /signup, /config, /permissions, /effort: each is the same kind of
+      "only this input means anything right now" question. Child inspect keeps InputBox mounted
+      and inert. Every branch here — including
       AuthPanel/ConfigPanel/PermissionsPanel/EffortPanel — is a real, wired OpenTUI
       component; state/handlers.ts and cli.ts dispatch auth-requested/config-requested/
       permissions-requested/effort-requested. */}
@@ -837,6 +850,14 @@ export function App({
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
         />
+      ) : state.plan.kind === "clarifying" ? (
+        <PlanQuestionsPanel
+          questions={state.plan.questions}
+          onAnswer={onPlanQuestionsAnswered}
+          onQuit={onQuit}
+        />
+      ) : state.plan.kind === "reviewing" ? (
+        <PlanReviewPanel plan={state.plan} onDecision={onPlanReview} onQuit={onQuit} />
       ) : state.pendingModelPicker !== undefined ? (
         <ModelPicker
           entries={state.pendingModelPicker.entries}

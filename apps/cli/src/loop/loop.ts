@@ -89,7 +89,7 @@ export type LoopEvent =
   // "the generator finished, why?" should not have to handle two shapes to answer it. It is
   // deliberately not an `error` either — a user-initiated cancel is not a failure, and printEvent
   // routes error to stderr, which would put "AbortError" inside whatever consumed the user's pipe.
-  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" }
+  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted" }
   | { type: "error"; error: string };
 
 // Three answers, not a boolean, because "yes" and "yes, and stop asking" are different
@@ -303,6 +303,9 @@ export async function* runLoop(opts: {
   // a Codex subscription child must not inherit a Groq parent's seed.
   temperature?: number;
   seed?: number;
+  // After a successful execute of a name in this set, finish the current tool round, then end the
+  // turn. Plan mode uses this so `submit_plan` is the last model step rather than another round.
+  terminalTools?: ReadonlySet<string>;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -698,6 +701,7 @@ export async function* runLoop(opts: {
       return aborted || opts.signal?.aborted === true ? "aborted" : "ok";
     }
 
+    let terminalHit = false;
     for (const call of toolCalls) {
       // Before the call, therefore upstream of the checkpoint snapshot taken inside the wrapper at
       // toolDef.execute — and this is the only point that sees all seven tools, since wrapTools
@@ -869,6 +873,7 @@ export async function* runLoop(opts: {
           context: {},
           abortSignal: opts.signal,
         });
+        if (opts.terminalTools?.has(call.toolName)) terminalHit = true;
       } catch (err) {
         // A cancelled tool rejects — spawnCollect and runRipgrep both do, and bash, powershell,
         // grep and glob all hand them the signal, which is every tool that spawns anything at all.
@@ -959,6 +964,14 @@ export async function* runLoop(opts: {
     // site could be written without.
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
+      return;
+    }
+
+    // After the unanswered abort, so a cancelled round is still "aborted" even if a terminal
+    // tool had already succeeded in the same batch. After the rows, so a plan-submitted turn
+    // stays resumable.
+    if (terminalHit) {
+      yield { type: "done", reason: "plan-submitted" };
       return;
     }
 

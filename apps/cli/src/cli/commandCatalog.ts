@@ -230,6 +230,15 @@ export const COMMAND_META: readonly CommandMeta[] = [
     // Always claims the name; decideProfileCreate still throws on a bad argument.
     accepts: () => true,
   },
+  {
+    name: "/plan",
+    surface: "tui",
+    description: "enter plan mode, or research a plan for a task",
+    argsUsage: "[task]",
+    // Claims the name so `/plan` never falls through to the `plan` subagent. Empty form toggles;
+    // a task starts the workflow. The handler still rejects mid-turn and mid-review.
+    accepts: () => true,
+  },
 ];
 
 const BY_NAME = new Map<string, CommandMeta>(COMMAND_META.map((meta) => [meta.name, meta]));

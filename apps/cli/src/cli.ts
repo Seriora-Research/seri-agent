@@ -113,6 +113,13 @@ import {
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
+import { unlinkPlanFile } from "./plan/files";
+import {
+  isPlanOverlayOn,
+  type PlanAnswers,
+  type PlanQuestion,
+  type PlanReviewDecision,
+} from "./plan/mode";
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import {
@@ -1554,11 +1561,12 @@ async function runTui(
   // the other half of C-1's fix, and finding 6: reads `liveState.session` (this function's own
   // comment above), not the old effect-refreshed `liveSession`, so a mid-run /mode is guaranteed
   // to be visible on the very next gate check rather than only "usually, once the effect catches
-  // up in time." `skipPermissions` still wins unconditionally, matching prepareSession's own
-  // original derivation of `prepared.permissionMode`: a run-scoped
+  // up in time." `skipPermissions` still wins over the stored session mode, matching
+  // prepareSession's own original derivation of `prepared.permissionMode`: a run-scoped
   // `--dangerously-skip-permissions` override is not something a mid-run /mode should be able to
-  // undo.
+  // undo. The `/plan` overlay beats both: plan-mode turns are read-only even under that flag.
   function getPermissionMode(): PermissionMode {
+    if (isPlanOverlayOn(liveState.plan)) return "read-only";
     return skipPermissions ? "auto" : liveState.session.permissionMode;
   }
 
@@ -1618,6 +1626,65 @@ async function runTui(
       };
       dispatch({ type: "approval-requested", toolName, args, offersAlways });
     });
+  }
+
+  // Parks `ask_plan_questions` on the TUI the same way tuiApprovalPrompt parks the gate. Cancel
+  // (Esc, or a turn abort) returns `{ cancelled: true }` as the tool result rather than aborting
+  // the turn — the model should keep researching with whatever it already knows.
+  let pendingPlanQuestionsResolve: ((answers: PlanAnswers) => void) | undefined;
+
+  function tuiAskPlanQuestions(
+    questions: readonly PlanQuestion[],
+    signal?: AbortSignal,
+  ): Promise<PlanAnswers> {
+    return new Promise<PlanAnswers>((resolve) => {
+      if (signal?.aborted === true) {
+        resolve({ cancelled: true });
+        return;
+      }
+      const abort = onAbort(signal, () => {
+        pendingPlanQuestionsResolve = undefined;
+        dispatch({ type: "plan-on" });
+        resolve({ cancelled: true });
+      });
+      pendingPlanQuestionsResolve = (answers) => {
+        abort.dispose();
+        resolve(answers);
+      };
+      dispatch({ type: "plan-questions-requested", questions });
+    });
+  }
+
+  function onPlanQuestionsAnswered(answers: PlanAnswers): void {
+    const resolve = pendingPlanQuestionsResolve;
+    if (resolve === undefined) return;
+    pendingPlanQuestionsResolve = undefined;
+    dispatch({ type: "plan-on" });
+    resolve(answers);
+  }
+
+  function onPlanReview(decision: PlanReviewDecision): void {
+    const plan = liveState.plan;
+    if (plan.kind !== "reviewing") return;
+    if (decision === "request-changes") {
+      dispatch({ type: "plan-on" });
+      return;
+    }
+    if (decision === "cancel") {
+      unlinkPlanFile(plan.path, configDir);
+      dispatch({ type: "plan-off" });
+      drainQueue();
+      return;
+    }
+    const prompt = `The user approved the plan "${plan.title}" at ${plan.path}. Implement it.\n\n${plan.markdown}`;
+    dispatch({ type: "plan-off" });
+    currentTurn = runTurn(
+      {
+        ...liveState.session,
+        messages: withUserTurn(liveState.session.messages, prompt),
+      },
+      prompt,
+    );
   }
 
   // The other end of tuiApprovalPrompt — App.tsx's onApprovalAnswer prop, called from
@@ -2193,7 +2260,13 @@ async function runTui(
         tuiApprovalPrompt,
         archivistState,
         (payload) => dispatch({ type: "subagent-child-event", ...payload }),
-        { directDispatch },
+        {
+          directDispatch,
+          planMode:
+            directDispatch === undefined && liveState.plan.kind !== "off"
+              ? { askQuestions: tuiAskPlanQuestions, configDir }
+              : undefined,
+        },
       );
       usage = {
         inputTokens: addTokens(usage.inputTokens, result.usage.inputTokens),
@@ -2224,6 +2297,9 @@ async function runTui(
         if (result.archivist.summary !== undefined) {
           pushTranscriptLine(dispatch, result.archivist.summary, { muted: true, markdown: true });
         }
+      }
+      if (result.submittedPlan !== undefined) {
+        dispatch({ type: "plan-review-requested", plan: result.submittedPlan });
       }
       // LOW-J: `result.cancelledBy` is deliberately not read here. The TUI never re-raises a
       // signal on a plain, individually-cancelled turn (H-3 returns it to awaiting input, not to
@@ -2315,6 +2391,7 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    if (liveState.plan.kind === "clarifying") onPlanQuestionsAnswered({ cancelled: true });
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
     // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
     // such effect at all (this function owns the renderer's lifecycle directly), so there is
@@ -2665,6 +2742,41 @@ async function runTui(
         });
       }
     },
+    "/plan": (args) => {
+      if (turnInFlight) {
+        dispatch({
+          type: "command-error",
+          message: "A turn is already running; wait for it to finish before submitting another.",
+        });
+        return;
+      }
+      const task = args.join(" ").trim();
+      if (task.length === 0) {
+        if (liveState.plan.kind === "reviewing") {
+          unlinkPlanFile(liveState.plan.path, configDir);
+          dispatch({ type: "plan-off" });
+          drainQueue();
+          return;
+        }
+        dispatch({ type: liveState.plan.kind === "off" ? "plan-on" : "plan-off" });
+        return;
+      }
+      if (liveState.plan.kind === "reviewing") {
+        dispatch({
+          type: "command-error",
+          message: "/plan: approve or cancel the current plan first.",
+        });
+        return;
+      }
+      if (liveState.plan.kind === "off") dispatch({ type: "plan-on" });
+      currentTurn = runTurn(
+        {
+          ...liveState.session,
+          messages: withUserTurn(liveState.session.messages, task),
+        },
+        task,
+      );
+    },
   };
   assertTuiHandlers(tuiHandlers);
 
@@ -2684,6 +2796,7 @@ async function runTui(
     // runTui with turn 2 and whatever tool children it spawned still live — precisely the
     // orphaned-child case HIGH-B exists to prevent.
     if (quitting) return;
+    if (liveState.plan.kind === "reviewing") return;
     // A message still open in the row editor has not left the user's hands yet.
     if (liveState.queue.editing) return;
     const head = liveState.queue.items[0];
@@ -2733,7 +2846,9 @@ async function runTui(
     // queued before it.
     if (
       !fromDrain &&
-      (turnInFlight || liveState.queue.items.length > 0) &&
+      (turnInFlight ||
+        liveState.queue.items.length > 0 ||
+        liveState.plan.kind === "reviewing") &&
       startsATurn(name, trimmed, prepared)
     ) {
       dispatch({ type: "queue-appended", id: nextQueueId(), text: value });
@@ -3019,6 +3134,8 @@ async function runTui(
       onQuit: quit,
       onEscape,
       onApprovalAnswer,
+      onPlanQuestionsAnswered,
+      onPlanReview,
       onModelSelected,
       onModelPickerCancel,
       onCycleMode,

@@ -178,6 +178,11 @@ export type ToolClass = "read" | "write";
 // gate at the same mode rather than escaping it, and `skill` reads one file the user themselves put
 // under `.seri/skills/`.
 //
+// `ask_plan_questions` and `submit_plan` are the same class for the same reason they are not in
+// `READ_ONLY_TOOL_NAMES`: they do not write the worktree (the harness writes the plan file), so
+// the gate must not block them under the plan-mode read-only getter, but they must run sequentially
+// rather than in the concurrent-read batch.
+//
 // `skill` is the literal rather than an import of SKILL_TOOL_NAME (skills/tool.ts) because
 // `provider/` sits below `skills/` in the module graph, and the foundational modules here do not
 // import the extension modules layered on top of them. The drift a literal invites is guarded in
@@ -187,6 +192,8 @@ const READ_CLASS_TOOL_NAMES = new Set<string>([
   ...READ_ONLY_TOOL_NAMES,
   DISPATCH_TOOL_NAME,
   "skill",
+  "ask_plan_questions",
+  "submit_plan",
 ]);
 
 export function classifyBuiltin(name: string): ToolClass {
