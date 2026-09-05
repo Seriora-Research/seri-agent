@@ -795,7 +795,10 @@ describe("dispatch_subagents", () => {
         }),
       }),
     );
-    await dispatchTool.execute({ tasks: [{ role: "explore", goal: "advise" }] }, dispatchOpts("t1"));
+    await dispatchTool.execute(
+      { tasks: [{ role: "explore", goal: "advise" }] },
+      dispatchOpts("t1"),
+    );
     const started = events.find((e) => e.event.type === "child-started");
     expect(started?.model).toBe("claude-sonnet-5");
     expect(started?.provider).toBe("anthropic");
@@ -969,7 +972,10 @@ describe("dispatch_subagents", () => {
     }));
     const snapshots: unknown[] = [];
     const dispatchTool = createDispatchTool(
-      makeRuntime(fake, { agents: withMutators(), checkpointer: (context) => snapshots.push(context) }),
+      makeRuntime(fake, {
+        agents: withMutators(),
+        checkpointer: (context) => snapshots.push(context),
+      }),
     );
 
     await dispatchTool.execute(
@@ -999,7 +1005,10 @@ describe("dispatch_subagents", () => {
     }));
     const snapshots: unknown[] = [];
     const dispatchTool = createDispatchTool(
-      makeRuntime(fake, { agents: withMutators(), checkpointer: (context) => snapshots.push(context) }),
+      makeRuntime(fake, {
+        agents: withMutators(),
+        checkpointer: (context) => snapshots.push(context),
+      }),
     );
 
     await dispatchTool.execute(
@@ -1031,7 +1040,7 @@ function withCustomAgent(spec: Partial<AgentSpec> & { name: string }): AgentRegi
 }
 
 function withMutators(extra?: Partial<AgentSpec> & { name: string }): AgentRegistry {
-  const agents = extra === undefined ? new Map(builtinRegistry()) : withCustomAgent(extra);
+  const agents = new Map(extra === undefined ? builtinRegistry() : withCustomAgent(extra));
   for (const spec of [
     {
       name: "writer",

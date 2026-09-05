@@ -28,10 +28,7 @@ export const submitPlanSchema = z.object({
 });
 
 export type PlanModeToolOpts = {
-  askQuestions: (
-    questions: readonly PlanQuestion[],
-    signal?: AbortSignal,
-  ) => Promise<PlanAnswers>;
+  askQuestions: (questions: readonly PlanQuestion[], signal?: AbortSignal) => Promise<PlanAnswers>;
   configDir: string;
 };
 
@@ -50,8 +47,7 @@ export function withPlanTools(tools: ToolSet, opts: PlanModeToolOpts): ToolSet {
         "needs 2–6 options. The user can also type a custom answer and optional free-text notes. " +
         "Skip this tool when the request is already clear.",
       inputSchema: askPlanQuestionsSchema,
-      execute: async ({ questions }, { abortSignal }) =>
-        opts.askQuestions(questions, abortSignal),
+      execute: async ({ questions }, { abortSignal }) => opts.askQuestions(questions, abortSignal),
     }),
     [SUBMIT_PLAN_TOOL_NAME]: tool({
       description:

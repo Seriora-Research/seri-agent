@@ -1698,9 +1698,7 @@ describe("runLoop", () => {
     test("a successful terminal tool ends the turn plan-submitted after the round finishes", async () => {
       const model = new MockLanguageModelV4({
         doStream: [
-          streamResult(
-            toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" }),
-          ),
+          streamResult(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
         ],
       });
       const events = await collect(
@@ -1725,15 +1723,13 @@ describe("runLoop", () => {
       const throwing = tool({
         description: "submit a plan",
         inputSchema: z.object({ title: z.string(), markdown: z.string() }),
-        execute: async () => {
+        execute: async (): Promise<{ path: string; title: string; markdown: string }> => {
           throw new Error("disk full");
         },
       });
       const model = new MockLanguageModelV4({
         doStream: [
-          streamResult(
-            toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" }),
-          ),
+          streamResult(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
           streamResult(textOnlyChunks("kept going")),
         ],
       });

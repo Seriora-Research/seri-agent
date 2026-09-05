@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { parseColor, RGBA, type Renderable, ScrollBoxRenderable } from "@opentui/core";
+import { parseColor, type Renderable, RGBA, ScrollBoxRenderable } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
@@ -35,9 +35,9 @@ import {
   MODE_CYCLE_HINT,
   MODE_HINT_COLS,
   MODE_LABEL,
-  PLAN_MODE_LABEL,
   matchesFilter,
   NAME_WIDTH,
+  PLAN_MODE_LABEL,
   pickerLabelWidth,
   singleLine,
   slideWindow,

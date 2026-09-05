@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { WRITE_TOOL_NAMES, toolDefinitions } from "../../src/provider/tools";
 import {
   ASK_PLAN_QUESTIONS_TOOL_NAME,
+  askPlanQuestionsSchema,
   MAX_PLAN_OPTIONS,
   MAX_PLAN_QUESTIONS,
   MIN_PLAN_OPTIONS,
   SUBMIT_PLAN_TOOL_NAME,
-  askPlanQuestionsSchema,
   stripWriteTools,
   submitPlanSchema,
   withPlanTools,
 } from "../../src/plan/tools";
+import { toolDefinitions, WRITE_TOOL_NAMES } from "../../src/provider/tools";
 
 describe("askPlanQuestionsSchema", () => {
   const question = { id: "q1", prompt: "Which?", options: ["a", "b"] };

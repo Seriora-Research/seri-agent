@@ -57,22 +57,29 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isShiftTabModeCycle } from "../cli/commandCatalog";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
-import { isPlanOverlayOn, isPlanPanelOpen, type PlanAnswers, type PlanReviewDecision } from "../plan/mode";
 import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
+import {
+  isPlanOverlayOn,
+  isPlanPanelOpen,
+  type PlanAnswers,
+  type PlanReviewDecision,
+} from "../plan/mode";
 import { appliedReasoningEffort, resolveReasoningEffort } from "../provider/reasoning";
 import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
+import type { ChromeTabId } from "./chrome/tabs";
 import { ApprovalBox } from "./components/ApprovalBox";
-import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
-import { PlanReviewPanel } from "./components/PlanReviewPanel";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
+import { PlanQuestionsPanel } from "./components/PlanQuestionsPanel";
+import { PlanReviewPanel } from "./components/PlanReviewPanel";
 import { QueueBlock } from "./components/QueueBlock";
 import { SubagentPanel } from "./components/SubagentPanel";
 import { indentReasoningBody, TranscriptList } from "./components/TranscriptList";
 import { TurnStatus } from "./components/TurnStatus";
+import { ChromePanel } from "./routes/chrome/ChromePanel";
 import { AuthPanel } from "./routes/config/AuthPanel";
 import { ConfigPanel } from "./routes/config/ConfigPanel";
 import { EffortPanel } from "./routes/config/EffortPanel";
@@ -83,16 +90,14 @@ import { SetupPanel } from "./routes/setup/SetupPanel";
 import { SplashBanner, type SplashBannerInfo } from "./routes/setup/SplashBanner";
 import { WelcomeSplashPanel } from "./routes/setup/WelcomeSplashPanel";
 import { SkillsPanel } from "./routes/skills/SkillsPanel";
-import { ChromePanel } from "./routes/chrome/ChromePanel";
-import type { ChromeTabId } from "./chrome/tabs";
 import type { SetupProviderRow } from "./state/commands";
 import { type Dispatch, initialTuiState } from "./state/reducer";
 import { createStreamDispatch } from "./state/streamDispatch";
 import { renderLiveToolActivity, summarizeArgs } from "./state/toolActivity";
 import { FRAME, gapBefore } from "./theme/spacing";
-import { approvalCopy } from "./util/approvalCopy";
 import { theme } from "./theme/theme";
 import { ErrorLine } from "./ui/ErrorLine";
+import { approvalCopy } from "./util/approvalCopy";
 import type { CompletionSource } from "./util/completion";
 import {
   DEFAULT_COLUMNS,
@@ -102,8 +107,8 @@ import {
   formatRouteLabelFromResolved,
   MODE_CYCLE_HINT,
   MODE_LABEL,
-  PLAN_MODE_LABEL,
   modeRowHintVisible,
+  PLAN_MODE_LABEL,
 } from "./util/format";
 import { quantizeScrollTop } from "./util/visibleTranscriptWindow";
 

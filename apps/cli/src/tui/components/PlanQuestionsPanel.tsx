@@ -2,8 +2,8 @@
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useState } from "react";
-import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import type { PlanAnswers, PlanQuestion } from "../../plan/mode";
+import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { theme } from "../theme/theme";
 import { ListRow } from "../ui/ListRow";
 import { OptionKeys } from "../ui/OptionKeys";
@@ -157,9 +157,7 @@ export function PlanQuestionsPanel({
           <ListRow
             selected={(selected[tab] ?? 0) === question.options.length}
             label={
-              (custom[tab] ?? "").length > 0
-                ? `${CUSTOM_LABEL}: ${custom[tab]}`
-                : CUSTOM_LABEL
+              (custom[tab] ?? "").length > 0 ? `${CUSTOM_LABEL}: ${custom[tab]}` : CUSTOM_LABEL
             }
           />
         </>

@@ -20,9 +20,9 @@ import { onAbort } from "./abort";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
-import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
-import type { login as loginReal, logout as logoutReal } from "./auth/commands";
 import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
+import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
   appendBarrier,
@@ -171,11 +171,11 @@ import { grep as grepReal } from "./tools/grep";
 import { resolveRg, rgVersion } from "./tools/runRipgrep";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
+import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
 import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import type { CompletionSource } from "./tui/util/completion";
-import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { fetchUsageReport } from "./usage/fetch";
 
@@ -2846,9 +2846,7 @@ async function runTui(
     // queued before it.
     if (
       !fromDrain &&
-      (turnInFlight ||
-        liveState.queue.items.length > 0 ||
-        liveState.plan.kind === "reviewing") &&
+      (turnInFlight || liveState.queue.items.length > 0 || liveState.plan.kind === "reviewing") &&
       startsATurn(name, trimmed, prepared)
     ) {
       dispatch({ type: "queue-appended", id: nextQueueId(), text: value });

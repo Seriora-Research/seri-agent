@@ -89,7 +89,10 @@ export type LoopEvent =
   // "the generator finished, why?" should not have to handle two shapes to answer it. It is
   // deliberately not an `error` either — a user-initiated cancel is not a failure, and printEvent
   // routes error to stderr, which would put "AbortError" inside whatever consumed the user's pipe.
-  | { type: "done"; reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted" }
+  | {
+      type: "done";
+      reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted";
+    }
   | { type: "error"; error: string };
 
 // Three answers, not a boolean, because "yes" and "yes, and stop asking" are different
