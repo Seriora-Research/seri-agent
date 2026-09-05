@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { canonicalizeLoopbackUrl } from "./loopback";
 import type {
   ApprovalAnswer,
   DaemonDescriptor,
@@ -35,7 +36,7 @@ export function readDaemonDescriptor(path: string): DaemonDescriptor {
   ) {
     throw new Error("daemon descriptor is invalid");
   }
-  return parsed;
+  return { ...parsed, endpoint: canonicalizeLoopbackUrl(parsed.endpoint) };
 }
 
 export class DaemonClient {
@@ -44,7 +45,7 @@ export class DaemonClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(opts: DaemonClientOptions) {
-    this.endpoint = opts.endpoint.replace(/\/$/, "");
+    this.endpoint = canonicalizeLoopbackUrl(opts.endpoint).replace(/\/$/, "");
     this.token = opts.token;
     this.fetchImpl = opts.fetch ?? fetch;
   }

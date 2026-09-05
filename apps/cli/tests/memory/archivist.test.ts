@@ -1042,6 +1042,7 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
       catalog: catalogFor(),
       permissionMode: () => "auto",
       allowedTools: [],
+      pathDenials: [],
       reasoningEffort: undefined,
     };
     const result = await runSubagent({

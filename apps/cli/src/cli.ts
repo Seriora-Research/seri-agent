@@ -61,6 +61,7 @@ import {
 import {
   loadConfig,
   loadReasoningEffortConfig,
+  loadSandboxConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
   persistDefaultReasoningEffort,
@@ -79,6 +80,9 @@ import { readDaemonDescriptorFile } from "./daemon/descriptor";
 import type { RunScheduled } from "./daemon/scheduler";
 import { runDoctorChecks } from "./doctor/checks";
 import { doctorExitCode, printDoctorReport } from "./doctor/report";
+import { defaultBangRunners, submitBang } from "./sandbox/bang";
+import { probeConfinement } from "./sandbox/confine";
+import { parseBangLine, resolveShellLaunch } from "./sandbox/policy";
 import { runUpdate } from "./update/run";
 import {
   type ExecuteTurn,
@@ -87,11 +91,13 @@ import {
 } from "./daemon/server";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
+import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
+  type ApprovalDetail,
   type ApprovalPrompt,
   DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
@@ -807,6 +813,7 @@ function makeApprovalPrompt(
   // Reads only from `input`, unchanged.
   openInterface: () => Interface = () =>
     createInterface({ input: process.stdin, output: chooseInterfaceOutput() }),
+  cwd: () => string = () => process.cwd(),
 ): ApprovalPrompt {
   // Once true, no further prompt in this run touches stdin at all. `process.stdin` is a single
   // shared stream that only ever emits 'end' once: the FIRST prompt's Interface is what actually
@@ -822,7 +829,7 @@ function makeApprovalPrompt(
   // reads and needs no approval at all; this only engages once stdin has actually ended.
   let ended = false;
 
-  return (toolName, args, signal) =>
+  return (toolName, args, signal, detail) =>
     new Promise<ApprovalAnswer>((resolve) => {
       if (signal?.aborted === true || ended) {
         resolve("no");
@@ -830,8 +837,10 @@ function makeApprovalPrompt(
       }
       // isPersistableTool (permissions/store.ts) is the single answer to "may this be remembered
       // permanently" — this prompt's offer and rememberGrant's own acceptance read the same
-      // function so the two cannot drift out of agreement with each other.
-      const offersAlways = isPersistableTool(toolName);
+      // function so the two cannot drift out of agreement with each other. An outside-cwd path
+      // is a one-shot for this run, never a persisted grant, so [a]lways stays off there.
+      const offersAlways =
+        isPersistableTool(toolName) && locationForCall(cwd(), toolName, args) !== "outside";
       let answered = false;
       const rl = openInterface();
       const abort = onAbort(signal, () => {
@@ -855,17 +864,20 @@ function makeApprovalPrompt(
         }
       });
       rl.on("SIGINT", () => deliverSignal("SIGINT"));
-      rl.question(approvalPromptText(toolName, args, offersAlways), (answer) => {
-        answered = true;
-        abort.dispose();
-        rl.close();
-        const typed = answer.trim().toLowerCase();
-        // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
-        // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
-        // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
-        const wantsAlways = offersAlways && (typed === "a" || typed === "always");
-        resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
-      });
+      rl.question(
+        approvalPromptText(toolName, args, offersAlways, detail?.classifierReason),
+        (answer) => {
+          answered = true;
+          abort.dispose();
+          rl.close();
+          const typed = answer.trim().toLowerCase();
+          // Anything unrecognised is "no", exactly as the old [y/N] parse treated it: an approval a
+          // user did not clearly give is not an approval. An "a"/"always" typed at a shell prompt
+          // (not offered, see isPersistableTool) is "unrecognised" by the same rule, not a special case.
+          const wantsAlways = offersAlways && (typed === "a" || typed === "always");
+          resolve(typed === "y" || typed === "yes" ? "once" : wantsAlways ? "always" : "no");
+        },
+      );
     });
 }
 
@@ -1661,6 +1673,7 @@ async function runTui(
     toolName: string,
     args: unknown,
     signal?: AbortSignal,
+    detail?: ApprovalDetail,
   ): Promise<ApprovalAnswer> {
     return new Promise<ApprovalAnswer>((resolve) => {
       // Mirrors makeApprovalPrompt's own already-aborted check: a turn already cancelled before
@@ -1670,7 +1683,9 @@ async function runTui(
         return;
       }
       // See makeApprovalPrompt's own comment on this same expression.
-      const offersAlways = isPersistableTool(toolName);
+      const offersAlways =
+        isPersistableTool(toolName) &&
+        locationForCall(liveState.session.cwd, toolName, args) !== "outside";
       // The other direction, mirroring makeApprovalPrompt's own onAbort wiring: a cancel that
       // arrives WHILE this prompt is up (a Ctrl-C mid-approval) resolves "no" and clears
       // pendingApproval, the same as an explicit "n" answer would, instead of leaving the box
@@ -1684,7 +1699,15 @@ async function runTui(
         abort.dispose();
         resolve(answer);
       };
-      dispatch({ type: "approval-requested", toolName, args, offersAlways });
+      dispatch({
+        type: "approval-requested",
+        toolName,
+        args,
+        offersAlways,
+        ...(detail?.classifierReason !== undefined
+          ? { classifierReason: detail.classifierReason }
+          : {}),
+      });
     });
   }
 
@@ -2901,6 +2924,26 @@ async function runTui(
     }
     const trimmed = value.trim();
     if (trimmed.length === 0) return;
+    const bangCommand = parseBangLine(trimmed);
+    if (bangCommand !== undefined) {
+      echoUserInput(value);
+      const confinement = { available: probeConfinement() };
+      const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
+      const launch = resolveShellLaunch(
+        "bang",
+        { allowUnsandboxedCommands, root: liveState.session.cwd },
+        confinement,
+      );
+      try {
+        await submitBang(bangCommand, launch, defaultBangRunners(), liveState.session.cwd, {
+          error: (message) => dispatch({ type: "command-error", message }),
+          output: (text) => dispatch({ type: "transcript-append", line: text }),
+        });
+      } catch (err) {
+        dispatch({ type: "command-error", message: messageOf(err) });
+      }
+      return;
+    }
     // Hoisted above `echoUserInput`, where the split used to sit below it: the queue gate needs
     // `name`, and a queued message must not be echoed. The move is safe because the parse is pure
     // — nothing between here and the echo has a side effect — and every branch further down still
@@ -3208,6 +3251,7 @@ async function runTui(
       onCycleMode,
       onTogglePlan,
       skipPermissions,
+      confinementAvailable: probeConfinement(),
       onSetupSelect,
       onSetupKeyEntered,
       onSetupRemove,
@@ -3511,7 +3555,9 @@ async function finishCliRun(
         printEvent,
         () => prepared.permissionMode,
         (session) => saveSession(session, ctx.sessionsDir, ctx.database),
-        promptChannel === "live" ? makeApprovalPrompt(deps.createInterface) : undefined,
+        promptChannel === "live"
+          ? makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd)
+          : undefined,
         createArchivistState(prepared.session),
       );
     } else {

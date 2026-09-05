@@ -194,7 +194,14 @@ export type TuiState = {
   // App.tsx renders its own ApprovalBox instead of InputBox whenever this is set — mutually
   // exclusive, matching how the non-interactive CLI already blocks on this same question before
   // reading anything else from stdin.
-  pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
+  pendingApproval:
+    | {
+        toolName: string;
+        args: unknown;
+        offersAlways: boolean;
+        classifierReason?: string;
+      }
+    | undefined;
   // Occupancy snapshot for ask_user. The park in cli.ts owns the resolve; this field is what
   // App.tsx paints. Not parked on `plan.kind`. The reducer can hold this next to
   // `pendingApproval` (ApprovalBox still wins the ternary), but no production path sets
@@ -442,7 +449,13 @@ export type TuiAction =
   | { type: "loop-event"; event: LoopEvent }
   | { type: "command-error"; message: string }
   | { type: "command-error-cleared" }
-  | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
+  | {
+      type: "approval-requested";
+      toolName: string;
+      args: unknown;
+      offersAlways: boolean;
+      classifierReason?: string;
+    }
   | { type: "approval-resolved" }
   | { type: "ask-user-requested"; prompt: AskPrompt }
   | { type: "ask-user-resolved" }
@@ -782,6 +795,9 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
           toolName: action.toolName,
           args: action.args,
           offersAlways: action.offersAlways,
+          ...(action.classifierReason !== undefined
+            ? { classifierReason: action.classifierReason }
+            : {}),
         },
       };
     case "approval-resolved":
