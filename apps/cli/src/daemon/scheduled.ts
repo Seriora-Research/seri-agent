@@ -23,6 +23,7 @@ import { assertScheduledToolset, type RunScheduled } from "./scheduler";
 export function createRunScheduled(opts: {
   configDir: string;
   sessionsDir: string;
+  permissionsDir: string;
   deps: CliDeps;
   database: SessionDatabase;
 }): RunScheduled {
@@ -70,7 +71,7 @@ export function createRunScheduled(opts: {
       permissionMode: input.policy.permissionMode,
       worktree: session.cwd,
       allowedTools: input.policy.allowedTools,
-      pathDenials: loadDenials(opts.configDir, onWarning),
+      pathDenials: loadDenials(opts.permissionsDir, onWarning),
       catalog,
       catalogEntry,
       route,
@@ -105,7 +106,7 @@ export function createRunScheduled(opts: {
       taskText: "",
       sessionsDir: opts.sessionsDir,
       checkpointsDir,
-      permissionsDir: opts.configDir,
+      permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
       cwd: session.cwd,
       database: opts.database,
