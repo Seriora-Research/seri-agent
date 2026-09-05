@@ -28,6 +28,8 @@ export const USAGE = `Usage:
   seri --resume <id> [task]       continue that session
   seri serve                      start the foreground loopback daemon for this profile
   seri exec <task>                run one task through an already-running daemon
+  seri doctor                     print a local install and config report
+  seri update                     replace this binary from GitHub Releases
   seri --version | --help
 
 Options:

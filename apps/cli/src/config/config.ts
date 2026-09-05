@@ -20,21 +20,33 @@ function readConfigText(path: string): string {
   return buf.toString("utf8");
 }
 
-export function loadConfig(configDir: string = getConfigDir()): Record<string, string> {
+export type ConfigInspect =
+  | { status: "missing" }
+  | { status: "ok"; values: Record<string, string> }
+  | { status: "malformed"; reason: "unreadable" | "not-object" };
+
+export function inspectConfig(configDir: string = getConfigDir()): ConfigInspect {
   const path = configPath(configDir);
-  if (!existsSync(path)) return {};
+  if (!existsSync(path)) return { status: "missing" };
   let parsed: unknown;
   try {
     parsed = JSON.parse(readConfigText(path));
   } catch {
-    return {};
+    return { status: "malformed", reason: "unreadable" };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
-  const result: Record<string, string> = {};
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { status: "malformed", reason: "not-object" };
+  }
+  const values: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
-    if (typeof value === "string") result[key] = value;
+    if (typeof value === "string") values[key] = value;
   }
-  return result;
+  return { status: "ok", values };
+}
+
+export function loadConfig(configDir: string = getConfigDir()): Record<string, string> {
+  const inspected = inspectConfig(configDir);
+  return inspected.status === "ok" ? inspected.values : {};
 }
 
 // Owner-only, write-then-rename: config.json holds API keys, and a colliding tmp name

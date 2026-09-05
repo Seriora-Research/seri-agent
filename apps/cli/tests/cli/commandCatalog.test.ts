@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { SLASH_COMMANDS } from "../../src/cli";
 import {
@@ -78,6 +78,7 @@ const EXPECTED_SESSION = [
 ] as const;
 
 const README = readFileSync(join(import.meta.dir, "../../../../README.md"), "utf8");
+const DOCS_COMMANDS_PATH = join(import.meta.dir, "../../../docs/reference/commands.mdx");
 
 function mentionsName(text: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -100,9 +101,22 @@ describe("command catalog completeness", () => {
     expect(README).toContain("/compact [instructions]");
   });
 
+  test.skipIf(!existsSync(DOCS_COMMANDS_PATH))(
+    "the docs command reference names every catalog command as a /name token",
+    () => {
+      const docsCommands = readFileSync(DOCS_COMMANDS_PATH, "utf8");
+      const missing = COMMAND_META.map((meta) => meta.name).filter(
+        (name) => !mentionsName(docsCommands, name),
+      );
+      expect(missing).toEqual([]);
+    },
+  );
+
   test("USAGE is launch-only and does not list catalog slash names", () => {
     expect(USAGE).toContain("seri serve");
     expect(USAGE).toContain("seri exec");
+    expect(USAGE).toContain("seri doctor");
+    expect(USAGE).toContain("seri update");
     expect(USAGE).not.toContain("seri config");
     expect(USAGE).not.toContain("seri login");
     expect(USAGE).not.toContain("seri usage");

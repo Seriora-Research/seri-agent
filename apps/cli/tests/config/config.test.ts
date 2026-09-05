@@ -6,6 +6,7 @@ import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
   CONFIG_FILENAME,
   getApiKey,
+  inspectConfig,
   loadConfig,
   loadTrajectoryConfig,
   loadVerifyConfig,
@@ -68,6 +69,25 @@ describe("loadConfig", () => {
       Buffer.from(`\uFEFF${JSON.stringify({ GROQ_API_KEY: "gsk_from_notepad" })}`, "utf16le"),
     );
     expect(loadConfig()).toEqual({ GROQ_API_KEY: "gsk_from_notepad" });
+  });
+});
+
+describe("inspectConfig", () => {
+  test("names missing, unlike loadConfig which returns {}", () => {
+    expect(inspectConfig()).toEqual({ status: "missing" });
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("names unreadable JSON that loadConfig still swallows", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "{not valid json");
+    expect(inspectConfig()).toEqual({ status: "malformed", reason: "unreadable" });
+    expect(loadConfig()).toEqual({});
+  });
+
+  test("names a JSON array that loadConfig still swallows", () => {
+    writeFileSync(join(configDir, CONFIG_FILENAME), "[]");
+    expect(inspectConfig()).toEqual({ status: "malformed", reason: "not-object" });
+    expect(loadConfig()).toEqual({});
   });
 });
 

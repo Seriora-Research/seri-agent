@@ -27,6 +27,8 @@ describe("USAGE", () => {
   test("documents serve and exec, not argv config or login", () => {
     expect(USAGE).toContain("seri serve");
     expect(USAGE).toContain("seri exec");
+    expect(USAGE).toContain("seri doctor");
+    expect(USAGE).toContain("seri update");
     expect(USAGE).not.toContain("seri config");
     expect(USAGE).not.toContain("/setup");
   });

@@ -30,7 +30,9 @@ Hosted apps, billing, and research docs live in `lzvxck/seri-agent`. Do not add 
 - Do not hand-edit `apps/cli/src/tools/rg-vendored.bin`.
 
 Open the file that owns a behavior instead of restating it here. Cancellation lives in
-`apps/cli/src/signals.ts`. The gate lives in `apps/cli/src/gate/gate.ts`.
+`apps/cli/src/signals.ts`. The gate lives in `apps/cli/src/gate/gate.ts`. After
+`--help`/`--version`/`--selftest`, argv launches `seri serve`, `seri exec`, `seri doctor`,
+`seri update`, and a task (or a TTY idle TUI). `--` is the escape that makes those words a task.
 
 ## Review
 
