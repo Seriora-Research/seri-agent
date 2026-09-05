@@ -91,9 +91,17 @@ function flattenInput(input: unknown): string {
 }
 
 // Local file writes can contain a renderer URL without sending it. bash, powershell, and an
-// unknown write name (an MCP fetch) can.
+// unknown write name (an MCP fetch) can. memory_write / skill_write are the same local shape as
+// write_file — they land under the profile root — and the archivist runs them in auto.
 export function packedUploadAppliesTo(toolName: string): boolean {
-  if (toolName === "write_file" || toolName === "edit") return false;
+  if (
+    toolName === "write_file" ||
+    toolName === "edit" ||
+    toolName === "memory_write" ||
+    toolName === "skill_write"
+  ) {
+    return false;
+  }
   return classifyBuiltin(toolName) === "write";
 }
 

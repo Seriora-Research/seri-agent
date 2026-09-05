@@ -2110,5 +2110,38 @@ describe("runLoop", () => {
       );
       expect(executed).toEqual(["README.md"]);
     });
+
+    test("still executes memory_write when the note quotes a packed renderer URL", async () => {
+      const executed: string[] = [];
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(
+            toolCallChunks("call-1", "memory_write", {
+              action: "add",
+              content: `badge ${mermaidInkUrl}`,
+            }),
+          ),
+          streamResult(textOnlyChunks("Done")),
+        ],
+      });
+      await collect(
+        runLoop({
+          model,
+          tools: {
+            memory_write: tool({
+              description: "write memory",
+              inputSchema: z.object({ action: z.string(), content: z.string() }),
+              execute: async (input) => {
+                executed.push(input.content);
+                return "ok";
+              },
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      );
+      expect(executed).toEqual([`badge ${mermaidInkUrl}`]);
+    });
   });
 });

@@ -192,5 +192,7 @@ describe("packedUploadAppliesTo", () => {
     expect(packedUploadAppliesTo("write_file")).toBe(false);
     expect(packedUploadAppliesTo("edit")).toBe(false);
     expect(packedUploadAppliesTo("todo")).toBe(false);
+    expect(packedUploadAppliesTo("memory_write")).toBe(false);
+    expect(packedUploadAppliesTo("skill_write")).toBe(false);
   });
 });
