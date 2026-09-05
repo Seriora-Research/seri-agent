@@ -385,6 +385,26 @@ describe("permissions store", () => {
     expect(existsSync(permissionsPath(dir))).toBe(false);
   });
 
+  test("a deny-only file still loads denials, even without global or projects", () => {
+    writeFileSync(permissionsPath(dir), "deny:\n  - read_file(.env)\n");
+    expect(loadDenials(dir)).toEqual([{ tool: "read_file", pattern: ".env" }]);
+  });
+
+  test("a deny for an unknown or path-less tool is skipped and warned about, without dropping the rest", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      "global: []\nprojects: {}\ndeny:\n  - read_file(.env)\n  - reed_file(.env)\n  - bash(rm -rf /)\n  - glob(/secret/**)\n",
+    );
+    const warnings: string[] = [];
+    expect(loadDenials(dir, (m) => warnings.push(m))).toEqual([
+      { tool: "read_file", pattern: ".env" },
+      { tool: "glob", pattern: "/secret/**" },
+    ]);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain("reed_file(.env)");
+    expect(warnings[1]).toContain("bash(rm -rf /)");
+  });
+
   test("a missing deny key yields no path denials and still loads grants", () => {
     writeFileSync(permissionsPath(dir), "global: [edit]\nprojects: {}\n");
     expect(loadDenials(dir)).toEqual([]);
@@ -427,10 +447,7 @@ describe("permissions store", () => {
   });
 
   test("rememberGrant preserves an existing deny list", () => {
-    writeFileSync(
-      permissionsPath(dir),
-      "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n",
-    );
+    writeFileSync(permissionsPath(dir), "global: []\nprojects: {}\ndeny:\n  - glob(/secret/**)\n");
     expect(rememberGrant(dir, "/w", "write_file")).toBe(true);
     expect(loadDenials(dir)).toEqual([{ tool: "glob", pattern: "/secret/**" }]);
     expect(readFileSync(permissionsPath(dir), "utf8")).toContain("glob(/secret/**)");
