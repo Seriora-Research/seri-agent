@@ -9,7 +9,13 @@ import type {
   ToolSet,
 } from "ai";
 import { streamText } from "ai";
+import {
+  type Consent,
+  decideFsPolicy,
+  reduceConsent,
+} from "../gate/fsBoundary";
 import { checkPermission, type PermissionMode } from "../gate/gate";
+import { locationForCall } from "../gate/workingDir";
 import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
@@ -21,7 +27,7 @@ import {
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
-import { READ_ONLY_TOOL_NAMES } from "../provider/tools";
+import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import { streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
@@ -193,28 +199,81 @@ function errorText(err: unknown): string {
 // verdict, which is exactly the reordering that guarantee depends on not happening.
 // Two ways to "deny", carried out as two verdicts rather than one so the loop can count only the
 // one that is a signal about the run: "deny-blocked" is the mode doing its job (checkPermission
-// returned "block", or there was no approvalPrompt to ask at all — the same as block, just
-// arrived at differently, because there is still no one to ask); "deny-declined" is a real
-// refusal — a live prompt that answered "no". Only the second should ever increment a denial
-// counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and driveLoop's own comment.
-async function decidePermission(
-  toolName: string,
-  input: unknown,
-  mode: PermissionMode,
-  allowedTools: Set<string>,
-  approvalPrompt: ApprovalPrompt | undefined,
-  signal: AbortSignal | undefined,
-): Promise<"allow" | "allow-new" | "deny-blocked" | "deny-declined"> {
-  const permission = checkPermission(toolName, mode, allowedTools);
-  if (permission === "allow") return "allow";
-  if (permission === "block") return "deny-blocked";
-  if (approvalPrompt === undefined) return "deny-blocked";
-  const answer = await approvalPrompt(toolName, input, signal);
-  if (answer === "always") {
-    allowedTools.add(toolName);
-    return "allow-new";
+// returned "block", the FS table refused an outside path with nobody to ask, or there was no
+// approvalPrompt — the same as block, just arrived at differently, because there is still no one
+// to ask); "deny-declined" is a real refusal — a live prompt that answered "no". Only the second
+// should ever increment a denial counter or flip an exit code; see MAX_CONSECUTIVE_DENIALS and
+// driveLoop's own comment.
+type PermissionDecision = {
+  verdict: "allow" | "allow-new" | "deny-blocked" | "deny-declined";
+  denyKind?: "mode" | "outside";
+};
+
+async function decidePermission(args: {
+  subject: string;
+  toolName: string;
+  input: unknown;
+  mode: PermissionMode;
+  allowedTools: Set<string>;
+  approvalPrompt: ApprovalPrompt | undefined;
+  signal: AbortSignal | undefined;
+  workingDirectory: string | undefined;
+  standingDeny: boolean;
+  askOutsideFs: boolean;
+  consent: { current: Consent };
+}): Promise<PermissionDecision> {
+  if (args.workingDirectory !== undefined) {
+    const fsVerdict = decideFsPolicy({
+      mode: args.mode,
+      toolClass: classifyBuiltin(args.toolName),
+      location: locationForCall(args.workingDirectory, args.toolName, args.input),
+      consent: args.consent.current,
+      standingDeny: args.standingDeny,
+      hasPrompt: args.askOutsideFs,
+    });
+    if (fsVerdict === "block") return { verdict: "deny-blocked", denyKind: "outside" };
+    if (fsVerdict === "ask") {
+      if (args.approvalPrompt === undefined) {
+        return { verdict: "deny-blocked", denyKind: "outside" };
+      }
+      const answer = await args.approvalPrompt(args.subject, args.input, args.signal);
+      args.consent.current = reduceConsent(
+        args.consent.current,
+        answer === "no" ? { type: "declined" } : { type: "granted" },
+      );
+      if (answer === "no") return { verdict: "deny-declined", denyKind: "outside" };
+    }
   }
-  return answer === "no" ? "deny-declined" : "allow";
+  const permission = checkPermission(args.subject, args.mode, args.allowedTools);
+  if (permission === "allow") return { verdict: "allow" };
+  if (permission === "block") return { verdict: "deny-blocked", denyKind: "mode" };
+  if (args.approvalPrompt === undefined) return { verdict: "deny-blocked", denyKind: "mode" };
+  const answer = await args.approvalPrompt(args.subject, args.input, args.signal);
+  if (answer === "always") {
+    args.allowedTools.add(args.subject);
+    return { verdict: "allow-new" };
+  }
+  return answer === "no"
+    ? { verdict: "deny-declined", denyKind: "mode" }
+    : { verdict: "allow" };
+}
+
+function executionDeniedReason(
+  subject: string,
+  mode: PermissionMode,
+  denyKind: "mode" | "outside",
+): string {
+  if (denyKind === "outside") {
+    return (
+      `Tool "${subject}" was not permitted to run because its path is outside the working directory. ` +
+      `Do not retry this call. Stay inside the working directory, or tell the user to allow outside access for this run.`
+    );
+  }
+  return (
+    `Tool "${subject}" was not permitted to run (permission mode: ${mode}). ` +
+    `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
+    `/mode to change the permission mode.`
+  );
 }
 
 function isConcurrentReadTool(name: string): boolean {
@@ -278,6 +337,16 @@ export async function* runLoop(opts: {
   // handle: the loop copies it into its own Set and never writes back through this reference, so a
   // caller cannot be surprised by a mutation it did not ask for. Growth leaves as `tool-allowed`.
   allowedTools?: readonly string[];
+  // When omitted, the FS-boundary table is skipped so existing library callers keep today's
+  // name-only gate. Production driveLoop always passes session.cwd.
+  workingDirectory?: string;
+  blockReadsOutsideWorkingDirectories?: boolean;
+  // Live human, not "a prompt function exists". Scheduled runs pass a dummy that always
+  // answers no; treating that as a human would count a decline for a question nobody saw.
+  askOutsideFs?: boolean;
+  // Seed and latch for this run. The loop mutates `.current` so a later turn in the same
+  // session sees the answer. Omitted is a fresh unasked latch that dies with the generator.
+  outsideConsent?: { current: Consent };
   maxIterations?: number;
   system?: string;
   contextWindowSize?: number;
@@ -382,6 +451,7 @@ export async function* runLoop(opts: {
   // gate check, so an "always" answer takes effect on the very next call in the same turn — which
   // is the whole point, and is why this cannot live in the caller's copy of anything.
   const allowedTools = new Set<string>(opts.allowedTools ?? []);
+  const fsConsent = opts.outsideConsent ?? { current: "unasked" as Consent };
   let consecutiveDenials = 0;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -785,14 +855,20 @@ export async function* runLoop(opts: {
         }
       }
 
-      const verdict = await decidePermission(
+      const decided = await decidePermission({
         subject,
-        call.input,
-        opts.permissionMode,
+        toolName: call.toolName,
+        input: call.input,
+        mode: opts.permissionMode,
         allowedTools,
-        opts.approvalPrompt,
-        opts.signal,
-      );
+        approvalPrompt: opts.approvalPrompt,
+        signal: opts.signal,
+        workingDirectory: opts.workingDirectory,
+        standingDeny: opts.blockReadsOutsideWorkingDirectories === true,
+        askOutsideFs: opts.askOutsideFs === true,
+        consent: fsConsent,
+      });
+      const verdict = decided.verdict;
 
       // Re-checked after the prompt, because a cancel that lands while the user is being asked
       // resolves it "no" (cli.ts closes the readline to unpark the turn) and "no" is otherwise
@@ -822,10 +898,11 @@ export async function* runLoop(opts: {
           toolName: call.toolName,
           output: {
             type: "execution-denied",
-            reason:
-              `Tool "${subject}" was not permitted to run (permission mode: ${opts.permissionMode}). ` +
-              `Do not retry this call. Either use a tool that does not write, or tell the user to run ` +
-              `/mode to change the permission mode.`,
+            reason: executionDeniedReason(
+              subject,
+              opts.permissionMode,
+              decided.denyKind ?? "mode",
+            ),
           },
         });
         continue;
