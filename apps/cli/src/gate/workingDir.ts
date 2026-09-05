@@ -30,3 +30,31 @@ export type PathLocation = "inside" | "outside";
 export function pathLocation(cwd: string, path: string): PathLocation {
   return isInsideWorkingDir(cwd, path) ? "inside" : "outside";
 }
+
+// The four execute wrappers that close over resolveAgainstCwd. A name missing from this set
+// never has a working-directory question: edit takes in-memory content, bash/powershell take a
+// command string, and MCP/skill/memory tools are not this resolver.
+export const PATH_BEARING_FS_TOOLS: ReadonlySet<string> = new Set([
+  "read_file",
+  "grep",
+  "glob",
+  "write_file",
+]);
+
+export type CallLocation = "inside" | "outside" | "nopath";
+
+function pathFromInput(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  if (!("path" in input)) return undefined;
+  const path = (input as { path: unknown }).path;
+  return typeof path === "string" ? path : undefined;
+}
+
+// String classification only: a missing or non-string path on a path-bearing tool is outside
+// (fail closed). An empty cwd is the same hole as a forgotten one.
+export function locationForCall(cwd: string, toolName: string, input: unknown): CallLocation {
+  if (!PATH_BEARING_FS_TOOLS.has(toolName)) return "nopath";
+  const path = pathFromInput(input);
+  if (path === undefined || cwd === "") return "outside";
+  return pathLocation(cwd, path);
+}
