@@ -86,6 +86,7 @@ export const TOOL_LABELS: Record<
     one: "subagent",
     many: "subagents",
   },
+  ask_user: { display: "Question", verb: "Asked", one: "question", many: "questions" },
   todo: {
     display: "Checklist",
     verb: "Updated",

@@ -16,6 +16,13 @@ export type AbortRegistration = {
   dispose: () => void;
 };
 
+export function abortedError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const err = new Error("The operation was aborted.");
+  err.name = "AbortError";
+  return err;
+}
+
 export function onAbort(signal: AbortSignal | undefined, cancel: () => void): AbortRegistration {
   let aborted = false;
   const handler = (): void => {

@@ -83,6 +83,7 @@ describe("buildSystemPrompt", () => {
     ]) {
       expect(prompt).toContain(`\`${name}\``);
     }
+    expect(prompt).not.toContain("`ask_user`");
   });
 
   test("the assembled system prompt tells the model write_file and the shells can destroy work, and to investigate before overwriting unfamiliar state", () => {

@@ -31,6 +31,9 @@ import { createRuleInjector } from "../rules/match";
 import type { SessionState } from "../session/session";
 import { onSignalCancel } from "../signals";
 import { withSkills } from "../skills/tool";
+import { ASK_USER_OVERLAY } from "../ask-user/prompt";
+import { withAskUser } from "../ask-user/tool";
+import type { AskUserPresenter } from "../ask-user/types";
 import { withTodo } from "../todo/tool";
 import { PLAN_MODE_OVERLAY } from "../plan/prompt";
 import {
@@ -148,6 +151,10 @@ export type DriveLoopOptions = {
     ) => Promise<PlanAnswers>;
     configDir: string;
   };
+  // TUI parks a question; omitted presenter fails closed (piped CLI, daemon attended).
+  askUser?: AskUserPresenter;
+  // Default true. Scheduled runs pass false so the tool and overlay are both absent.
+  composeAskUser?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -275,8 +282,12 @@ export async function driveLoop(
       family: catalogEntry?.family ?? null,
     }),
   );
-  const parentSystem =
-    driveOpts.planMode === undefined ? system : joinTiers(system, PLAN_MODE_OVERLAY);
+  const askUserEnabled = driveOpts.composeAskUser !== false;
+  const parentSystem = joinTiers(
+    system,
+    driveOpts.planMode === undefined ? undefined : PLAN_MODE_OVERLAY,
+    askUserEnabled ? ASK_USER_OVERLAY : undefined,
+  );
   // Pins are re-read every turn so a mid-session env or config change takes effect next turn, the
   // same freshness reasoningEffort already has. A task's own model+provider pair, when complete,
   // wins over those defaults. Construction failures warn and reuse the session model rather than
@@ -425,10 +436,11 @@ export async function driveLoop(
     prepared.mcp,
     prepared.mcpClients,
   );
+  const withAsk = askUserEnabled ? withAskUser(composed, driveOpts.askUser) : composed;
   const tools =
     driveOpts.planMode === undefined
-      ? composed
-      : withPlanTools(stripWriteTools(composed), driveOpts.planMode);
+      ? withAsk
+      : withPlanTools(stripWriteTools(withAsk), driveOpts.planMode);
   // Tracked here, not in loop.ts: whether "no-tool-call" counts as success is a judgement about
   // what an exit code promises a shell, which is this consumer's business, not the loop's.
   // `permission-denied` fires on two different facts carried in its `reason` — "blocked" is a

@@ -172,15 +172,24 @@ export type ToolClass = "read" | "write";
 // "absent from the write list" stops being evidence of safety — absence of knowledge never was —
 // and an unseen name costs an approval instead of being waved through in all three modes.
 //
-// `ask_plan_questions` and `submit_plan` are the same class for the same reason they are not in
-// `READ_ONLY_TOOL_NAMES`: they do not write the worktree (the harness writes the plan file), so
-// the gate must not block them under the plan-mode read-only getter, but they must run sequentially
-// rather than in the concurrent-read batch.
+// Names here that are not keys of `toolDefinitions` would otherwise be unknown, which would
+// break read-only sessions that use them. None of them write the worktree: `dispatch_subagents`
+// hands the child the parent's own permission mode (subagents/dispatch.ts), so a subagent's
+// `bash` re-enters this same gate at the same mode rather than escaping it, and `skill` reads one
+// file the user themselves put under `.seri/skills/`.
 //
-// `skill` and `todo` are literals rather than imports of SKILL_TOOL_NAME / TODO_TOOL_NAME because
-// `provider/` sits below those modules in the graph, and the foundational modules here do not
-// import the extension modules layered on top of them. The drift a literal invites is guarded in
-// tests/provider/tools.test.ts, which imports the constants and asserts they still agree.
+// `ask_plan_questions`, `submit_plan`, `todo`, and `ask_user` are the same class for the same
+// reason they are not in `READ_ONLY_TOOL_NAMES`: they do not write the worktree, so the gate must
+// not block them under a read-only getter, but they must run sequentially rather than in the
+// concurrent-read batch. Putting `ask_user` on READ_ONLY_TOOL_NAMES would let it share a batch
+// with another sequential UI park.
+//
+// `skill`, `todo`, `ask_plan_questions`, `submit_plan` and `ask_user` are literals rather than
+// imports of their own modules' constants because `provider/` sits below those modules in the
+// graph, and the foundational modules here do not import the extension modules layered on top of
+// them. The drift a literal invites is guarded in tests/provider/tools.test.ts, which imports
+// each constant and asserts the two still agree — a cross-module import that costs nothing in a
+// test.
 const READ_CLASS_TOOL_NAMES = new Set<string>([
   ...READ_ONLY_TOOL_NAMES,
   DISPATCH_TOOL_NAME,
@@ -188,6 +197,7 @@ const READ_CLASS_TOOL_NAMES = new Set<string>([
   "todo",
   "ask_plan_questions",
   "submit_plan",
+  "ask_user",
 ]);
 
 export function classifyBuiltin(name: string): ToolClass {

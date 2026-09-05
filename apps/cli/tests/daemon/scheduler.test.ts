@@ -60,6 +60,12 @@ describe("scheduled toolset", () => {
     expect(() => assertScheduledToolset(createToolDefinitions(dir))).toThrow(/write_file/);
   });
 
+  test("assertScheduledToolset rejects ask_user", () => {
+    const dir = makeDir();
+    const tools = { ...createScheduledToolDefinitions(dir), ask_user: {} };
+    expect(() => assertScheduledToolset(tools)).toThrow(/ask_user/);
+  });
+
   test("assertScheduledToolset rejects a scheduled set with todo injected", () => {
     const dir = makeDir();
     expect(() => assertScheduledToolset(withTodo(createScheduledToolDefinitions(dir)))).toThrow(

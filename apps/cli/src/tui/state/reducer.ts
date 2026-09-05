@@ -9,6 +9,7 @@ import {
   type PlanQuestion,
   type SubmittedPlan,
 } from "../../plan/mode";
+import type { AskPrompt } from "../../ask-user/types";
 import type { LanguageModelUsage, ModelMessage } from "ai";
 import { toolAllowedLine } from "../../cli/output";
 import type { LoopEvent } from "../../loop/loop";
@@ -194,6 +195,11 @@ export type TuiState = {
   // exclusive, matching how the non-interactive CLI already blocks on this same question before
   // reading anything else from stdin.
   pendingApproval: { toolName: string; args: unknown; offersAlways: boolean } | undefined;
+  // Occupancy snapshot for ask_user. The park in cli.ts owns the resolve; this field is what
+  // App.tsx paints. Not parked on `plan.kind`. The reducer can hold this next to
+  // `pendingApproval` (ApprovalBox still wins the ternary), but no production path sets
+  // both: `runLoop` runs `ask_user` only on the sequential branch after `flushReadBatch`.
+  pendingAskUser: AskPrompt | undefined;
   // /model's own live state, mirroring pendingApproval's shape exactly: set when the picker opens
   // (decideModelPickerOpen's own result, tui/commands.ts), cleared once resolved. App.tsx renders
   // its own ModelPicker instead of InputBox whenever this is set — the same three-way mutual
@@ -390,6 +396,7 @@ export function initialTuiState(
     pendingTool: undefined,
     commandError: undefined,
     pendingApproval: undefined,
+    pendingAskUser: undefined,
     pendingModelPicker: undefined,
     pendingInputPrefill: undefined,
     pendingSetup: undefined,
@@ -437,6 +444,8 @@ export type TuiAction =
   | { type: "command-error-cleared" }
   | { type: "approval-requested"; toolName: string; args: unknown; offersAlways: boolean }
   | { type: "approval-resolved" }
+  | { type: "ask-user-requested"; prompt: AskPrompt }
+  | { type: "ask-user-resolved" }
   | { type: "plan-on" }
   | { type: "plan-off" }
   | { type: "plan-questions-requested"; questions: readonly PlanQuestion[] }
@@ -777,6 +786,15 @@ export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
       };
     case "approval-resolved":
       return { ...state, pendingApproval: undefined };
+    case "ask-user-requested":
+      return {
+        ...state,
+        pendingAskUser: action.prompt,
+        subagentPanelFocus: false,
+        pendingChildView: undefined,
+      };
+    case "ask-user-resolved":
+      return { ...state, pendingAskUser: undefined };
     case "plan-on":
       return { ...state, plan: { kind: "on" } };
     case "plan-off":

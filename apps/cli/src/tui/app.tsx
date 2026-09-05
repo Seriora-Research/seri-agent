@@ -55,6 +55,7 @@ import { findCatalogEntry, type ModelCatalog, type ModelProvider } from "@seri/m
 import type { ModelMessage } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isCtrlOPlanToggle, isShiftTabModeCycle } from "../cli/commandCatalog";
+import type { HumanReply } from "../ask-user/types";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
@@ -70,6 +71,7 @@ import type { ResolvedRoute } from "../provider/routing";
 import type { SessionState } from "../session/session";
 import type { ChromeTabId } from "./chrome/tabs";
 import { ApprovalBox } from "./components/ApprovalBox";
+import { AskUserPanel } from "./components/AskUserPanel";
 import { ChildTranscript } from "./components/ChildTranscript";
 import { InputBox } from "./components/InputBox";
 import { ModelPicker } from "./components/ModelPicker";
@@ -174,6 +176,7 @@ export type AppProps = {
   // and a second SIGINT route would otherwise race the renderer's own raw-mode ownership and
   // signals.ts's single cancel slot.
   onApprovalAnswer?: (answer: ApprovalAnswer) => void;
+  onAskUserAnswered?: (reply: HumanReply) => void;
   onPlanQuestionsAnswered?: (answers: PlanAnswers) => void;
   onPlanReview?: (decision: PlanReviewDecision) => void;
   // /model's own two resolutions, mirroring onApprovalAnswer's shape: called from ModelPicker's own
@@ -343,6 +346,7 @@ export function App({
   onQuit,
   onEscape,
   onApprovalAnswer,
+  onAskUserAnswered,
   onPlanQuestionsAnswered,
   onPlanReview,
   onModelSelected,
@@ -553,7 +557,8 @@ export function App({
   const pagingPanelOpen =
     state.pendingSplash ||
     (state.pendingApproval === undefined &&
-      (isPlanPanelOpen(state.plan) ||
+      (state.pendingAskUser !== undefined ||
+        isPlanPanelOpen(state.plan) ||
         state.pendingModelPicker !== undefined ||
         state.pendingSetup !== undefined ||
         state.pendingAuth !== undefined ||
@@ -849,6 +854,8 @@ export function App({
           onAnswer={onApprovalAnswer}
           onQuit={onQuit}
         />
+      ) : state.pendingAskUser !== undefined ? (
+        <AskUserPanel prompt={state.pendingAskUser} onAnswer={onAskUserAnswered} onQuit={onQuit} />
       ) : state.plan.kind === "clarifying" ? (
         <PlanQuestionsPanel
           questions={state.plan.questions}

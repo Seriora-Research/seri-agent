@@ -898,6 +898,48 @@ describe("tuiReducer: approval-requested / approval-resolved", () => {
   });
 });
 
+describe("tuiReducer: ask-user-requested / ask-user-resolved", () => {
+  const prompt = {
+    prompt: "Which auth?",
+    choices: ["cookies", "JWT"],
+    allowOther: true,
+  };
+
+  test("ask-user-requested sets pendingAskUser and leaves plan.kind untouched", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "plan-on" });
+    expect(state.plan.kind).toBe("on");
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingAskUser).toEqual(prompt);
+    expect(state.plan.kind).toBe("on");
+    state = tuiReducer(state, { type: "ask-user-resolved" });
+    expect(state.pendingAskUser).toBeUndefined();
+    expect(state.plan.kind).toBe("on");
+  });
+
+  test("ask-user-requested blurs the subagent roster and closes a child overlay", () => {
+    let state = tuiReducer(initialTuiState(session()), { type: "subagent-panel-focus" });
+    state = tuiReducer(state, { type: "subagent-overlay-open", id: "t1:0" });
+    expect(state.subagentPanelFocus).toBe(false);
+    expect(state.pendingChildView).toBe("t1:0");
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingAskUser).toEqual(prompt);
+    expect(state.subagentPanelFocus).toBe(false);
+    expect(state.pendingChildView).toBeUndefined();
+  });
+
+  test("approval and ask-user can both be set", () => {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "approval-requested",
+      toolName: "write_file",
+      args: { path: "a.txt" },
+      offersAlways: true,
+    });
+    state = tuiReducer(state, { type: "ask-user-requested", prompt });
+    expect(state.pendingApproval?.toolName).toBe("write_file");
+    expect(state.pendingAskUser).toEqual(prompt);
+  });
+});
+
 describe("tuiReducer: command-error / command-error-cleared", () => {
   test("command-error sets commandError, command-error-cleared clears it, other fields untouched", () => {
     const initial = initialTuiState(session());

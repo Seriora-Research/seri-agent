@@ -17,6 +17,8 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
+import { createAskUserPark } from "./ask-user/park";
+import type { HumanReply } from "./ask-user/types";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
@@ -1597,6 +1599,12 @@ async function runTui(
   // aborts for an unrelated reason.
   let pendingApprovalResolve: ((answer: ApprovalAnswer) => void) | undefined;
 
+  const askUserPark = createAskUserPark({
+    dispatchOccupy: (prompt) => dispatch({ type: "ask-user-requested", prompt }),
+    dispatchVacate: () => dispatch({ type: "ask-user-resolved" }),
+    approvalOccupied: () => liveState.pendingApproval !== undefined,
+  });
+
   function tuiApprovalPrompt(
     toolName: string,
     args: unknown,
@@ -2263,6 +2271,7 @@ async function runTui(
             directDispatch === undefined && liveState.plan.kind !== "off"
               ? { askQuestions: tuiAskPlanQuestions, configDir }
               : undefined,
+          askUser: askUserPark.present,
         },
       );
       usage = {
@@ -2311,6 +2320,11 @@ async function runTui(
       // mirrors is signals.ts's, and it is only genuinely free again once this turn has actually
       // settled.
       cancelDelivered = false;
+      // If driveLoop threw without aborting, the presenter would stay occupied and the next
+      // turn's ask_user would see nested-approval. Same unpark quit() uses. Gate on the park,
+      // not the reducer mirror: present() assigns the waiter before dispatchOccupy, so a
+      // thrown occupy would leave the park live with pendingAskUser still unset.
+      askUserPark.answer({ outcome: "cancelled" });
       // The one place `driveLoop`'s own call is known to have genuinely settled, success or
       // failure — mirrors `turn-started`'s own dispatch above, at the one place a turn is known to
       // have genuinely begun. This `finally` always runs before the `destroyTuiRenderer()` call
@@ -2388,6 +2402,7 @@ async function runTui(
     // afterward (a denied approval is not a finished turn), so the turnInFlight branch below
     // still runs exactly as it would for any other in-flight-turn quit.
     if (liveState.pendingApproval !== undefined) onApprovalAnswer("no");
+    askUserPark.answer({ outcome: "cancelled" });
     if (liveState.plan.kind === "clarifying") onPlanQuestionsAnswered({ cancelled: true });
     // No final re-render before this, unlike the Ink original: that rerender's only purpose was
     // flipping a `done` prop to true so App's own effect called `useApp().exit()` — app.tsx has no
@@ -3133,6 +3148,7 @@ async function runTui(
       onQuit: quit,
       onEscape,
       onApprovalAnswer,
+      onAskUserAnswered: (reply: HumanReply) => askUserPark.answer(reply),
       onPlanQuestionsAnswered,
       onPlanReview,
       onModelSelected,
