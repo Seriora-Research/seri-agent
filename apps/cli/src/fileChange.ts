@@ -41,11 +41,20 @@ function capLines(
   lines: FileChangeLine[],
   max: number,
 ): { lines: FileChangeLine[]; hidden: number } {
-  // diffLines emits every del before every add; a prefix slice of `lines` would drop the adds.
+  // diffLines emits prefix context, every del, every add, then suffix context. A prefix
+  // slice of that array can be all dels. Split the budget across dels and adds, then
+  // restack in that same order so leftover context cannot jump from the suffix to the top.
   const trimmed = lines.map((line) => ({ ...line, text: capBody(line.text) }));
   if (trimmed.length <= max) return { lines: trimmed, hidden: 0 };
-  const dels = trimmed.filter((line) => line.kind === "del");
-  const adds = trimmed.filter((line) => line.kind === "add");
+  let prefixEnd = 0;
+  while (prefixEnd < trimmed.length && trimmed[prefixEnd]?.kind === "context") prefixEnd++;
+  let suffixStart = trimmed.length;
+  while (suffixStart > prefixEnd && trimmed[suffixStart - 1]?.kind === "context") suffixStart--;
+  const prefix = trimmed.slice(0, prefixEnd);
+  const suffix = trimmed.slice(suffixStart);
+  const middle = trimmed.slice(prefixEnd, suffixStart);
+  const dels = middle.filter((line) => line.kind === "del");
+  const adds = middle.filter((line) => line.kind === "add");
   let shownDels: FileChangeLine[];
   let shownAdds: FileChangeLine[];
   if (dels.length === 0) {
@@ -59,10 +68,11 @@ function capLines(
     shownDels = dels.slice(0, Math.min(dels.length, max - addBudget));
     shownAdds = adds.slice(0, max - shownDels.length);
   }
-  const leftover = max - shownDels.length - shownAdds.length;
-  const ctx =
-    leftover > 0 ? trimmed.filter((line) => line.kind === "context").slice(0, leftover) : [];
-  const shown = [...ctx, ...shownDels, ...shownAdds];
+  let leftover = max - shownDels.length - shownAdds.length;
+  const shownPrefix = leftover > 0 ? prefix.slice(0, leftover) : [];
+  leftover -= shownPrefix.length;
+  const shownSuffix = leftover > 0 ? suffix.slice(0, leftover) : [];
+  const shown = [...shownPrefix, ...shownDels, ...shownAdds, ...shownSuffix];
   return { lines: shown, hidden: trimmed.length - shown.length };
 }
 
