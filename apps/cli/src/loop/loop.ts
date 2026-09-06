@@ -494,6 +494,11 @@ export async function* runLoop(opts: {
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
+  let estimatedTokens = estimateTokens(messages);
+  function appendMessage(message: ModelMessage): void {
+    messages.push(message);
+    estimatedTokens += estimateTokens(message);
+  }
   const turnUserText = lastUserText(opts.messages);
 
   // The AI SDK auto-runs a tool's `execute` while streaming. Strip it so every
@@ -516,6 +521,7 @@ export async function* runLoop(opts: {
         ...samplingFields,
       });
       messages.splice(0, messages.length, ...compacted.messages);
+      estimatedTokens = estimateTokens(messages);
       for (let attempt = 1; attempt <= compacted.retries; attempt++) {
         yield { type: "retry", attempt };
       }
@@ -558,7 +564,7 @@ export async function* runLoop(opts: {
       return;
     }
 
-    const tokens = Math.max(lastInputTokens, estimateTokens(messages));
+    const tokens = Math.max(lastInputTokens, estimatedTokens);
     if (tokens / contextWindowSize >= compactionThreshold) {
       const thresholdOutcome = yield* tryCompact("soft");
       if (thresholdOutcome === "aborted") return;
@@ -753,7 +759,7 @@ export async function* runLoop(opts: {
 
     if (toolCalls.length === 0) {
       if (text) {
-        messages.push({ role: "assistant", content: [{ type: "text", text }] });
+        appendMessage({ role: "assistant", content: [{ type: "text", text }] });
         yield { type: "messages-updated", messages: [...messages] };
       }
       yield { type: "done", reason: "no-tool-call" };
@@ -770,7 +776,7 @@ export async function* runLoop(opts: {
         input: call.input,
       });
     }
-    messages.push({ role: "assistant", content: assistantContent });
+    appendMessage({ role: "assistant", content: assistantContent });
     yield { type: "messages-updated", messages: [...messages] };
 
     const toolResults: ToolContent = [];
@@ -1174,7 +1180,7 @@ export async function* runLoop(opts: {
       });
     }
 
-    messages.push({ role: "tool", content: toolResults });
+    appendMessage({ role: "tool", content: toolResults });
     yield { type: "messages-updated", messages: [...messages] };
 
     // A break or an aborted in-flight read is the way a call is left unanswered. Read off the
@@ -1214,7 +1220,7 @@ export async function* runLoop(opts: {
     // re-bill every message token uncached.
     const appended = executed.length === 0 ? undefined : opts.onToolPhaseEnd?.(executed);
     if (appended !== undefined && appended.length > 0) {
-      messages.push({ role: "user", content: [{ type: "text", text: appended }] });
+      appendMessage({ role: "user", content: [{ type: "text", text: appended }] });
       yield { type: "messages-updated", messages: [...messages] };
     }
   }

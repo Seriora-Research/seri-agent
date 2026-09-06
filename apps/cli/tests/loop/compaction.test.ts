@@ -175,6 +175,21 @@ describe("elideOversizedStrings", () => {
   });
 });
 
+describe("estimateTokens additivity", () => {
+  test("the array estimate equals the sum of per-message estimates, including tool payloads", () => {
+    const body = "x".repeat(50_000);
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("call-1"),
+      toolResultMsg("call-1", body),
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ];
+    let running = 0;
+    for (const message of messages) running += estimateTokens(message);
+    expect(running).toBe(estimateTokens(messages));
+  });
+});
+
 describe("compactMessages", () => {
   test("replaces the evicted span with one synthetic summary message and keeps the tail, surviving a marker fact", async () => {
     const marker = "MARKER_SECRET_FACT_42";
