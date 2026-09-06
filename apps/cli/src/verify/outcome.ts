@@ -45,8 +45,6 @@ export type CheckOutcome =
 export type WriteFileResult = {
   written: true;
   verification: CheckOutcome;
-  // Capped hunks for the TUI. Never the full previous body: that would re-inject the
-  // file into the model's context on every write.
   change?: FileChangeView;
 };
 
