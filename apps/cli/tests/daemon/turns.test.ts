@@ -80,6 +80,79 @@ describe("daemon turns", () => {
     expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
   });
 
+  test("reconnecting after a missed text-delta still replays it", async () => {
+    const sawOne = Promise.withResolvers<void>();
+    const twoReady = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const executeTurn: ExecuteTurn = async (input) => {
+      input.emitLoop({ type: "text-delta", text: "one" });
+      await sawOne.promise;
+      input.emitLoop({ type: "text-delta", text: "two" });
+      twoReady.resolve();
+      await released.promise;
+      input.emitLoop({ type: "done", reason: "no-tool-call" });
+      return { exitCode: 0 };
+    };
+    const daemon = await startDaemon({ configDir: makeDir(), executeTurn });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const liveIter = client.startTurn({ task: "split" })[Symbol.asyncIterator]();
+    const first = (await liveIter.next()).value as DaemonEvent;
+    expect(first.event).toEqual({ type: "loop", value: { type: "text-delta", text: "one" } });
+    await liveIter.return?.();
+    sawOne.resolve();
+    await twoReady.promise;
+    const restPromise = collect(client.events(first.turnId, 1));
+    released.resolve();
+    const rest = await restPromise;
+    expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
+    expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+  });
+
+  test("daemon_events omit text-delta and reasoning-delta after the turn finishes", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        for (let i = 0; i < 50; i++) input.emitLoop({ type: "text-delta", text: "x" });
+        input.emitLoop({ type: "reasoning-delta", text: "think" });
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      { idleMs: 0 },
+    );
+    try {
+      const started = await manager.startTurn({ task: "stream" });
+      const live: DaemonEvent[] = [];
+      await new Promise<void>((resolve) => {
+        started.subscribe((event) => {
+          live.push(event);
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+      await manager.waitForIdle();
+      const liveLoop = live.flatMap((event) =>
+        isLoopDaemonEvent(event.event) ? [event.event.value.type] : [],
+      );
+      expect(liveLoop.filter((type) => type === "text-delta")).toHaveLength(50);
+      expect(liveLoop).toContain("reasoning-delta");
+      const persisted = database.listDaemonEventsAfter(started.turnId, 0) as DaemonEvent[];
+      const persistedLoop = persisted.flatMap((event) =>
+        isLoopDaemonEvent(event.event) ? [event.event.value.type] : [],
+      );
+      expect(persistedLoop).not.toContain("text-delta");
+      expect(persistedLoop).not.toContain("reasoning-delta");
+      expect(persistedLoop).toEqual(["done"]);
+      expect(persisted).toHaveLength(2);
+      expect(persisted.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
+  });
+
   test("disconnecting resolves a pending approval as no but does not cancel the turn", async () => {
     let answer: string | undefined;
     let aborted = false;
