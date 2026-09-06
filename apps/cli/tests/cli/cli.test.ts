@@ -11,7 +11,9 @@ import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { AUTH_FILENAME, saveAuthSession } from "../../src/auth/authStore";
 import { saveCodexSubscription } from "../../src/auth/codexAuthStore";
+import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
 import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
+import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import { checkpointStoreDir, createCheckpointer, readLog } from "../../src/checkpoint/checkpoint";
 import { isGitAvailable, projectRoot } from "../../src/checkpoint/shadowGit";
 import { recordWrite } from "../../src/checkpoint/writeLedger";
@@ -3444,6 +3446,123 @@ describe("guided setup gate", () => {
     try {
       setConfigValue("OPENROUTER_API_KEY", "sk-or-test", configDir);
       expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a leftover Codex CLI login with no persisted default still needs guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = mkdtempSync(join(tmpdir(), "seri-cli-test-codex-leftover-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      writeFileSync(
+        join(codexHome, "auth.json"),
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: { access_token: "tok", refresh_token: "rt", account_id: "acct" },
+        }),
+      );
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  test("an ignored leftover Codex CLI login is a blank first run", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    const codexHome = mkdtempSync(join(tmpdir(), "seri-cli-test-codex-ignored-"));
+    process.env.CODEX_HOME = codexHome;
+    try {
+      writeFileSync(
+        join(codexHome, "auth.json"),
+        JSON.stringify({
+          auth_mode: "chatgpt",
+          tokens: { access_token: "tok", refresh_token: "rt", account_id: "acct" },
+        }),
+      );
+      ignoreCodexSubscription(configDir);
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  test("a Grok plan with no persisted default still needs guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveXaiSubscription(
+        {
+          accessToken: "at-grok",
+          refreshToken: "rt-grok",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a Grok plan plus a persisted xai default does not need guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveXaiSubscription(
+        {
+          accessToken: "at-grok",
+          refreshToken: "rt-grok",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+        },
+        configDir,
+      );
+      persistDefaultModel({ model: "grok-4", provider: "xai" }, configDir);
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test("a ChatGPT plan plus a persisted groq default still needs guided setup", () => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      saveCodexSubscription(
+        {
+          accessToken: "at-codex",
+          refreshToken: "rt-codex",
+          obtainedAt: "2026-01-01T00:00:00.000Z",
+          accountId: "acct-codex",
+        },
+        configDir,
+      );
+      persistDefaultModel({ model: "openai/gpt-oss-120b", provider: "groq" }, configDir);
+      expect(needsGuidedSetup(configDir)).toBe(true);
+    } finally {
+      if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = originalCodexHome;
+    }
+  });
+
+  test.each([
+    ["GOOGLE_GENERATIVE_AI_API_KEY", "gk-test"],
+    ["OPENAI_API_KEY", "sk-test"],
+    ["XAI_API_KEY", "xai-test"],
+  ] as const)("%s with no persisted default still needs guided setup", (keyName, value) => {
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = configDir;
+    try {
+      setConfigValue(keyName, value, configDir);
+      expect(needsGuidedSetup(configDir)).toBe(true);
     } finally {
       if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = originalCodexHome;
