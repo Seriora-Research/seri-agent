@@ -37,7 +37,10 @@ function capBody(text: string): string {
     : text;
 }
 
-function capLines(lines: FileChangeLine[], max: number): { lines: FileChangeLine[]; hidden: number } {
+function capLines(
+  lines: FileChangeLine[],
+  max: number,
+): { lines: FileChangeLine[]; hidden: number } {
   // diffLines emits every del before every add; a prefix slice of `lines` would drop the adds.
   const trimmed = lines.map((line) => ({ ...line, text: capBody(line.text) }));
   if (trimmed.length <= max) return { lines: trimmed, hidden: 0 };
@@ -57,7 +60,8 @@ function capLines(lines: FileChangeLine[], max: number): { lines: FileChangeLine
     shownAdds = adds.slice(0, max - shownDels.length);
   }
   const leftover = max - shownDels.length - shownAdds.length;
-  const ctx = leftover > 0 ? trimmed.filter((line) => line.kind === "context").slice(0, leftover) : [];
+  const ctx =
+    leftover > 0 ? trimmed.filter((line) => line.kind === "context").slice(0, leftover) : [];
   const shown = [...ctx, ...shownDels, ...shownAdds];
   return { lines: shown, hidden: trimmed.length - shown.length };
 }

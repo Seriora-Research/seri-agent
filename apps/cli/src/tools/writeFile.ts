@@ -72,7 +72,9 @@ export function writeFile(
   // a window this narrow would give up the read → write fast path this cache exists for.
   const previous = existsSync(path) ? readFileSync(path, "utf8") : null;
   const eol =
-    opts?.eol ?? getCachedEol(path) ?? (previous !== null && previous.includes("\r\n") ? "CRLF" : "LF");
+    opts?.eol ??
+    getCachedEol(path) ??
+    (previous !== null && previous.includes("\r\n") ? "CRLF" : "LF");
   const lf = content.replace(/\r\n/g, "\n");
   const finalContent = eol === "CRLF" ? lf.replace(/\n/g, "\r\n") : lf;
 
