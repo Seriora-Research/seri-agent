@@ -330,10 +330,19 @@ const TRANSCRIPT_PADDING_MIN_WIDTH = 20;
 
 function WritePreview({ name, args }: { name: string; args: unknown }) {
   const copy = approvalCopy(name, args);
+  // Headline only. Hunks belong in the transcript at tool-result (commitFileChange): painting
+  // them here grows this chrome and shrinks the scrollbox, then this unmounts and the same
+  // rows jump into the transcript.
   return (
-    <box {...FRAME} flexDirection="column">
-      <text fg={theme.text}>{copy.headline}</text>
-      {copy.detail.length > 0 && <text fg={theme.muted}>{copy.detail}</text>}
+    <box {...FRAME} flexDirection="column" flexShrink={0}>
+      <text fg={theme.text} flexShrink={0} wrapMode="none" truncate>
+        {copy.headline}
+      </text>
+      {copy.detail.length > 0 && (
+        <text fg={theme.muted} flexShrink={0} wrapMode="none" truncate>
+          {copy.detail}
+        </text>
+      )}
     </box>
   );
 }

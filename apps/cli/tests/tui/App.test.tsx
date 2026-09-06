@@ -8,6 +8,7 @@ import { createRoot } from "@opentui/react";
 import type { ModelCatalogEntry, ModelProvider } from "@seri/model-catalog";
 import type { ReactElement, ReactNode } from "react";
 import { GROK_BORROWED_CLIENT_WARNING } from "../../src/auth/xaiConnect";
+import { buildFileChange } from "../../src/fileChange";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
@@ -1609,6 +1610,81 @@ describe("App", () => {
     expect(frame).toContain("Write a.txt");
     expect(frame).not.toContain("write_file(");
     expect(frame).not.toContain("! write_file");
+  });
+
+  test("a settled write_file paints capped hunks in the transcript", async () => {
+    const { setup, dispatch } = await connect();
+    const change = buildFileChange("Write a.txt", "old", "new");
+
+    dispatch({
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "a.txt", content: "new" },
+      },
+    });
+    dispatch({
+      type: "loop-event",
+      event: { type: "tool-result", name: "write_file", result: { written: true, change } },
+    });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Write a.txt");
+    expect(frame).toContain("- old");
+    expect(frame).toContain("+ new");
+    expect(frame).toContain("+1 −1");
+  });
+
+  test("a pending edit stays a compact headline so chrome cannot steal transcript height", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "edit",
+        args: { content: "keep\nold\n", oldString: "old", newString: "new" },
+      },
+    });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("edit");
+    expect(frame).not.toContain("- old");
+    expect(frame).not.toContain("+ new");
+    expect(frame).not.toContain("oldString");
+  });
+
+  test("edit hunks stay on screen after done and do not paint twice", async () => {
+    const { setup, dispatch } = await connect();
+
+    dispatch({
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "edit",
+        args: { content: "keep\nold\n", oldString: "old", newString: "new" },
+      },
+    });
+    dispatch({
+      type: "loop-event",
+      event: { type: "tool-result", name: "edit", result: "keep\nnew\n" },
+    });
+    await flush(setup);
+    expect(setup.captureCharFrame()).toContain("- old");
+    expect(setup.captureCharFrame()).toContain("+ new");
+
+    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    await flush(setup);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("- old");
+    expect(frame).toContain("+ new");
+    expect(frame).toContain("Edited 1 edit");
+    expect(countNeedle(frame, "- old")).toBe(1);
+    expect(countNeedle(frame, "+ new")).toBe(1);
   });
 
   // Non-write tools use an unbordered theme.muted live line, not the write_file/edit bordered box.
