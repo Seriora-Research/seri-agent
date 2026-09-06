@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ApprovalAnswer, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
+import {
+  type ApprovalAnswer,
+  type DaemonEvent,
+  isLoopDaemonEvent,
+  type PublicLoopEvent,
+} from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { PromptChannel } from "../permissions/promptChannel";
@@ -236,7 +241,7 @@ export class DaemonSessionManager {
     permissionMode: PermissionMode | undefined,
     promptChannel: PromptChannel | undefined,
   ): Promise<void> {
-    const emit = (event: DaemonEvent["event"], persist = true) => {
+    const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
       const envelope: DaemonEvent = {
         v: 1,
@@ -246,6 +251,9 @@ export class DaemonSessionManager {
         event,
       };
       handle.replay.push(envelope);
+      const persist =
+        !isLoopDaemonEvent(event) ||
+        (event.value.type !== "text-delta" && event.value.type !== "reasoning-delta");
       if (persist) this.database.appendDaemonEvent(turnId, handle.seq, envelope);
       for (const subscriber of handle.subscribers) subscriber(envelope);
     };
@@ -261,10 +269,7 @@ export class DaemonSessionManager {
         signal: handle.abort.signal,
         emitLoop: (value) => {
           if (value.type === "messages-updated") return;
-          emit(
-            { type: "loop", value: value as PublicLoopEvent },
-            value.type !== "text-delta" && value.type !== "reasoning-delta",
-          );
+          emit({ type: "loop", value: value as PublicLoopEvent });
         },
         requestApproval: (requestId, toolName, args) =>
           new Promise<ApprovalAnswer>((resolve) => {
