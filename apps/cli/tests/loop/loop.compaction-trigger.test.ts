@@ -275,6 +275,39 @@ describe("runLoop compaction trigger", () => {
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
+  test("compacts when assistant text, not a tool result, is what grows the estimate past threshold", async () => {
+    const fatText = "x".repeat(8_000);
+    const tools = makeTools(async () => "ok");
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: fatText },
+          { type: "text-end", id: "1" },
+          ...toolCallChunks("call-0", "write_file", { path: "a.txt" }, usage(5, 5)),
+        ]),
+        streamResult(textOnlyChunks("ok")),
+      ],
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools,
+        messages: fatHistory(6, 8),
+        permissionMode: "auto",
+        maxIterations: 2,
+        contextWindowSize: 2_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 80,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
   test("does not compact again after splice when remaining history stays under threshold", async () => {
     const body = "x".repeat(400);
     const tools = makeTools(async () => body);
@@ -304,5 +337,36 @@ describe("runLoop compaction trigger", () => {
 
     expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
     expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("compacts a second time after splice once the kept tail plus new growth recrosses threshold", async () => {
+    const laterBody = "x".repeat(1_500);
+    const tools = makeTools(async () => laterBody);
+    const laterTurns = 8;
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...Array.from({ length: laterTurns }, (_, i) =>
+          streamResult(toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(5, 5))),
+        ),
+        streamResult(textOnlyChunks("done")),
+      ],
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools,
+        messages: fatHistory(12, 2_000),
+        permissionMode: "auto",
+        maxIterations: laterTurns + 1,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 3_500,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted").length).toBeGreaterThanOrEqual(2);
+    expect(model.doGenerateCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

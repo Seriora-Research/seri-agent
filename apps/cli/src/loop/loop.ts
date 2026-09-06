@@ -494,8 +494,6 @@ export async function* runLoop(opts: {
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const messages: ModelMessage[] = [...opts.messages];
-  // messages is append-only except the compaction splice below. The tally tracks that, so
-  // the per-iteration compact check does not JSON.stringify every prior tool payload again.
   let estimatedTokens = estimateTokens(messages);
   function appendMessage(message: ModelMessage): void {
     messages.push(message);
