@@ -103,16 +103,25 @@ describe("daemon turns", () => {
     sawOne.resolve();
     await twoReady.promise;
     const restIter = client.events(first.turnId, 1)[Symbol.asyncIterator]();
-    const second = await restIter.next();
-    expect(second.done).toBe(false);
-    expect(second.value?.event).toEqual({
-      type: "loop",
-      value: { type: "text-delta", text: "two" },
-    });
-    released.resolve();
-    const rest = [second.value!, ...(await collect({ [Symbol.asyncIterator]: () => restIter }))];
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+    try {
+      const second = await Promise.race([
+        restIter.next(),
+        delay(2000).then(() => {
+          throw new Error("timed out waiting for replayed text-delta two");
+        }),
+      ]);
+      expect(second.done).toBe(false);
+      expect(second.value?.event).toEqual({
+        type: "loop",
+        value: { type: "text-delta", text: "two" },
+      });
+      released.resolve();
+      const rest = [second.value!, ...(await collect({ [Symbol.asyncIterator]: () => restIter }))];
+      expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
+      expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+    } finally {
+      released.resolve();
+    }
   });
 
   test("daemon_events omit text-delta and reasoning-delta after the turn finishes", async () => {
