@@ -102,9 +102,12 @@ describe("daemon turns", () => {
     await liveIter.return?.();
     sawOne.resolve();
     await twoReady.promise;
-    const restPromise = collect(client.events(first.turnId, 1));
+    const restIter = client.events(first.turnId, 1)[Symbol.asyncIterator]();
+    const second = await restIter.next();
+    expect(second.done).toBe(false);
+    expect(second.value?.event).toEqual({ type: "loop", value: { type: "text-delta", text: "two" } });
     released.resolve();
-    const rest = await restPromise;
+    const rest = [second.value!, ...(await collect({ [Symbol.asyncIterator]: () => restIter }))];
     expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
     expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
   });

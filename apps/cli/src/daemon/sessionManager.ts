@@ -49,6 +49,7 @@ type TurnHandle = {
   sessionId: string;
   abort: AbortController;
   seq: number;
+  replay: DaemonEvent[];
   subscribers: Set<Subscriber>;
   pendingApproval: PendingApproval | undefined;
   finished: boolean;
@@ -104,6 +105,7 @@ export class DaemonSessionManager {
       sessionId: session.id,
       abort,
       seq: 0,
+      replay: [],
       subscribers: new Set(),
       pendingApproval: undefined,
       finished: false,
@@ -148,14 +150,20 @@ export class DaemonSessionManager {
 
   replayAndFollow(turnId: string, afterSeq: number, send: Subscriber): (() => void) | undefined {
     const handle = this.turns.get(turnId);
+    if (handle !== undefined) {
+      for (const event of handle.replay) {
+        if (event.seq > afterSeq) send(event);
+      }
+      if (handle.finished) return undefined;
+      handle.subscribers.add(send);
+      return () => {
+        handle.subscribers.delete(send);
+        this.onSubscriberGone(handle);
+      };
+    }
     const persisted = this.database.listDaemonEventsAfter(turnId, afterSeq) as DaemonEvent[];
     for (const event of persisted) send(event);
-    if (handle === undefined || handle.finished) return undefined;
-    handle.subscribers.add(send);
-    return () => {
-      handle.subscribers.delete(send);
-      this.onSubscriberGone(handle);
-    };
+    return undefined;
   }
 
   resolveApproval(turnId: string, requestId: string, answer: ApprovalAnswer): boolean {
@@ -228,7 +236,7 @@ export class DaemonSessionManager {
     permissionMode: PermissionMode | undefined,
     promptChannel: PromptChannel | undefined,
   ): Promise<void> {
-    const emit = (event: DaemonEvent["event"]) => {
+    const emit = (event: DaemonEvent["event"], persist = true) => {
       handle.seq += 1;
       const envelope: DaemonEvent = {
         v: 1,
@@ -237,7 +245,8 @@ export class DaemonSessionManager {
         seq: handle.seq,
         event,
       };
-      this.database.appendDaemonEvent(turnId, handle.seq, envelope);
+      handle.replay.push(envelope);
+      if (persist) this.database.appendDaemonEvent(turnId, handle.seq, envelope);
       for (const subscriber of handle.subscribers) subscriber(envelope);
     };
 
@@ -252,7 +261,10 @@ export class DaemonSessionManager {
         signal: handle.abort.signal,
         emitLoop: (value) => {
           if (value.type === "messages-updated") return;
-          emit({ type: "loop", value: value as PublicLoopEvent });
+          emit(
+            { type: "loop", value: value as PublicLoopEvent },
+            value.type !== "text-delta" && value.type !== "reasoning-delta",
+          );
         },
         requestApproval: (requestId, toolName, args) =>
           new Promise<ApprovalAnswer>((resolve) => {
