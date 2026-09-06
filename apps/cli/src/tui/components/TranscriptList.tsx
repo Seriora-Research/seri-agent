@@ -6,6 +6,7 @@ import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
 import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
+import type { FileChangeView } from "../../fileChange";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference changes when the reducer commits a new array, so `memo` here lets React skip
@@ -165,6 +166,9 @@ const TranscriptRow = memo(function TranscriptRow({
       </box>
     );
   }
+  if (entry.kind === "file-change" && entry.fileChange !== undefined) {
+    return <FileChangeBlock change={entry.fileChange} gap={gap} />;
+  }
   if (entry.role === "system" && entry.muted && entry.markdown) {
     return (
       <markdown
@@ -183,3 +187,35 @@ const TranscriptRow = memo(function TranscriptRow({
     </text>
   );
 });
+
+function lineFg(kind: FileChangeView["lines"][number]["kind"]): string {
+  if (kind === "add") return theme.diffAdd;
+  if (kind === "del") return theme.diffDel;
+  return theme.muted;
+}
+
+function FileChangeBlock({ change, gap }: { change: FileChangeView; gap: 0 | 1 }) {
+  return (
+    <box marginTop={gap} flexDirection="column" flexShrink={0}>
+      <text fg={theme.muted} flexShrink={0} wrapMode="none" truncate>
+        {change.title}  +{change.added} −{change.removed}
+      </text>
+      {change.lines.map((line, index) => (
+        <text
+          key={index}
+          fg={lineFg(line.kind)}
+          flexShrink={0}
+          wrapMode="none"
+          truncate
+        >
+          {line.text}
+        </text>
+      ))}
+      {change.hidden > 0 ? (
+        <text fg={theme.muted} flexShrink={0} wrapMode="none" truncate>
+          … {change.hidden} more
+        </text>
+      ) : null}
+    </box>
+  );
+}
