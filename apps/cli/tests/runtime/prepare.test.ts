@@ -6,10 +6,9 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import type { ToolExecutionOptions } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import type { RunContext } from "../../src/cli";
-import { loadVerifyConfig } from "../../src/config/config";
+import { inspectConfig, loadVerifyConfig } from "../../src/config/config";
 import { denialBlocks } from "../../src/gate/gate";
 import type { HooksLoad } from "../../src/hooks/registry";
-import { DEFAULT_HOOK_TIMEOUT_MS, type HookSpec } from "../../src/hooks/types";
 import {
   callMcpTool,
   createMcpClients,
@@ -264,7 +263,7 @@ describe("prepareSession + mcp", () => {
     ]);
   });
 
-  test("a malformed sandbox object in config.json does not drop path denials or PreToolUse hooks", async () => {
+  test("an unreadable config.json does not drop path denials or PreToolUse hooks", async () => {
     mkdirSync(permissionsDir, { recursive: true });
     writeFileSync(
       permissionsPath(permissionsDir),
@@ -272,39 +271,26 @@ describe("prepareSession + mcp", () => {
     );
     const seriDir = mcpConfigDirFor(tmpConfigRoot);
     mkdirSync(seriDir, { recursive: true });
+    writeFileSync(join(seriDir, "config.json"), "{nope");
+    expect(inspectConfig(seriDir).status).toBe("malformed");
+
+    const hooksDir = join(seriDir, "hooks");
+    mkdirSync(hooksDir, { recursive: true });
     writeFileSync(
-      join(seriDir, "config.json"),
-      JSON.stringify({
-        sandbox: { enabled: true, filesystem: { denyRead: [{ path: "/tmp/.ssh" }] } },
-      }),
+      join(hooksDir, "hooks.yaml"),
+      "hooks:\n  PreToolUse:\n    - script: block-dangerous\n",
     );
-    const hook: HookSpec = {
-      event: "PreToolUse",
-      script: "block-dangerous",
-      path: join(seriDir, "hooks", "block-dangerous.sh"),
-      matcher: undefined,
-      timeoutMs: DEFAULT_HOOK_TIMEOUT_MS,
-      source: "user",
-      filePath: join(seriDir, "hooks", "hooks.yaml"),
-    };
+    writeFileSync(join(hooksDir, "block-dangerous.sh"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(hooksDir, "block-dangerous.ps1"), "exit 0\n");
+
     const cwd = makeDir();
-    const result = await prepareSession(
-      baseCtx(cwd),
-      {
-        ...deps,
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map([["PreToolUse", [hook]]]) },
-        }),
-      },
-      false,
-      true,
-    );
+    const result = await prepareSession(baseCtx(cwd), { loadAgentsFile: () => "" }, false, true);
     expect(typeof result).not.toBe("number");
     const prepared = result as PreparedRun;
     expect(prepared.pathDenials).toEqual([{ tool: "read_file", pattern: ".env" }]);
-    expect(prepared.hooks.registry.get("PreToolUse")).toEqual([hook]);
+    expect(prepared.hooks.registry.get("PreToolUse")?.map((spec) => spec.script)).toEqual([
+      "block-dangerous",
+    ]);
     expect(
       prepared.preMountMessages.some(
         (message) => message.text.includes("deny[1]") && message.text.includes("object"),
