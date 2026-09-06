@@ -4,15 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
+import type { CliDeps } from "../../src/cli";
 import { createAttendedExecuteTurn } from "../../src/daemon/turn";
 import * as mcpClient from "../../src/mcp/client";
+import { callMcpTool, type McpClientHandle, type McpClients } from "../../src/mcp/client";
+import type { McpServerSpec } from "../../src/mcp/types";
 import { SessionDatabase } from "../../src/session/database";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
 let dirs: string[] = [];
 let databases: SessionDatabase[] = [];
-let closeSpy: ReturnType<typeof spyOn> | undefined;
+let spies: Array<{ mockRestore: () => void }> = [];
 
 function makeDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "seri-daemon-turn-"));
@@ -23,6 +26,20 @@ function makeDir(): string {
 function restoreEnv(key: string, original: string | undefined): void {
   if (original === undefined) delete process.env[key];
   else process.env[key] = original;
+}
+
+function macrotick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function spec(): McpServerSpec {
+  return {
+    name: "ghost",
+    url: "https://127.0.0.1:1/mcp",
+    headers: {},
+    source: "project",
+    filePath: "x",
+  };
 }
 
 const originalKey = process.env.GROQ_API_KEY;
@@ -36,8 +53,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  closeSpy?.mockRestore();
-  closeSpy = undefined;
+  for (const spy of spies) spy.mockRestore();
+  spies = [];
   for (const database of databases) database.close();
   databases = [];
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -54,7 +71,30 @@ function openDatabase(configDir: string): SessionDatabase {
   return database;
 }
 
-function setupExecute(runLoop?: ReturnType<typeof fakeRunLoop>["fake"]) {
+function instrumentPools() {
+  const pools: McpClients[] = [];
+  let closeCalls = 0;
+  const realCreate = mcpClient.createMcpClients;
+  const createSpy = spyOn(mcpClient, "createMcpClients").mockImplementation(() => {
+    const handle: McpClientHandle = {
+      listTools: async () => [{ name: "web_search", description: "", inputSchema: {} }],
+      callTool: async () => "",
+      close: async () => {
+        closeCalls++;
+      },
+    };
+    const pool = realCreate(async () => handle);
+    pools.push(pool);
+    return pool;
+  });
+  spies.push(createSpy);
+  return {
+    pools,
+    closeCount: () => closeCalls,
+  };
+}
+
+function setupExecute(runLoop?: NonNullable<CliDeps["runLoop"]>) {
   const configDir = makeDir();
   process.env.HOME = configDir;
   const cwd = makeDir();
@@ -111,36 +151,61 @@ function startTurn(
 }
 
 describe("createAttendedExecuteTurn mcp clients", () => {
-  test("closes the prepareSession mcp pool after the turn", async () => {
-    closeSpy = spyOn(mcpClient, "closeMcpClients");
-    const { execute, sessionId, cwd } = setupExecute();
-    const result = await startTurn(execute, sessionId, cwd, "turn-1");
-    expect(result.exitCode).toBe(0);
-    expect(closeSpy).toHaveBeenCalledTimes(1);
-  });
-
-  test("closes a fresh pool on every attended turn", async () => {
-    closeSpy = spyOn(mcpClient, "closeMcpClients");
-    const { execute, sessionId, cwd } = setupExecute();
-    expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
-    expect((await startTurn(execute, sessionId, cwd, "turn-2")).exitCode).toBe(0);
-    expect(closeSpy).toHaveBeenCalledTimes(2);
-  });
-
-  test("closes after the loop returns, not before", async () => {
-    const order: string[] = [];
-    const originalClose = mcpClient.closeMcpClients;
-    closeSpy = spyOn(mcpClient, "closeMcpClients").mockImplementation((clients, onWarning) => {
-      order.push("close");
-      originalClose(clients, onWarning);
-    });
+  test("closes a dialled handle after the turn, not while the loop is running", async () => {
+    const { pools, closeCount } = instrumentPools();
     const { fake } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
-    async function* tracked(opts: Parameters<typeof fake>[0]) {
-      order.push("loop");
+    let closesSeenWhileRunning = -1;
+    async function* dialThenDone(opts: Parameters<typeof fake>[0]) {
+      const pool = pools.at(-1);
+      if (pool === undefined) throw new Error("prepareSession did not create an mcp pool");
+      await callMcpTool(pool, spec(), "web_search", {});
+      await macrotick();
+      closesSeenWhileRunning = closeCount();
       return yield* fake(opts);
     }
-    const { execute, sessionId, cwd } = setupExecute(tracked);
+    const { execute, sessionId, cwd } = setupExecute(dialThenDone);
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
-    expect(order).toEqual(["loop", "close"]);
+    expect(closesSeenWhileRunning).toBe(0);
+    // closeMcpClients is fire-and-forget through two then/catch hops on an already-resolved
+    // promise. A macrotask tick is what lets the handle close settle, same as bindSession's test.
+    await macrotick();
+    expect(closeCount()).toBe(1);
+    expect(pools[0]?.handles.size).toBe(0);
+  });
+
+  test("closes a dialled handle on every attended turn", async () => {
+    const { pools, closeCount } = instrumentPools();
+    const { fake } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
+    async function* dialThenDone(opts: Parameters<typeof fake>[0]) {
+      const pool = pools.at(-1);
+      if (pool === undefined) throw new Error("prepareSession did not create an mcp pool");
+      await callMcpTool(pool, spec(), "web_search", {});
+      return yield* fake(opts);
+    }
+    const { execute, sessionId, cwd } = setupExecute(dialThenDone);
+    expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
+    expect((await startTurn(execute, sessionId, cwd, "turn-2")).exitCode).toBe(0);
+    await macrotick();
+    expect(pools).toHaveLength(2);
+    expect(pools[0]).not.toBe(pools[1]);
+    expect(closeCount()).toBe(2);
+    expect(pools[0]?.handles.size).toBe(0);
+    expect(pools[1]?.handles.size).toBe(0);
+  });
+
+  test("closes a dialled handle when the loop throws", async () => {
+    const { pools, closeCount } = instrumentPools();
+    async function* dialThenThrow() {
+      const pool = pools.at(-1);
+      if (pool === undefined) throw new Error("prepareSession did not create an mcp pool");
+      await callMcpTool(pool, spec(), "web_search", {});
+      yield { type: "text-delta" as const, text: "partial" };
+      throw new Error("boom");
+    }
+    const { execute, sessionId, cwd } = setupExecute(dialThenThrow);
+    await expect(startTurn(execute, sessionId, cwd, "turn-1")).rejects.toThrow("boom");
+    await macrotick();
+    expect(closeCount()).toBe(1);
+    expect(pools[0]?.handles.size).toBe(0);
   });
 });
