@@ -1192,11 +1192,9 @@ function openOrAppendReasoning(state: TuiState, text: string, startedAt: number)
 }
 
 function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptEntry[] {
-  let changed = false;
-  const next = transcript.map((entry) => {
+  return transcript.map((entry) => {
     if (entry.kind !== "reasoning") return entry;
     if (entry.body === undefined && entry.expanded !== true) return entry;
-    changed = true;
     const nextEntry: TranscriptEntry = {
       ...entry,
       expanded: false,
@@ -1205,7 +1203,6 @@ function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptE
     delete nextEntry.body;
     return nextEntry;
   });
-  return changed ? next : transcript;
 }
 
 function settleReasoning(state: TuiState, now: number): TuiState {
