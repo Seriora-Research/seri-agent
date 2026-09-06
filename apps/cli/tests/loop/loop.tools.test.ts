@@ -318,6 +318,33 @@ describe("runLoop", () => {
     expect(JSON.stringify(update?.messages.at(-1)).length).toBeLessThan(1_000);
   });
 
+  test("an oversized Error tool failure is truncated instead of stringified whole", async () => {
+    const tools = makeTools(async () => {
+      throw new Error("x".repeat(5_000));
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+    );
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain('Tool "write_file" threw during execution');
+    expect(errorEvent?.error).toContain("truncated");
+    expect(errorEvent?.error?.length).toBeLessThan(700);
+    expect(errorEvent?.error).toContain("Error: xxx");
+
+    const update = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+        e.type === "messages-updated" && e.messages.at(-1)?.role === "tool",
+    );
+    expect(JSON.stringify(update?.messages.at(-1)).length).toBeLessThan(1_000);
+  });
+
   describe("abort", () => {
     // Every case here drives a real AbortController through runLoop, because the decisions this
     // stage had to make — discard the partial message, kill the in-flight tool, never start the
