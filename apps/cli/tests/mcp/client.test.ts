@@ -140,6 +140,27 @@ describe("callTool flattens content to a string", () => {
   test("no content array flattens to an empty string", () => {
     expect(flattenContent({})).toBe("");
   });
+
+  test("an oversized join is capped, keeps both ends, and omits the middle", () => {
+    const text = flattenContent({
+      content: [
+        { type: "text", text: "A".repeat(100_000) },
+        { type: "text", text: "B".repeat(100_000) },
+      ],
+    });
+    expect(text.length).toBeLessThan(30_200);
+    expect(text.startsWith("A".repeat(100))).toBe(true);
+    expect(text.endsWith("B".repeat(100))).toBe(true);
+    expect(text).toContain("characters omitted");
+  });
+
+  test("a join that lands exactly on 30000 characters stays whole", () => {
+    const text = flattenContent({
+      content: [{ type: "text", text: "x".repeat(30_000) }],
+    });
+    expect(text).toHaveLength(30_000);
+    expect(text).not.toContain("characters omitted");
+  });
 });
 
 describe("a dial that only needs a login says so", () => {
