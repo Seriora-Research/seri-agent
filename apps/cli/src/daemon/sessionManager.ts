@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ApprovalAnswer, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
+import {
+  type ApprovalAnswer,
+  type DaemonEvent,
+  isLoopDaemonEvent,
+  type PublicLoopEvent,
+} from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { PromptChannel } from "../permissions/promptChannel";
@@ -49,6 +54,7 @@ type TurnHandle = {
   sessionId: string;
   abort: AbortController;
   seq: number;
+  replay: DaemonEvent[];
   subscribers: Set<Subscriber>;
   pendingApproval: PendingApproval | undefined;
   finished: boolean;
@@ -104,6 +110,7 @@ export class DaemonSessionManager {
       sessionId: session.id,
       abort,
       seq: 0,
+      replay: [],
       subscribers: new Set(),
       pendingApproval: undefined,
       finished: false,
@@ -148,14 +155,20 @@ export class DaemonSessionManager {
 
   replayAndFollow(turnId: string, afterSeq: number, send: Subscriber): (() => void) | undefined {
     const handle = this.turns.get(turnId);
+    if (handle !== undefined) {
+      for (const event of handle.replay) {
+        if (event.seq > afterSeq) send(event);
+      }
+      if (handle.finished) return undefined;
+      handle.subscribers.add(send);
+      return () => {
+        handle.subscribers.delete(send);
+        this.onSubscriberGone(handle);
+      };
+    }
     const persisted = this.database.listDaemonEventsAfter(turnId, afterSeq) as DaemonEvent[];
     for (const event of persisted) send(event);
-    if (handle === undefined || handle.finished) return undefined;
-    handle.subscribers.add(send);
-    return () => {
-      handle.subscribers.delete(send);
-      this.onSubscriberGone(handle);
-    };
+    return undefined;
   }
 
   resolveApproval(turnId: string, requestId: string, answer: ApprovalAnswer): boolean {
@@ -237,7 +250,11 @@ export class DaemonSessionManager {
         seq: handle.seq,
         event,
       };
-      this.database.appendDaemonEvent(turnId, handle.seq, envelope);
+      handle.replay.push(envelope);
+      const persist =
+        !isLoopDaemonEvent(event) ||
+        (event.value.type !== "text-delta" && event.value.type !== "reasoning-delta");
+      if (persist) this.database.appendDaemonEvent(turnId, handle.seq, envelope);
       for (const subscriber of handle.subscribers) subscriber(envelope);
     };
 
