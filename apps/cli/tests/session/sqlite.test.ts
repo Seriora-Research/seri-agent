@@ -156,6 +156,12 @@ describe("SessionDatabase", () => {
     ]);
   });
 
+  function changeDelta(raw: Database, sql: string): number {
+    const before = (raw.query("SELECT total_changes() AS n").get() as { n: number }).n;
+    raw.exec(sql);
+    return (raw.query("SELECT total_changes() AS n").get() as { n: number }).n - before;
+  }
+
   test("schema 4 rewrites messages_au on a v3 database so seq-only updates skip FTS", () => {
     withDatabase((database) =>
       database.saveSession(state("v3", [{ role: "user", content: "hello" }])),
@@ -168,19 +174,23 @@ describe("SessionDatabase", () => {
         INSERT INTO session_fts(rowid, search_text)
         VALUES (new.id, new.search_text);
       END`);
+    const oldSeqChurn = changeDelta(setup, "UPDATE messages SET seq = seq + 1");
+    setup.exec("UPDATE messages SET seq = 0");
     setup.exec("PRAGMA user_version = 3");
     setup.close();
 
     expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(4);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
-    const sql = (
-      raw.query("SELECT sql FROM sqlite_master WHERE name = 'messages_au'").get() as {
-        sql: string;
-      }
-    ).sql;
+    const seqOnly = changeDelta(raw, "UPDATE messages SET seq = seq + 1");
+    const searchText = changeDelta(raw, "UPDATE messages SET search_text = 'goodbye'");
     raw.close();
-    expect(sql).toContain("UPDATE OF search_text");
-    expect(sql).toContain("WHEN");
+    expect(seqOnly).toBe(1);
+    expect(oldSeqChurn).toBeGreaterThan(seqOnly);
+    expect(searchText).toBeGreaterThan(seqOnly);
+    expect(withDatabase((database) => database.searchSessions("hello"))).toEqual([]);
+    expect(withDatabase((database) => database.searchSessions("goodbye"))).toMatchObject([
+      { sessionId: "v3", messageIndex: 1 },
+    ]);
   });
 
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {
