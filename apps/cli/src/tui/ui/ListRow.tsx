@@ -9,17 +9,13 @@ import { theme } from "../theme/theme";
 // deliberate, tested behavior change from its pre-ListRow rows, which soft-wrapped instead of
 // truncating (see the splash's own truncation test).
 //
-// Selection is reverse video (Design conformance, docs/design/tui.md), spelled as an explicit
-// `theme.selectedBg` + `theme.selectedFg` pair rather than `TextAttributes.INVERSE`. INVERSE
-// cannot express it on OpenTUI 0.5.6: a raw PTY capture of this very row shows it emitting
-// `38;2;255;255;255` `48;2;255;255;255` `7`, i.e. a background set to the SAME value as the
-// foreground, so the row painted a solid block with `> Log in` invisible inside it. Naming both
-// colors is also what lets the highlight sit on the wrapping `<box>`, which spans the full row
-// width — a background painted only under the glyphs left a ragged right edge whose width moved
-// with each label. INVERSE does survive in three places (`components/InputBox.tsx`,
-// `components/ModelPicker.tsx`, `routes/skills/SkillsPanel.tsx`), all of them a block cursor drawn
-// on a single space: a cell whose background equals its foreground is exactly what a solid caret
-// is, so there the same behavior is the intended one rather than a bug.
+// Selection is accent fill with on-ink text, spelled as an explicit `theme.selectedBg` +
+// `theme.selectedFg` pair rather than `TextAttributes.INVERSE`. INVERSE cannot express it on
+// OpenTUI 0.5.6: a raw PTY capture of this very row shows it emitting `38;2;255;255;255`
+// `48;2;255;255;255` `7`, i.e. a background set to the SAME value as the foreground, so the row
+// painted a solid block with `> Log in` invisible inside it. Naming both colors is also what lets
+// the highlight sit on the wrapping `<box>`, which spans the full row width — a background painted
+// only under the glyphs left a ragged right edge whose width moved with each label.
 //
 // The marker ("> "/"  ") and `label` are two SIBLING `<text>` nodes, not one `<text>` with two
 // children — verified live (apps/cli/tests/tui/): a single `<text truncate>` whose content spans

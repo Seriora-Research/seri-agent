@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 // Ported from panels/ModelPicker.tsx: same logic, OpenTUI's element/hook names.
 
-import { decodePasteBytes, TextAttributes } from "@opentui/core";
+import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
 import { useState } from "react";
@@ -141,7 +141,7 @@ export function ModelPicker({
         keeps `truncate`; `wrapMode="none"` on it is required too, the same as ListRow's own label,
         for `truncate` to clip instead of soft-wrap the placeholder across two lines. */}
         <text flexShrink={0}>{promptText}</text>
-        <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+        <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
           {" "}
         </text>
         {showPlaceholder && (

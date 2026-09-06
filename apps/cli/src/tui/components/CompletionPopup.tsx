@@ -41,8 +41,8 @@ export function CompletionPopup({
     <box flexDirection="column">
       {visible.map((item, index) => {
         const isSelected = offset + index === selected;
-        // Reverse video via an explicit `theme.selectedBg`/`theme.selectedFg` pair, never
-        // `TextAttributes.INVERSE` — ui/ListRow.tsx's own comment records the raw PTY capture
+        // Accent fill with on-ink text via an explicit `theme.selectedBg`/`theme.selectedFg` pair,
+        // never `TextAttributes.INVERSE` — ui/ListRow.tsx's own comment records the raw PTY capture
         // showing INVERSE setting a cell's background to its own foreground. It hit this popup
         // twice over, once per column: the value column's `theme.text` and the description
         // column's `theme.muted` each became their own background, so a selected row read as two

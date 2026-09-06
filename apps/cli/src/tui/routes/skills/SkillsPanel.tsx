@@ -1,5 +1,4 @@
 /** @jsxImportSource @opentui/react */
-import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
 import { useListWindow } from "../../hooks/useListWindow";
@@ -79,7 +78,7 @@ export function SkillsPanel({
       than one child renders blank the instant it overflows. */}
       <box flexDirection="row">
         <text flexShrink={0}>{filterQuery.length === 0 ? "> " : `> ${filterQuery}`}</text>
-        <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+        <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
           {" "}
         </text>
         {filterQuery.length === 0 && (

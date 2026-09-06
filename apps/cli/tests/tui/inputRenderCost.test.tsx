@@ -5,7 +5,7 @@
 // diff-and-write path this file measures — passing a real `stdout` stream alongside an explicit
 // `bufferedOutput: "stdout"` override makes the renderer allocate a real `NativeSpanFeed` and pipe
 // actual diffed ANSI bytes through it (confirmed empirically against this exact harness: a plain
-// `<text bg="#333333">` mount produces the real truecolor SGR on the provided stream), the same
+// `<text bg={theme.userBg}>` mount produces the real truecolor SGR on the provided stream), the same
 // path `runTui`'s own real terminal mount uses.
 
 import { describe, expect, test } from "bun:test";
@@ -14,6 +14,7 @@ import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testin
 import { createRoot } from "@opentui/react";
 import { App } from "../../src/tui/app";
 import { MAIN_TUI_RENDERER_CONFIG } from "../../src/tui/runtime/renderOptions";
+import { theme } from "../../src/tui/theme/theme";
 import type { TuiAction } from "../../src/tui/state/reducer";
 import type { TranscriptRole } from "../../src/tui/util/format";
 import { flush, route, session } from "./helpers";
@@ -150,7 +151,8 @@ async function measureBackspaceCost(options: {
 describe("TUI input render cost", () => {
   // theme.userBg's opening truecolor background code — the same SGR chunk's own file-level comment
   // above confirms lands on a real provided stdout stream once `bufferedOutput: "stdout"` is set.
-  const USER_BG_SGR = "\x1b[48;2;51;51;51m";
+  const n = theme.userBg.startsWith("#") ? theme.userBg.slice(1) : theme.userBg;
+  const USER_BG_SGR = `\x1b[48;2;${Number.parseInt(n.slice(0, 2), 16)};${Number.parseInt(n.slice(2, 4), 16)};${Number.parseInt(n.slice(4, 6), 16)}m`;
 
   // This scenario changes meaning under OpenTUI, not just its harness (worth recording explicitly,
   // per this migration's own test-plan: a scenario that no longer applies as originally framed
