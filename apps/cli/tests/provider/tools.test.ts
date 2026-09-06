@@ -41,6 +41,24 @@ describe("toolDefinitions", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("read_file execute caps an oversized file before it would enter messages", async () => {
+    tmpDir = makeTmpDir();
+    const filePath = join(tmpDir, "big.txt");
+    writeFileSync(filePath, `HEAD${"x".repeat(200_000)}TAIL`);
+    const result = await toolDefinitions.read_file.execute?.({ path: filePath }, execOpts);
+    expect(typeof result).toBe("string");
+    const text = result as string;
+    expect(text.length).toBeLessThan(30_200);
+    expect(text.startsWith("HEAD")).toBe(true);
+    expect(text.endsWith("TAIL")).toBe(true);
+    expect(JSON.stringify(text).length).toBeLessThan(31_000);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("read_file's description names the 30000-character cap", () => {
+    expect(toolDefinitions.read_file.description).toContain("30000");
+  });
+
   test("write_file writes content to a file", async () => {
     tmpDir = makeTmpDir();
     const filePath = join(tmpDir, "out.txt");

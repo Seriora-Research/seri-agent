@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { MAX_TOOL_RESULT_CHARS } from "../capToolResult";
 import { resolveAgainstCwd } from "../gate/workingDir";
 
 export { resolveAgainstCwd };
@@ -20,7 +21,7 @@ import { writeFile } from "../tools/writeFile";
 // same string the tool will probe.
 export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
-    description: "Read a file's contents as text.",
+    description: `Read a file's contents as text. The result is capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file.`,
     inputSchema: z.object({ path: z.string() }),
     execute: ({ path }) => readFile(resolveAgainstCwd(cwd, path)),
   });

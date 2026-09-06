@@ -92,6 +92,17 @@ describe("writeFile", () => {
     expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
   });
 
+  test("a write following a capped read still reuses the raw file's cached EOL", () => {
+    const filePath = join(tmpRoot, "big-crlf.txt");
+    writeFileSync(filePath, `old\r\n${"x".repeat(40_000)}\r\n`);
+    readFile(filePath);
+
+    writeFileSync(filePath, "old\ncontent\n");
+
+    writeFile(filePath, "new\ncontent\n");
+    expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
+  });
+
   // eolCache.ts: bash/powershell can touch any file, not just the one a prior read_file cached the
   // EOL for, so a shell call in between has to drop the whole cache rather than leave writeFile
   // trusting a line-ending style that command may have just changed on disk.
