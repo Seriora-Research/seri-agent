@@ -20,7 +20,6 @@ import {
   packedUploadAppliesTo,
 } from "../gate/packedRenderer";
 import { locationForCall } from "../gate/workingDir";
-import { withCodexStoreOption } from "../provider/codex";
 import {
   type CostReport,
   openRouterServedProvider,
@@ -581,11 +580,10 @@ export async function* runLoop(opts: {
     let modelCallStarts = 0;
     let reportedRetries = 0;
 
-    const reasoningOptions =
+    const providerOptions =
       legalReasoningEffort && opts.provider
         ? buildReasoningProviderOptions(opts.provider, legalReasoningEffort)
         : undefined;
-    const providerOptions = withCodexStoreOption(opts.provider, opts.credential, reasoningOptions);
 
     streamAttempt: while (true) {
       text = "";
