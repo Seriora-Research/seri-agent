@@ -7,6 +7,7 @@ import {
   fileChangeFromTool,
   fileChangePlainText,
   isFileChangeView,
+  sameHunk,
 } from "../src/fileChange";
 
 describe("buildFileChange", () => {
@@ -203,5 +204,19 @@ describe("fileChangeFromTool", () => {
         lines: [{ kind: "add", text: "+ x" }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("sameHunk", () => {
+  test("ignores title and context lines", () => {
+    const edit = buildFileChange("Edit", "keep\nold\n", "keep\nnew\n");
+    const write = buildFileChange("Write a.ts", "keep\nold\n", "keep\nnew\n");
+    expect(sameHunk(edit, write)).toBe(true);
+  });
+
+  test("different add/del bodies are not the same hunk", () => {
+    const first = buildFileChange("Edit", "a", "b");
+    const second = buildFileChange("Edit", "a", "c");
+    expect(sameHunk(first, second)).toBe(false);
   });
 });

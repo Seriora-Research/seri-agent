@@ -364,6 +364,21 @@ describe("formatToolSummary", () => {
     expect(formatToolSummary([])).toBeUndefined();
     expect(formatToolSummary([entry("read_file", 0)])).toBeUndefined();
   });
+
+  test("edit and write_file are omitted because hunks already show them", () => {
+    const clean = (name: string): ToolActivityEntry => ({
+      name,
+      count: 1,
+      callLine: "",
+      singleLine: "",
+      detailLines: [],
+      anomalyLines: [],
+    });
+    expect(formatToolSummary([clean("edit"), clean("write_file")])).toBeUndefined();
+    expect(formatToolSummary([clean("read_file"), clean("edit"), clean("write_file")])).toBe(
+      "Read 1 file",
+    );
+  });
 });
 
 describe("renderToolActivity", () => {

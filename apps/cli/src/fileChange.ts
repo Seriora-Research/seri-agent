@@ -113,6 +113,18 @@ export function fileChangePlainText(change: FileChangeView): string {
   return [`${change.title}  ${stats}`, ...body].join("\n");
 }
 
+export function sameHunk(left: FileChangeView, right: FileChangeView): boolean {
+  if (left.added !== right.added || left.removed !== right.removed) return false;
+  const signature = (change: FileChangeView) =>
+    change.lines
+      .filter((line) => line.kind !== "context")
+      .map((line) => `${line.kind}\0${line.text}`);
+  const a = signature(left);
+  const b = signature(right);
+  if (a.length !== b.length) return false;
+  return a.every((line, index) => line === b[index]);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

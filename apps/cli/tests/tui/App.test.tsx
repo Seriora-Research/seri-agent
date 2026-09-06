@@ -1637,7 +1637,7 @@ describe("App", () => {
     expect(frame).toContain("+1 −1");
   });
 
-  test("a pending edit stays a compact headline so chrome cannot steal transcript height", async () => {
+  test("a pending edit paints its hunk in the transcript as soon as the tool-call arrives", async () => {
     const { setup, dispatch } = await connect();
 
     dispatch({
@@ -1651,9 +1651,8 @@ describe("App", () => {
     await flush(setup);
 
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("edit");
-    expect(frame).not.toContain("- old");
-    expect(frame).not.toContain("+ new");
+    expect(frame).toContain("- old");
+    expect(frame).toContain("+ new");
     expect(frame).not.toContain("oldString");
   });
 
@@ -1682,7 +1681,8 @@ describe("App", () => {
     const frame = setup.captureCharFrame();
     expect(frame).toContain("- old");
     expect(frame).toContain("+ new");
-    expect(frame).toContain("Edited 1 edit");
+    expect(frame).not.toContain("Edited 1 edit");
+    expect(frame).toContain("+1");
     expect(countNeedle(frame, "- old")).toBe(1);
     expect(countNeedle(frame, "+ new")).toBe(1);
   });

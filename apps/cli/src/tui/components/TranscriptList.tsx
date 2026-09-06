@@ -6,7 +6,7 @@ import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
 import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
-import { FileChangeLines } from "./FileChangeLines";
+import { FileChangeLines, FileChangeStatsLine } from "./FileChangeLines";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference changes when the reducer commits a new array, so `memo` here lets React skip
@@ -59,7 +59,12 @@ export const TranscriptList = memo(function TranscriptList({
           <TranscriptRow
             key={index}
             entry={entry}
-            gap={gapBefore(transcript[index - 1]?.role, entry.role)}
+            gap={gapBefore(
+              transcript[index - 1]?.role,
+              entry.role,
+              transcript[index - 1]?.kind,
+              entry.kind,
+            )}
           />
         ))}
       </>
@@ -73,7 +78,15 @@ export const TranscriptList = memo(function TranscriptList({
         const index = start + offset;
         return (
           <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
-            <TranscriptRow entry={entry} gap={gapBefore(transcript[index - 1]?.role, entry.role)} />
+            <TranscriptRow
+              entry={entry}
+              gap={gapBefore(
+                transcript[index - 1]?.role,
+                entry.role,
+                transcript[index - 1]?.kind,
+                entry.kind,
+              )}
+            />
           </box>
         );
       })}
@@ -168,6 +181,15 @@ const TranscriptRow = memo(function TranscriptRow({
   }
   if (entry.kind === "file-change" && entry.fileChange !== undefined) {
     return <FileChangeLines change={entry.fileChange} gap={gap} />;
+  }
+  if (entry.kind === "file-change-stats" && entry.fileChangeStats !== undefined) {
+    return (
+      <FileChangeStatsLine
+        added={entry.fileChangeStats.added}
+        removed={entry.fileChangeStats.removed}
+        gap={gap}
+      />
+    );
   }
   if (entry.role === "system" && entry.muted && entry.markdown) {
     return (

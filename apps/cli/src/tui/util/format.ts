@@ -70,12 +70,15 @@ export type TranscriptEntry = {
   markdown?: boolean;
   // Settled thought caret. Not a fourth role: the gap table already treats this as
   // system (same exchange as the answer).
-  kind?: "reasoning" | "quota-exhausted" | "file-change";
+  kind?: "reasoning" | "quota-exhausted" | "file-change" | "file-change-stats" | "tool-summary";
   body?: string;
   expanded?: boolean;
   elapsedMs?: number;
   fileChange?: FileChangeView;
+  fileChangeStats?: { added: number; removed: number };
 };
+
+export type TranscriptKind = NonNullable<TranscriptEntry["kind"]>;
 
 export const REASONING_MARK_CLOSED = "▸";
 export const REASONING_MARK_OPEN = "▾";

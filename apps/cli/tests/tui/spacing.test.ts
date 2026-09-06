@@ -9,8 +9,8 @@ const ROLES: TranscriptRole[] = ["user", "assistant", "system"];
 const TABLE: [TranscriptRole | undefined, Record<TranscriptRole, 0 | 1>][] = [
   [undefined, { user: 0, assistant: 0, system: 0 }],
   ["user", { user: 1, assistant: 1, system: 1 }],
-  ["assistant", { user: 1, assistant: 0, system: 0 }],
-  ["system", { user: 1, assistant: 0, system: 0 }],
+  ["assistant", { user: 1, assistant: 0, system: 1 }],
+  ["system", { user: 1, assistant: 1, system: 0 }],
 ];
 
 describe("hairlineRow", () => {
@@ -32,4 +32,15 @@ describe("gapBefore", () => {
       });
     }
   }
+
+  test("reasoning stays tight against the answer", () => {
+    expect(gapBefore("system", "assistant", "reasoning")).toBe(0);
+    expect(gapBefore("assistant", "system", undefined, "reasoning")).toBe(0);
+  });
+
+  test("file-change, tool-summary, and turn stats take a blank row", () => {
+    expect(gapBefore("system", "system", "file-change")).toBe(1);
+    expect(gapBefore("system", "system", undefined, "tool-summary")).toBe(1);
+    expect(gapBefore("assistant", "system", undefined, "file-change-stats")).toBe(1);
+  });
 });

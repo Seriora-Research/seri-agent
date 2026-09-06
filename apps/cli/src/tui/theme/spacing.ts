@@ -1,6 +1,6 @@
 // The TUI's frame and its vertical rhythm, beside theme.ts and read the same way.
 
-import type { TranscriptRole } from "../util/format";
+import type { TranscriptKind, TranscriptRole } from "../util/format";
 import { theme } from "./theme";
 
 // Horizontal only, deliberately: PANEL_CHROME_ROWS (util/format.ts) budgets the rows a panel spends
@@ -35,18 +35,38 @@ export const FRAME = {
 // reflow the transcript.
 export const TOOL_INDENT = "  ";
 
-// Blank rows between two adjacent transcript rows. Only a user turn breaks the rhythm: it is the
-// boundary between one exchange and the next, and everything the model does in reply — its prose,
-// its tool lines, its errors and retries, its done marker — belongs to one block and reads as one.
+// Blank rows between two adjacent transcript rows. A user turn still fences the exchange.
+// File-change hunks, the tool-count line, and turn +/- stats take a row of air so the harness
+// events do not stack into one wall. Reasoning stays tight against the answer that follows it.
 const GAP_TABLE: Record<TranscriptRole, Record<TranscriptRole, 0 | 1>> = {
   user: { user: 1, assistant: 1, system: 1 },
-  assistant: { user: 1, assistant: 0, system: 0 },
-  system: { user: 1, assistant: 0, system: 0 },
+  assistant: { user: 1, assistant: 0, system: 1 },
+  system: { user: 1, assistant: 1, system: 0 },
 };
 
 // A transcript's first row has nothing to be separated from, so a session never opens on a blank
 // row.
-export function gapBefore(prev: TranscriptRole | undefined, cur: TranscriptRole): 0 | 1 {
+export function gapBefore(
+  prev: TranscriptRole | undefined,
+  cur: TranscriptRole,
+  prevKind?: TranscriptKind,
+  curKind?: TranscriptKind,
+): 0 | 1 {
   if (prev === undefined) return 0;
+  if (prevKind === "reasoning" && cur === "assistant") return 0;
+  if (prev === "assistant" && curKind === "reasoning") return 0;
+  if (prev === "user" || cur === "user") return GAP_TABLE[prev]?.[cur] ?? GAP_TABLE.user[cur];
+  if (
+    prevKind === "file-change" ||
+    curKind === "file-change" ||
+    prevKind === "file-change-stats" ||
+    curKind === "file-change-stats" ||
+    prevKind === "tool-summary" ||
+    curKind === "tool-summary"
+  ) {
+    return 1;
+  }
+  if (prev === "assistant" && cur === "system" && curKind !== "reasoning") return 1;
+  if (prev === "system" && cur === "assistant") return 1;
   return GAP_TABLE[prev][cur];
 }
