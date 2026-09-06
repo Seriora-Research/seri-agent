@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  configDirForStore,
   DATABASE_FILENAME,
   SessionDatabase,
-  configDirForStore,
   type SessionSearchResult,
 } from "../../src/session/database";
 import { exportSessionsToJsonl } from "../../src/session/export";
@@ -52,7 +52,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
-    expect(pragmas.userVersion).toBe(3);
+    expect(pragmas.userVersion).toBe(4);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
       .user_version;
@@ -101,6 +101,96 @@ describe("SessionDatabase", () => {
     expect(withDatabase((database) => database.loadSession("changes"))).toEqual(
       state("changes", [{ n: 1 }]),
     );
+  });
+
+  test("a replaced head with a retained suffix keeps suffix row ids and dense seq", () => {
+    const prefix = [
+      { role: "user", content: "evicted alpha" },
+      { role: "assistant", content: "evicted beta" },
+      { role: "user", content: "evicted gamma" },
+    ];
+    const suffix = [
+      { role: "user", content: "kept delta" },
+      { role: "assistant", content: "kept epsilon" },
+    ];
+    const summary = { role: "user", content: "reseeded recap of earlier turns" };
+    withDatabase((database) => database.saveSession(state("compacted", [...prefix, ...suffix])));
+
+    const before = new Database(join(configDir, DATABASE_FILENAME));
+    const suffixIds = (
+      before
+        .query(
+          "SELECT id FROM messages WHERE session_id = 'compacted' ORDER BY seq LIMIT ? OFFSET ?",
+        )
+        .all(suffix.length, prefix.length) as { id: number }[]
+    ).map((row) => row.id);
+    before.close();
+    expect(suffixIds).toHaveLength(suffix.length);
+
+    withDatabase((database) => {
+      database.saveSession(state("compacted", [summary, ...suffix]));
+      expect(database.loadSession("compacted")?.messages).toEqual([summary, ...suffix]);
+      expect(database.searchSessions("evicted")).toEqual([]);
+      expect(database.searchSessions("delta")).toMatchObject([
+        { sessionId: "compacted", messageIndex: 1 },
+      ]);
+      expect(database.searchSessions("reseeded")).toMatchObject([
+        { sessionId: "compacted", messageIndex: 0 },
+      ]);
+      database.saveSession(
+        state("compacted", [summary, ...suffix, { role: "user", content: "appended zeta" }]),
+      );
+    });
+
+    const after = new Database(join(configDir, DATABASE_FILENAME));
+    const afterRows = after
+      .query("SELECT id, seq FROM messages WHERE session_id = 'compacted' ORDER BY seq")
+      .all() as { id: number; seq: number }[];
+    after.close();
+    expect(afterRows.map((row) => row.seq)).toEqual([0, 1, 2, 3]);
+    expect(afterRows.slice(1, 1 + suffix.length).map((row) => row.id)).toEqual(suffixIds);
+    expect(withDatabase((database) => database.loadSession("compacted")?.messages)).toEqual([
+      summary,
+      ...suffix,
+      { role: "user", content: "appended zeta" },
+    ]);
+  });
+
+  function changeDelta(raw: Database, sql: string): number {
+    const before = (raw.query("SELECT total_changes() AS n").get() as { n: number }).n;
+    raw.exec(sql);
+    return (raw.query("SELECT total_changes() AS n").get() as { n: number }).n - before;
+  }
+
+  test("schema 4 rewrites messages_au on a v3 database so seq-only updates skip FTS", () => {
+    withDatabase((database) =>
+      database.saveSession(state("v3", [{ role: "user", content: "hello" }])),
+    );
+    const setup = new Database(join(configDir, DATABASE_FILENAME));
+    setup.exec("DROP TRIGGER messages_au");
+    setup.exec(`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO session_fts(session_fts, rowid, search_text)
+        VALUES ('delete', old.id, old.search_text);
+        INSERT INTO session_fts(rowid, search_text)
+        VALUES (new.id, new.search_text);
+      END`);
+    const oldSeqChurn = changeDelta(setup, "UPDATE messages SET seq = seq + 1");
+    setup.exec("UPDATE messages SET seq = 0");
+    setup.exec("PRAGMA user_version = 3");
+    setup.close();
+
+    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(4);
+    const raw = new Database(join(configDir, DATABASE_FILENAME));
+    const seqOnly = changeDelta(raw, "UPDATE messages SET seq = seq + 1");
+    const searchText = changeDelta(raw, "UPDATE messages SET search_text = 'goodbye'");
+    raw.close();
+    expect(seqOnly).toBe(1);
+    expect(oldSeqChurn).toBeGreaterThan(seqOnly);
+    expect(searchText).toBeGreaterThan(seqOnly);
+    expect(withDatabase((database) => database.searchSessions("hello"))).toEqual([]);
+    expect(withDatabase((database) => database.searchSessions("goodbye"))).toMatchObject([
+      { sessionId: "v3", messageIndex: 1 },
+    ]);
   });
 
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {

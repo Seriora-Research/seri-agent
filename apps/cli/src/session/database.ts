@@ -10,7 +10,7 @@ import type { SessionState } from "./session";
 
 export { DATABASE_FILENAME };
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const BUSY_TIMEOUT_MS = 5_000;
 
 // Production layout is `<configDir>/sessions` and `<configDir>/trajectories`. Tests inject a
@@ -128,6 +128,20 @@ const MIGRATIONS = [
         started_at TEXT NOT NULL,
         finished_at TEXT
       );
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      DROP TRIGGER IF EXISTS messages_au;
+      CREATE TRIGGER messages_au AFTER UPDATE OF search_text ON messages
+      WHEN old.search_text IS NOT new.search_text
+      BEGIN
+        INSERT INTO session_fts(session_fts, rowid, search_text)
+        VALUES ('delete', old.id, old.search_text);
+        INSERT INTO session_fts(rowid, search_text)
+        VALUES (new.id, new.search_text);
+      END;
     `,
   },
 ] as const;
@@ -830,6 +844,17 @@ export class SessionDatabase {
     ) {
       commonPrefix++;
     }
+    let commonSuffix = 0;
+    if (commonPrefix === 0) {
+      const maxSuffix = Math.min(messages.length, encoded.length);
+      while (
+        commonSuffix < maxSuffix &&
+        messages[messages.length - 1 - commonSuffix]!.json ===
+          encoded[encoded.length - 1 - commonSuffix]
+      ) {
+        commonSuffix++;
+      }
+    }
     const headerChanged =
       existing === null ||
       existing.cwd !== state.cwd ||
@@ -870,6 +895,28 @@ export class SessionDatabase {
         updatedAt,
       );
     if (!messagesChanged) return;
+
+    if (commonPrefix === 0 && commonSuffix > 0) {
+      const oldHead = messages.length - commonSuffix;
+      const newHead = encoded.length - commonSuffix;
+      const seqBeyondOccupied = messages.length + encoded.length + 1;
+      this.database
+        .query("UPDATE messages SET seq = seq + ? WHERE session_id = ? AND seq >= ?")
+        .run(seqBeyondOccupied, state.id, oldHead);
+      this.database
+        .query("DELETE FROM messages WHERE session_id = ? AND seq < ?")
+        .run(state.id, oldHead);
+      const insertHead = this.database.query(
+        "INSERT INTO messages(session_id, seq, json, search_text) VALUES (?, ?, ?, ?)",
+      );
+      for (let index = 0; index < newHead; index++) {
+        insertHead.run(state.id, index, encoded[index]!, textFromMessage(state.messages[index]));
+      }
+      this.database
+        .query("UPDATE messages SET seq = seq - ? WHERE session_id = ? AND seq >= ?")
+        .run(seqBeyondOccupied + oldHead - newHead, state.id, seqBeyondOccupied);
+      return;
+    }
 
     this.database
       .query("DELETE FROM messages WHERE session_id = ? AND seq >= ?")
