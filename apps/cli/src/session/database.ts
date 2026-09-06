@@ -899,12 +899,10 @@ export class SessionDatabase {
     if (commonPrefix === 0 && commonSuffix > 0) {
       const oldHead = messages.length - commonSuffix;
       const newHead = encoded.length - commonSuffix;
-      // Park the suffix above every live and soon-to-be-inserted seq so
-      // UNIQUE(session_id, seq) holds at every statement, not only at commit.
-      const seqPark = messages.length + encoded.length + 1;
+      const seqBeyondOccupied = messages.length + encoded.length + 1;
       this.database
         .query("UPDATE messages SET seq = seq + ? WHERE session_id = ? AND seq >= ?")
-        .run(seqPark, state.id, oldHead);
+        .run(seqBeyondOccupied, state.id, oldHead);
       this.database
         .query("DELETE FROM messages WHERE session_id = ? AND seq < ?")
         .run(state.id, oldHead);
@@ -916,7 +914,7 @@ export class SessionDatabase {
       }
       this.database
         .query("UPDATE messages SET seq = seq - ? WHERE session_id = ? AND seq >= ?")
-        .run(seqPark + oldHead - newHead, state.id, seqPark);
+        .run(seqBeyondOccupied + oldHead - newHead, state.id, seqBeyondOccupied);
       return;
     }
 
