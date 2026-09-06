@@ -57,10 +57,9 @@ describe("daemon turns", () => {
     expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
   });
 
-  test("reconnecting with after replays only later persisted events", async () => {
+  test("after a finished turn, events after the last live delta seq still return compact rows", async () => {
     const executeTurn: ExecuteTurn = async (input) => {
       input.emitLoop({ type: "text-delta", text: "one" });
-      await delay(80);
       input.emitLoop({ type: "text-delta", text: "two" });
       input.emitLoop({ type: "done", reason: "no-tool-call" });
       return { exitCode: 0 };
@@ -68,16 +67,20 @@ describe("daemon turns", () => {
     const daemon = await startDaemon({ configDir: makeDir(), executeTurn });
     stop = daemon.stop;
     const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
-    const live = client.startTurn({ task: "split" });
-    const first: DaemonEvent[] = [];
-    for await (const event of live) {
-      first.push(event);
-      if (event.seq === 1) break;
+    const live = await collect(client.startTurn({ task: "split" }));
+    let lastDelta: DaemonEvent | undefined;
+    for (const event of live) {
+      if (isLoopDaemonEvent(event.event) && event.event.value.type === "text-delta")
+        lastDelta = event;
     }
-    expect(first[0]?.event).toEqual({ type: "loop", value: { type: "text-delta", text: "one" } });
-    const rest = await collect(client.events(first[0]!.turnId, 1));
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+    expect(lastDelta?.seq).toBe(2);
+    expect(live.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    const rest = await collect(client.events(live[0]!.turnId, lastDelta!.seq));
+    expect(rest.some((event) => JSON.stringify(event).includes("text-delta"))).toBe(false);
+    expect(
+      rest.some((event) => isLoopDaemonEvent(event.event) && event.event.value.type === "done"),
+    ).toBe(true);
+    expect(rest.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
   });
 
   test("reconnecting after a missed text-delta still replays it", async () => {
@@ -159,8 +162,12 @@ describe("daemon turns", () => {
       expect(persistedLoop).not.toContain("text-delta");
       expect(persistedLoop).not.toContain("reasoning-delta");
       expect(persistedLoop).toEqual(["done"]);
+      expect(persisted.map((event) => event.seq)).toEqual([52, 53]);
       expect(persisted).toHaveLength(2);
       expect(persisted.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+      expect(manager.getTurn(started.turnId)).toBeUndefined();
+      const afterLastDelta = database.listDaemonEventsAfter(started.turnId, 51) as DaemonEvent[];
+      expect(afterLastDelta.map((event) => event.seq)).toEqual([52, 53]);
     } finally {
       manager.cancelAll();
       await manager.waitForIdle();
