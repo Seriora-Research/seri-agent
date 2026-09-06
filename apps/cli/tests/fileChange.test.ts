@@ -64,6 +64,29 @@ describe("buildFileChange", () => {
     expect(view.lines.map((line) => line.text)).toEqual(["  a", "  b", "- c", "+ C", "  d", "  e"]);
   });
 
+  test("truncation keeps suffix context after the hunk, not above the dels", () => {
+    const before = ["keep0", "keep1", "old0", "old1", "old2", "old3", "rest0", "rest1"].join("\n");
+    const after = ["keep0", "keep1", "new0", "new1", "new2", "new3", "new4", "rest0", "rest1"].join(
+      "\n",
+    );
+    const view = buildFileChange("Edit", before, after);
+    expect(view.lines.map((line) => line.text)).toEqual([
+      "  keep0",
+      "  keep1",
+      "- old0",
+      "- old1",
+      "- old2",
+      "- old3",
+      "+ new0",
+      "+ new1",
+      "+ new2",
+      "+ new3",
+      "+ new4",
+      "  rest0",
+    ]);
+    expect(view.hidden).toBe(1);
+  });
+
   test("truncation keeps +/− counts and still shows some adds", () => {
     const before = Array.from({ length: 40 }, (_, i) => `old${i}`).join("\n");
     const after = Array.from({ length: 40 }, (_, i) => `new${i}`).join("\n");
