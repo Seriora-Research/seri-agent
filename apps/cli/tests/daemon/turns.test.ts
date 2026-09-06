@@ -105,7 +105,10 @@ describe("daemon turns", () => {
     const restIter = client.events(first.turnId, 1)[Symbol.asyncIterator]();
     const second = await restIter.next();
     expect(second.done).toBe(false);
-    expect(second.value?.event).toEqual({ type: "loop", value: { type: "text-delta", text: "two" } });
+    expect(second.value?.event).toEqual({
+      type: "loop",
+      value: { type: "text-delta", text: "two" },
+    });
     released.resolve();
     const rest = [second.value!, ...(await collect({ [Symbol.asyncIterator]: () => restIter }))];
     expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
