@@ -737,7 +737,13 @@ describe("tuiReducer: loop-event", () => {
   });
 
   test("compacted still appends immediately, non-muted", () => {
-    const state = apply(undefined, {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "transcript-append",
+      line: "> keep me",
+      role: "user",
+    });
+    const kept = state.transcript[0];
+    state = apply(state, {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 3,
@@ -754,6 +760,8 @@ describe("tuiReducer: loop-event", () => {
         totalTokens: 46,
       },
     });
+    expect(state.transcript).toHaveLength(2);
+    expect(state.transcript[0]).toBe(kept);
     expect(state.transcript.at(-1)).toEqual({
       role: "system",
       text: "⚙ compacted 3 messages",
@@ -3109,6 +3117,7 @@ describe("tuiReducer: reasoning spans", () => {
     const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
     expect(rows[0]?.body).toBeUndefined();
     expect(rows[0]?.expanded).toBe(false);
+    expect(rows[0]?.text).toBe("▸ thought · 1s");
     expect(rows[1]?.body).toBe("second");
   });
 

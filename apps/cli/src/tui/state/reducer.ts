@@ -1199,7 +1199,7 @@ function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptE
     changed = true;
     return {
       role: entry.role,
-      text: entry.text,
+      text: formatReasoningCaret(false, entry.elapsedMs ?? 0),
       muted: entry.muted,
       kind: entry.kind,
       expanded: false,
