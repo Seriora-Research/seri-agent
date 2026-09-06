@@ -65,7 +65,6 @@ export const theme = {
   // with `mode`'s danger signal.
   code: "#9fc5e8",
   quotaExhausted: "#e05050",
-  // Unified-diff add/remove. Hue is the signal, same class as `mode` and `code`.
   diffAdd: "#3fb950",
   diffDel: "#f85149",
   // Every bordered surface's own rule (theme/spacing.ts's FRAME). Same ink as prose, so the

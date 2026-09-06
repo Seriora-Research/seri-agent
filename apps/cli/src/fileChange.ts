@@ -41,9 +41,6 @@ function capLines(
   lines: FileChangeLine[],
   max: number,
 ): { lines: FileChangeLine[]; hidden: number } {
-  // diffLines emits prefix context, every del, every add, then suffix context. A prefix
-  // slice of that array can be all dels. Split the budget across dels and adds, then
-  // restack in that same order so leftover context cannot jump from the suffix to the top.
   const trimmed = lines.map((line) => ({ ...line, text: capBody(line.text) }));
   if (trimmed.length <= max) return { lines: trimmed, hidden: 0 };
   let prefixEnd = 0;

@@ -575,9 +575,7 @@ export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
 // skip an open count===1 entry so the first in-flight call is only pendingTool. An open
 // follow-up (count>1) paints at count-1 so the group stays on the previous settled line
 // (Read a.txt / Ran echo a) until the next result lands as the aggregate (Read 2 files /
-// Ran 2 shell commands). Clean edit/write_file groups stay off this tree: their hunks
-// already live on the transcript, and done would unmount a duplicate. Anomalies stay —
-// a denial or thrown execute never commits a hunk, and formatToolSummary is count-only.
+// Ran 2 shell commands).
 export function liveToolActivity(entries: ToolActivityEntry[]): ToolActivityEntry[] {
   const out: ToolActivityEntry[] = [];
   for (const entry of entries) {

@@ -1117,8 +1117,9 @@ function pushLine(
 }
 
 // Commits any pending streamed text as its own assistant transcript line without adding a
-// system line. A mid-stream tool-call still has to park the model's partial answer so later
-// text-deltas don't concatenate onto it.
+// system line — tool-call/result/permission-denied never push transcript lines (the tree is
+// live-only), but a mid-stream tool-call still has to park the model's partial answer so
+// later text-deltas don't concatenate onto it.
 function flushStreaming(state: TuiState): TuiState {
   if (state.streaming.length === 0) return state;
   return {
