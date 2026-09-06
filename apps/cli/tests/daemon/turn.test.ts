@@ -111,9 +111,6 @@ function startTurn(
 }
 
 describe("createAttendedExecuteTurn mcp clients", () => {
-  // Seen red first: with closeMcpClients deleted from createAttendedExecuteTurn, the spy stays
-  // at 0 — prepareSession mints a fresh pool per attended daemon turn and dropping it leaks one
-  // HTTP client per dialled server for the life of `seri serve`.
   test("closes the prepareSession mcp pool after the turn", async () => {
     closeSpy = spyOn(mcpClient, "closeMcpClients");
     const { execute, sessionId, cwd } = setupExecute();

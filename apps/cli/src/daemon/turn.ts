@@ -82,9 +82,6 @@ export function createAttendedExecuteTurn(opts: {
       opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
       return { exitCode: exitCodeFromDriveResult(result) };
     } finally {
-      // prepareSession mints a new pool every call. The TUI keeps one for the process and
-      // closes it in bindSession (/clear). This path is one turn, then PreparedRun is dropped,
-      // so the pool has to close here or each dialled server leaks until seri serve exits.
       closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
     }
   };
