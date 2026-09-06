@@ -1,6 +1,6 @@
 import type { ToolExecutionOptions, ToolSet } from "ai";
 import { basename } from "node:path";
-import { buildFileChange } from "../fileChange";
+import { buildFileChange, isFileChangeView } from "../fileChange";
 import type { CheckOutcome, WriteFileResult } from "./outcome";
 import { runCheck as runCheckReal } from "./run";
 
@@ -61,23 +61,22 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
             // Advisory, never blocking: the write stands whatever comes back. A multi-file
             // refactor is type-incorrect between its own steps — writing a file that imports a
             // not-yet-written one produces a real error — and blocking would make that
-            // impossible to work through. Stage 4's checkpoints are the undo path.
+            // impossible to work through. Checkpoints remain the undo path.
             const verification = enabled
               ? await runCheck(deps.command, path, options.abortSignal)
               : DISABLED;
+            const producedRecord =
+              produced !== null && typeof produced === "object" && !Array.isArray(produced)
+                ? (produced as Record<string, unknown>)
+                : {};
             const previous =
-              produced !== null &&
-              typeof produced === "object" &&
-              "previous" in produced
-                ? (produced as { previous: string | null }).previous
+              producedRecord.previous === null || typeof producedRecord.previous === "string"
+                ? (producedRecord.previous ?? "")
                 : undefined;
-            const change =
-              typeof content === "string"
-                ? buildFileChange(
-                    `Write ${basename(path)}`,
-                    typeof previous === "string" ? previous : "",
-                    content,
-                  )
+            const change = isFileChangeView(producedRecord.change)
+              ? producedRecord.change
+              : typeof content === "string" && previous !== undefined
+                ? buildFileChange(`Write ${basename(path)}`, previous, content, { path })
                 : undefined;
             return {
               written: true,

@@ -133,6 +133,7 @@ describe("transcript vertical rhythm", () => {
         text: "Write a.ts  +1 −1\n- old\n+ new\n… 3 more",
         kind: "file-change",
         fileChange: {
+          kind: "update",
           title: "Write a.ts",
           added: 1,
           removed: 1,
@@ -146,5 +147,36 @@ describe("transcript vertical rhythm", () => {
     ]);
 
     expect(rows).toEqual(["> edit it", "", "Write a.ts  +1 −1", "- old", "+ new", "… 3 more"]);
+  });
+
+  test("a long hunk line truncates on one row instead of wrapping", async () => {
+    const long = `+ ${"x".repeat(80)}`;
+    const setup = await createTestRenderer({ width: 40, height: 10 });
+    await mount(
+      setup,
+      <TranscriptList
+        transcript={[
+          {
+            role: "system",
+            text: long,
+            kind: "file-change",
+            fileChange: {
+              kind: "update",
+              title: "Edit",
+              added: 1,
+              removed: 0,
+              hidden: 0,
+              lines: [{ kind: "add", text: long }],
+            },
+          },
+        ]}
+      />,
+    );
+    const rows = paintedRows(setup);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain("Edit");
+    expect(rows[1]?.startsWith("+ ")).toBe(true);
+    expect(rows[1]?.length).toBeLessThanOrEqual(40);
+    expect(rows.some((row) => row.includes("xx") && !row.startsWith("+"))).toBe(false);
   });
 });
