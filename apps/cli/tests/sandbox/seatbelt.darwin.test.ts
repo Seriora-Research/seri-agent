@@ -4,7 +4,6 @@ import { existsSync } from "node:fs";
 import { seatbeltLoopbackAllow } from "../../src/sandbox/macos/seatbelt";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-const PYTHON = "/usr/bin/python3";
 
 function denyDefaultPlusLoopback(): string {
   return [
@@ -22,21 +21,23 @@ function denyDefaultPlusLoopback(): string {
   ].join("\n");
 }
 
-const CONNECT_SCRIPT = `
-import socket, sys
-host, port = sys.argv[1], int(sys.argv[2])
-family = socket.AF_INET6 if ":" in host else socket.AF_INET
-sock = socket.socket(family, socket.SOCK_STREAM)
-sock.settimeout(2)
-try:
-    sock.connect((host, port))
-    print("ok")
-except OSError as err:
-    print(err.errno, err.strerror, file=sys.stderr)
-    sys.exit(1)
-finally:
-    sock.close()
-`;
+// bun, not /usr/bin/python3: on current macos-latest runners the CLT python
+// stub exits 72 (EX_OSFILE) under (deny default) before the connect script
+// runs, so a loopback allow looks like a connect failure. process.execPath is
+// the bun that is already running this file.
+const CONNECT_SCRIPT = [
+  "const host = Bun.argv[1];",
+  "const port = Number(Bun.argv[2]);",
+  "try {",
+  "  const socket = await Bun.connect({ hostname: host, port });",
+  "  console.log('ok');",
+  "  socket.end();",
+  "} catch (err) {",
+  "  const e = err;",
+  "  console.error(String((e && e.code) || ''), String((e && e.message) || e));",
+  "  process.exit(1);",
+  "}",
+].join("\n");
 
 function runSandboxedConnect(
   host: string,
@@ -45,7 +46,7 @@ function runSandboxedConnect(
   return new Promise((resolve, reject) => {
     const child = spawn(
       SANDBOX_EXEC,
-      ["-p", denyDefaultPlusLoopback(), PYTHON, "-c", CONNECT_SCRIPT, host, String(port)],
+      ["-p", denyDefaultPlusLoopback(), process.execPath, "-e", CONNECT_SCRIPT, host, String(port)],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
     let stdout = "";
@@ -98,7 +99,7 @@ describe.skipIf(process.platform !== "darwin" || !existsSync(SANDBOX_EXEC))(
         }
 
         const allowedV4 = await runSandboxedConnect("127.0.0.1", v4Port);
-        expect(allowedV4.exitCode).toBe(0);
+        expect(allowedV4.exitCode, allowedV4.stderr).toBe(0);
         expect(allowedV4.stdout).toContain("ok");
 
         if (v6 !== undefined && v6.port !== undefined) {
