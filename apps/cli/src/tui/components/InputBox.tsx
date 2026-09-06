@@ -296,9 +296,7 @@ export function InputBox({
       : resolveCompletion(sources, value);
 
   // The value and its caret, shared by both forms below so the two can never disagree on how a
-  // block cursor is drawn. An explicit `theme.onInk` on `theme.accent` space, never
-  // `TextAttributes.INVERSE`: OpenTUI 0.5.6 still paints INVERSE as fg=bg, which would hide the
-  // cell and could not be amber. There is no cursor-position tracking here — the handlers above
+  // block cursor is drawn. There is no cursor-position tracking here — the handlers above
   // only append to and delete from the end — so it always trails the text.
   // `flexShrink={0}` on both: OpenTUI's own default is 1, so a narrow terminal would otherwise
   // squeeze the marker and the cursor to make room for the placeholder below instead of clipping

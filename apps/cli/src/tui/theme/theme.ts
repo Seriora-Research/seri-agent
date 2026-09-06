@@ -41,8 +41,7 @@ export const theme = {
   // express it on OpenTUI 0.5.6: verified from a raw PTY capture, INVERSE emits `48;2;<fg>`
   // alongside `7`, so the cell's background lands on the SAME value as its foreground and the row
   // renders as a solid block with its text invisible inside it — one gray band per `fg` the row
-  // happened to set. The explicit pair is also what makes the band amber rather than a fg=bg
-  // block.
+  // happened to set.
   selectedBg: ACCENT,
   selectedFg: ON_INK,
   accent: ACCENT,
@@ -66,8 +65,8 @@ export const theme = {
   // with `mode`'s danger signal.
   code: "#9fc5e8",
   quotaExhausted: "#e05050",
-  // Every bordered surface's own rule (theme/spacing.ts's FRAME). Same ink as prose: the input
-  // frame is the analog of a `--border` token, which is `--ink`.
+  // Every bordered surface's own rule (theme/spacing.ts's FRAME). Same ink as prose, so the
+  // frame reads as structure rather than a second hue.
   border: INK,
 } as const;
 

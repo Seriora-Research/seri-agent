@@ -15,9 +15,7 @@ import { theme } from "../theme/theme";
 // `48;2;255;255;255` `7`, i.e. a background set to the SAME value as the foreground, so the row
 // painted a solid block with `> Log in` invisible inside it. Naming both colors is also what lets
 // the highlight sit on the wrapping `<box>`, which spans the full row width — a background painted
-// only under the glyphs left a ragged right edge whose width moved with each label. Carets in
-// InputBox, ModelPicker, and SkillsPanel use the same explicit pair (`theme.accent` /
-// `theme.onInk`) for the same reason: INVERSE would paint fg=bg, and the caret has to be amber.
+// only under the glyphs left a ragged right edge whose width moved with each label.
 //
 // The marker ("> "/"  ") and `label` are two SIBLING `<text>` nodes, not one `<text>` with two
 // children — verified live (apps/cli/tests/tui/): a single `<text truncate>` whose content spans
