@@ -709,6 +709,10 @@ describe("renderLiveToolActivity", () => {
     entries = recordResult(entries, "edit", { oldString: "a", newString: "b" }, "b");
     expect(renderLiveToolActivity(entries)).toEqual([]);
     expect(renderToolActivity(entries)[0]).toContain("Edit");
+    entries = recordCall(entries, "write_file", { path: "a.txt" });
+    entries = recordResult(entries, "write_file", { path: "a.txt" }, { written: true });
+    expect(renderLiveToolActivity(entries)).toEqual([]);
+    expect(renderToolActivity(entries).some((line) => line.includes("Write"))).toBe(true);
   });
 });
 
