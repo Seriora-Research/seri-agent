@@ -24,19 +24,29 @@ function denyDefaultPlusLoopback(): string {
 // bun, not /usr/bin/python3: on current macos-latest runners the CLT python
 // stub exits 72 (EX_OSFILE) under (deny default) before the connect script
 // runs, so a loopback allow looks like a connect failure. process.execPath is
-// the bun that is already running this file.
+// the bun that is already running this file. node:net, not Bun.connect: that
+// API requires SocketOptions.socket handlers and never opens a TCP connection
+// from hostname+port alone (CI: ERR_INVALID_ARG_TYPE). Explicit family keeps
+// ::ffff:127.0.0.1 on AF_INET6 so the mapped-form deny stays a real v6 probe.
 const CONNECT_SCRIPT = [
+  "const net = require('node:net');",
   "const host = Bun.argv[1];",
   "const port = Number(Bun.argv[2]);",
-  "try {",
-  "  const socket = await Bun.connect({ hostname: host, port });",
+  "const socket = net.connect({ host, port, family: host.includes(':') ? 6 : 4 });",
+  "socket.setTimeout(2000);",
+  "socket.on('connect', () => {",
   "  console.log('ok');",
   "  socket.end();",
-  "} catch (err) {",
-  "  const e = err;",
-  "  console.error(String((e && e.code) || ''), String((e && e.message) || e));",
+  "});",
+  "socket.on('timeout', () => {",
+  "  console.error('ETIMEDOUT timed out');",
+  "  socket.destroy();",
   "  process.exit(1);",
-  "}",
+  "});",
+  "socket.on('error', (err) => {",
+  "  console.error(String(err.errno ?? ''), String(err.message || err));",
+  "  process.exit(1);",
+  "});",
 ].join("\n");
 
 function runSandboxedConnect(
