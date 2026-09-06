@@ -4,7 +4,14 @@ import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { isContextOverflowError } from "../../src/loop/compaction";
 import { type LoopEvent, runLoop } from "../../src/loop/loop";
-import { collect, streamResult, textOnlyChunks, usage } from "./fixtures";
+import {
+  collect,
+  makeTools,
+  streamResult,
+  textOnlyChunks,
+  toolCallChunks,
+  usage,
+} from "./fixtures";
 
 function summaryGenerate() {
   return {
@@ -237,5 +244,65 @@ describe("runLoop compaction trigger", () => {
     );
     expect(errors.length).toBeGreaterThanOrEqual(1);
     expect(errors.at(-1)?.error).toContain("context_length");
+  });
+
+  test("compacts on a later iteration when history estimate grows past threshold even though usage inputTokens stay tiny", async () => {
+    const fat = "x".repeat(8_000);
+    const tools = makeTools(async () => fat);
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-0", "write_file", { path: "a.txt" }, usage(5, 5))),
+        streamResult(textOnlyChunks("ok")),
+      ],
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools,
+        messages: fatHistory(6, 8),
+        permissionMode: "auto",
+        maxIterations: 2,
+        contextWindowSize: 2_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 80,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    expect(model.doStreamCalls).toHaveLength(2);
+  });
+
+  test("does not compact again after splice when remaining history stays under threshold", async () => {
+    const body = "x".repeat(400);
+    const tools = makeTools(async () => body);
+    const laterTurns = 8;
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...Array.from({ length: laterTurns }, (_, i) =>
+          streamResult(toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" }, usage(5, 5))),
+        ),
+        streamResult(textOnlyChunks("done")),
+      ],
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools,
+        messages: fatHistory(12, 2_000),
+        permissionMode: "auto",
+        maxIterations: laterTurns + 1,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 80,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 });
