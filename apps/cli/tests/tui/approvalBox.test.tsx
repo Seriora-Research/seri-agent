@@ -88,6 +88,44 @@ describe("ApprovalBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("Write a.txt?");
   });
 
+  test("an edit approval paints oldString/newString hunks", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 16 });
+    await mount(
+      setup,
+      <ApprovalBox
+        pendingApproval={{
+          toolName: "edit",
+          args: { oldString: "old", newString: "new" },
+          offersAlways: true,
+        }}
+        onAnswer={() => {}}
+      />,
+    );
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Approve edit?");
+    expect(frame).toContain("- old");
+    expect(frame).toContain("+ new");
+  });
+
+  test("a write_file approval does not invent an all-adds hunk", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 8 });
+    await mount(
+      setup,
+      <ApprovalBox
+        pendingApproval={{
+          toolName: "write_file",
+          args: { path: "a.txt", content: "brand-new-body" },
+          offersAlways: true,
+        }}
+        onAnswer={() => {}}
+      />,
+    );
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("Write a.txt?");
+    expect(frame).not.toContain("brand-new-body");
+    expect(frame).not.toContain("+ brand-new-body");
+  });
+
   test("'y' answers once", async () => {
     const answers: ApprovalAnswer[] = [];
     const setup = await createTestRenderer({ width: 60, height: 5 });

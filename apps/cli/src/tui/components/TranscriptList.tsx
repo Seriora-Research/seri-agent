@@ -6,6 +6,7 @@ import { gapBefore, TOOL_INDENT } from "../theme/spacing";
 import { syntaxStyle } from "../theme/syntaxStyle";
 import { theme } from "../theme/theme";
 import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
+import { FileChangeLines } from "./FileChangeLines";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
 // reference changes when the reducer commits a new array, so `memo` here lets React skip
@@ -164,6 +165,9 @@ const TranscriptRow = memo(function TranscriptRow({
         ) : null}
       </box>
     );
+  }
+  if (entry.kind === "file-change" && entry.fileChange !== undefined) {
+    return <FileChangeLines change={entry.fileChange} gap={gap} />;
   }
   if (entry.role === "system" && entry.muted && entry.markdown) {
     return (

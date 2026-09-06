@@ -9,6 +9,7 @@
 // at module load. Importing the printer must not do that, so keep any new import here dependency-
 // free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
+import { fileChangeFromTool, fileChangePlainText } from "../fileChange";
 import type { LoopEvent } from "../loop/loop";
 import type { ArchivistReport } from "../memory/archivist";
 import type { CostReport } from "../provider/cost";
@@ -285,9 +286,12 @@ export function printEvent(event: LoopEvent): void {
     case "tool-call":
       console.log(`\n→ ${event.name}(${JSON.stringify(event.args)})`);
       break;
-    case "tool-result":
+    case "tool-result": {
       console.log(toolResultLine(event));
+      const change = fileChangeFromTool(event.name, {}, event.result);
+      if (change !== undefined) console.log(fileChangePlainText(change));
       break;
+    }
     case "permission-denied":
       console.log(`✗ ${event.name} blocked`);
       break;

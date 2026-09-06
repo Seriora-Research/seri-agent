@@ -65,6 +65,8 @@ export const theme = {
   // with `mode`'s danger signal.
   code: "#9fc5e8",
   quotaExhausted: "#e05050",
+  diffAdd: "#3fb950",
+  diffDel: "#f85149",
   // Every bordered surface's own rule (theme/spacing.ts's FRAME). Same ink as prose, so the
   // frame reads as structure rather than a second hue.
   border: INK,

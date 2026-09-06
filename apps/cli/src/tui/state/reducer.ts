@@ -27,6 +27,7 @@ import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
 import { ERROR_MARK } from "../theme/theme";
+import { fileChangeFromTool, fileChangePlainText } from "../../fileChange";
 import {
   estimateTokens,
   formatDoneLine,
@@ -662,19 +663,21 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
       };
     }
     case "tool-result":
-      return {
-        ...child,
-        toolActivity: recordResult(
-          child.toolActivity,
-          event.name,
-          child.currentTool?.args,
-          event.result,
-        ),
-        // Same slot as the parent's pendingTool: an error while this is set is treated as
-        // that call throwing. A settled call has to drop it or a later hook error paints
-        // as a false throw on a tool that already succeeded.
-        currentTool: undefined,
-      };
+      return commitFileChange(
+        {
+          ...child,
+          toolActivity: recordResult(
+            child.toolActivity,
+            event.name,
+            child.currentTool?.args,
+            event.result,
+          ),
+          currentTool: undefined,
+        },
+        event.name,
+        child.currentTool?.args,
+        event.result,
+      );
     case "permission-denied":
       return {
         ...child,
@@ -1126,6 +1129,28 @@ function flushStreaming(state: TuiState): TuiState {
   };
 }
 
+function commitFileChange<T extends { transcript: TranscriptEntry[] }>(
+  state: T,
+  name: string,
+  args: unknown,
+  result: unknown,
+): T {
+  const change = fileChangeFromTool(name, args, result);
+  if (change === undefined) return state;
+  return {
+    ...state,
+    transcript: [
+      ...state.transcript,
+      {
+        role: "system",
+        text: fileChangePlainText(change),
+        kind: "file-change",
+        fileChange: change,
+      },
+    ],
+  };
+}
+
 function flushToolActivity(state: TuiState): TuiState {
   const summary = formatToolSummary(state.toolActivity);
   if (summary === undefined) return { ...state, toolActivity: [] };
@@ -1277,12 +1302,6 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     }
     case "reasoning-delta":
       return openOrAppendReasoning(state, event.text, Date.now());
-    // Tool-call/result/permission-denied do not push a transcript line here. Stats accumulate
-    // on `toolActivity` — the live-paint source during the turn (app.tsx) — and discarded on
-    // done (not error: loop.ts yields error and continues). pendingTool is set
-    // for every tool name so the live status slot (app.tsx) can show the in-flight call.
-    // recordCall on tool-call so a thrown execute (tool-call then error, no tool-result) still
-    // has a group for recordThrow to settle.
     case "tool-call": {
       const settled = settleReasoning(state, Date.now());
       return {
@@ -1297,19 +1316,24 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     }
     case "tool-result": {
       const nextList = event.name === TODO_TOOL_NAME ? parseTodoList(event.result) : undefined;
-      return {
-        ...state,
-        ...(event.name === "dispatch_subagents" ? EMPTY_ROSTER : {}),
-        ...(nextList !== undefined ? { checklist: nextList } : {}),
-        toolActivity: recordResult(
-          state.toolActivity,
-          event.name,
-          state.pendingTool?.args,
-          event.result,
-        ),
-        status: "",
-        pendingTool: undefined,
-      };
+      return commitFileChange(
+        {
+          ...state,
+          ...(event.name === "dispatch_subagents" ? EMPTY_ROSTER : {}),
+          ...(nextList !== undefined ? { checklist: nextList } : {}),
+          toolActivity: recordResult(
+            state.toolActivity,
+            event.name,
+            state.pendingTool?.args,
+            event.result,
+          ),
+          status: "",
+          pendingTool: undefined,
+        },
+        event.name,
+        state.pendingTool?.args,
+        event.result,
+      );
     }
     case "permission-denied":
       return {

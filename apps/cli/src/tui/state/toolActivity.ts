@@ -575,10 +575,13 @@ export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
 // skip an open count===1 entry so the first in-flight call is only pendingTool. An open
 // follow-up (count>1) paints at count-1 so the group stays on the previous settled line
 // (Read a.txt / Ran echo a) until the next result lands as the aggregate (Read 2 files /
-// Ran 2 shell commands). Name-agnostic: every TOOL_LABELS group uses the same rule.
+// Ran 2 shell commands).
 export function liveToolActivity(entries: ToolActivityEntry[]): ToolActivityEntry[] {
   const out: ToolActivityEntry[] = [];
   for (const entry of entries) {
+    if ((entry.name === "edit" || entry.name === "write_file") && entry.anomalyLines.length === 0) {
+      continue;
+    }
     if (entry.open && entry.count === 1) continue;
     if (entry.open && entry.count > 1) {
       out.push({ ...entry, count: entry.count - 1, open: false });

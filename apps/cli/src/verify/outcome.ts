@@ -6,6 +6,7 @@
 // and calls `onSignalCleanup` AT MODULE LOAD — so importing the printer would have registered a
 // process-global signal handler as a side effect, and cli/output.ts's header promises the opposite.
 // `Diagnostic` comes from parse.ts, which is a regex and a loop and imports nothing.
+import type { FileChangeView } from "../fileChange";
 import type { Diagnostic } from "./parse";
 
 export type CheckOutcome =
@@ -41,7 +42,11 @@ export type CheckOutcome =
 // `{type:"json", value:null}` — nothing in the codebase read it, so there was no consumer to break,
 // and `written` is here so the model can still tell a completed write from a failed one now that
 // the interesting half of the result is about something else entirely.
-export type WriteFileResult = { written: true; verification: CheckOutcome };
+export type WriteFileResult = {
+  written: true;
+  verification: CheckOutcome;
+  change?: FileChangeView;
+};
 
 // The narrowing, beside the shape it narrows. loop.ts types a tool result as `unknown`
 // (loop.ts:17), so this has to happen somewhere; doing it in the printer would make output.ts an

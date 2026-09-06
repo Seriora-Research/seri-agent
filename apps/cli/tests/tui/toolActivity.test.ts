@@ -707,6 +707,36 @@ describe("renderLiveToolActivity", () => {
     entries = recordResult(entries, "bash", { command: "echo b" }, ok);
     expect(renderLiveToolActivity(entries)).toEqual([`→ Bash(echo a)\n${I}Ran 2 shell commands`]);
   });
+
+  test("edit and write_file stay out of the live tree so hunks cannot unmount on done", () => {
+    let entries = recordCall([], "edit", { oldString: "a", newString: "b" });
+    entries = recordResult(entries, "edit", { oldString: "a", newString: "b" }, "b");
+    expect(renderLiveToolActivity(entries)).toEqual([]);
+    expect(renderToolActivity(entries)[0]).toContain("Edit");
+    entries = recordCall(entries, "write_file", { path: "a.txt" });
+    entries = recordResult(entries, "write_file", { path: "a.txt" }, { written: true });
+    expect(renderLiveToolActivity(entries)).toEqual([]);
+    expect(renderToolActivity(entries).some((line) => line.includes("Write"))).toBe(true);
+  });
+
+  test("a declined write_file stays on the live tree because no hunk is committed", () => {
+    let entries = recordCall([], "write_file", { path: "a.txt" });
+    entries = recordDenial(entries, "write_file", "declined");
+    expect(renderLiveToolActivity(entries).some((line) => line.includes("declined"))).toBe(true);
+  });
+
+  test("a thrown edit stays on the live tree because no hunk is committed", () => {
+    let entries = recordCall([], "edit", { oldString: "a", newString: "b" });
+    entries = recordThrow(
+      entries,
+      "edit",
+      { oldString: "a", newString: "b" },
+      'Tool "edit" threw during execution: oldString matched multiple times',
+    );
+    expect(renderLiveToolActivity(entries).some((line) => line.includes("matched multiple"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("MCP grouping", () => {
