@@ -68,8 +68,7 @@ export type TranscriptEntry = {
   muted?: boolean;
   markdown?: boolean;
   // Settled thought caret. Not a fourth role: the gap table already treats this as
-  // system (same exchange as the answer). `body` is the raw trace; `expanded` is
-  // the open/closed caret. Absent unless a reasoning span actually settled.
+  // system (same exchange as the answer).
   kind?: "reasoning" | "quota-exhausted";
   body?: string;
   expanded?: boolean;

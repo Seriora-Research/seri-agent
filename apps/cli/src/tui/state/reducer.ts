@@ -1191,8 +1191,6 @@ function openOrAppendReasoning(state: TuiState, text: string, startedAt: number)
   };
 }
 
-// ctrl+t only toggles the last caret (toggleReasoning). A prior span's
-// body cannot be shown again once a newer one settles.
 function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptEntry[] {
   let changed = false;
   const next = transcript.map((entry) => {
