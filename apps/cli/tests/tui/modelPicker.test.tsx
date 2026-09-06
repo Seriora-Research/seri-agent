@@ -202,7 +202,7 @@ describe("ModelPicker (OpenTUI)", () => {
       await setup.mockInput.typeText("x".repeat(60));
       await settle(setup);
 
-      // The cursor renders as a reverse-video single space — captureCharFrame() returns plain
+      // The cursor renders as a single space — captureCharFrame() returns plain
       // characters, so this only asserts the row didn't go blank (the actual bug's symptom: the
       // whole line, including the "> " prompt, vanished) rather than the space's own styling.
       const frame = setup.captureCharFrame();

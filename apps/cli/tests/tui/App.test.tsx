@@ -1995,10 +1995,10 @@ describe("App", () => {
 
   // ListRow (ui/ListRow.tsx) has no hooks, so calling it directly (not mounting it) is safe: its
   // return value is a plain element tree whose props reflect exactly what it would render.
-  // Selection is reverse video (Design conformance, docs/design/tui.md), spelled as an explicit
-  // `theme.selectedFg` on `theme.selectedBg` — `captureCharFrame()` carries no attribute/color
-  // info (the same limitation the old harness's `lastFrame()` had for the reverse-video row), so
-  // this is the one place that pins the actual style props rather than just the "> "/"  " marker.
+  // Selection is accent fill with on-ink text, spelled as an explicit `theme.selectedFg` on
+  // `theme.selectedBg` — `captureCharFrame()` carries no attribute/color info (the same limitation
+  // the old harness's `lastFrame()` had for a selected row), so this is the one place that pins
+  // the actual style props rather than just the "> "/"  " marker.
   describe("ListRow", () => {
     // The regression this exists for: the row used to carry `TextAttributes.INVERSE` and no colors
     // at all, and OpenTUI 0.5.6 renders INVERSE by emitting a background equal to the cell's own
@@ -2474,7 +2474,7 @@ describe("App", () => {
     // at width 42 with no resize involved at all — and against `modelPicker.test.tsx`'s own re-test
     // loop, which never exercised this because it always types a filter first, so
     // `showPlaceholder` is never true there): with an EMPTY filter query specifically, the row
-    // renders `promptText` ("> "), the reverse-video cursor (a lone space), and the placeholder as
+    // renders `promptText` ("> "), the caret (a lone space), and the placeholder as
     // three siblings — `promptText`'s own trailing space used to be dropped ("> Type to filter…",
     // one space) rather than kept ("> " + cursor + placeholder, two spaces) once the row ran out of
     // width, reproducing the exact symptom the ORIGINAL Ink-era Yoga flexShrink arbitration bug had

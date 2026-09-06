@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import { decodePasteBytes, TextAttributes } from "@opentui/core";
+import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
@@ -75,7 +75,7 @@ export function InputBox({
   inert?: boolean;
   // Drops this component's own chrome — the top/bottom bordered box and the "> " marker — leaving
   // the value and its block cursor. For the mount inside a queue row (components/QueueBlock.tsx),
-  // which supplies its own index prefix and reverse-video band and has one terminal row to do it
+  // which supplies its own index prefix and selected-row band and has one terminal row to do it
   // in: the bordered form would make an edited row three rows tall and replace its index with a
   // second "> " prompt. Default false, so no existing call site changes.
   bare?: boolean;
@@ -296,9 +296,10 @@ export function InputBox({
       : resolveCompletion(sources, value);
 
   // The value and its caret, shared by both forms below so the two can never disagree on how a
-  // block cursor is drawn. INVERSE on a single space is exactly a solid caret (theme/theme.ts's own
-  // note on where that attribute survives), and there is no cursor-position tracking here — the
-  // handlers above only append to and delete from the end — so it always trails the text.
+  // block cursor is drawn. An explicit `theme.onInk` on `theme.accent` space, never
+  // `TextAttributes.INVERSE`: OpenTUI 0.5.6 still paints INVERSE as fg=bg, which would hide the
+  // cell and could not be amber. There is no cursor-position tracking here — the handlers above
+  // only append to and delete from the end — so it always trails the text.
   // `flexShrink={0}` on both: OpenTUI's own default is 1, so a narrow terminal would otherwise
   // squeeze the marker and the cursor to make room for the placeholder below instead of clipping
   // the placeholder, which is the only one of the three that can afford to lose characters.
@@ -307,7 +308,7 @@ export function InputBox({
       <text fg={theme.text} flexShrink={0}>
         {bare ? value : `> ${value}`}
       </text>
-      <text attributes={TextAttributes.INVERSE} flexShrink={0}>
+      <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
         {" "}
       </text>
     </>
