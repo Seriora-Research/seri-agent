@@ -1,6 +1,3 @@
-// In-memory sibling of spawnCollect's stream cap. read_file and MCP flattenContent already hold a
-// string, so they cannot use the rolling sink; they still have to bound what they return before
-// loop.ts pushes it into session.messages. Same 30k ceiling, same both-ends cut, same marker.
 export const MAX_TOOL_RESULT_CHARS = 30_000;
 const HALF = MAX_TOOL_RESULT_CHARS / 2;
 
