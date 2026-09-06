@@ -140,7 +140,7 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     const { fake } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
     async function* tracked(opts: Parameters<typeof fake>[0]) {
       order.push("loop");
-      yield* fake(opts);
+      return yield* fake(opts);
     }
     const { execute, sessionId, cwd } = setupExecute(tracked);
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
