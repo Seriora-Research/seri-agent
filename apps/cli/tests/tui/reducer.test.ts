@@ -737,7 +737,13 @@ describe("tuiReducer: loop-event", () => {
   });
 
   test("compacted still appends immediately, non-muted", () => {
-    const state = apply(undefined, {
+    let state = tuiReducer(initialTuiState(session()), {
+      type: "transcript-append",
+      line: "> keep me",
+      role: "user",
+    });
+    const kept = state.transcript[0];
+    state = apply(state, {
       type: "compacted",
       summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
       evictedCount: 3,
@@ -754,6 +760,8 @@ describe("tuiReducer: loop-event", () => {
         totalTokens: 46,
       },
     });
+    expect(state.transcript).toHaveLength(2);
+    expect(state.transcript[0]).toBe(kept);
     expect(state.transcript.at(-1)).toEqual({
       role: "system",
       text: "⚙ compacted 3 messages",
@@ -2966,7 +2974,8 @@ describe("tuiReducer: reasoning spans", () => {
 
     const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
     expect(rows).toHaveLength(2);
-    expect(rows[0]?.body).toBe("first");
+    expect(rows[0]?.body).toBeUndefined();
+    expect(rows[0]?.expanded).toBe(false);
     expect(rows[1]?.body).toBe("second");
     expect(rows[1]?.text).toBe("▸ thought · 3s");
   });
@@ -3005,10 +3014,10 @@ describe("tuiReducer: reasoning spans", () => {
     now.mockRestore();
 
     const kinds = state.transcript.map((entry) =>
-      entry.kind === "reasoning" ? `thought:${entry.body}` : `${entry.role}:${entry.text}`,
+      entry.kind === "reasoning" ? "thought" : `${entry.role}:${entry.text}`,
     );
-    const thoughtIdx = kinds.findIndex((line) => line === "thought:first");
-    const thought2Idx = kinds.findIndex((line) => line === "thought:second");
+    const thoughtIdx = kinds.indexOf("thought");
+    const thought2Idx = kinds.findIndex((line, i) => line === "thought" && i > thoughtIdx);
     const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
     const doneIdx = kinds.findIndex(
       (line) => line === "system:done" || line.startsWith("system:done ·"),
@@ -3035,6 +3044,114 @@ describe("tuiReducer: reasoning spans", () => {
 
     expect(state.transcript.some((entry) => entry.kind === "reasoning")).toBe(false);
     expect(state.transcript.some((entry) => entry.text.includes("thought"))).toBe(false);
+  });
+
+  test("ctrl+t still expands the last settled span after a prior body was dropped", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    state = tuiReducer(state, { type: "reasoning-toggled" });
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows[0]?.body).toBeUndefined();
+    expect(rows[0]?.expanded).toBe(false);
+    expect(rows[1]?.expanded).toBe(true);
+    expect(rows[1]?.body).toBe("second");
+  });
+
+  test("a newer span collapses an expanded prior caret and drops its body", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "first" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    state = tuiReducer(state, { type: "reasoning-toggled" });
+    expect(state.transcript.find((entry) => entry.kind === "reasoning")?.expanded).toBe(true);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "read_file", result: "ok" },
+    });
+    now.mockReturnValue(3_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "second" },
+    });
+    now.mockReturnValue(6_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
+    now.mockRestore();
+
+    const rows = state.transcript.filter((entry) => entry.kind === "reasoning");
+    expect(rows[0]?.body).toBeUndefined();
+    expect(rows[0]?.expanded).toBe(false);
+    expect(rows[0]?.text).toBe("▸ thought · 1s");
+    expect(rows[1]?.body).toBe("second");
+  });
+
+  test("compacted appends a line and leaves a settled reasoning body in place", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "keep this trace" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    now.mockRestore();
+    const before = state.transcript;
+    const thought = before.find((entry) => entry.kind === "reasoning");
+    if (thought === undefined) throw new Error("expected a settled reasoning row");
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "compacted",
+        summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+        evictedCount: 3,
+        tokensBefore: 100,
+        usage: usageOf(12, 34),
+      },
+    });
+    expect(state.transcript).toHaveLength(before.length + 1);
+    expect(state.transcript.includes(thought)).toBe(true);
+    expect(thought.body).toBe("keep this trace");
+    expect(state.transcript.at(-1)?.text).toBe("⚙ compacted 3 messages");
   });
 
   test("opening a thought does not commit the answer buffer", () => {

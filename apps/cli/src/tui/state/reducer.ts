@@ -1191,6 +1191,20 @@ function openOrAppendReasoning(state: TuiState, text: string, startedAt: number)
   };
 }
 
+function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  return transcript.map((entry) => {
+    if (entry.kind !== "reasoning") return entry;
+    if (entry.body === undefined && entry.expanded !== true) return entry;
+    const nextEntry: TranscriptEntry = {
+      ...entry,
+      expanded: false,
+      text: formatReasoningCaret(false, entry.elapsedMs ?? 0),
+    };
+    delete nextEntry.body;
+    return nextEntry;
+  });
+}
+
 function settleReasoning(state: TuiState, now: number): TuiState {
   const live = state.reasoning.live;
   if (live === undefined) return state;
@@ -1210,7 +1224,7 @@ function settleReasoning(state: TuiState, now: number): TuiState {
   };
   return {
     ...state,
-    transcript: [...state.transcript, entry],
+    transcript: [...withoutPriorReasoningBodies(state.transcript), entry],
     reasoning: { ...state.reasoning, live: undefined },
   };
 }
