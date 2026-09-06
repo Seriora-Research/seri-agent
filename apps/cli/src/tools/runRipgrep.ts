@@ -185,11 +185,7 @@ export function rgVersion(command: string): string {
 // byte-valued constant for spawnSync's maxBuffer, so the two share the number and nothing else.
 const MAX_BUFFER_CHARS = 8 * 1024 * 1024;
 
-// stderr is only interpolated into the thrown Error, then into the tool-result row. stdout's 8 M
-// ceiling is a match-event buffer callers already page; holding that much in an Error still spikes
-// heap at the throw. spawnCollect caps both streams at 30 k for the same reason. Sliced to the
-// remaining room, because one write can be a missing path whose name is itself huge, and a `+=`
-// then-check would keep the whole chunk the way stdout allows for small JSON events.
+// Error.message, not a match buffer — 30 k like spawnCollect, not stdout's 8 M.
 const MAX_STDERR_CHARS = 30_000;
 
 // How many results grep and glob hand back. A model searching a real repo gains nothing from
@@ -282,12 +278,15 @@ export function runRipgrep(
       }
     });
     child.stderr.on("data", (chunk: string) => {
-      if (stderrOverflow || truncated) return;
-      stderr += chunk.slice(0, MAX_STDERR_CHARS - stderr.length);
-      if (stderr.length >= MAX_STDERR_CHARS) {
+      if (stderrOverflow) return;
+      const room = MAX_STDERR_CHARS - stderr.length;
+      if (chunk.length > room) {
+        stderr += chunk.slice(0, room);
         stderrOverflow = true;
         child.kill("SIGKILL");
+        return;
       }
+      stderr += chunk;
     });
 
     // A plain kill, not spawnCollect's killTree: rg starts no children, so there is no process
@@ -331,16 +330,15 @@ export function runRipgrep(
         reject(new Error(`rg did not finish within ${RG_TIMEOUT_MS / 1000}s and was killed`));
         return;
       }
-      // Before the exit-code check, not after: a truncation kills rg, so it closes with
-      // `code === null`, which the check below would report as `rg exited with code null`.
-      if (truncated) {
-        resolve({ stdout, truncated: true });
-        return;
-      }
-      // Own flag, not stdout's `truncated`: that path is a successful page of matches. Killing rg
-      // for a stderr flood closes with `code === null`, which is not "more results than we return".
+      // Overflow before truncated success: a stderr flood on the same close is not a page of matches.
+      // Either kill closes with `code === null`, which the check below would report as
+      // `rg exited with code null`.
       if (stderrOverflow) {
         reject(new Error(`rg stderr exceeded ${MAX_STDERR_CHARS} characters: ${stderr}`));
+        return;
+      }
+      if (truncated) {
+        resolve({ stdout, truncated: true });
         return;
       }
       // rg exits 1 when there are no matches (not an error); anything else is a real failure.

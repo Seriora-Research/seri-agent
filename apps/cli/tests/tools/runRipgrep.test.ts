@@ -321,25 +321,22 @@ describe("runRipgrep", () => {
     );
   });
 
-  // rg prints the missing path on stderr and exits 2, so a long path is one write that used to
-  // become the whole thrown Error. Windows MAX_PATH rejects the spawn before that write.
-  test.skipIf(process.platform === "win32")(
-    "caps stderr instead of throwing the whole stream on a failed search",
-    async () => {
-      const missing = join(tmpDir, "x".repeat(50_000));
-      let thrown: unknown;
-      try {
-        await runRipgrep(["--json", "needle", missing]);
-      } catch (error) {
-        thrown = error;
-      }
-
-      expect(thrown).toBeInstanceOf(Error);
-      const message = (thrown as Error).message;
-      expect(message).toMatch(/rg (exited with code|stderr exceeded)/);
+  test("caps stderr instead of throwing the whole stream on a failed search", async () => {
+    writeFileSync(join(tmpDir, "a.txt"), "needle\n");
+    // Via -f so argv stays short: Windows CreateProcess rejects a 50k argument. rg still
+    // reprints the whole pattern on stderr for an unclosed class.
+    const patternFile = join(tmpDir, "pattern.txt");
+    writeFileSync(patternFile, `[${"x".repeat(50_000)}`);
+    try {
+      await runRipgrep(["--json", "-f", patternFile, tmpDir]);
+      throw new Error("expected runRipgrep to reject");
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/rg stderr exceeded 30000 characters/);
       expect(message.length).toBeLessThan(32_000);
-    },
-  );
+    }
+  });
 
   test("ignores the user's own ripgrep config", async () => {
     // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a

@@ -185,10 +185,6 @@ const MAX_SERIALISED_ERROR_LENGTH = 500;
 // `String()` is defined, which is every value a provider or an in-repo tool produces. A value that
 // defeats JSON.stringify AND String() (a null-prototype cyclic object) still escapes; guarding that
 // is padding for a case nothing here can reach.
-//
-// Every branch is capped. In-repo tools throw Error, so the live tool-result row is String(err),
-// not JSON.stringify. The cap used to live only on the object branch, which nothing in reach
-// produces, at a site that puts the result on stderr AND into the model's billed context.
 function errorText(err: unknown): string {
   let text: string;
   if (err instanceof Error) text = String(err);
