@@ -1191,6 +1191,26 @@ function openOrAppendReasoning(state: TuiState, text: string, startedAt: number)
   };
 }
 
+// ctrl+t only toggles the last caret (toggleReasoning). A prior span's
+// body cannot be shown again once a newer one settles.
+function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  let changed = false;
+  const next = transcript.map((entry) => {
+    if (entry.kind !== "reasoning") return entry;
+    if (entry.body === undefined && entry.expanded !== true) return entry;
+    changed = true;
+    return {
+      role: entry.role,
+      text: entry.text,
+      muted: entry.muted,
+      kind: entry.kind,
+      expanded: false,
+      elapsedMs: entry.elapsedMs,
+    };
+  });
+  return changed ? next : transcript;
+}
+
 function settleReasoning(state: TuiState, now: number): TuiState {
   const live = state.reasoning.live;
   if (live === undefined) return state;
@@ -1210,7 +1230,7 @@ function settleReasoning(state: TuiState, now: number): TuiState {
   };
   return {
     ...state,
-    transcript: [...state.transcript, entry],
+    transcript: [...withoutPriorReasoningBodies(state.transcript), entry],
     reasoning: { ...state.reasoning, live: undefined },
   };
 }
