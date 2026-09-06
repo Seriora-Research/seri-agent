@@ -283,10 +283,6 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
   });
 
-  // The tool-failure site puts errorText's output on stderr AND into the model's context as the
-  // tool result, so an uncapped JSON.stringify of an arbitrary payload is the same shape as the
-  // 66-line APICallError blob onError was silenced for. Nothing in reach throws a non-Error today
-  // (see the cap's comment in loop.ts), so this pins the cap itself rather than a live failure.
   test("an oversized non-Error tool failure is truncated instead of serialised whole", async () => {
     const payload = { detail: "x".repeat(5_000) };
     const tools = makeTools(async () => {
@@ -311,6 +307,33 @@ describe("runLoop", () => {
 
     // The same string is what the model is billed to read on its next turn, which is the half the
     // stderr line above does not cover.
+    const update = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+        e.type === "messages-updated" && e.messages.at(-1)?.role === "tool",
+    );
+    expect(JSON.stringify(update?.messages.at(-1)).length).toBeLessThan(1_000);
+  });
+
+  test("an oversized Error tool failure is truncated instead of stringified whole", async () => {
+    const tools = makeTools(async () => {
+      throw new Error("x".repeat(5_000));
+    });
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+    );
+
+    const errorEvent = events.find((e) => e.type === "error");
+    expect(errorEvent?.error).toContain('Tool "write_file" threw during execution');
+    expect(errorEvent?.error).toContain("truncated");
+    expect(errorEvent?.error?.length).toBeLessThan(700);
+    expect(errorEvent?.error).toContain("Error: xxx");
+
     const update = events.find(
       (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
         e.type === "messages-updated" && e.messages.at(-1)?.role === "tool",
