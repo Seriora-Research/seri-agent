@@ -5,9 +5,11 @@ import {
   archivistStatsLine,
   pendingQueueNotice,
   printCost,
+  printEvent,
   toolResultLine,
   USAGE,
 } from "../../src/cli/output";
+import { buildFileChange } from "../../src/fileChange";
 import type { ArchivistReport } from "../../src/memory/archivist";
 import { ARCHIVIST_MARK } from "../../src/tui/theme/theme";
 
@@ -239,5 +241,25 @@ describe("toolResultLine", () => {
       },
     });
     expect(line).toBe("✓ Dispatched subagents done (1 of 2 tasks)");
+  });
+});
+
+describe("printEvent file-change", () => {
+  test("write_file prints capped hunks from the result", () => {
+    const change = buildFileChange("Write a.ts", "old", "new");
+    const logged = captureLog(() =>
+      printEvent({ type: "tool-result", name: "write_file", result: { written: true, change } }),
+    ).join("\n");
+    expect(logged).toContain("✓ write_file done");
+    expect(logged).toContain("Write a.ts  +1 −1");
+    expect(logged).toContain("- old");
+    expect(logged).toContain("+ new");
+  });
+
+  test("negative control: write_file without change prints only the done line", () => {
+    const logged = captureLog(() =>
+      printEvent({ type: "tool-result", name: "write_file", result: { written: true } }),
+    );
+    expect(logged).toEqual(["✓ write_file done"]);
   });
 });

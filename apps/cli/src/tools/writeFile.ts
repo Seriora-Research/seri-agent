@@ -42,11 +42,6 @@ function isReservedName(path: string): boolean {
   return RESERVED_NAMES.has(name);
 }
 
-function detectEol(path: string): "LF" | "CRLF" {
-  if (!existsSync(path)) return "LF";
-  return readFileSync(path, "utf8").includes("\r\n") ? "CRLF" : "LF";
-}
-
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -56,12 +51,14 @@ function isRetryableError(err: unknown): boolean {
   return code === "EBUSY" || code === "EPERM";
 }
 
+export type WriteFileOutput = { previous: string | null };
+
 export function writeFile(
   path: string,
   content: string,
   opts?: { eol?: "LF" | "CRLF" },
   renameFn: typeof renameSync = renameSync,
-): void {
+): WriteFileOutput {
   if (process.platform === "win32" && isReservedName(path)) {
     throw new Error(`Cannot write to reserved device name: ${basename(path)}`);
   }
@@ -73,7 +70,11 @@ export function writeFile(
   // invisible to either of those triggers. The cost is a wrong-but-still-consistent EOL
   // convention on the next write, not data loss, and paying disk detection on every write to close
   // a window this narrow would give up the read → write fast path this cache exists for.
-  const eol = opts?.eol ?? getCachedEol(path) ?? detectEol(path);
+  const previous = existsSync(path) ? readFileSync(path, "utf8") : null;
+  const eol =
+    opts?.eol ??
+    getCachedEol(path) ??
+    (previous !== null && previous.includes("\r\n") ? "CRLF" : "LF");
   const lf = content.replace(/\r\n/g, "\n");
   const finalContent = eol === "CRLF" ? lf.replace(/\n/g, "\r\n") : lf;
 
@@ -90,7 +91,7 @@ export function writeFile(
       // The file's EOL is now whatever was just written — cached so a read_file/write_file that
       // follows on the same path doesn't re-detect it from disk.
       setCachedEol(path, eol);
-      return;
+      return { previous };
     } catch (err) {
       if (attempt === MAX_RENAME_ATTEMPTS || !isRetryableError(err)) {
         unlinkSync(tempPath);
@@ -99,4 +100,5 @@ export function writeFile(
       sleepSync(RETRY_DELAY_MS);
     }
   }
+  throw new Error("writeFile: rename retries exhausted");
 }

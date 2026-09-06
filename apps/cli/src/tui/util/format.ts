@@ -11,6 +11,7 @@ import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
+import type { FileChangeView } from "../../fileChange";
 import { ERROR_MARK, theme, WARNING_MARK } from "../theme/theme";
 
 // Shared by every list panel (ModelPicker, ConfigPanel, PermissionsPanel, SetupPanel) via
@@ -67,13 +68,14 @@ export type TranscriptEntry = {
   text: string;
   muted?: boolean;
   markdown?: boolean;
-  // Settled thought caret. Not a fourth role: the gap table already treats this as
-  // system (same exchange as the answer). `body` is the raw trace; `expanded` is
-  // the open/closed caret. Absent unless a reasoning span actually settled.
-  kind?: "reasoning" | "quota-exhausted";
+  // Optional paint tag, not a fourth role. The gap table still treats these as system.
+  // reasoning: settled thought caret (`body`/`expanded`). quota-exhausted: hue.
+  // file-change: `fileChange` hunks instead of `text`.
+  kind?: "reasoning" | "quota-exhausted" | "file-change";
   body?: string;
   expanded?: boolean;
   elapsedMs?: number;
+  fileChange?: FileChangeView;
 };
 
 export const REASONING_MARK_CLOSED = "▸";

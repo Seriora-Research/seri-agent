@@ -1,4 +1,6 @@
 import type { ToolExecutionOptions, ToolSet } from "ai";
+import { basename } from "node:path";
+import { buildFileChange, isFileChangeView } from "../fileChange";
 import type { CheckOutcome, WriteFileResult } from "./outcome";
 import { runCheck as runCheckReal } from "./run";
 
@@ -51,19 +53,36 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
           ) => {
             // Awaited first, and not caught: a write that threw wrote nothing, so there is
             // nothing to check and the throw is the model's answer.
-            await execute(args, options);
+            const produced = await execute(args, options);
             // Validated against write_file's zod schema (provider/tools.ts:28-32) before execute is
             // reached, so `path` is a string by construction. It only ORDERS the diagnostics — what
             // runs is the user's configured command and nothing here can change that.
-            const { path } = args as { path: string };
+            const { path, content } = args as { path: string; content: string };
             // Advisory, never blocking: the write stands whatever comes back. A multi-file
             // refactor is type-incorrect between its own steps — writing a file that imports a
             // not-yet-written one produces a real error — and blocking would make that
-            // impossible to work through. Stage 4's checkpoints are the undo path.
+            // impossible to work through. Checkpoints remain the undo path.
             const verification = enabled
               ? await runCheck(deps.command, path, options.abortSignal)
               : DISABLED;
-            return { written: true, verification } satisfies WriteFileResult;
+            const producedRecord =
+              produced !== null && typeof produced === "object" && !Array.isArray(produced)
+                ? (produced as Record<string, unknown>)
+                : {};
+            const previous =
+              producedRecord.previous === null || typeof producedRecord.previous === "string"
+                ? (producedRecord.previous ?? "")
+                : undefined;
+            const change = isFileChangeView(producedRecord.change)
+              ? producedRecord.change
+              : typeof content === "string" && previous !== undefined
+                ? buildFileChange(`Write ${basename(path)}`, previous, content, { path })
+                : undefined;
+            return {
+              written: true,
+              verification,
+              ...(change === undefined ? {} : { change }),
+            } satisfies WriteFileResult;
           },
         },
       ];

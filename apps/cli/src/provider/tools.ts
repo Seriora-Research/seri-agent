@@ -1,6 +1,7 @@
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
+import { buildFileChange } from "../fileChange";
 import { isBashAvailable, runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
@@ -38,8 +39,17 @@ export function createToolDefinitions(cwd: string) {
       content: z.string(),
       eol: z.enum(["LF", "CRLF"]).optional(),
     }),
-    execute: ({ path, content, eol }) =>
-      writeFile(resolveAgainstCwd(cwd, path), content, eol ? { eol } : undefined),
+    execute: ({ path, content, eol }) => {
+      const { previous } = writeFile(
+        resolveAgainstCwd(cwd, path),
+        content,
+        eol ? { eol } : undefined,
+      );
+      return {
+        written: true as const,
+        change: buildFileChange(`Write ${basename(path)}`, previous ?? "", content, { path }),
+      };
+    },
   });
 
   const editTool = tool({
