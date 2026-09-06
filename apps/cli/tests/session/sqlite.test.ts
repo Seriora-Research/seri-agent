@@ -103,6 +103,57 @@ describe("SessionDatabase", () => {
     );
   });
 
+  test("a replaced head with a retained suffix keeps suffix row ids and dense seq", () => {
+    const prefix = [
+      { role: "user", content: "evicted alpha" },
+      { role: "assistant", content: "evicted beta" },
+      { role: "user", content: "evicted gamma" },
+    ];
+    const suffix = [
+      { role: "user", content: "kept delta" },
+      { role: "assistant", content: "kept epsilon" },
+    ];
+    const summary = { role: "user", content: "reseeded recap of earlier turns" };
+    withDatabase((database) => database.saveSession(state("compacted", [...prefix, ...suffix])));
+
+    const before = new Database(join(configDir, DATABASE_FILENAME));
+    const suffixIds = (
+      before
+        .query(
+          "SELECT id FROM messages WHERE session_id = 'compacted' ORDER BY seq LIMIT ? OFFSET ?",
+        )
+        .all(suffix.length, prefix.length) as { id: number }[]
+    ).map((row) => row.id);
+    before.close();
+    expect(suffixIds).toHaveLength(suffix.length);
+
+    withDatabase((database) => {
+      database.saveSession(state("compacted", [summary, ...suffix]));
+      expect(database.loadSession("compacted")?.messages).toEqual([summary, ...suffix]);
+      expect(database.searchSessions("evicted")).toEqual([]);
+      expect(database.searchSessions("delta")).toMatchObject([
+        { sessionId: "compacted", messageIndex: 1 },
+      ]);
+      expect(database.searchSessions("reseeded")).toMatchObject([
+        { sessionId: "compacted", messageIndex: 0 },
+      ]);
+      database.saveSession(
+        state("compacted", [summary, ...suffix, { role: "user", content: "appended zeta" }]),
+      );
+    });
+
+    const after = new Database(join(configDir, DATABASE_FILENAME));
+    const afterRows = after
+      .query("SELECT id, seq FROM messages WHERE session_id = 'compacted' ORDER BY seq")
+      .all() as { id: number; seq: number }[];
+    after.close();
+    expect(afterRows.map((row) => row.seq)).toEqual([0, 1, 2, 3]);
+    expect(afterRows.slice(1, 1 + suffix.length).map((row) => row.id)).toEqual(suffixIds);
+    expect(
+      withDatabase((database) => database.loadSession("compacted")?.messages),
+    ).toEqual([summary, ...suffix, { role: "user", content: "appended zeta" }]);
+  });
+
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {
     withDatabase((database) => {
       database.saveSession(
