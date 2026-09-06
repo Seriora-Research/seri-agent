@@ -131,6 +131,28 @@ describe("withVerification", () => {
     expect((result as { change?: { title: string } }).change?.title).toBe("Write a.ts");
   });
 
+  test("an overwrite's model JSON does not carry the truncated previous body", async () => {
+    const marker = "MARKER_SHOULD_NOT_LEAK";
+    const previous = Array.from({ length: 40 }, (_, i) => (i === 30 ? marker : `old${i}`)).join(
+      "\n",
+    );
+    const filePath = join(root, "a.ts");
+    writeFile(filePath, previous);
+    const wrapped = withVerification(realishTools(), { enabled: false });
+    const result = await wrapped.write_file?.execute?.(
+      {
+        path: filePath,
+        content: Array.from({ length: 40 }, (_, i) => `new${i}`).join("\n"),
+      },
+      execOpts(),
+    );
+    const asModelSeesIt = JSON.stringify(result);
+    expect(result).not.toHaveProperty("previous");
+    expect(asModelSeesIt).not.toContain(marker);
+    expect((result as { change?: { added: number; removed: number } }).change?.added).toBe(40);
+    expect((result as { change?: { added: number; removed: number } }).change?.removed).toBe(40);
+  });
+
   // Acceptance criterion 4, and now the default for every user rather than a fallback: no command
   // is configured, so the real runCheck runs, spawns nothing, and the write returns normally. No
   // runCheck is injected — the check that nothing is spawned is the real one.

@@ -15,6 +15,7 @@ import type {
 } from "../../src/tui/state/commands";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
+import { buildFileChange } from "../../src/fileChange";
 import { TOOL_INDENT } from "../../src/tui/theme/spacing";
 import { ERROR_MARK, TREE_BRANCH } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
@@ -491,6 +492,26 @@ describe("tuiReducer: transcript role tagging", () => {
       event: { type: "tool-result", name: "write_file", result: { written: true } },
     });
     expect(state.transcript.length).toBe(before);
+  });
+
+  test("write_file with a change on the result commits hunks", () => {
+    let state = initialTuiState(session());
+    const change = buildFileChange("Write a.txt", "old", "new");
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "a.txt", content: "new" },
+      },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "write_file", result: { written: true, change } },
+    });
+    const hunk = state.transcript.find((entry) => entry.kind === "file-change");
+    expect(hunk?.fileChange).toEqual(change);
+    expect(renderLiveToolActivity(state.toolActivity)).toEqual([]);
   });
 
   test('done, error, compacted, retry, and tool-allowed still land as role: "system"', () => {

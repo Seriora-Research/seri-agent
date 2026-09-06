@@ -62,8 +62,30 @@ describe("toolDefinitions", () => {
   test("write_file writes content to a file", async () => {
     tmpDir = makeTmpDir();
     const filePath = join(tmpDir, "out.txt");
-    await toolDefinitions.write_file.execute?.({ path: filePath, content: "written" }, execOpts);
+    const result = await toolDefinitions.write_file.execute?.({ path: filePath, content: "written" }, execOpts);
     expect(readFileSync(filePath, "utf8")).toBe("written");
+    expect(result).toMatchObject({ written: true });
+    expect(result).not.toHaveProperty("previous");
+    expect((result as { change?: { kind: string; added: number } }).change?.kind).toBe("create");
+    expect((result as { change?: { added: number } }).change?.added).toBe(1);
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  test("write_file overwrite diffs against the previous bytes and omits them from the result", async () => {
+    tmpDir = makeTmpDir();
+    const filePath = join(tmpDir, "out.txt");
+    writeFileSync(filePath, "old");
+    const result = await toolDefinitions.write_file.execute?.(
+      { path: filePath, content: "new" },
+      execOpts,
+    );
+    expect(readFileSync(filePath, "utf8")).toBe("new");
+    expect(result).not.toHaveProperty("previous");
+    expect(JSON.stringify(result)).not.toContain('"previous"');
+    expect((result as { change?: { kind: string } }).change?.kind).toBe("update");
+    expect(
+      (result as { change?: { lines: { text: string }[] } }).change?.lines.map((line) => line.text),
+    ).toEqual(["- old", "+ new"]);
     rmSync(tmpDir, { recursive: true, force: true });
   });
 

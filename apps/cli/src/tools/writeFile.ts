@@ -42,11 +42,6 @@ function isReservedName(path: string): boolean {
   return RESERVED_NAMES.has(name);
 }
 
-function detectEol(path: string): "LF" | "CRLF" {
-  if (!existsSync(path)) return "LF";
-  return readFileSync(path, "utf8").includes("\r\n") ? "CRLF" : "LF";
-}
-
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -76,7 +71,8 @@ export function writeFile(
   // convention on the next write, not data loss, and paying disk detection on every write to close
   // a window this narrow would give up the read → write fast path this cache exists for.
   const previous = existsSync(path) ? readFileSync(path, "utf8") : null;
-  const eol = opts?.eol ?? getCachedEol(path) ?? detectEol(path);
+  const eol =
+    opts?.eol ?? getCachedEol(path) ?? (previous !== null && previous.includes("\r\n") ? "CRLF" : "LF");
   const lf = content.replace(/\r\n/g, "\n");
   const finalContent = eol === "CRLF" ? lf.replace(/\n/g, "\r\n") : lf;
 

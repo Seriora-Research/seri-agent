@@ -1,10 +1,11 @@
+import { basename } from "node:path";
 import { tool } from "ai";
 import { z } from "zod";
 import { MAX_TOOL_RESULT_CHARS } from "../capToolResult";
+import { buildFileChange } from "../fileChange";
 import { resolveAgainstCwd } from "../gate/workingDir";
 
 export { resolveAgainstCwd };
-
 import { isBashAvailable, runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
@@ -41,8 +42,17 @@ export function createToolDefinitions(cwd: string) {
       content: z.string(),
       eol: z.enum(["LF", "CRLF"]).optional(),
     }),
-    execute: ({ path, content, eol }) =>
-      writeFile(resolveAgainstCwd(cwd, path), content, eol ? { eol } : undefined),
+    execute: ({ path, content, eol }) => {
+      const { previous } = writeFile(
+        resolveAgainstCwd(cwd, path),
+        content,
+        eol ? { eol } : undefined,
+      );
+      return {
+        written: true as const,
+        change: buildFileChange(`Write ${basename(path)}`, previous ?? "", content, { path }),
+      };
+    },
   });
 
   const editTool = tool({
