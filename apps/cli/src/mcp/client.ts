@@ -8,6 +8,7 @@
 // return plain JSON, so nothing branded crosses this boundary and no version pin is needed to
 // keep this typechecking clean. Do not "simplify" this back to toolsFromDefinitions().
 import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
+import { capToolResult } from "../capToolResult";
 import { messageOf } from "../errors";
 import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
 import type { McpCatalog, McpServerSpec } from "./types";
@@ -51,9 +52,11 @@ export function flattenContent(result: {
   [key: string]: unknown;
 }): string {
   if (result.content === undefined) return "";
-  return result.content
-    .map((part) => (part.type === "text" ? (part.text ?? "") : `[${part.type}]`))
-    .join("\n");
+  return capToolResult(
+    result.content
+      .map((part) => (part.type === "text" ? (part.text ?? "") : `[${part.type}]`))
+      .join("\n"),
+  );
 }
 
 async function dialServer(
