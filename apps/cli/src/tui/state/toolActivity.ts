@@ -578,6 +578,10 @@ export function renderToolActivity(entries: ToolActivityEntry[]): string[] {
 export function liveToolActivity(entries: ToolActivityEntry[]): ToolActivityEntry[] {
   const out: ToolActivityEntry[] = [];
   for (const entry of entries) {
+    // Hunks for these two land on the transcript at tool-result (reducer commitFileChange)
+    // and stay there after flush. Painting them again in the live tree would duplicate
+    // during the turn, then unmount at done — a shrink. Skip the live group instead.
+    if (entry.name === "edit" || entry.name === "write_file") continue;
     if (entry.open && entry.count === 1) continue;
     if (entry.open && entry.count > 1) {
       out.push({ ...entry, count: entry.count - 1, open: false });

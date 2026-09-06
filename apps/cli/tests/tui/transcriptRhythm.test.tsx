@@ -124,4 +124,27 @@ describe("transcript vertical rhythm", () => {
     expect(joined).toContain("a *literal* star");
     expect(joined).not.toContain("●");
   });
+
+  test("a file-change block paints the title, hunks, and overflow on their own rows", async () => {
+    const rows = await render([
+      { role: "user", text: "> edit it" },
+      {
+        role: "system",
+        text: "Write a.ts  +1 −1\n- old\n+ new\n… 3 more",
+        kind: "file-change",
+        fileChange: {
+          title: "Write a.ts",
+          added: 1,
+          removed: 1,
+          hidden: 3,
+          lines: [
+            { kind: "del", text: "- old" },
+            { kind: "add", text: "+ new" },
+          ],
+        },
+      },
+    ]);
+
+    expect(rows).toEqual(["> edit it", "", "Write a.ts  +1 −1", "- old", "+ new", "… 3 more"]);
+  });
 });

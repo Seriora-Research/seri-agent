@@ -127,6 +127,8 @@ describe("withVerification", () => {
 
     expect(result).toMatchObject({ written: true });
     expect(readFileSync(join(root, "a.ts"), "utf8")).toBe("hello");
+    expect(result).not.toHaveProperty("previous");
+    expect((result as { change?: { title: string } }).change?.title).toBe("Write a.ts");
   });
 
   // Acceptance criterion 4, and now the default for every user rather than a fallback: no command

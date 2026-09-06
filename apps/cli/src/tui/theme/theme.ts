@@ -69,6 +69,11 @@ export const theme = {
   // with `mode`'s danger signal.
   code: "#9fc5e8",
   quotaExhausted: "#e05050",
+  // Scoped the same way `mode` and `code` are: unified-diff hunks are the one place hue is
+  // the signal (added vs removed), the way git and every other harness paint a patch. Not used
+  // for syntax highlighting, alerts, or chrome — those stay on the monochrome tokens above.
+  diffAdd: "#3fb950",
+  diffDel: "#f85149",
   // Every bordered surface's own rule (theme/spacing.ts's FRAME). Its own token rather than
   // `muted`, which it used to share: the mock draws the frame a full step darker than the text
   // sitting inside it, so one value cannot be both without the border competing with the prose.

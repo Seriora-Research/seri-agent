@@ -128,4 +128,10 @@ describe("writeFile", () => {
 
     expect(readFileSync(filePath, "utf8")).toBe("unlocked");
   });
+
+  test("a create reports no previous; an overwrite returns the bytes that were there", () => {
+    const filePath = join(tmpRoot, "prev.txt");
+    expect(writeFile(filePath, "first")).toEqual({ previous: null });
+    expect(writeFile(filePath, "second")).toEqual({ previous: "first" });
+  });
 });

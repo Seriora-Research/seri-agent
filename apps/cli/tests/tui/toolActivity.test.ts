@@ -703,6 +703,13 @@ describe("renderLiveToolActivity", () => {
     entries = recordResult(entries, "bash", { command: "echo b" }, ok);
     expect(renderLiveToolActivity(entries)).toEqual([`→ Bash(echo a)\n${I}Ran 2 shell commands`]);
   });
+
+  test("edit and write_file stay out of the live tree so hunks cannot unmount on done", () => {
+    let entries = recordCall([], "edit", { oldString: "a", newString: "b" });
+    entries = recordResult(entries, "edit", { oldString: "a", newString: "b" }, "b");
+    expect(renderLiveToolActivity(entries)).toEqual([]);
+    expect(renderToolActivity(entries)[0]).toContain("Edit");
+  });
 });
 
 describe("MCP grouping", () => {
