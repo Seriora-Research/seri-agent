@@ -7,7 +7,9 @@ import type { ToolExecutionOptions } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import type { RunContext } from "../../src/cli";
 import { loadVerifyConfig } from "../../src/config/config";
+import { denialBlocks } from "../../src/gate/gate";
 import type { HooksLoad } from "../../src/hooks/registry";
+import { DEFAULT_HOOK_TIMEOUT_MS, type HookSpec } from "../../src/hooks/types";
 import {
   callMcpTool,
   createMcpClients,
@@ -260,6 +262,62 @@ describe("prepareSession + mcp", () => {
       { tool: "glob", pattern: "/secret/**" },
       { tool: "read_file", pattern: ".env" },
     ]);
+  });
+
+  test("a malformed sandbox object in config.json does not drop path denials or PreToolUse hooks", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - read_file(.env)\n  - path: /tmp/secret\n  - 42\n",
+    );
+    const seriDir = mcpConfigDirFor(tmpConfigRoot);
+    mkdirSync(seriDir, { recursive: true });
+    writeFileSync(
+      join(seriDir, "config.json"),
+      JSON.stringify({
+        sandbox: { enabled: true, filesystem: { denyRead: [{ path: "/tmp/.ssh" }] } },
+      }),
+    );
+    const hook: HookSpec = {
+      event: "PreToolUse",
+      script: "block-dangerous",
+      path: join(seriDir, "hooks", "block-dangerous.sh"),
+      matcher: undefined,
+      timeoutMs: DEFAULT_HOOK_TIMEOUT_MS,
+      source: "user",
+      filePath: join(seriDir, "hooks", "hooks.yaml"),
+    };
+    const cwd = makeDir();
+    const result = await prepareSession(
+      baseCtx(cwd),
+      {
+        ...deps,
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map([["PreToolUse", [hook]]]) },
+        }),
+      },
+      false,
+      true,
+    );
+    expect(typeof result).not.toBe("number");
+    const prepared = result as PreparedRun;
+    expect(prepared.pathDenials).toEqual([{ tool: "read_file", pattern: ".env" }]);
+    expect(prepared.hooks.registry.get("PreToolUse")).toEqual([hook]);
+    expect(
+      prepared.preMountMessages.some(
+        (message) => message.text.includes("deny[1]") && message.text.includes("object"),
+      ),
+    ).toBe(true);
+    expect(
+      prepared.preMountMessages.some(
+        (message) => message.text.includes("deny[2]") && message.text.includes("number"),
+      ),
+    ).toBe(true);
+    expect(denialBlocks(prepared.pathDenials, "read_file", { path: join(cwd, ".env") }, cwd)).toBe(
+      true,
+    );
   });
 
   test("permissions.yaml ask loads onto PreparedRun with the allow-all classifier", async () => {

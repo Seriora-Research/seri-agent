@@ -189,9 +189,22 @@ function parseDenialEntry(value: string): PathDenial | undefined {
   return { tool, pattern };
 }
 
+function yamlSeqValue(item: unknown): unknown {
+  return item instanceof Scalar ? item.value : item;
+}
+
+function describeDenyEntry(value: unknown): string {
+  if (typeof value === "number") return "a number";
+  if (typeof value === "boolean") return "a boolean";
+  if (value === null || value === undefined) return "null";
+  if (value instanceof YAMLSeq) return "a list";
+  return "an object";
+}
+
 // `deny` is optional on purpose: every existing permissions.yaml was written without it, and a
 // missing or wrong-type key must not mark the whole store malformed. That would drop grants.
-// seri never writes this list; a human edits it. A bad entry is skipped, not fatal.
+// seri never writes this list; a human edits it. A bad entry is skipped and named by index, not
+// fatal and not silent. A non-string is the same skip, never a path denial.
 //
 // Parsed independently of `global`/`projects`: a hand-written file that is only `deny:` still
 // has to load. Those two keys exist so rememberGrant will not mutate a file it did not write;
@@ -215,17 +228,24 @@ export function loadDenials(
   }
 
   const result: PathDenial[] = [];
-  for (const value of scalarStrings(node)) {
+  for (let index = 0; index < node.items.length; index++) {
+    const value = yamlSeqValue(node.items[index]);
+    if (typeof value !== "string") {
+      onWarning?.(
+        `ignoring deny[${index}] in ${parsed.path}: expected a tool(pattern) string, not ${describeDenyEntry(value)}`,
+      );
+      continue;
+    }
     const entry = parseDenialEntry(value);
     if (entry === undefined) {
       onWarning?.(
-        `ignoring "${value}" in ${parsed.path}: deny entries must look like tool(pattern), e.g. glob(/secret/**)`,
+        `ignoring deny[${index}] "${value}" in ${parsed.path}: deny entries must look like tool(pattern), e.g. glob(/secret/**)`,
       );
       continue;
     }
     if (!DENIABLE_TOOLS.has(entry.tool)) {
       onWarning?.(
-        `ignoring "${value}" in ${parsed.path}: deny entries must name a tool with a path argument (read_file, glob, grep, write_file)`,
+        `ignoring deny[${index}] "${value}" in ${parsed.path}: deny entries must name a tool with a path argument (read_file, glob, grep, write_file)`,
       );
       continue;
     }

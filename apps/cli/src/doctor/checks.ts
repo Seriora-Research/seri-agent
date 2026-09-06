@@ -8,7 +8,7 @@ import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
-import { loadGrants } from "../permissions/store";
+import { loadDenials, loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
@@ -163,7 +163,9 @@ function credentialsCheck(configDir: string): CheckResult {
 
 function permissionsCheck(configDir: string, cwd: string): CheckResult {
   const warnings: string[] = [];
-  const grants = loadGrants(configDir, cwd, (message) => warnings.push(message));
+  const onWarning = (message: string) => warnings.push(message);
+  const grants = loadGrants(configDir, cwd, onWarning);
+  loadDenials(configDir, onWarning);
   if (warnings.length > 0) {
     return {
       name: "permissions",

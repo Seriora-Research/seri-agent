@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { denialBlocks } from "../../src/gate/gate";
 import { toolFingerprint } from "../../src/mcp/registry";
 import type { McpToolInfo } from "../../src/mcp/types";
 import { mcpGrantKey } from "../../src/mcp/types";
@@ -445,6 +446,50 @@ describe("permissions store", () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("expected a list");
     expect(loadGrants(dir, "/w").global).toEqual(["edit"]);
+  });
+
+  test("object-form and numeric deny entries warn naming deny[index] and leave sibling string denials in place", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      "global: [edit]\nprojects: {}\ndeny:\n  - read_file(.env)\n  - path: /tmp/secret\n  - 42\n  - glob(/secret/**)\n  - true\n",
+    );
+    const warnings: string[] = [];
+    expect(loadDenials(dir, (m) => warnings.push(m))).toEqual([
+      { tool: "read_file", pattern: ".env" },
+      { tool: "glob", pattern: "/secret/**" },
+    ]);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain("deny[1]");
+    expect(warnings[0]).toContain("object");
+    expect(warnings[1]).toContain("deny[2]");
+    expect(warnings[1]).toContain("number");
+    expect(warnings[2]).toContain("deny[4]");
+    expect(warnings[2]).toContain("boolean");
+    expect(loadGrants(dir, "/w").global).toEqual(["edit"]);
+    expect(denialBlocks(loadDenials(dir), "read_file", { path: join(dir, ".env") }, dir)).toBe(
+      true,
+    );
+    expect(denialBlocks(loadDenials(dir), "glob", { path: "/secret/keys" })).toBe(true);
+  });
+
+  test("a sandbox key in permissions.yaml does not drop path denials", () => {
+    writeFileSync(
+      permissionsPath(dir),
+      "global: []\nprojects: {}\nsandbox:\n  filesystem:\n    denyRead:\n      - path: /tmp/secret\ndeny:\n  - read_file(.env)\n",
+    );
+    const warnings: string[] = [];
+    expect(loadDenials(dir, (m) => warnings.push(m))).toEqual([
+      { tool: "read_file", pattern: ".env" },
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("an object-form deny entry is not honoured as a path denial", () => {
+    writeFileSync(permissionsPath(dir), "global: []\nprojects: {}\ndeny:\n  - path: .env\n");
+    const warnings: string[] = [];
+    expect(loadDenials(dir, (m) => warnings.push(m))).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("deny[0]");
   });
 
   test("rememberGrant preserves an existing deny list", () => {
