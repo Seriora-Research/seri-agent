@@ -283,9 +283,6 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
   });
 
-  // The tool-failure site puts errorText's output on stderr AND into the model's context as the
-  // tool result, so an uncapped JSON.stringify of an arbitrary payload is the same shape as the
-  // 66-line APICallError blob onError was silenced for.
   test("an oversized non-Error tool failure is truncated instead of serialised whole", async () => {
     const payload = { detail: "x".repeat(5_000) };
     const tools = makeTools(async () => {

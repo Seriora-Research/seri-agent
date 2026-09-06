@@ -185,7 +185,6 @@ export function rgVersion(command: string): string {
 // byte-valued constant for spawnSync's maxBuffer, so the two share the number and nothing else.
 const MAX_BUFFER_CHARS = 8 * 1024 * 1024;
 
-// Error.message, not a match buffer — 30 k like spawnCollect, not stdout's 8 M.
 const MAX_STDERR_CHARS = 30_000;
 
 // How many results grep and glob hand back. A model searching a real repo gains nothing from
