@@ -474,7 +474,10 @@ describe("tuiReducer: transcript role tagging", () => {
     expect(hunk?.text).toContain("+ new");
     expect(renderLiveToolActivity(state.toolActivity)).toEqual([]);
 
-    state = tuiReducer(state, { type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "done", reason: "no-tool-call" },
+    });
     expect(state.transcript.some((entry) => entry.kind === "file-change")).toBe(true);
     expect(state.transcript.some((entry) => entry.text === "Edited 1 edit")).toBe(true);
     expect(state.toolActivity).toEqual([]);

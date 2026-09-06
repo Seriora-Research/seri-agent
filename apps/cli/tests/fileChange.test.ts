@@ -61,14 +61,7 @@ describe("buildFileChange", () => {
     const view = buildFileChange("Edit", "a\nb\nc\nd\ne\n", "a\nb\nC\nd\ne\n");
     expect(view.added).toBe(1);
     expect(view.removed).toBe(1);
-    expect(view.lines.map((line) => line.text)).toEqual([
-      "  a",
-      "  b",
-      "- c",
-      "+ C",
-      "  d",
-      "  e",
-    ]);
+    expect(view.lines.map((line) => line.text)).toEqual(["  a", "  b", "- c", "+ C", "  d", "  e"]);
   });
 
   test("truncation keeps +/− counts and still shows some adds", () => {

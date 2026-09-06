@@ -9,13 +9,7 @@ function lineFg(kind: FileChangeView["lines"][number]["kind"]): string {
   return theme.muted;
 }
 
-export function FileChangeLines({
-  change,
-  gap = 0,
-}: {
-  change: FileChangeView;
-  gap?: 0 | 1;
-}) {
+export function FileChangeLines({ change, gap = 0 }: { change: FileChangeView; gap?: 0 | 1 }) {
   return (
     <box marginTop={gap} flexDirection="column" flexShrink={0}>
       <text fg={theme.muted} flexShrink={0} wrapMode="none" truncate>

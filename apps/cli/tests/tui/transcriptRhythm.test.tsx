@@ -177,8 +177,12 @@ describe("transcript vertical rhythm", () => {
       />,
     );
     const spans = setup.captureSpans();
-    const addSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("+ new"));
-    const delSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("- old"));
+    const addSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("+ new"));
+    const delSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("- old"));
     expect(addSpan, "no span found containing + new").toBeDefined();
     expect(delSpan, "no span found containing - old").toBeDefined();
     expect(addSpan?.fg.equals(parseColor(theme.diffAdd))).toBe(true);

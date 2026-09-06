@@ -62,7 +62,10 @@ describe("toolDefinitions", () => {
   test("write_file writes content to a file", async () => {
     tmpDir = makeTmpDir();
     const filePath = join(tmpDir, "out.txt");
-    const result = await toolDefinitions.write_file.execute?.({ path: filePath, content: "written" }, execOpts);
+    const result = await toolDefinitions.write_file.execute?.(
+      { path: filePath, content: "written" },
+      execOpts,
+    );
     expect(readFileSync(filePath, "utf8")).toBe("written");
     expect(result).toMatchObject({ written: true });
     expect(result).not.toHaveProperty("previous");
