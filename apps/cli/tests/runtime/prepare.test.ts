@@ -6,7 +6,8 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import type { ToolExecutionOptions } from "ai";
 import { loadAgentsFile } from "../../src/agents/loadAgentsFile";
 import type { RunContext } from "../../src/cli";
-import { loadVerifyConfig } from "../../src/config/config";
+import { inspectConfig, loadVerifyConfig } from "../../src/config/config";
+import { denialBlocks } from "../../src/gate/gate";
 import type { HooksLoad } from "../../src/hooks/registry";
 import {
   callMcpTool,
@@ -260,6 +261,49 @@ describe("prepareSession + mcp", () => {
       { tool: "glob", pattern: "/secret/**" },
       { tool: "read_file", pattern: ".env" },
     ]);
+  });
+
+  test("an unreadable config.json does not drop path denials or PreToolUse hooks", async () => {
+    mkdirSync(permissionsDir, { recursive: true });
+    writeFileSync(
+      permissionsPath(permissionsDir),
+      "global: []\nprojects: {}\ndeny:\n  - read_file(.env)\n  - path: /tmp/secret\n  - 42\n",
+    );
+    const seriDir = mcpConfigDirFor(tmpConfigRoot);
+    mkdirSync(seriDir, { recursive: true });
+    writeFileSync(join(seriDir, "config.json"), "{nope");
+    expect(inspectConfig(seriDir).status).toBe("malformed");
+
+    const hooksDir = join(seriDir, "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(
+      join(hooksDir, "hooks.yaml"),
+      "hooks:\n  PreToolUse:\n    - script: block-dangerous\n",
+    );
+    writeFileSync(join(hooksDir, "block-dangerous.sh"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(hooksDir, "block-dangerous.ps1"), "exit 0\n");
+
+    const cwd = makeDir();
+    const result = await prepareSession(baseCtx(cwd), { loadAgentsFile: () => "" }, false, true);
+    expect(typeof result).not.toBe("number");
+    const prepared = result as PreparedRun;
+    expect(prepared.pathDenials).toEqual([{ tool: "read_file", pattern: ".env" }]);
+    expect(prepared.hooks.registry.get("PreToolUse")?.map((spec) => spec.script)).toEqual([
+      "block-dangerous",
+    ]);
+    expect(
+      prepared.preMountMessages.some(
+        (message) => message.text.includes("deny[1]") && message.text.includes("object"),
+      ),
+    ).toBe(true);
+    expect(
+      prepared.preMountMessages.some(
+        (message) => message.text.includes("deny[2]") && message.text.includes("number"),
+      ),
+    ).toBe(true);
+    expect(denialBlocks(prepared.pathDenials, "read_file", { path: join(cwd, ".env") }, cwd)).toBe(
+      true,
+    );
   });
 
   test("permissions.yaml ask loads onto PreparedRun with the allow-all classifier", async () => {

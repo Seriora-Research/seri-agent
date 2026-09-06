@@ -124,6 +124,69 @@ describe("runDoctorChecks", () => {
     expect(checks.find((check) => check.name === "config")?.status).toBe("fail");
   });
 
+  test("fails permissions when a deny entry is not a string, naming deny[index]", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "permissions.yaml"),
+      "global: []\nprojects: {}\ndeny:\n  - read_file(.env)\n  - path: /tmp/secret\n",
+    );
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd(),
+      configDir,
+    });
+    const permissions = checks.find((check) => check.name === "permissions");
+    expect(permissions?.status).toBe("fail");
+    expect(permissions?.detail).toContain("deny[1]");
+    expect(permissions?.fix).toContain("do not delete");
+  });
+
+  test("names deny[index] even when a grant warning is also present", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, "permissions.yaml"),
+      "global:\n  - bash\nprojects: {}\ndeny:\n  - read_file(.env)\n  - path: /tmp/secret\n",
+    );
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: process.platform,
+      arch: process.arch,
+      cwd: process.cwd(),
+      configDir,
+    });
+    const permissions = checks.find((check) => check.name === "permissions");
+    expect(permissions?.status).toBe("fail");
+    expect(permissions?.detail).toContain("deny[1]");
+    expect(permissions?.detail).not.toContain("bash");
+    expect(permissions?.fix).toContain("do not delete");
+  });
+
   test("passes credentials when a BYOK key is set", async () => {
     tempHome();
     process.env.GROQ_API_KEY = "fake-test-key";

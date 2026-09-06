@@ -8,7 +8,7 @@ import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
-import { loadGrants } from "../permissions/store";
+import { loadDenials, loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
@@ -162,13 +162,23 @@ function credentialsCheck(configDir: string): CheckResult {
 }
 
 function permissionsCheck(configDir: string, cwd: string): CheckResult {
-  const warnings: string[] = [];
-  const grants = loadGrants(configDir, cwd, (message) => warnings.push(message));
-  if (warnings.length > 0) {
+  const grantWarnings: string[] = [];
+  const denyWarnings: string[] = [];
+  const grants = loadGrants(configDir, cwd, (message) => grantWarnings.push(message));
+  loadDenials(configDir, (message) => denyWarnings.push(message));
+  if (denyWarnings.length > 0) {
     return {
       name: "permissions",
       status: "fail",
-      detail: warnings[0] ?? "permissions.yaml is malformed",
+      detail: denyWarnings[0] ?? "permissions.yaml deny list is malformed",
+      fix: "edit the deny list in permissions.yaml (do not delete the file; that would drop sibling path denials)",
+    };
+  }
+  if (grantWarnings.length > 0) {
+    return {
+      name: "permissions",
+      status: "fail",
+      detail: grantWarnings[0] ?? "permissions.yaml is malformed",
       fix: "fix or delete permissions.yaml",
     };
   }
