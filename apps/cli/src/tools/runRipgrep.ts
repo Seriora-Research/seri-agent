@@ -185,6 +185,13 @@ export function rgVersion(command: string): string {
 // byte-valued constant for spawnSync's maxBuffer, so the two share the number and nothing else.
 const MAX_BUFFER_CHARS = 8 * 1024 * 1024;
 
+// stderr is only interpolated into the thrown Error, then into the tool-result row. stdout's 8 M
+// ceiling is a match-event buffer callers already page; holding that much in an Error still spikes
+// heap at the throw. spawnCollect caps both streams at 30 k for the same reason. Sliced to the
+// remaining room, because one write can be a missing path whose name is itself huge, and a `+=`
+// then-check would keep the whole chunk the way stdout allows for small JSON events.
+const MAX_STDERR_CHARS = 30_000;
+
 // How many results grep and glob hand back. A model searching a real repo gains nothing from
 // thousands of hits — they bury the useful ones and burn context — so both tools return a
 // bounded page and report when there is more. Lives here because the buffer above only has
@@ -259,6 +266,7 @@ export function runRipgrep(
     let stdout = "";
     let stderr = "";
     let truncated = false;
+    let stderrOverflow = false;
     let timedOut = false;
 
     // Decoding per chunk would split multi-byte characters across stream boundaries; setEncoding
@@ -266,7 +274,7 @@ export function runRipgrep(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (truncated) return;
+      if (truncated || stderrOverflow) return;
       stdout += chunk;
       if (stdout.length >= MAX_BUFFER_CHARS) {
         truncated = true;
@@ -274,7 +282,12 @@ export function runRipgrep(
       }
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
+      if (stderrOverflow || truncated) return;
+      stderr += chunk.slice(0, MAX_STDERR_CHARS - stderr.length);
+      if (stderr.length >= MAX_STDERR_CHARS) {
+        stderrOverflow = true;
+        child.kill("SIGKILL");
+      }
     });
 
     // A plain kill, not spawnCollect's killTree: rg starts no children, so there is no process
@@ -322,6 +335,12 @@ export function runRipgrep(
       // `code === null`, which the check below would report as `rg exited with code null`.
       if (truncated) {
         resolve({ stdout, truncated: true });
+        return;
+      }
+      // Own flag, not stdout's `truncated`: that path is a successful page of matches. Killing rg
+      // for a stderr flood closes with `code === null`, which is not "more results than we return".
+      if (stderrOverflow) {
+        reject(new Error(`rg stderr exceeded ${MAX_STDERR_CHARS} characters: ${stderr}`));
         return;
       }
       // rg exits 1 when there are no matches (not an error); anything else is a real failure.

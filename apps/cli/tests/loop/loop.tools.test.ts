@@ -284,9 +284,9 @@ describe("runLoop", () => {
   });
 
   // The tool-failure site puts errorText's output on stderr AND into the model's context as the
-  // tool result, so an uncapped JSON.stringify of an arbitrary payload is the same shape as the
-  // 66-line APICallError blob onError was silenced for. Nothing in reach throws a non-Error today
-  // (see the cap's comment in loop.ts), so this pins the cap itself rather than a live failure.
+  // tool result, so an uncapped serialisation of an arbitrary payload is the same shape as the
+  // 66-line APICallError blob onError was silenced for. The object branch used to be the only
+  // cap; in-repo tools throw Error, which is the live row this second case pins.
   test("an oversized non-Error tool failure is truncated instead of serialised whole", async () => {
     const payload = { detail: "x".repeat(5_000) };
     const tools = makeTools(async () => {

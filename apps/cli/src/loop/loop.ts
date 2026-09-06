@@ -170,11 +170,11 @@ export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 const MAX_SERIALISED_ERROR_LENGTH = 500;
 
 // String() of an Error is `${name}: ${message}` — one line, and exactly what the four sites below
-// already produced, so nothing changes for an Error. What changes is the other branch: a provider
-// that hands over a plain object (Groq rejects with {"error":{"message":…,"type":…}}) stringified
-// to the literal "[object Object]", which names neither the failure nor its origin. JSON.stringify
-// rather than plucking `.message`: the payload shape is the provider's, not ours, and guessing at
-// one field is how the next provider gets "[object Object]" back.
+// already produced. A provider that hands over a plain object (Groq rejects with
+// {"error":{"message":…,"type":…}}) stringifies to the literal "[object Object]", which names
+// neither the failure nor its origin. JSON.stringify rather than plucking `.message`: the payload
+// shape is the provider's, not ours, and guessing at one field is how the next provider gets
+// "[object Object]" back.
 //
 // The try is not padding: JSON.stringify throws on a cyclic value, and the site that renders a
 // thrown tool failure (below, in the template literal) is not inside any try — measured, a tool
@@ -185,24 +185,26 @@ const MAX_SERIALISED_ERROR_LENGTH = 500;
 // `String()` is defined, which is every value a provider or an in-repo tool produces. A value that
 // defeats JSON.stringify AND String() (a null-prototype cyclic object) still escapes; guarding that
 // is padding for a case nothing here can reach.
+//
+// Every branch is capped. In-repo tools throw Error, so the live tool-result row is String(err),
+// not JSON.stringify. The cap used to live only on the object branch, which nothing in reach
+// produces, at a site that puts the result on stderr AND into the model's billed context.
 function errorText(err: unknown): string {
-  if (err instanceof Error) return String(err);
+  let text: string;
+  if (err instanceof Error) text = String(err);
   // Already the message. JSON.stringify would hand the user and the model `"ENOENT: no such file"`,
   // quotes included, for a tool that rejected with a bare string.
-  if (typeof err === "string") return err;
-  try {
-    const serialised = JSON.stringify(err) ?? String(err);
-    // Nothing in reach produces this today — every AI SDK provider error is an Error subclass and
-    // every in-repo tool throws Error — so this fixes no live bug. It caps a payload whose size is
-    // the provider's to choose, at a site that puts the result on stderr AND into the model's billed
-    // context as the tool result, which is the shape of the 66-line blob onError was silenced for
-    // above. Here so the branch cannot become that defect if it ever is reached.
-    return serialised.length > MAX_SERIALISED_ERROR_LENGTH
-      ? `${serialised.slice(0, MAX_SERIALISED_ERROR_LENGTH)}… (truncated from ${serialised.length} characters)`
-      : serialised;
-  } catch {
-    return String(err);
+  else if (typeof err === "string") text = err;
+  else {
+    try {
+      text = JSON.stringify(err) ?? String(err);
+    } catch {
+      text = String(err);
+    }
   }
+  return text.length > MAX_SERIALISED_ERROR_LENGTH
+    ? `${text.slice(0, MAX_SERIALISED_ERROR_LENGTH)}… (truncated from ${text.length} characters)`
+    : text;
 }
 
 // "allow-new" rather than a boolean-plus-flag: a fresh grant needs to reach the loop as a single
