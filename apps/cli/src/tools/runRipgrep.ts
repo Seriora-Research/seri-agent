@@ -261,7 +261,6 @@ export function runRipgrep(
     let stdout = "";
     let stderr = "";
     let truncated = false;
-    let stderrOverflow = false;
     let timedOut = false;
 
     // Decoding per chunk would split multi-byte characters across stream boundaries; setEncoding
@@ -269,7 +268,7 @@ export function runRipgrep(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (truncated || stderrOverflow) return;
+      if (truncated) return;
       stdout += chunk;
       if (stdout.length >= MAX_BUFFER_CHARS) {
         truncated = true;
@@ -277,15 +276,8 @@ export function runRipgrep(
       }
     });
     child.stderr.on("data", (chunk: string) => {
-      if (stderrOverflow) return;
-      const room = MAX_STDERR_CHARS - stderr.length;
-      if (chunk.length > room) {
-        stderr += chunk.slice(0, room);
-        stderrOverflow = true;
-        child.kill("SIGKILL");
-        return;
-      }
-      stderr += chunk;
+      if (stderr.length >= MAX_STDERR_CHARS) return;
+      stderr += chunk.slice(0, MAX_STDERR_CHARS - stderr.length);
     });
 
     // A plain kill, not spawnCollect's killTree: rg starts no children, so there is no process
@@ -329,13 +321,8 @@ export function runRipgrep(
         reject(new Error(`rg did not finish within ${RG_TIMEOUT_MS / 1000}s and was killed`));
         return;
       }
-      // Overflow before truncated success: a stderr flood on the same close is not a page of matches.
-      // Either kill closes with `code === null`, which the check below would report as
-      // `rg exited with code null`.
-      if (stderrOverflow) {
-        reject(new Error(`rg stderr exceeded ${MAX_STDERR_CHARS} characters: ${stderr}`));
-        return;
-      }
+      // Before the exit-code check, not after: a truncation kills rg, so it closes with
+      // `code === null`, which the check below would report as `rg exited with code null`.
       if (truncated) {
         resolve({ stdout, truncated: true });
         return;

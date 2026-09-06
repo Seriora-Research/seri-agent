@@ -333,10 +333,36 @@ describe("runRipgrep", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
       const message = (error as Error).message;
-      expect(message).toMatch(/rg stderr exceeded 30000 characters/);
+      expect(message).toMatch(/rg exited with code 2/);
       expect(message.length).toBeLessThan(32_000);
     }
   });
+
+  // rg prints one permission line per unreadable directory and still fills stdout. Killing on
+  // the stderr cap forfeits that page; the slice alone bounds the string. chmod 000 is POSIX.
+  test.skipIf(process.platform === "win32")(
+    "a stderr flood does not forfeit a truncated page of matches",
+    async () => {
+      writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
+      for (let i = 0; i < 600; i++) {
+        const dir = join(tmpDir, `denied_${i}`);
+        mkdirSync(dir);
+        chmodSync(dir, 0);
+      }
+      try {
+        const { stdout, truncated } = await runRipgrep(["--json", "needle", tmpDir]);
+        expect(truncated).toBe(true);
+        expect(stdout.length).toBeGreaterThan(0);
+        expect(stdout).toContain("needle");
+      } finally {
+        for (let i = 0; i < 600; i++) {
+          try {
+            chmodSync(join(tmpDir, `denied_${i}`), 0o700);
+          } catch {}
+        }
+      }
+    },
+  );
 
   test("ignores the user's own ripgrep config", async () => {
     // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a
