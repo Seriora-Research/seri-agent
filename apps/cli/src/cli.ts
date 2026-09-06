@@ -151,6 +151,7 @@ import {
 } from "./provider/reasoning";
 import {
   gatewayCoverageInGroup,
+  NATIVE_PROVIDERS,
   type ResolvedRoute,
   resolveLegalReasoningTiers,
   resolveRoute,
@@ -1324,17 +1325,34 @@ export function tuiPresenter(
   };
 }
 
-// The mandatory first-run /setup panel exists only when the session has no way to reach a
-// model: no BYOK key, no vendor subscription, and no usable seri plan. A hosted login is not
-// an API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it
-// is the third credential resolveRoute already accepts — `credential: "gateway"`. An ignored
-// seri plan does not count: the user asked to use their keys instead.
+// The mandatory first-run /setup panel exists when the session has no way to reach the
+// model prepareSession will actually dispatch. A ChatGPT or Grok grant, or a native key,
+// is not enough if the implicit groq default is still what resolveDefaultModel returns.
+// A hosted login is the third credential resolveRoute accepts (`credential: "gateway"`).
+// An ignored seri plan does not count: the user asked to use their keys instead.
 export function needsGuidedSetup(configDir: string): boolean {
-  return (
-    configuredProviders(configDir).size === 0 &&
-    subscribedProviders(configDir).size === 0 &&
-    !hostedPlanUsable(configDir)
-  );
+  const configured = configuredProviders(configDir);
+  const subscribed = subscribedProviders(configDir);
+  if (configured.size === 0 && subscribed.size === 0 && !hostedPlanUsable(configDir)) {
+    return true;
+  }
+  return !defaultPairPayable(configDir, configured, subscribed);
+}
+
+function defaultPairPayable(
+  configDir: string,
+  configured: ReadonlySet<ModelProvider>,
+  subscribed: ReadonlySet<ModelProvider>,
+): boolean {
+  if (hostedPlanUsable(configDir)) return true;
+  const { provider } = resolveDefaultModel(configDir);
+  const resolved = provider ?? DEFAULT_PROVIDER;
+  if (configured.has(resolved) || subscribed.has(resolved)) return true;
+  if (provider !== undefined) return false;
+  for (const key of configured) {
+    if (!NATIVE_PROVIDERS[key]) return true;
+  }
+  return false;
 }
 
 function checkZeroKeysConfigured(configDir: string): boolean | number {
