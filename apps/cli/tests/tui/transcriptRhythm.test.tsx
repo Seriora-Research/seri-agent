@@ -4,11 +4,13 @@
 // by rendering TranscriptList and counting the rows between entries in the frame.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { parseColor } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
 import { TranscriptList } from "../../src/tui/components/TranscriptList";
+import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 
 // See inputBox.test.tsx: each createTestRenderer registers its own listener on the process-wide
@@ -147,6 +149,40 @@ describe("transcript vertical rhythm", () => {
     ]);
 
     expect(rows).toEqual(["> edit it", "", "Write a.ts  +1 −1", "- old", "+ new", "… 3 more"]);
+  });
+
+  test("add lines paint diffAdd and del lines paint diffDel", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 14 });
+    await mount(
+      setup,
+      <TranscriptList
+        transcript={[
+          {
+            role: "system",
+            text: "Write a.ts  +1 −1\n- old\n+ new",
+            kind: "file-change",
+            fileChange: {
+              kind: "update",
+              title: "Write a.ts",
+              added: 1,
+              removed: 1,
+              hidden: 0,
+              lines: [
+                { kind: "del", text: "- old" },
+                { kind: "add", text: "+ new" },
+              ],
+            },
+          },
+        ]}
+      />,
+    );
+    const spans = setup.captureSpans();
+    const addSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("+ new"));
+    const delSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("- old"));
+    expect(addSpan, "no span found containing + new").toBeDefined();
+    expect(delSpan, "no span found containing - old").toBeDefined();
+    expect(addSpan?.fg.equals(parseColor(theme.diffAdd))).toBe(true);
+    expect(delSpan?.fg.equals(parseColor(theme.diffDel))).toBe(true);
   });
 
   test("a long hunk line truncates on one row instead of wrapping", async () => {
