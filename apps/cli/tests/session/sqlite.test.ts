@@ -1,12 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  configDirForStore,
   DATABASE_FILENAME,
   SessionDatabase,
-  configDirForStore,
   type SessionSearchResult,
 } from "../../src/session/database";
 import { exportSessionsToJsonl } from "../../src/session/export";
@@ -52,7 +52,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
-    expect(pragmas.userVersion).toBe(3);
+    expect(pragmas.userVersion).toBe(4);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
       .user_version;
@@ -149,9 +149,38 @@ describe("SessionDatabase", () => {
     after.close();
     expect(afterRows.map((row) => row.seq)).toEqual([0, 1, 2, 3]);
     expect(afterRows.slice(1, 1 + suffix.length).map((row) => row.id)).toEqual(suffixIds);
-    expect(
-      withDatabase((database) => database.loadSession("compacted")?.messages),
-    ).toEqual([summary, ...suffix, { role: "user", content: "appended zeta" }]);
+    expect(withDatabase((database) => database.loadSession("compacted")?.messages)).toEqual([
+      summary,
+      ...suffix,
+      { role: "user", content: "appended zeta" },
+    ]);
+  });
+
+  test("schema 4 rewrites messages_au on a v3 database so seq-only updates skip FTS", () => {
+    withDatabase((database) =>
+      database.saveSession(state("v3", [{ role: "user", content: "hello" }])),
+    );
+    const setup = new Database(join(configDir, DATABASE_FILENAME));
+    setup.exec("DROP TRIGGER messages_au");
+    setup.exec(`CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+        INSERT INTO session_fts(session_fts, rowid, search_text)
+        VALUES ('delete', old.id, old.search_text);
+        INSERT INTO session_fts(rowid, search_text)
+        VALUES (new.id, new.search_text);
+      END`);
+    setup.exec("PRAGMA user_version = 3");
+    setup.close();
+
+    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(4);
+    const raw = new Database(join(configDir, DATABASE_FILENAME));
+    const sql = (
+      raw.query("SELECT sql FROM sqlite_master WHERE name = 'messages_au'").get() as {
+        sql: string;
+      }
+    ).sql;
+    raw.close();
+    expect(sql).toContain("UPDATE OF search_text");
+    expect(sql).toContain("WHEN");
   });
 
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {
