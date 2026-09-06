@@ -11,7 +11,6 @@ test.skipIf(!hasCodexSubscription() || process.env.SERI_LIVE_CODEX_CHECK !== "1"
       model,
       messages: [{ role: "user", content: "Reply with a single word: PONG." }],
       maxOutputTokens: 16,
-      providerOptions: { openai: { store: false } },
     });
     for await (const _part of result.fullStream) {
       // drain
