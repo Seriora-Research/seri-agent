@@ -3008,7 +3008,7 @@ describe("tuiReducer: reasoning spans", () => {
     const kinds = state.transcript.map((entry) =>
       entry.kind === "reasoning" ? "thought" : `${entry.role}:${entry.text}`,
     );
-    const thoughtIdx = kinds.findIndex((line) => line === "thought");
+    const thoughtIdx = kinds.indexOf("thought");
     const thought2Idx = kinds.findIndex((line, i) => line === "thought" && i > thoughtIdx);
     const answerIdx = kinds.findIndex((line) => line.startsWith("assistant:"));
     const doneIdx = kinds.findIndex(
