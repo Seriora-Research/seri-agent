@@ -714,6 +714,25 @@ describe("renderLiveToolActivity", () => {
     expect(renderLiveToolActivity(entries)).toEqual([]);
     expect(renderToolActivity(entries).some((line) => line.includes("Write"))).toBe(true);
   });
+
+  test("a declined write_file stays on the live tree because no hunk is committed", () => {
+    let entries = recordCall([], "write_file", { path: "a.txt" });
+    entries = recordDenial(entries, "write_file", "declined");
+    expect(renderLiveToolActivity(entries).some((line) => line.includes("declined"))).toBe(true);
+  });
+
+  test("a thrown edit stays on the live tree because no hunk is committed", () => {
+    let entries = recordCall([], "edit", { oldString: "a", newString: "b" });
+    entries = recordThrow(
+      entries,
+      "edit",
+      { oldString: "a", newString: "b" },
+      'Tool "edit" threw during execution: oldString matched multiple times',
+    );
+    expect(renderLiveToolActivity(entries).some((line) => line.includes("matched multiple"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("MCP grouping", () => {
