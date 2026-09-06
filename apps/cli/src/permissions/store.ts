@@ -203,8 +203,7 @@ function describeDenyEntry(value: unknown): string {
 
 // `deny` is optional on purpose: every existing permissions.yaml was written without it, and a
 // missing or wrong-type key must not mark the whole store malformed. That would drop grants.
-// seri never writes this list; a human edits it. A bad entry is skipped and named by index, not
-// fatal and not silent. A non-string is the same skip, never a path denial.
+// seri never writes this list; a human edits it. A bad entry is skipped, not fatal.
 //
 // Parsed independently of `global`/`projects`: a hand-written file that is only `deny:` still
 // has to load. Those two keys exist so rememberGrant will not mutate a file it did not write;
