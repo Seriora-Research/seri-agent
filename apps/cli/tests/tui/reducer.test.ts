@@ -3121,6 +3121,39 @@ describe("tuiReducer: reasoning spans", () => {
     expect(rows[1]?.body).toBe("second");
   });
 
+  test("compacted appends a line and leaves a settled reasoning body in place", () => {
+    const now = spyOn(Date, "now");
+    now.mockReturnValue(1_000);
+    let state = withUser();
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "reasoning-delta", text: "keep this trace" },
+    });
+    now.mockReturnValue(2_000);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-call", name: "read_file", args: {} },
+    });
+    now.mockRestore();
+    const before = state.transcript;
+    const thought = before.find((entry) => entry.kind === "reasoning");
+    if (thought === undefined) throw new Error("expected a settled reasoning row");
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "compacted",
+        summary: { goal: "g", progress: "p", blockers: "b", nextSteps: "n" },
+        evictedCount: 3,
+        tokensBefore: 100,
+        usage: usageOf(12, 34),
+      },
+    });
+    expect(state.transcript).toHaveLength(before.length + 1);
+    expect(state.transcript.includes(thought)).toBe(true);
+    expect(thought.body).toBe("keep this trace");
+    expect(state.transcript.at(-1)?.text).toBe("⚙ compacted 3 messages");
+  });
+
   test("opening a thought does not commit the answer buffer", () => {
     let state = withUser();
     state = tuiReducer(state, {

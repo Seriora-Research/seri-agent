@@ -1197,14 +1197,13 @@ function withoutPriorReasoningBodies(transcript: TranscriptEntry[]): TranscriptE
     if (entry.kind !== "reasoning") return entry;
     if (entry.body === undefined && entry.expanded !== true) return entry;
     changed = true;
-    return {
-      role: entry.role,
-      text: formatReasoningCaret(false, entry.elapsedMs ?? 0),
-      muted: entry.muted,
-      kind: entry.kind,
+    const nextEntry: TranscriptEntry = {
+      ...entry,
       expanded: false,
-      elapsedMs: entry.elapsedMs,
+      text: formatReasoningCaret(false, entry.elapsedMs ?? 0),
     };
+    delete nextEntry.body;
+    return nextEntry;
   });
   return changed ? next : transcript;
 }

@@ -8,7 +8,7 @@ import { theme } from "../theme/theme";
 import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
 
 // Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
-// reference only changes on an actual append (state/reducer.ts), so `memo` here lets React skip
+// reference changes when the reducer commits a new array, so `memo` here lets React skip
 // rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
 // streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
 // markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
@@ -111,10 +111,10 @@ const BULLET_GUTTER = BULLET.length + 1;
 // else (tool calls/results/errors/done markers, and the archivist stats line) stays plain text:
 // none of those are model prose, and a tool result can legitimately contain a literal
 // `*`/`#`/backtick that must render as-is, not get parsed as markdown syntax.
-// Memoized: `TranscriptList` above re-runs on every actual transcript append, but each entry's own
-// object reference is stable across renders (state/reducer.ts only appends, never replaces existing
-// entries) — so `memo` lets React skip re-invoking this for every already-rendered row (assistant
-// rows re-parse and re-highlight markdown, the expensive case) and only render newly appended ones.
+// Memoized: `TranscriptList` above re-runs when `state.transcript` is a new array, but each
+// entry's own object reference stays stable until that row is rewritten — so `memo` lets React
+// skip re-invoking this for every already-rendered row (assistant rows re-parse and re-highlight
+// markdown, the expensive case) and only render new or rewritten ones.
 const TranscriptRow = memo(function TranscriptRow({
   entry,
   gap,
