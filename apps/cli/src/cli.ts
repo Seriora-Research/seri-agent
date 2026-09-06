@@ -15,10 +15,10 @@ import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "a
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
-import { createAskUserPark } from "./ask-user/park";
-import type { HumanReply } from "./ask-user/types";
 import type { loadAgentsFile as loadAgentsFileReal } from "./agents/loadAgentsFile";
 import { buildSystemPrompt, buildVolatileTier, joinTiers } from "./agents/systemPrompt";
+import { createAskUserPark } from "./ask-user/park";
+import type { HumanReply } from "./ask-user/types";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
@@ -78,17 +78,13 @@ import {
 } from "./config/paths";
 import { readDaemonDescriptorFile } from "./daemon/descriptor";
 import type { RunScheduled } from "./daemon/scheduler";
-import { runDoctorChecks } from "./doctor/checks";
-import { doctorExitCode, printDoctorReport } from "./doctor/report";
-import { defaultBangRunners, submitBang } from "./sandbox/bang";
-import { probeConfinement } from "./sandbox/confine";
-import { parseBangLine, resolveShellLaunch } from "./sandbox/policy";
-import { runUpdate } from "./update/run";
 import {
   type ExecuteTurn,
   type StartedDaemon,
   startDaemon as startDaemonReal,
 } from "./daemon/server";
+import { runDoctorChecks } from "./doctor/checks";
+import { doctorExitCode, printDoctorReport } from "./doctor/report";
 import { messageOf } from "./errors";
 import type { PermissionMode } from "./gate/gate";
 import { locationForCall } from "./gate/workingDir";
@@ -121,7 +117,7 @@ import {
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
-import { parsePromptChannel, type PromptChannel } from "./permissions/promptChannel";
+import { type PromptChannel, parsePromptChannel } from "./permissions/promptChannel";
 import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
 import { unlinkPlanFile } from "./plan/files";
 import {
@@ -170,6 +166,9 @@ import {
   driveLoop,
   exitCodeFromDriveResult,
 } from "./runtime/drive";
+import { defaultBangRunners, submitBang } from "./sandbox/bang";
+import { probeConfinement } from "./sandbox/confine";
+import { parseBangLine, resolveShellLaunch } from "./sandbox/policy";
 import { awaitsReply } from "./session/awaitsReply";
 import { configDirForStore, SessionDatabase } from "./session/database";
 import { type SessionState, saveSession } from "./session/session";
@@ -186,6 +185,7 @@ import { runGuidedSetup } from "./tui/routes/setup/guidedSetup";
 import { runWelcomeSplash } from "./tui/routes/setup/welcomeSplash";
 import { destroyTuiRenderer, getTuiRenderer } from "./tui/runtime/renderer";
 import type { CompletionSource } from "./tui/util/completion";
+import { runUpdate } from "./update/run";
 import { runUsageCommand as runUsageCommandReal } from "./usage/command";
 import { fetchUsageReport } from "./usage/fetch";
 
@@ -645,7 +645,13 @@ async function compactCommand(
     session.model === undefined
       ? resolveDefaultModel(configDir)
       : { model: session.model, provider: session.provider };
-  const { model } = await resolveModelRoute(requested, configDir, session.id, deps, printWarning);
+  const { model, route } = await resolveModelRoute(
+    requested,
+    configDir,
+    session.id,
+    deps,
+    printWarning,
+  );
 
   const controller = new AbortController();
   let cancelledSignal: NodeJS.Signals | undefined;
@@ -657,6 +663,7 @@ async function compactCommand(
   try {
     const customInstructions = args.join(" ").trim();
     compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal, {
+      stream: route.credential === "subscription" && route.provider === "openai",
       customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
     });
   } catch (err) {

@@ -1,14 +1,12 @@
-import { createOpenAI } from "@ai-sdk/openai";
-import type { JSONValue } from "ai";
-import type { LanguageModel } from "ai";
 import { randomUUID } from "node:crypto";
 import { arch, platform } from "node:os";
+import { createOpenAI } from "@ai-sdk/openai";
+import { type LanguageModel, wrapLanguageModel } from "ai";
 import pkg from "../../package.json";
-import { refreshCodexSubscription, type CodexRefreshResult } from "../auth/codexRefresh";
 import { loadUsableCodexGrant } from "../auth/codexAuthStore";
 import { CODEX_BASE_URL_DEFAULT, CODEX_ORIGINATOR } from "../auth/codexOAuth";
+import { type CodexRefreshResult, refreshCodexSubscription } from "../auth/codexRefresh";
 import { getApiKey } from "../config/config";
-import type { RouteCredential } from "./routing";
 
 export { CODEX_BASE_URL_DEFAULT };
 export const CODEX_ORIGINATOR_DEFAULT = CODEX_ORIGINATOR;
@@ -31,17 +29,6 @@ function asHeaderRecord(headers: HeadersInit | undefined): Record<string, string
   return Object.fromEntries(new Headers(headers));
 }
 
-function withCodexRequestBody(body: BodyInit | null | undefined): BodyInit | undefined {
-  if (typeof body !== "string") return body ?? undefined;
-  try {
-    const parsed: unknown = JSON.parse(body);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return body;
-    return JSON.stringify({ ...(parsed as Record<string, unknown>), store: false, stream: true });
-  } catch {
-    return body;
-  }
-}
-
 export function codexAuthedFetch(
   configDir: string,
   sessionId: string,
@@ -56,11 +43,7 @@ export function codexAuthedFetch(
       headers["user-agent"] = seriUserAgent();
       headers.session_id = sessionId;
       if (accountId.length > 0) headers["ChatGPT-Account-Id"] = accountId;
-      return fetchFn(input, {
-        ...init,
-        headers,
-        body: withCodexRequestBody(init?.body ?? null),
-      });
+      return fetchFn(input, { ...init, headers });
     };
 
     const current = loadUsableCodexGrant(configDir);
@@ -83,23 +66,26 @@ export function getCodexSubscriptionModel(
   sessionId: string = randomUUID(),
   fetchFn: typeof fetch = fetch,
 ): LanguageModel {
-  return createOpenAI({
-    apiKey: UNUSED_PLACEHOLDER_KEY,
-    baseURL: codexBaseUrl(configDir),
-    fetch: codexAuthedFetch(configDir, sessionId, fetchFn) as typeof fetch,
-  })(modelId);
-}
-
-export function withCodexStoreOption(
-  provider: string | undefined,
-  credential: RouteCredential | undefined,
-  options: Record<string, Record<string, JSONValue>> | undefined,
-): Record<string, Record<string, JSONValue>> | undefined {
-  if (credential !== "subscription" || provider !== "openai") return options;
-  return {
-    openai: {
-      ...(options?.openai ?? {}),
-      store: false,
+  // ChatGPT-plan Responses has no storage. store:false must be a providerOptions
+  // value the SDK sees, so getArgs also sets include: reasoning.encrypted_content.
+  // A fetch-layer JSON.parse/stringify of the full conversation cannot do that.
+  return wrapLanguageModel({
+    model: createOpenAI({
+      apiKey: UNUSED_PLACEHOLDER_KEY,
+      baseURL: codexBaseUrl(configDir),
+      fetch: codexAuthedFetch(configDir, sessionId, fetchFn) as typeof fetch,
+    })(modelId),
+    middleware: {
+      transformParams: async ({ params }) => ({
+        ...params,
+        providerOptions: {
+          ...params.providerOptions,
+          openai: {
+            ...params.providerOptions?.openai,
+            store: false,
+          },
+        },
+      }),
     },
-  };
+  });
 }
