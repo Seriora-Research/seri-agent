@@ -288,8 +288,6 @@ export function printEvent(event: LoopEvent): void {
       break;
     case "tool-result": {
       console.log(toolResultLine(event));
-      // write_file carries a capped `change` on the result. edit's result is a string and this
-      // event has no args, so CLI edit hunks stay TUI-only (the reducer still has the tool-call).
       const change = fileChangeFromTool(event.name, {}, event.result);
       if (change !== undefined) console.log(fileChangePlainText(change));
       break;

@@ -1117,10 +1117,8 @@ function pushLine(
 }
 
 // Commits any pending streamed text as its own assistant transcript line without adding a
-// system line — most tool-call/result/permission-denied events never push transcript lines
-// (the tree is live-only). edit/write_file are the exception: commitFileChange below parks
-// their hunks so they survive flush. A mid-stream tool-call still has to park the model's
-// partial answer so later text-deltas don't concatenate onto it.
+// system line. A mid-stream tool-call still has to park the model's partial answer so later
+// text-deltas don't concatenate onto it.
 function flushStreaming(state: TuiState): TuiState {
   if (state.streaming.length === 0) return state;
   return {
@@ -1303,9 +1301,6 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     }
     case "reasoning-delta":
       return openOrAppendReasoning(state, event.text, Date.now());
-    // Tool-call/result/permission-denied do not push a transcript line here, except edit and
-    // write_file: those commit a FileChangeView at tool-result so the hunks survive flush
-    // instead of living only in the live tree (which unmounts on done).
     case "tool-call": {
       const settled = settleReasoning(state, Date.now());
       return {

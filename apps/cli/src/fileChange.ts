@@ -1,9 +1,6 @@
 import path from "node:path";
 import { diffLines } from "./diffLines";
 
-// Hard cap so a whole-file rewrite cannot grow the transcript without bound. Stats stay exact;
-// only the painted body truncates. A naive slice of the unified stream would keep only deletions
-// (diffLines emits every `-` before every `+`), so the cap splits the budget across both sides.
 export const FILE_CHANGE_LINE_CAP = 12;
 export const FILE_CHANGE_LINE_CHAR_CAP = 240;
 
@@ -41,6 +38,7 @@ function capBody(text: string): string {
 }
 
 function capLines(lines: FileChangeLine[], max: number): { lines: FileChangeLine[]; hidden: number } {
+  // diffLines emits every del before every add; a prefix slice of `lines` would drop the adds.
   const trimmed = lines.map((line) => ({ ...line, text: capBody(line.text) }));
   if (trimmed.length <= max) return { lines: trimmed, hidden: 0 };
   const dels = trimmed.filter((line) => line.kind === "del");
