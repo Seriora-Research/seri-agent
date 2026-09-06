@@ -102,11 +102,9 @@ function runSandboxedConnect(
   port: number,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(
-      SANDBOX_EXEC,
-      ["-p", denyDefaultPlusLoopback(), bin, host, String(port)],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
+    const child = spawn(SANDBOX_EXEC, ["-p", denyDefaultPlusLoopback(), bin, host, String(port)], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
