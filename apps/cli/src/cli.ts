@@ -151,6 +151,7 @@ import {
 } from "./provider/reasoning";
 import {
   gatewayCoverageInGroup,
+  NATIVE_PROVIDERS,
   type ResolvedRoute,
   resolveLegalReasoningTiers,
   resolveRoute,
@@ -1324,17 +1325,32 @@ export function tuiPresenter(
   };
 }
 
-// The mandatory first-run /setup panel exists only when the session has no way to reach a
-// model: no BYOK key, no vendor subscription, and no usable seri plan. A hosted login is not
-// an API key (configuredProviders) and not a Grok/Codex grant (subscribedProviders), but it
-// is the third credential resolveRoute already accepts — `credential: "gateway"`. An ignored
-// seri plan does not count: the user asked to use their keys instead.
 export function needsGuidedSetup(configDir: string): boolean {
-  return (
-    configuredProviders(configDir).size === 0 &&
-    subscribedProviders(configDir).size === 0 &&
-    !hostedPlanUsable(configDir)
-  );
+  const configured = configuredProviders(configDir);
+  const subscribed = subscribedProviders(configDir);
+  if (configured.size === 0 && subscribed.size === 0 && !hostedPlanUsable(configDir)) {
+    return true;
+  }
+  return !defaultPairPayable(configDir, configured, subscribed);
+}
+
+function hasAggregatorKey(configured: ReadonlySet<ModelProvider>): boolean {
+  for (const provider of configured) {
+    if (!NATIVE_PROVIDERS[provider]) return true;
+  }
+  return false;
+}
+
+function defaultPairPayable(
+  configDir: string,
+  configured: ReadonlySet<ModelProvider>,
+  subscribed: ReadonlySet<ModelProvider>,
+): boolean {
+  if (hostedPlanUsable(configDir)) return true;
+  const { provider } = resolveDefaultModel(configDir);
+  const resolved = provider ?? DEFAULT_PROVIDER;
+  if (configured.has(resolved) || subscribed.has(resolved)) return true;
+  return provider === undefined && hasAggregatorKey(configured);
 }
 
 function checkZeroKeysConfigured(configDir: string): boolean | number {
