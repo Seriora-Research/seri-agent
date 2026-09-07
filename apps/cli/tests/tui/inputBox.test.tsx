@@ -7,11 +7,13 @@
 // React 18's automatic batching of synchronous state updates).
 
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { parseColor } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
-import { InputBox } from "../../src/tui/components/InputBox";
+import { InputBox, inputCaretLayout } from "../../src/tui/components/InputBox";
+import { theme } from "../../src/tui/theme/theme";
 import { DEFAULT_COLUMNS, INPUT_PLACEHOLDER } from "../../src/tui/util/format";
 
 const THROTTLE_MS = 50;
@@ -301,5 +303,55 @@ describe("InputBox (OpenTUI)", () => {
 
     expect(setup.captureCharFrame()).toContain("> h");
     expect(setup.captureCharFrame()).not.toContain(INPUT_PLACEHOLDER);
+  });
+
+  test("the block cursor sits on the last wrapped row, not the first", async () => {
+    const setup = await createTestRenderer({ width: 24, height: 8 });
+    await mount(
+      setup,
+      <InputBox prefill={`${"word ".repeat(12)}end`} onSubmit={() => {}} />,
+    );
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("> word");
+    expect(frame).toContain("end");
+
+    const lines = setup.captureSpans().lines;
+    const cursorLine = lines.findIndex((line) =>
+      line.spans.some((span) => span.bg.equals(parseColor(theme.accent))),
+    );
+    const firstTextLine = lines.findIndex((line) =>
+      line.spans.some((span) => span.text.includes(">")),
+    );
+    expect(firstTextLine).toBeGreaterThanOrEqual(0);
+    expect(cursorLine).toBeGreaterThan(firstTextLine);
+    const cursorSpans = lines[cursorLine]?.spans ?? [];
+    expect(cursorSpans.some((span) => span.text.includes("end") || span.text === " ")).toBe(true);
+  });
+});
+
+describe("inputCaretLayout", () => {
+  test("an empty value is a caret on the first row", () => {
+    expect(inputCaretLayout("", 10)).toEqual({ above: [], last: "" });
+  });
+
+  test("text shorter than the width stays on one row with the caret", () => {
+    expect(inputCaretLayout("> hello", 20)).toEqual({ above: [], last: "> hello" });
+  });
+
+  test("text longer than the width leaves the caret on the last chunk", () => {
+    expect(inputCaretLayout("abcdefghij", 4)).toEqual({
+      above: ["abcd", "efgh"],
+      last: "ij",
+    });
+  });
+
+  test("an exact multiple of the width drops the caret to a new row", () => {
+    expect(inputCaretLayout("abcdefgh", 4)).toEqual({
+      above: ["abcd", "efgh"],
+      last: "",
+    });
   });
 });

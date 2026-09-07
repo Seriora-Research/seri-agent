@@ -24,6 +24,8 @@ export const theme = {
   quotaExhausted: "#e05050",
   diffAdd: "#3fb950",
   diffDel: "#f85149",
+  diffAddBg: "#142615",
+  diffDelBg: "#2f1614",
   border: INK,
 } as const;
 
