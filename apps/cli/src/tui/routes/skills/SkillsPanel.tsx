@@ -15,18 +15,12 @@ import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
 const FILTER_PLACEHOLDER = "Search skills…";
 
-// /skills' own live state, in the same shape as every other list panel here: its own keyboard
-// handler, a single-bordered box, mutually exclusive with InputBox. `filterQuery` is component
-// state rather than reducer state for the same reason ModelPicker's is — transient UI data with no
-// reason to survive a close.
 export function SkillsPanel({
   rows,
   onSkillRun,
   onSkillsClose,
 }: {
   rows: SkillsPanelRow[];
-  // Enter runs the highlighted skill, the one action seri actually has for a skill. There is no
-  // enable/disable to cycle: a skill is loadable because its file is there.
   onSkillRun?: (name: string) => void;
   onSkillsClose?: () => void;
 }) {
@@ -73,9 +67,7 @@ export function SkillsPanel({
       <text fg={theme.muted} truncate wrapMode="none">
         {`${rows.length} ${rows.length === 1 ? "skill" : "skills"} · ↑/↓ move · type to search · enter to run · esc to close`}
       </text>
-      {/* The filter row's prompt, cursor and placeholder are three separate `<text>` siblings for
-      the reason ModelPicker's own filter row documents: a single truncated `<text>` spanning more
-      than one child renders blank the instant it overflows. */}
+      {/* OpenTUI paints a blank line if one truncated <text> has multiple children. */}
       <box flexDirection="row">
         <text flexShrink={0}>{filterQuery.length === 0 ? "> " : `> ${filterQuery}`}</text>
         <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
@@ -107,8 +99,6 @@ export function SkillsPanel({
             />
           ))}
           {remainingCount > 0 && <text fg={theme.muted}>↓ {remainingCount} more below</text>}
-          {/* The description is shown for the highlighted row only, not on every row: it is a
-          sentence, and a column of sentences would crowd out the list it is describing. */}
           {selectedRow !== undefined && (
             <text fg={theme.muted} truncate wrapMode="none">
               {selectedRow.description.length === 0

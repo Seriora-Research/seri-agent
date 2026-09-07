@@ -6,9 +6,6 @@ import { theme } from "../theme/theme";
 import { composeBorderTitle } from "../util/borderTitle";
 import { DEFAULT_COLUMNS } from "../util/format";
 
-// The titled FRAME every panel and dialog shares: command on the left of the top rule, Esc on
-// the right. InputBox stays an untitled FRAME so a panel and the prompt cannot be mistaken for
-// each other.
 export function PanelBox({
   title,
   right = "Esc",

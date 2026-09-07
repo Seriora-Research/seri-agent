@@ -11,8 +11,6 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-// Parent of a file path, shortened the way the locked mocks paint a write: two trailing
-// segments under an ellipsis, always with a trailing slash so it reads as a directory.
 export function parentDirDisplay(filePath: string): string {
   const parts = filePath
     .replaceAll("\\", "/")
@@ -31,8 +29,6 @@ export type ApprovalCopy = {
   classifierReason?: string;
 };
 
-// TUI-only prose for an approval or an in-flight write. The non-interactive CLI path keeps
-// approvalPromptText's JSON line so a piped `seri <task>` prompt stays one readline row.
 export function approvalCopy(
   toolName: string,
   args: unknown,
