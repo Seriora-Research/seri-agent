@@ -13,7 +13,6 @@ test.skipIf(!hasCodexSubscription() || process.env.SERI_LIVE_CODEX_CHECK !== "1"
       maxOutputTokens: 16,
     });
     for await (const _part of result.fullStream) {
-      // drain
     }
     const text = await result.text;
     const usage = await result.usage;
