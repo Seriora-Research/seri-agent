@@ -496,10 +496,8 @@ describe("tuiReducer: transcript role tagging", () => {
       event: { type: "done", reason: "no-tool-call" },
     });
     expect(state.transcript.some((entry) => entry.text === "Edited 1 edit")).toBe(false);
-    expect(state.transcript.some((entry) => entry.kind === "file-change-stats")).toBe(true);
-    expect(state.transcript.find((entry) => entry.kind === "file-change-stats")?.fileChangeStats).toEqual(
-      { added: 1, removed: 1 },
-    );
+    expect(state.transcript.some((entry) => entry.kind === "file-change")).toBe(true);
+    expect(state.transcript.some((entry) => entry.text === "+1 −1")).toBe(false);
     expect(state.toolActivity).toEqual([]);
   });
 

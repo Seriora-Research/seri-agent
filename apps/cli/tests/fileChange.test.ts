@@ -31,6 +31,7 @@ describe("buildFileChange", () => {
       "  keep2",
       "  ",
     ]);
+    expect(view.lines.map((line) => line.lineNumber)).toEqual([1, 2, 2, 3, 4]);
   });
 
   test("a create is all adds", () => {

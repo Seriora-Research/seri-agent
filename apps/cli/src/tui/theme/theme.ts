@@ -67,6 +67,13 @@ export const theme = {
   quotaExhausted: "#e05050",
   diffAdd: "#3fb950",
   diffDel: "#f85149",
+  // Soft full-row washes behind add/del hunk lines (Claude Code's inner-loop snippet, not a git
+  // dump). ~15% of `diffAdd`/`diffDel` over the TUI ground so the row reads as a tint, not a
+  // crayon. A third confirmed background use, next to `userBg` and `selectedBg`. The edge mark is
+  // a left-eighth glyph in `diffAdd`/`diffDel`, not a 1-col saturated fill — a full cell of those
+  // hues reads as a crayon, which is the opposite of this wash.
+  diffAddBg: "#142615",
+  diffDelBg: "#2f1614",
   // Every bordered surface's own rule (theme/spacing.ts's FRAME). Same ink as prose, so the
   // frame reads as structure rather than a second hue.
   border: INK,

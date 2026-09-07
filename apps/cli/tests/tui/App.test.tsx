@@ -1632,9 +1632,11 @@ describe("App", () => {
 
     const frame = setup.captureCharFrame();
     expect(frame).toContain("Write a.txt");
-    expect(frame).toContain("- old");
-    expect(frame).toContain("+ new");
+    expect(frame).toContain("old");
+    expect(frame).toContain("new");
     expect(frame).toContain("+1 −1");
+    expect(frame).not.toContain("- old");
+    expect(frame).not.toContain("+ new");
   });
 
   test("a pending edit paints its hunk in the transcript as soon as the tool-call arrives", async () => {
@@ -1651,9 +1653,10 @@ describe("App", () => {
     await flush(setup);
 
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("- old");
-    expect(frame).toContain("+ new");
+    expect(frame).toContain("old");
+    expect(frame).toContain("new");
     expect(frame).not.toContain("oldString");
+    expect(frame).not.toContain("- old");
   });
 
   test("edit hunks stay on screen after done and do not paint twice", async () => {
@@ -1672,19 +1675,20 @@ describe("App", () => {
       event: { type: "tool-result", name: "edit", result: "keep\nnew\n" },
     });
     await flush(setup);
-    expect(setup.captureCharFrame()).toContain("- old");
-    expect(setup.captureCharFrame()).toContain("+ new");
+    expect(setup.captureCharFrame()).toContain("old");
+    expect(setup.captureCharFrame()).toContain("new");
 
     dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
     await flush(setup);
 
     const frame = setup.captureCharFrame();
-    expect(frame).toContain("- old");
-    expect(frame).toContain("+ new");
+    expect(frame).toContain("old");
+    expect(frame).toContain("new");
     expect(frame).not.toContain("Edited 1 edit");
     expect(frame).toContain("+1");
-    expect(countNeedle(frame, "- old")).toBe(1);
-    expect(countNeedle(frame, "+ new")).toBe(1);
+    expect(countNeedle(frame, "+1")).toBe(1);
+    expect(countNeedle(frame, "old")).toBe(1);
+    expect(countNeedle(frame, "new")).toBe(1);
   });
 
   // Non-write tools use an unbordered theme.muted live line, not the write_file/edit bordered box.

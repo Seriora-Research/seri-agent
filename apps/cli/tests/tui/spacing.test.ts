@@ -38,9 +38,8 @@ describe("gapBefore", () => {
     expect(gapBefore("assistant", "system", undefined, "reasoning")).toBe(0);
   });
 
-  test("file-change, tool-summary, and turn stats take a blank row", () => {
+  test("file-change and tool-summary take a blank row", () => {
     expect(gapBefore("system", "system", "file-change")).toBe(1);
     expect(gapBefore("system", "system", undefined, "tool-summary")).toBe(1);
-    expect(gapBefore("assistant", "system", undefined, "file-change-stats")).toBe(1);
   });
 });

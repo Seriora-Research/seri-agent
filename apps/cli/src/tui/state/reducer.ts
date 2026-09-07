@@ -1143,21 +1143,6 @@ function lastFileChangeThisTurn(
   return undefined;
 }
 
-function fileChangeStatsThisTurn(transcript: TranscriptEntry[]): { added: number; removed: number } {
-  let added = 0;
-  let removed = 0;
-  for (let index = transcript.length - 1; index >= 0; index--) {
-    const entry = transcript[index];
-    if (entry === undefined) continue;
-    if (entry.role === "user") break;
-    if (entry.kind === "file-change" && entry.fileChange !== undefined) {
-      added += entry.fileChange.added;
-      removed += entry.fileChange.removed;
-    }
-  }
-  return { added, removed };
-}
-
 function commitFileChange<T extends { transcript: TranscriptEntry[] }>(
   state: T,
   name: string,
@@ -1187,16 +1172,6 @@ function flushToolActivity(state: TuiState): TuiState {
   const summary = formatToolSummary(state.toolActivity);
   if (summary !== undefined) {
     rows.push({ role: "system", text: summary, muted: true, kind: "tool-summary" });
-  }
-  const stats = fileChangeStatsThisTurn(state.transcript);
-  if (stats.added > 0 || stats.removed > 0) {
-    rows.push({
-      role: "system",
-      text: `+${stats.added} −${stats.removed}`,
-      muted: true,
-      kind: "file-change-stats",
-      fileChangeStats: stats,
-    });
   }
   return {
     ...state,

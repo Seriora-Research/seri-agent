@@ -36,8 +36,10 @@ export const FRAME = {
 export const TOOL_INDENT = "  ";
 
 // Blank rows between two adjacent transcript rows. A user turn still fences the exchange.
-// File-change hunks, the tool-count line, and turn +/- stats take a row of air so the harness
-// events do not stack into one wall. Reasoning stays tight against the answer that follows it.
+// File-change hunks and the tool-count line take a row of air so the harness events do not
+// stack into one wall. Reasoning stays tight against the answer that follows it. One gap per
+// adjacent pair — the table is consulted once, so a hunk then a summary is still a single
+// blank row, not one from each kind.
 const GAP_TABLE: Record<TranscriptRole, Record<TranscriptRole, 0 | 1>> = {
   user: { user: 1, assistant: 1, system: 1 },
   assistant: { user: 1, assistant: 0, system: 1 },
@@ -59,8 +61,6 @@ export function gapBefore(
   if (
     prevKind === "file-change" ||
     curKind === "file-change" ||
-    prevKind === "file-change-stats" ||
-    curKind === "file-change-stats" ||
     prevKind === "tool-summary" ||
     curKind === "tool-summary"
   ) {
