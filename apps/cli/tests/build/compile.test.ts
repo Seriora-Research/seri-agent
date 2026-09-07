@@ -33,11 +33,13 @@ describe("compileArgs", () => {
       "--outfile",
       "dist/seri",
       "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+      "--define",
       'SERI_BAKED_COMMIT="cafebabecafebabecafebabecafebabecafebabe"',
     ]);
   });
 
-  test("omits --define when no commit is known — the compiled-binary gap", () => {
+  test("always defines SERI_BAKED_HOSTED_ACCOUNTS=false when no commit is known", () => {
     const args = compileArgs({ entry: "./src/cli.ts", outfile: "dist/seri" });
     expect(args).toEqual([
       "build",
@@ -46,8 +48,10 @@ describe("compileArgs", () => {
       "./src/cli.ts",
       "--outfile",
       "dist/seri",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
     ]);
-    expect(args.join(" ")).not.toContain("--define");
+    expect(args.filter((arg) => arg.startsWith("SERI_BAKED_COMMIT="))).toEqual([]);
   });
 
   test("forwards --target when set", () => {

@@ -109,4 +109,29 @@ describe("login", () => {
     expect(deviceCodeCalls).toEqual([]);
     expect(pollForTokenCalls).toBe(0);
   });
+
+  test("throws HostedAccountsUnavailable and does not call requestDeviceCode when access is unavailable", async () => {
+    let requested = 0;
+    let opened = 0;
+
+    await expect(
+      login("login", "client_123", configDir, {
+        hostedAccountAccess: () => "unavailable",
+        requestDeviceCode: async () => {
+          requested += 1;
+          return device;
+        },
+        openBrowser: async () => {
+          opened += 1;
+        },
+        pollForToken: async () => ({ status: "aborted" }),
+      }),
+    ).rejects.toMatchObject({
+      name: "HostedAccountsUnavailable",
+      code: "hosted-accounts-unavailable",
+    });
+
+    expect(requested).toBe(0);
+    expect(opened).toBe(0);
+  });
 });

@@ -15,7 +15,8 @@ import { hasLeftoverCodexSubscription, loadCodexSubscription } from "../../auth/
 import type { CodexSetupStatus } from "../../auth/codexBin";
 import { isCodexSubscriptionIgnored } from "../../auth/codexIgnore";
 import { codexPlanType } from "../../auth/codexRefresh";
-import { type SeriSetupStatus, hostedPlanUsable, isSeriIgnored } from "../../auth/seriIgnore";
+import { type HostedAccountAccess, hostedAccountAccess } from "../../auth/hostedAccountAccess";
+import { hostedPlanUsable, isSeriIgnored, type SeriSetupStatus } from "../../auth/seriIgnore";
 import { hasXaiSubscription } from "../../auth/xaiAuthStore";
 import {
   appendBarrier,
@@ -38,12 +39,12 @@ import { isDefaultProfile, profileDir, profileNameError } from "../../config/pat
 import { cycleMode } from "../../gate/gate";
 import { type HooksLoad, loadHookRegistry } from "../../hooks/registry";
 import { loadGrants, PERSISTABLE_TOOL_NAMES } from "../../permissions/store";
+import { loadCachedAccountPlan } from "../../provider/accountStatus";
 import {
   allProviderKeyStates,
   configuredProviders,
   PROVIDER_API_KEY_NAMES,
 } from "../../provider/keys";
-import { loadCachedAccountPlan } from "../../provider/accountStatus";
 import { GATEWAY_PROVIDER } from "../../provider/planCoverage";
 import { resolveReasoningEffort } from "../../provider/reasoning";
 import {
@@ -250,10 +251,13 @@ function codexSetupRow(configDir?: string): SetupSubscriptionRow {
   };
 }
 
-export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
+export function decideSetupOpen(
+  configDir?: string,
+  access: HostedAccountAccess = hostedAccountAccess(),
+): SetupProviderRow[] {
   const grokConnected = configDir !== undefined && hasXaiSubscription(configDir);
   const openaiSubscribed = configDir !== undefined && codexSubscriptionActive(configDir);
-  const seriActive = configDir !== undefined && hostedPlanUsable(configDir);
+  const seriActive = configDir !== undefined && hostedPlanUsable(configDir, access);
   const keyRows: SetupKeyRow[] = allProviderKeyStates(configDir).map((state) => {
     let unusedBecause: string | undefined;
     if (grokConnected && state.provider === "xai" && state.source !== "unset") {
@@ -273,11 +277,12 @@ export function decideSetupOpen(configDir?: string): SetupProviderRow[] {
       unusedBecause,
     };
   });
+  const seri = seriSetupRow(configDir);
   return [
     { kind: "heading", label: "API keys" },
     ...keyRows,
     { kind: "heading", label: "Subscriptions" },
-    seriSetupRow(configDir),
+    ...(access === "unavailable" && seri.status.status === "not-logged-in" ? [] : [seri]),
     { kind: "subscription", provider: "xai", connected: grokConnected },
     codexSetupRow(configDir),
   ];

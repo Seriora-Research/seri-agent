@@ -1835,6 +1835,21 @@ describe("App", () => {
       expect(frame).not.toContain("approve-each mode on");
     });
 
+    test("unavailable hosted accounts show only Continue, not Log in or Sign up", async () => {
+      const { setup } = await connect({
+        showSplash: true,
+        authOffer: true,
+        hostedAccounts: "unavailable",
+        onSubmit: undefined,
+      });
+
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("Continue");
+      expect(frame).not.toContain("Log in");
+      expect(frame).not.toContain("Sign up");
+      expect(frame).not.toContain("Continue without logging in");
+    });
+
     // OpenTUI truncate clips with a middle ellipsis ("Continue...ogging in" at width 24), so the narrow half checks the middle of the label is gone.
     test("rows carry the ListRow marker, and truncate rather than wrap at a narrow width", async () => {
       const { setup, dispatch } = await connect();

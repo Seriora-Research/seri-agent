@@ -20,6 +20,7 @@ export function compileArgs(opts: {
   if (opts.target !== undefined && opts.target.length > 0) {
     args.push("--target", opts.target);
   }
+  args.push("--define", `SERI_BAKED_HOSTED_ACCOUNTS=${JSON.stringify(false)}`);
   if (opts.commit !== undefined && opts.commit.length > 0) {
     args.push("--define", `SERI_BAKED_COMMIT=${JSON.stringify(opts.commit)}`);
   }

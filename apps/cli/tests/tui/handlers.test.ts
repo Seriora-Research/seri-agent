@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveAuthSession } from "../../src/auth/authStore";
 import { CODEX_IGNORE_FILENAME, ignoreCodexSubscription } from "../../src/auth/codexIgnore";
+import { HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE } from "../../src/auth/hostedAccountAccess";
 import { needsGuidedSetup } from "../../src/cli";
 import { setConfigValue } from "../../src/config/config";
 import {
+  createAuthHandlers,
   createConfigHandlers,
   createEffortHandlers,
   createPermissionsHandlers,
@@ -600,5 +602,32 @@ describe("createEffortHandlers", () => {
     expect(actions).toEqual([
       { type: "effort-resolved", tier: undefined, leftoverInput: "typed after close" },
     ]);
+  });
+});
+
+describe("createAuthHandlers hosted accounts", () => {
+  test("unavailable onLogin login and signup append the same message and never dispatch auth-requested", async () => {
+    const { actions, dispatch } = actionsCollector();
+    let loginCalls = 0;
+    const { onLogin } = createAuthHandlers({
+      dispatch,
+      deps: {
+        login: async () => {
+          loginCalls += 1;
+        },
+      },
+      configDir: "unused",
+      hostedAccountAccess: () => "unavailable",
+    });
+
+    await onLogin("login");
+    await onLogin("signup");
+
+    expect(loginCalls).toBe(0);
+    expect(actions).toEqual([
+      { type: "transcript-append", line: HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE },
+      { type: "transcript-append", line: HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE },
+    ]);
+    expect(actions.some((action) => action.type === "auth-requested")).toBe(false);
   });
 });
