@@ -7,12 +7,6 @@ import { pathToFileURL } from "node:url";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
-// The real cli.ts, because makeApprovalPrompt is not exported and the wiring is half of what is
-// being asserted, with a fake runLoop standing in for the model round-trip so the only thing this
-// pty exercises is the approval prompt. It reports the answer AND the run's own signal: `"no"`
-// alone is indistinguishable from a typed "n", and `aborted=true` is what says the press travelled
-// interface -> deliverSignal -> signals.ts's cancel slot -> cli.ts's controller. run() then ends in
-// raiseSignal, so the child dies by SIGINT exactly as it does in production.
 function childScript(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -34,11 +28,6 @@ function childScript(dir: string): string {
   ].join("\n");
 }
 
-// Three sequential prompts in one child, reusing the same runLoopFake shape as childScript above
-// but never aborting: this is the three-way parse's own test, not the cancel path's. Each call
-// asks about a differently-named file so `sawLine` can tell one prompt's readiness from the next
-// (the rendered line embeds the JSON args), and each answer is logged distinctly so `sawLine` can
-// tell one resolved answer from the next.
 function childScriptThreeAnswers(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -64,10 +53,7 @@ function childScriptThreeAnswers(dir: string): string {
   ].join("\n");
 }
 
-// Two sequential prompts, reusing the shape above: the first is answered with Ctrl-D, the second
-// must still render and be answerable normally. This is what proves the `ended` latch is keyed on
-// the input stream actually ending, not on this Interface having closed — readline's tty path
-// also calls close() on Ctrl-D at an empty line, WITHOUT the underlying stream ending.
+// Node readline Ctrl-D closes the interface without ending the stream.
 function childScriptCtrlD(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -93,16 +79,7 @@ function childScriptCtrlD(dir: string): string {
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
-// Shaped after tests/signals.test.ts's harness — same accumulate-and-poll, same reason: the press
-// has to land after the prompt is up, and a sleep would be a race. What is added is the pty.
-// The allocator is python3's stdlib `pty` — stdlib-complete on both CI runners and identical on
-// linux and darwin, so there is no platform branch here. `script(1)` was the first attempt and it
-// is the reason this comment exists: util-linux and BSD disagree on argument order, and the macOS
-// branch produced zero stdout for a full 20 s rather than a spawn error. pty.spawn forks a real
-// pty, copies our stdin pipe into the master with os.write and the master back out to STDOUT_FILENO
-// unbuffered, and needs no termios of its own (tcgetattr on a pipe raises, which it tolerates). A
-// pipe in place of the pty would not do — raw mode is the entire mechanism, and over a pipe 0x03
-// could never have raised a signal in the first place, so the test would prove nothing.
+// python3 stdlib pty allocates a real tty; a pipe cannot deliver 0x03 as a keypress.
 function startChild(
   scriptPath: string,
   cwd: string,
@@ -120,10 +97,7 @@ function startChild(
     stdout += chunk;
   });
 
-  // A runner without `python3` reports it as an 'error' event, not as a throw. Unhandled, that
-  // takes the whole test process down instead of failing this test; and 'exit' never fires after
-  // it, so both waits below would otherwise sit out their full deadlines and blame the prompt for a
-  // missing pty allocator.
+  // Node spawn reports a missing python3 as an error event, not a throw.
   let spawnError: Error | undefined;
   const exited = new Promise<Exit>((resolve) => {
     child.once("exit", (code, signal) => resolve({ code, signal, stdout }));
@@ -150,10 +124,7 @@ function startChild(
   return { child, exited, sawLine };
 }
 
-// Windows has no pty to allocate — python's `pty` is POSIX-only — and its process.kill(pid,
-// "SIGINT") terminates without running any listener — the same constraint every other cancellation
-// case in this repo works under. Real execution is the WSL box and CI's ubuntu/macos legs; a green
-// Windows run means this case SKIPPED.
+// Windows has no pty to allocate — python pty is POSIX-only.
 describe.skipIf(process.platform === "win32")("approval prompt on a real terminal", () => {
   let dir: string;
 
@@ -171,18 +142,10 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
 
     const { child, exited, sawLine } = startChild(scriptPath, dir);
     try {
-      // The prompt itself is the readiness marker, and waiting for it is also what keeps the byte
-      // out of the window before readline sets raw mode — while the pty is still canonical, 0x03
-      // WOULD raise a real SIGINT and the test would pass for the wrong reason.
+      // Node readline in raw mode eats 0x03 and does not raise SIGINT.
       await sawLine("[a]lways");
       child.stdin?.write("\x03");
-      // stdin is deliberately left open: an EOF on the pty master is its own way to close readline,
-      // and it would end this run without the press ever being interpreted.
 
-      // Raced against a named sentinel rather than plainly awaited, the same shape
-      // tests/cli/cli.test.ts uses one file over. A regression here leaves the prompt parked
-      // forever, and a bare await turns that into 60 s of CI, a leaked inner bun process behind
-      // python3, and a red that says "timeout" rather than what actually broke.
       const settled = await Promise.race([
         exited,
         new Promise<"the prompt never settled">((r) =>
@@ -190,10 +153,6 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
         ),
       ]);
 
-      // Asserted on stdout rather than on the exit disposition, because the allocator reports its
-      // own status and not the child's: pty.spawn's return value is discarded here, so python3
-      // exits 0 however the inner bun died. Clause (b)'s by-signal death has its own test in
-      // tests/signals.test.ts.
       expect(settled === "the prompt never settled" ? settled : settled.stdout).toContain(
         "answer=no aborted=true",
       );
@@ -202,10 +161,6 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
     }
   }, 60_000);
 
-  // The only proof that the three-way parse works through a real tty in raw mode; a mocked
-  // Interface cannot show it, because raw mode and readline's own line-editing are exactly what a
-  // mock stands in for. One child for all three answers rather than three tests, because the pty
-  // allocator spawn is the expensive part of every test in this file.
   test("typing a, n, and y at the prompt answers always, no, and once", async () => {
     const scriptPath = join(dir, "child-three.mjs");
     writeFileSync(scriptPath, childScriptThreeAnswers(dir));
@@ -213,8 +168,6 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
     const { child, exited, sawLine } = startChild(scriptPath, dir);
     try {
       await sawLine("[a]lways");
-      // The only proof that the honesty fix — the label telling the user `a` is permanent — actually
-      // renders through a real tty in raw mode; a mocked Interface cannot show it.
       await sawLine("saved for this project");
       await sawLine('"path":"a.txt"');
       child.stdin?.write("a\n");
@@ -240,11 +193,7 @@ describe.skipIf(process.platform === "win32")("approval prompt on a real termina
     }
   }, 60_000);
 
-  // The only real-tty proof of the Ctrl-D fix: a mocked Interface cannot show it, because raw
-  // mode's own interpretation of 0x04 as "close, but the stream did not end" is exactly the
-  // mechanism a mock stands in for. Ctrl-D on the FIRST prompt still resolves "no" — that part
-  // was always correct — the regression this guards is the SECOND prompt silently denying itself
-  // with nothing rendered, which `sawLine('"path":"b.txt"')` below would time out on if it did.
+  // Node readline Ctrl-D closes the interface without ending the stream.
   test("Ctrl-D at one prompt does not deny every prompt after it", async () => {
     const scriptPath = join(dir, "child-ctrl-d.mjs");
     writeFileSync(scriptPath, childScriptCtrlD(dir));
