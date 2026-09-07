@@ -130,6 +130,7 @@ import {
 import { fetchAccountPlan } from "./provider/accountStatus";
 import type { getAnthropicModel as getAnthropicModelReal } from "./provider/anthropic";
 import {
+  bundledModelCatalog,
   catalogForModelPicker,
   getModelCatalog,
   isCodexPlanCatalogApplied,
@@ -987,10 +988,18 @@ function defaultPairPayable(
   subscribed: ReadonlySet<ModelProvider>,
 ): boolean {
   if (hostedPlanUsable(configDir)) return true;
-  const { provider } = resolveDefaultModel(configDir);
-  const resolved = provider ?? DEFAULT_PROVIDER;
+  const requested = resolveDefaultModel(configDir);
+  const resolved = requested.provider ?? DEFAULT_PROVIDER;
   if (configured.has(resolved) || subscribed.has(resolved)) return true;
-  return provider === undefined && hasAggregatorKey(configured);
+  if (requested.provider === undefined && hasAggregatorKey(configured)) return true;
+  const route = resolveRoute(
+    bundledModelCatalog(),
+    { model: requested.model, provider: resolved },
+    configured,
+    null,
+    subscribed,
+  );
+  return configured.has(route.provider) || subscribed.has(route.provider);
 }
 
 function checkZeroKeysConfigured(configDir: string): boolean | number {

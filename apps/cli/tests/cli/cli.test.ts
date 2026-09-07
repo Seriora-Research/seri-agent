@@ -3026,6 +3026,22 @@ describe("guided setup gate", () => {
     }
   });
 
+  test("an anthropic key plus an env OpenRouter Claude default does not need guided setup", () => {
+    const originalModel = process.env.SERI_MODEL;
+    const originalProvider = process.env.SERI_PROVIDER;
+    process.env.SERI_MODEL = "anthropic/claude-sonnet-5";
+    process.env.SERI_PROVIDER = "openrouter";
+    try {
+      setConfigValue("ANTHROPIC_API_KEY", "sk-ant-test", configDir);
+      expect(needsGuidedSetup(configDir)).toBe(false);
+    } finally {
+      if (originalModel === undefined) delete process.env.SERI_MODEL;
+      else process.env.SERI_MODEL = originalModel;
+      if (originalProvider === undefined) delete process.env.SERI_PROVIDER;
+      else process.env.SERI_PROVIDER = originalProvider;
+    }
+  });
+
   test("a groq key with no persisted default does not need guided setup", () => {
     const originalCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = configDir;

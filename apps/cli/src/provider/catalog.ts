@@ -16,6 +16,10 @@ import { grokCatalogHeaders, grokProxyBaseUrl } from "./xai";
 // bun inlines a JSON import at build time; it needs no with { type: "file" }.
 const FALLBACK_MANIFEST = bundledManifest as ModelCatalog;
 
+export function bundledModelCatalog(): ModelCatalog {
+  return FALLBACK_MANIFEST;
+}
+
 export function catalogWithFallback(
   live: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
