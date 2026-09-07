@@ -1,13 +1,3 @@
-// What seri puts on the screen, and nothing else: every function here takes what it prints as an
-// argument, so none of them can reach a session, a checkpoint store or the loop. That is what makes
-// them testable without building a run — printEvent's `never` guard in particular, which is the
-// file's compile-time contract with LoopEvent.
-//
-// The one value import is held to the same standard. `verify/outcome` exists precisely so this file
-// can narrow a verified write_file result without reaching `verify/run` and, through it,
-// `spawnCollect` — which imports `node:child_process` and registers a process-global signal handler
-// at module load. Importing the printer must not do that, so keep any new import here dependency-
-// free or the sentence above stops being true.
 import type { RestorePlan, RestoreResult } from "../checkpoint/checkpoint";
 import { fileChangeFromTool, fileChangePlainText } from "../fileChange";
 import type { LoopEvent } from "../loop/loop";
@@ -19,9 +9,6 @@ import { formatTodoLines, parseTodoList } from "../todo/list";
 import { TODO_TOOL_NAME } from "../todo/tool";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
-// stdout and exit 0 for a served request, like --help. A bad invocation of seri itself — anything
-// parseArgs rejects, or no task given — is a usage error: printed to stderr, exit 2.
-// `--selftest` is left out on purpose — cli.ts calls it an undocumented build-verification flag.
 export const USAGE = `Usage:
   seri <task>                     send a task to the model
   seri                            (in a terminal) open the TUI with an empty input box
@@ -42,29 +29,13 @@ Options:
   --                              everything after this is the task, flags included:
                                     seri -- fix the --help output`;
 
-// console.error(message), console.error(USAGE), return 2 — one helper because every usage error
-// takes the same three steps, and USAGE is what names the -- escape: parseArgs' own message does,
-// for an unknown option, but not for the "argument missing"/"argument is ambiguous" messages an
-// optional value or a required-value option without one produce (measured) — so USAGE is appended
-// unconditionally rather than only on the option that happens to name it already.
 export function usageError(message: string): number {
   console.error(message);
   console.error(USAGE);
   return 2;
 }
 
-// Load-bearing, not defence-in-depth: this file renders a tool name at two sites — the approval
-// prompt (cli.ts) and the tool-allowed line below — and both are reached whenever `checkPermission`
-// returns `needs-approval`/`allow-new`, which is now every name `classifyBuiltin` does not vouch
-// for as read (gate.ts). Classifying an unknown name `write` is deliberate there, so the name at
-// both sites is no longer always one of the fixed `WRITE_TOOL_NAMES` strings — a name the model
-// invented reaches here too, since the gate runs on `call.toolName` before the `opts.tools[…]`
-// lookup that would reject it (loop.ts) — and a newline or an ANSI escape sequence in THAT name
-// could scroll real output off-screen or paint a fake line. This is what stops it. Only control
-// characters and DEL are escaped, not the whole name the way a prompt's `args` are already wrapped
-// in JSON.stringify: a legitimate name is always a plain identifier (write_file, bash, …), and
-// stringifying it would put visible quotes on every single render to defend against a case only a
-// hostile name reaches.
+// A model-supplied tool name can contain C0/DEL and paint or scroll the TTY.
 export function escapeControlChars(text: string): string {
   return text.replace(
     /[\x00-\x1f\x7f]/g,
@@ -72,29 +43,13 @@ export function escapeControlChars(text: string): string {
   );
 }
 
-// write_file's input carries the whole file body, so an uncapped JSON.stringify can render
-// hundreds of lines on one prompt line and scroll the question itself out of scrollback before the
-// user can even see it, let alone answer it. Capped, not omitted: the prompt's job is still to
-// show what is about to happen, just not all of it when "all of it" is unreadable anyway. Used by
-// cli.ts's own approval prompt and by App.tsx's live pending-tool box (Ink's TUI) — the two render
-// sites that show `write_file`/`edit`'s own args, whole-file-body carrying tools both.
 const MAX_PROMPT_ARGS_LENGTH = 200;
 export function truncateArgsDisplay(args: unknown): string {
-  // JSON.stringify(undefined) returns `undefined` (the value, not a string), and `.length` on
-  // that throws inside this Promise executor — which rejects approvalPrompt, which nothing in
-  // runLoop wraps, so it would escape driveLoop as an unhandled rejection, skipping printUsage and
-  // the exit-code logic entirely. Unreachable through cli.ts today (call.input is provider-parsed
-  // JSON, never bare undefined), but ApprovalPrompt is an exported seam Stage 11's Ink prompt
-  // re-implements against, and `args: unknown` promises nothing about what a future caller passes.
+  // JSON.stringify(undefined) returns the value undefined, not a string, so `.length` throws.
   const json = JSON.stringify(args) ?? "undefined";
   return json.length > MAX_PROMPT_ARGS_LENGTH ? `${json.slice(0, MAX_PROMPT_ARGS_LENGTH)}…` : json;
 }
 
-// Round 7 code review: this line was written out twice — once in makeApprovalPrompt's own
-// rl.question call (cli.ts), once in App.tsx's ApprovalBox — exactly the drift risk
-// toolResultLine/toolAllowedLine (below) already exist to prevent elsewhere. One shared function
-// instead, used by both. `offersAlways` gates the "[a]lways" option — PERSISTABLE_TOOLS decides
-// it at each call site, not here, so this file stays free of a permissions/store.ts import.
 export function approvalPromptText(
   toolName: string,
   args: unknown,
@@ -108,30 +63,17 @@ export function approvalPromptText(
   return `Classifier: ${escapeControlChars(classifierReason)}\n${question}`;
 }
 
-// stderr, not stdout: stdout carries the model's own output and is routinely piped, and a warning
-// that a file will not be recoverable must not end up inside whatever consumed that pipe.
-// `sink` follows undoPlanLines/recoveryLines' own optional-sink shape (below) — prepareSession's
-// TUI path (cli.ts) passes one that queues the formatted line instead of writing it to the
-// terminal, since a raw console.error between enterAltScreen() and the TUI's own Ink mount lands
-// on the alt-screen buffer and is gone the instant that render() paints over it.
+// A raw console.error between enterAltScreen() and the OpenTUI mount lands on the alt-screen buffer and is gone when the first frame paints.
 export function printWarning(message: string, sink: (line: string) => void = console.error): void {
   sink(`⚠ ${message}`);
 }
 
-// The second half of what an "always" answer now does. Printed only when a grant was actually
-// written — driveLoop calls this on rememberGrant's `true`, never unconditionally — so it can
-// never claim a persistence that the store refused (a non-persistable name, an unparseable file).
-// Reachable outside the TUI (approve-each answered from a plain stdin prompt), so the undo
-// instruction names permissions.yaml directly rather than only /permissions, which isn't there.
 export function printGrantPersisted(name: string, worktree: string): void {
   console.log(
     `  saved for ${worktree} — undo by editing permissions.yaml, or with /permissions inside the TUI (remove ${escapeControlChars(name)})`,
   );
 }
 
-// A grant the user cannot see is a grant they cannot revoke, and a grant made weeks ago in another
-// session is exactly the invisible kind. One line at the start of the run that would otherwise
-// silently skip a prompt. Same non-TTY reachability as printGrantPersisted above.
 export function printPreApproved(
   tools: readonly string[],
   sink: (line: string) => void = console.log,
@@ -141,17 +83,6 @@ export function printPreApproved(
   );
 }
 
-// One line-shape, one place: cli.ts's tuiPresenter calls this via a sink that dispatches a
-// transcript-append action per line, instead of hand-copying the restored/deleted/ignored
-// template inline where it could drift out of sync with this one.
-//
-// Called before the restore happens, not after. Every path here comes from git's own output, so
-// an ignored file can never appear under "restored" or "deleted"; the ones that were written and
-// skipped are listed separately rather than left for the user to notice was missing. The deletion
-// list is already ledger-filtered by the time it reaches here (checkpoint.ts's own restoreTo) —
-// only a path seri can still prove it wrote is ever in it; `preserved` is everything that would
-// once have been deleted alongside it but is not proven, printed with its own honest reason
-// rather than left for the user to wonder why a file they expected gone is still there.
 export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = console.log): void {
   if (plan.diff) sink(plan.diff);
   for (const path of plan.restored) sink(`restored ${path}`);
@@ -162,9 +93,6 @@ export function undoPlanLines(plan: RestorePlan, sink: (line: string) => void = 
   }
 }
 
-// Restoring is never the operation that loses work: the state it just replaced was committed first.
-// "in this session" because recoverCommand resolves against the live session's own ref
-// (decideRestore reads session.id) — pasted after a /clear mints a new id, it targets that one.
 export function recoveryLines(
   result: RestoreResult,
   sink: (line: string) => void = console.log,
@@ -175,23 +103,10 @@ export function recoveryLines(
   sink(`  ${result.recoverCommand}`);
 }
 
-// The per-write cost is the whole reason `verify.enabled` exists, and a user deciding whether to
-// turn the feature off cannot weigh a number they were never shown.
 function seconds(elapsedMs: number): string {
   return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
-// What a verified write_file adds to its "done" line, or "" when there is nothing to say.
-//
-// `unavailable` deliberately prints nothing: no command configured is the default for every user
-// and disabling it is an explicit choice, so neither is news, and a line on every single write
-// would be pure noise. `failed` is the opposite — a check that RAN and broke, most often a typo in
-// SERI_VERIFY_COMMAND, which otherwise costs a spawn per write and reports itself only to the
-// model. It is the one case that must not read as a clean run.
-//
-// The count is `total`, never `diagnostics.length`: the list is capped at MAX_DIAGNOSTICS, so the
-// length is what survived the cap and the total is what the check actually found. When they differ
-// the cap is stated outright rather than left to be inferred from a suspiciously round number.
 function verificationSuffix(verification: CheckOutcome): string {
   switch (verification.status) {
     case "ok":
@@ -211,25 +126,6 @@ function verificationSuffix(verification: CheckOutcome): string {
   }
 }
 
-// Finding 7 (thermo-nuclear structural review, round 6): reducer.ts's own applyLoopEvent (Ink's
-// TUI transcript) used to reimplement these two line shapes by hand instead of sharing them, and
-// had drifted — missing the `edit`-specific message and the verification suffix on tool-result,
-// missing escapeControlChars on tool-allowed's tool name. Extracted so the two paths render the
-// SAME line, the same way undoPlanLines/recoveryLines already do for /undo and /restore, rather
-// than needing another audit the next time either drifts again.
-//
-// `edit` returns the edited text and writes nothing (provider/tools.ts's FS_MUTATING_TOOL_NAMES
-// comment), so a bare "done" reads as a file that changed — observed live, with the model moving
-// on as though it had. Named here rather than in the loop, which knows no tool names by design.
-//
-// The verification suffix is NOT named that way: the narrowing belongs to the module that
-// produces the shape, so this file asks it rather than re-deriving it, and `edit` stays the only
-// tool name here.
-// `DispatchResult` above is a type-only import, so nothing from subagents/ is actually loaded at
-// runtime — this file already type-imports the heavier loop.ts for LoopEvent (above) the same way,
-// so the header comment's "keep imports dependency-free" rule is about VALUE imports, not this one.
-// Still narrowed rather than trusted outright: `result` is `unknown` on the wire (loop.ts types
-// every tool result that way), so the cast is a shape assertion, not a guarantee.
 function dispatchSummary(
   result: unknown,
 ): { ran: number; total: number; tokens: number | undefined } | undefined {
@@ -266,12 +162,6 @@ export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }
   return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;
 }
 
-// Printed because a grant the user cannot see is a grant they cannot revoke. This string is still
-// true — a tool that reaches "allow-new" IS approved for the rest of the run, run-scoped grant
-// included — but it is no longer the whole persistence decision: for write_file/edit, driveLoop
-// prints a SECOND line (printGrantPersisted, above) naming the permanent half, only when a grant
-// was actually written. `name` is the same model-supplied call.toolName the approval prompt
-// renders, so it gets the same escaping — see escapeControlChars above.
 export function toolAllowedLine(name: string): string {
   return `✓ ${escapeControlChars(name)} approved for the rest of this run`;
 }
@@ -301,34 +191,17 @@ export function printEvent(event: LoopEvent): void {
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);
       break;
-    // A rate limit or a 5xx, and there is no telling which from here: the SDK hands its retry
-    // callback neither the error nor the delay (compaction.ts's MAX_RETRIES comment), so naming one of
-    // the two would be a guess printed as a fact. Worth a line at all because the wait is the SDK's
-    // — 2 s before the first re-issue — and until now a rate-limited turn simply looked hung.
+    // The SDK retry callback is handed neither the error nor the delay, so this line cannot name which of 429 or 5xx it was.
     case "retry":
       console.log(`\n↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);
       break;
-    // Deliberately silent per event: the loop emits one of these per completed model call, so
-    // printing here would put a token count between every turn and its successor. driveLoop sums
-    // them instead and run() prints the one line at the end.
     case "usage":
       break;
-    // Never actually reaches here — driveLoop persists the session and `continue`s on it — and it
-    // has no rendering if it ever does: the message array is the session's business, not the
-    // screen's. Spelled out rather than left to the default below, because "this event prints
-    // nothing" is a decision and the default is where an undecided one gets caught.
     case "messages-updated":
       break;
     case "done":
       console.log(`\n(done: ${event.reason})`);
-      // The one reason whose fix is a command the user has to type. `max-iterations` and
-      // `no-tool-call` need no follow-up and `aborted` was the user's own doing.
       if (event.reason === "repeated-denials") {
-        // Reachable only in approve-each: a read-only block is never a decline (see the
-        // permission-denied event's `reason`, and MAX_CONSECUTIVE_DENIALS in loop.ts), so getting
-        // here means a live "no" three times in a row. "Answer 'a'" is not always the fix even so —
-        // bash and powershell never offer it (the one-rule allowlist: always-allow is scoped to
-        // write_file/edit, never a shell), so a streak of shell calls needs /mode instead.
         console.log("Several tool calls were refused in a row, so the run stopped. Run /mode to");
         console.log(
           "switch to auto, or answer 'a' at the next write_file/edit prompt to allow it.",
@@ -338,13 +211,6 @@ export function printEvent(event: LoopEvent): void {
     case "error":
       console.error(event.error);
       break;
-    // Every LoopEvent member is handled above, so nothing reaches this at runtime. Not all of them
-    // were before this line was written — adding it is what showed that `messages-updated` had no case
-    // at all. It exists for the next one: `usage` and `retry` were both added to the union here and both
-    // would have fallen through this switch in silence, which for a user-facing event means it was
-    // simply never printed. `never` is what makes tsc say so at the point the member is added
-    // rather than leaving it to be noticed in a session. Compile-time only, with no throw: nothing
-    // can reach this at runtime, and a printer is the last thing that should be able to end a run.
     default: {
       const _unhandled: never = event;
       break;
@@ -352,32 +218,8 @@ export function printEvent(event: LoopEvent): void {
   }
 }
 
-// What the run cost, summed by the consumer rather than in runLoop: the loop is stateless by design
-// and emits one usage event per completed model call, so the running total is the consumer's to keep.
-//
-// `undefined` rather than 0 for "the provider never told us", and the two halves are tracked
-// separately because a provider can report one and not the other: LanguageModelUsage types both as
-// optional, and `?? 0` turned a missing outputTokens into the printed claim "0 out" — a
-// measurement of a number nobody measured. 0 stays available for the other meaning, a call that
-// really did report zero.
 export type RunUsage = { inputTokens: number | undefined; outputTokens: number | undefined };
 
-// Only what was actually reported. A run that made no model call — a provider that failed before
-// the first request — has no spend, and "(tokens: 0 in, 0 out)" is a number the user cannot act on
-// printed on paths that never called anything; that run prints no line at all. A provider that
-// reports input tokens and not output ones prints only the half it gave, because "0 out" reads as a
-// measurement and there was no measurement: a provider omitting the field and a call that genuinely
-// produced nothing are not the same fact, and the summary is the wrong place to guess which. A
-// reported 0 still prints — that one IS a measurement.
-//
-// Leading "\n" for the same reason printEvent's terminal `done` line carries one: the model's text
-// arrives through process.stdout.write with no trailing newline, and on the path this summary was
-// built for — a call that streamed text and then failed — there is no `done` event to end that
-// line, because the error goes to stderr. Measured without it, on raw stdout:
-// "partial answer(tokens: 900 in, 7 out)\n", i.e. a consumer piping stdout for the answer got the
-// token count welded onto its last line. Unconditional rather than only on that path: every other
-// exit ends with the `done` line, whose own leading "\n" already puts a blank line before it, so
-// this is the spacing the rest of the run's output already has.
 export function printUsage(usage: RunUsage): void {
   const parts: string[] = [];
   if (usage.inputTokens !== undefined) parts.push(`${usage.inputTokens} in`);
@@ -386,16 +228,7 @@ export function printUsage(usage: RunUsage): void {
   console.log(`\n(tokens: ${parts.join(", ")})`);
 }
 
-// A run's dollar cost, tagged with its provenance. Kept separate from printUsage's token line
-// rather than folded into it: BUILD-PLAN's own verify criterion is that a cost tagged `estimated`
-// is VISIBLY distinguishable from one tagged `actual` — a different string on screen, not just
-// different data — so `estimated` gets its own "~" prefix and trailing label rather than the same
-// template with a swapped-in word.
 export function printCost(cost: CostReport): void {
-  // `status` is checked before `amountUsd`, not after: `addCost` (cli.ts) can carry a defined
-  // dollar figure forward from an earlier, more-certain turn while the combined status degrades to
-  // "unknown" (a later turn contributed nothing costable) — printing that number bare would claim
-  // more certainty than the total actually has, which is the exact bug VERIFY pass 2 caught.
   if (cost.status === "included") {
     console.log("(cost: included)");
     return;
@@ -416,12 +249,6 @@ export function printCost(cost: CostReport): void {
   console.log(cost.status === "estimated" ? `(cost: ~${amount} (estimated))` : `(cost: ${amount})`);
 }
 
-// The inline half of printCost's own formatting — needed here because archivistLine renders cost
-// on the SAME line as the trigger/token count, not as printCost's own standalone line. Kept
-// minimal (amount + estimated-label only) rather than sharing printCost's full branch structure,
-// since "unknown" never reaches here: reportFromCatalogPricing (archivist.ts's own caller) always
-// returns a defined amountUsd once a catalog entry has pricing, and undefined pricing on the
-// archivist's own model is exactly as reachable as it is for the main turn's cost line.
 function costFragment(cost: CostReport): string {
   if (cost.status === "included") return "cost: included";
   if (cost.amountUsd === undefined) return "cost: unknown";
@@ -429,22 +256,6 @@ function costFragment(cost: CostReport): string {
   return cost.status === "estimated" ? `cost: ~${amount} (estimated)` : `cost: ${amount}`;
 }
 
-// The archivist's usage/cost are reported on their own line, deliberately never summed into
-// printUsage/printCost's own totals (driveLoop's own comment on why: folding them in would
-// silently change what cli.test.ts's existing "(tokens: …)" assertions mean). Takes no sink
-// callback — the non-interactive path console.logs `archivistLine`; the TUI pushes
-// `archivistStatsLine` as one muted system entry and the summary (when defined) as a second
-// muted markdown entry, rather than wrapping this whole string.
-//
-// `report.summary` — the model's own explanation of what it did or decided, its only deliverable
-// (subagents/dispatch.ts's own description: "each subagent's final assistant message is its only
-// deliverable") — used to be computed and paid for but never shown anywhere. Appended as its own
-// line, rather than folded inline with the stats line, when defined: undoPlanLines' own sink
-// already carries multi-line content (a git diff) as one transcript entry the same way, so this
-// is not a new shape for the CLI path. `undefined` (ArchivistReport's own comment on why)
-// means the child produced no real closing text of its own — runSubagent's own generic
-// fallbackSummary filler, not the model's own explanation — so nothing is appended for those:
-// showing that filler on every line would be noise, not signal.
 export function archivistStatsLine(report: ArchivistReport): string {
   const tokenParts: string[] = [];
   if (report.usage.inputTokens !== undefined) tokenParts.push(`${report.usage.inputTokens} in`);
@@ -455,18 +266,11 @@ export function archivistStatsLine(report: ArchivistReport): string {
   return `${ARCHIVIST_MARK}(archivist: ${report.trigger} trigger, ${calls}${tokens}${cost})`;
 }
 
-// The two queues an archivist run can add to, and how each is reviewed. A table rather than a
-// branch per kind so the render below stays one loop, and so a third write path would be one row.
 const ARCHIVIST_STAGED_KINDS = [
   { kind: "memory", noun: "memory write", review: "/memory pending" },
   { kind: "skill", noun: "skill", review: "/skills pending" },
 ] as const;
 
-// One line per kind rather than one combined line, so each carries the command that reviews it.
-// Every entry names its target and its id, which is what makes the line enough to run
-// `/memory diff <id>` from without listing the queue first. Kept out of `archivistStatsLine`
-// because the TUI pushes each of these as its own muted transcript entry, the same way it already
-// splits the stats line from the summary.
 export function archivistStagedLines(report: ArchivistReport): string[] {
   const lines: string[] = [];
   for (const row of ARCHIVIST_STAGED_KINDS) {
@@ -485,12 +289,6 @@ export function archivistLine(report: ArchivistReport): string {
   return parts.join("\n");
 }
 
-// The per-run lines above only cover what THIS session staged. Two other paths fill the same queue
-// with nobody watching: an earlier session's archivist, and the daemon's idle flush, which stages
-// unconditionally against a session that has no terminal attached at all. Both are why a queue can
-// reach double digits before anyone types `/memory pending`. Counts rather than names because this
-// prints once at session start, ahead of any work, and a long list there would read as a wall.
-// Takes counts, not the queues themselves, so this file keeps its no-filesystem-imports contract.
 export function pendingQueueNotice(memoryCount: number, skillCount: number): string | undefined {
   const parts: string[] = [];
   if (memoryCount > 0) parts.push(`${memoryCount} memory write${memoryCount === 1 ? "" : "s"}`);
