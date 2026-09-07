@@ -44,8 +44,6 @@ const EXPECTED_NAMES = [
 
 const EXPECTED_TUI_CLAIMED = [
   "/effort",
-  // Session-surface, TUI-claimed: the bare form opens the review panel here, while
-  // `seri "/memory approve all"` still runs on the non-TTY path that has no panel to open.
   "/memory",
   "/usage",
   "/exit",
@@ -179,9 +177,6 @@ describe("command catalog completeness", () => {
   });
 });
 
-// The one question cli.ts's message queue asks before it defers a submission instead of running it.
-// Every branch is exercised here rather than through the TUI, which is the reason it is a pure
-// function taking its registries as an argument at all.
 describe("startsATurn", () => {
   const registries = {
     agents: new Map<string, unknown>([["reviewer", {}]]),
@@ -201,15 +196,11 @@ describe("startsATurn", () => {
     expect(startsATurn("/reviewer", "/reviewer grade the diff", registries)).toBe(true);
   });
 
-  // Deferring this one would put the usage error minutes away from the keypress that caused it,
-  // with nothing on screen to connect them. Falling through runs the error cli.ts already prints.
   test("an agent dispatch with no goal does not, so its usage error stays immediate", () => {
     expect(startsATurn("/reviewer", "/reviewer", registries)).toBe(false);
     expect(startsATurn("/reviewer", "/reviewer   ", registries)).toBe(false);
   });
 
-  // Both halves of the catalog: a TUI-claimed name opens a panel or quits, and a session command
-  // has its own mid-turn gate. Neither may be deferred, or /exit would stop working mid-turn.
   test("no catalog command starts a turn", () => {
     for (const meta of COMMAND_META) {
       expect(startsATurn(meta.name, meta.name, registries)).toBe(false);
