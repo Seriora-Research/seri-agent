@@ -1,5 +1,6 @@
 import { fetchWithTimeout } from "@seri/model-catalog";
-import { type AuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
+import { type AuthSession, expiresAtFrom, saveAuthSession } from "./authStore";
+import { liveHostedSession } from "./hostedAccountAccess";
 import { AUTHENTICATE_URL, getWorkosClientId, parseResponseBody } from "./deviceFlow";
 
 export type RefreshResult =
@@ -85,7 +86,7 @@ async function refreshSessionOnce(
   configDir: string,
   fetchFn: typeof fetch,
 ): Promise<AuthSession | undefined> {
-  const session = loadAuthSession(configDir);
+  const session = liveHostedSession(configDir);
   if (!session) return undefined;
 
   const result = await refreshAccessToken(

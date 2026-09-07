@@ -103,6 +103,28 @@ describe("getGatewayModel — login requirement", () => {
       /\/login/,
     );
   });
+
+  test("unavailable copy points at /setup and does not name /login", () => {
+    expect(() =>
+      getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+        hostedAccountAccess: () => "unavailable",
+      }),
+    ).toThrow(/\/setup/);
+    expect(() =>
+      getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+        hostedAccountAccess: () => "unavailable",
+      }),
+    ).not.toThrow(/\/login/);
+  });
+
+  test("leftover auth.json is inert when unavailable", () => {
+    seedAuthJson(tmpRoot);
+    expect(() =>
+      getGatewayModel("some-model", "openrouter", "session-1", tmpRoot, {
+        hostedAccountAccess: () => "unavailable",
+      }),
+    ).toThrow(/\/setup/);
+  });
 });
 
 describe("gatewayBaseUrl — default host", () => {

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { fetchWithTimeout } from "@seri/model-catalog";
 import { type Plan, toPlan } from "@seri/plans";
 import { atomicWriteFile } from "../atomicWriteFile";
-import { loadAuthSession } from "../auth/authStore";
+import { liveHostedSession } from "../auth/hostedAccountAccess";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 import { authedFetch } from "./authedFetch";
 import { gatewayBaseUrl } from "./gateway";
@@ -46,7 +46,7 @@ export async function fetchAccountPlan(
   configDir: string,
   deps: AccountStatusDeps = {},
 ): Promise<Plan | null> {
-  if (!loadAuthSession(configDir)) return null;
+  if (!liveHostedSession(configDir)) return null;
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;

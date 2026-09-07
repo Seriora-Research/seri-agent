@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Plan } from "@seri/plans";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { hasHostedAuth } from "./authStore";
+import { type HostedAccountAccess, hostedAccountAccess } from "./hostedAccountAccess";
 
 export const SERI_IGNORE_FILENAME = "seri-ignore";
 
@@ -23,7 +24,11 @@ export function clearSeriIgnore(configDir: string): void {
   if (existsSync(path)) unlinkSync(path);
 }
 
-export function hostedPlanUsable(configDir: string): boolean {
+export function hostedPlanUsable(
+  configDir: string,
+  access: HostedAccountAccess = hostedAccountAccess(),
+): boolean {
+  if (access === "unavailable") return false;
   return hasHostedAuth(configDir) && !isSeriIgnored(configDir);
 }
 

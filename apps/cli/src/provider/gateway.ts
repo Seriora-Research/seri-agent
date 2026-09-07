@@ -1,7 +1,11 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import type { ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel } from "ai";
-import { loadAuthSession } from "../auth/authStore";
+import {
+  type HostedAccountAccess,
+  hostedAccountAccess,
+  liveHostedSession,
+} from "../auth/hostedAccountAccess";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 import { getApiKey } from "../config/config";
 import { authedFetch } from "./authedFetch";
@@ -36,6 +40,7 @@ const UNUSED_PLACEHOLDER_KEY = "seri-gateway";
 type GatewayDeps = {
   fetchFn?: typeof fetch;
   refreshSession?: typeof refreshSessionReal;
+  hostedAccountAccess?: () => HostedAccountAccess;
 };
 
 export function getGatewayModel(
@@ -51,8 +56,14 @@ export function getGatewayModel(
     );
   }
 
-  if (!loadAuthSession(configDir))
-    throw new Error("Not logged in. Run /login inside the TUI, or configure a provider API key.");
+  const access = (deps.hostedAccountAccess ?? hostedAccountAccess)();
+  if (!liveHostedSession(configDir, access)) {
+    throw new Error(
+      access === "unavailable"
+        ? "Not logged in. Run /setup inside the TUI, or configure a provider API key."
+        : "Not logged in. Run /login inside the TUI, or configure a provider API key.",
+    );
+  }
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;

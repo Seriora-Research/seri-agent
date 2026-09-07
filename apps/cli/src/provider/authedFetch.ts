@@ -1,5 +1,6 @@
 import { onAbort } from "../abort";
-import { type AuthSession, loadAuthSession } from "../auth/authStore";
+import { type AuthSession } from "../auth/authStore";
+import { liveHostedSession } from "../auth/hostedAccountAccess";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 
 export function authedFetch(
@@ -9,7 +10,7 @@ export function authedFetch(
 ) {
   return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(init?.headers);
-    const session = loadAuthSession(configDir);
+    const session = liveHostedSession(configDir);
     if (session) headers.set("Authorization", `Bearer ${session.accessToken}`);
     const requestInit = { ...init, headers };
 

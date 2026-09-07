@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { useKeyboard } from "@opentui/react";
 import { isQuotaExhaustedNotice } from "@seri/plans";
-import { usagePanelLines, LOGGED_OUT_USAGE } from "../../../usage/format";
+import { loggedOutUsage, usagePanelLines } from "../../../usage/format";
 import type { FetchUsageResult } from "../../../usage/fetch";
 import { CHROME_TABS, nextChromeTab, type ChromeTabId } from "../../chrome/tabs";
 import type { ChromePanelState } from "../../state/reducer";
@@ -34,7 +34,7 @@ function UsageBody({ load, detail }: { load: ChromePanelState["load"]; detail: b
     return <text fg={theme.muted}>Loading hosted usage…</text>;
   }
   if (load.status === "logged-out") {
-    return <text fg={theme.text}>{LOGGED_OUT_USAGE}</text>;
+    return <text fg={theme.text}>{loggedOutUsage()}</text>;
   }
   if (load.status === "error") {
     return <text fg={theme.text}>{load.message}</text>;

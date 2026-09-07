@@ -14,8 +14,8 @@ import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import { saveAuthSession } from "../../src/auth/authStore";
 import type { CodexJsonRpc } from "../../src/auth/codexAppServer";
 import { ignoreCodexSubscription } from "../../src/auth/codexIgnore";
-import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
 import { listCodexModels, resetCodexModelCache } from "../../src/auth/codexRefresh";
+import { ignoreSeriPlan } from "../../src/auth/seriIgnore";
 import { saveXaiSubscription } from "../../src/auth/xaiAuthStore";
 import {
   type CheckpointRecord,
@@ -27,12 +27,12 @@ import { isGitAvailable } from "../../src/checkpoint/shadowGit";
 import { loadVerifyConfig, setConfigValue, unsetConfigValue } from "../../src/config/config";
 import { getBaseConfigDir } from "../../src/config/paths";
 import { rememberGrant } from "../../src/permissions/store";
-import bundledManifest from "../../src/provider/catalog-manifest.json";
 import {
   isCodexPlanCatalogApplied,
   resetCodexPlanCatalogApplied,
   withCodexSubscriptionCatalog,
 } from "../../src/provider/catalog";
+import bundledManifest from "../../src/provider/catalog-manifest.json";
 import { modelPickerSubscribedProviders } from "../../src/provider/subscriptions";
 import type { SessionState } from "../../src/session/session";
 import {
@@ -582,6 +582,36 @@ describe("decideSetupOpen", () => {
     expect(plans[2] && "status" in plans[2] ? plans[2].status.status : undefined).toBe(
       "not-connected",
     );
+  });
+
+  test("unavailable with no session omits the seri row and keeps grok and Codex", () => {
+    const rows = decideSetupOpen(setupConfigDir, "unavailable");
+    const plans = rows.filter((row) => row.kind === "subscription");
+    expect(plans.some((row) => row.provider === "seri")).toBe(false);
+    expect(plans.some((row) => row.provider === "xai")).toBe(true);
+    expect(plans.some((row) => row.provider === "openai")).toBe(true);
+  });
+
+  test("unavailable with a leftover session keeps the seri row", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      setupConfigDir,
+    );
+    const rows = decideSetupOpen(setupConfigDir, "unavailable");
+    const seri = rows.find((entry) => entry.kind === "subscription" && entry.provider === "seri");
+    expect(seri).toMatchObject({
+      kind: "subscription",
+      provider: "seri",
+      status: { status: "connected" },
+    });
+    expect(rows.some((row) => row.kind === "subscription" && row.provider === "xai")).toBe(true);
+    expect(rows.some((row) => row.kind === "subscription" && row.provider === "openai")).toBe(true);
   });
 
   test("a hosted login with no local OpenRouter key is a seri subscription, and OpenRouter stays unset", () => {

@@ -1,5 +1,5 @@
 import { fetchUsageReport } from "./fetch";
-import { formatUsageReport, LOGGED_OUT_USAGE } from "./format";
+import { formatUsageReport, loggedOutUsage } from "./format";
 
 export type UsageCommandPresenter = { message: (text: string) => void };
 
@@ -20,7 +20,7 @@ export async function runUsageCommand(configDir: string, opts: RunUsageOpts = {}
 
   const result = await fetchUsage(configDir);
   if (result.status === "logged-out") {
-    presentLines(presenter, LOGGED_OUT_USAGE);
+    presentLines(presenter, loggedOutUsage());
     return;
   }
   if (result.status === "error") {

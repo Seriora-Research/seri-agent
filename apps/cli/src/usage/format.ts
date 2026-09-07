@@ -1,5 +1,6 @@
 import { isPaidPlan, PLAN_MONTHLY_USD } from "@seri/plans";
 
+import { type HostedAccountAccess, hostedAccountAccess } from "../auth/hostedAccountAccess";
 import { quotaExhaustedLineFromReport, utcResetLabel } from "./quotaNotice";
 import type { UsageReport } from "./report";
 
@@ -48,9 +49,16 @@ function modelLine(model: UsageReport["models"][number], detail: boolean): strin
   return `  ${model.modelId}  ${formatTokenCount(model.inputTokens)} in  ${formatTokenCount(model.outputTokens)} out  ${formatTokenCount(model.cacheReadTokens)} cache read  ${formatTokenCount(model.cacheWriteTokens)} cache write  ${formatShare(model.share)}${route}`;
 }
 
-export const LOGGED_OUT_USAGE = `Not signed in. /usage shows hosted-gateway spend for a seri account.
-Sign in with /login.
-BYOK provider-key spend is in your provider console, not here.`;
+export function loggedOutUsage(access: HostedAccountAccess = hostedAccountAccess()): string {
+  const intro = "Not signed in. /usage shows hosted-gateway spend for a seri account.";
+  const byok = "BYOK provider-key spend is in your provider console, not here.";
+  if (access === "unavailable") {
+    return `${intro}\n${byok}`;
+  }
+  return `${intro}\nSign in with /login.\n${byok}`;
+}
+
+export const LOGGED_OUT_USAGE = loggedOutUsage("offered");
 
 export function usagePanelLines(report: UsageReport, opts: FormatUsageOpts = {}): string[] {
   const lines: string[] = [];

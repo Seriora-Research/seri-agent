@@ -22,6 +22,7 @@ import type { HumanReply } from "./ask-user/types";
 import { ensureOwnerOnlyDir } from "./atomicWriteFile";
 import type { connectCodex as connectCodexReal } from "./auth/codexConnect";
 import type { login as loginReal, logout as logoutReal } from "./auth/commands";
+import { hostedAccountAccess, hostedCommandVisible } from "./auth/hostedAccountAccess";
 import { effectiveHostedPlan, hostedPlanUsable } from "./auth/seriIgnore";
 import type { connectGrok as connectGrokReal } from "./auth/xaiConnect";
 import {
@@ -1391,7 +1392,9 @@ async function runTui(
         trigger: "/",
         lineStartOnly: true,
         items: [
-          ...COMMAND_META.map((meta) => ({ name: meta.name, description: meta.description })),
+          ...COMMAND_META.filter((meta) =>
+            hostedCommandVisible(meta.name, hostedAccountAccess()),
+          ).map((meta) => ({ name: meta.name, description: meta.description })),
           ...[...prepared.agents.values()].map((agent) => ({
             name: `/${agent.name}`,
             description: describeCompletion("subagent", agent.description),
@@ -2176,6 +2179,7 @@ async function runTui(
       onChromeTab: (tab) => dispatch({ type: "chrome-tab", tab }),
       onChromeClose: (leftoverInput) => dispatch({ type: "chrome-closed", leftoverInput }),
       getCompletionSources: buildCompletionSources,
+      hostedAccounts: hostedAccountAccess(),
       onAuthResolved: () => {
         onAbandon();
         dispatch({ type: "auth-resolved" });

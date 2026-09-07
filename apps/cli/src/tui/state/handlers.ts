@@ -4,9 +4,14 @@ import {
   disconnectCodex as disconnectCodexReal,
 } from "../../auth/codexConnect";
 import { reconnectCodex } from "../../auth/codexIgnore";
-import { disconnectSeri, reconnectSeri } from "../../auth/seriIgnore";
 import { login as loginReal, logout as logoutReal } from "../../auth/commands";
 import { getWorkosClientId } from "../../auth/deviceFlow";
+import {
+  HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE,
+  type HostedAccountAccess,
+  hostedAccountAccess,
+} from "../../auth/hostedAccountAccess";
+import { disconnectSeri, reconnectSeri } from "../../auth/seriIgnore";
 import {
   connectGrok as connectGrokReal,
   disconnectGrok as disconnectGrokReal,
@@ -22,8 +27,8 @@ import {
 } from "../../provider/keys";
 import { validateProviderKey } from "../../provider/validate";
 import {
-  configKeyInfo,
   booleanRowOn,
+  configKeyInfo,
   decideAuthOffer,
   decideConfigOpen,
   decidePermissionsOpen,
@@ -303,6 +308,7 @@ export function createAuthHandlers(opts: {
   dispatch: Dispatch;
   deps: Pick<CliDeps, "login" | "logout" | "connectGrok" | "connectCodex">;
   configDir: string;
+  hostedAccountAccess?: () => HostedAccountAccess;
 }): {
   onLogin: (mode: "login" | "signup") => Promise<void>;
   onLogout: () => void;
@@ -311,6 +317,7 @@ export function createAuthHandlers(opts: {
   onConnectCodex: () => Promise<void>;
 } {
   const { dispatch, deps, configDir } = opts;
+  const accessFn = opts.hostedAccountAccess ?? hostedAccountAccess;
   const loginFn = deps.login ?? loginReal;
   const logoutFn = deps.logout ?? logoutReal;
   const connectGrokFn = deps.connectGrok ?? connectGrokReal;
@@ -320,6 +327,10 @@ export function createAuthHandlers(opts: {
   let currentController: AbortController | undefined;
 
   async function onLogin(mode: "login" | "signup"): Promise<void> {
+    if (accessFn() === "unavailable") {
+      dispatch({ type: "transcript-append", line: HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE });
+      return;
+    }
     const myAttempt = ++attemptCounter;
     const controller = new AbortController();
     currentController = controller;
