@@ -30,8 +30,6 @@ describe("routeKey", () => {
     );
   });
 
-
-
   test("maps . and _ separators to - in the slug, but not the vendor", () => {
     expect(routeKey(entry({ id: "anthropic/claude-sonnet-4.5", provider: "openrouter" }))).toBe(
       "anthropic/claude-sonnet-4-5",
@@ -41,8 +39,6 @@ describe("routeKey", () => {
     );
   });
 
-
-
   test("a native id with no slash uses the entry's own provider as vendor", () => {
     expect(routeKey(entry({ id: "claude-sonnet-5", provider: "anthropic" }))).toBe(
       "anthropic/claude-sonnet-5",
@@ -51,8 +47,6 @@ describe("routeKey", () => {
 });
 
 describe("groupRoutes", () => {
-
-
   test("groups a native entry with its OpenRouter counterpart", () => {
     const entries = [
       entry({ id: "claude-sonnet-5", provider: "anthropic" }),
@@ -63,7 +57,6 @@ describe("groupRoutes", () => {
     expect(groups.get("anthropic/claude-sonnet-5")).toEqual(entries);
   });
 
-
   test("groups entries whose ids differ only by separator style", () => {
     const entries = [
       entry({ id: "claude-sonnet-4-5", provider: "anthropic" }),
@@ -72,8 +65,6 @@ describe("groupRoutes", () => {
     expect(groupRoutes(entries).size).toBe(1);
   });
 
-
-
   test("groups a groq entry with its OpenRouter counterpart", () => {
     const entries = [
       entry({ id: "openai/gpt-oss-120b", provider: "groq" }),
@@ -81,10 +72,6 @@ describe("groupRoutes", () => {
     ];
     expect(groupRoutes(entries).size).toBe(1);
   });
-
-
-
-
 
   test("does not group two genuinely different models", () => {
     const entries = [
@@ -99,7 +86,6 @@ describe("groupRoutes", () => {
     const entries = [
       entry({ id: "b", provider: "groq" }),
       entry({ id: "a", provider: "groq" }),
-
 
       entry({ id: "groq/b", provider: "openrouter" }),
     ];

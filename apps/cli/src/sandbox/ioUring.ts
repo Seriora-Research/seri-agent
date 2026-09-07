@@ -11,8 +11,6 @@ export type IoUringProbe =
   | { status: "unsupported" }
   | { status: "error"; message: string };
 
-
-
 const SYSCALL_NR: Record<IoUringSyscall, number> = {
   io_uring_setup: 425,
   io_uring_enter: 426,
@@ -61,7 +59,6 @@ export function ioUringDenyFilter(arch: LinuxArch): Uint8Array {
     ...insn(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
     ...insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0),
   ];
-
 
   if (arch === "x64") {
     // x32 syscalls share AUDIT_ARCH_X86_64 with bit 0x40000000 set on nr; without this JGE they miss 425/426/427.

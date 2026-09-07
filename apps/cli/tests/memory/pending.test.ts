@@ -88,9 +88,6 @@ describe("stagePendingWrite / listPending", () => {
     expect(warnings.length).toBe(1);
   });
 
-
-
-
   test("a memory-project .pending file missing projectPath is skipped with a warning, not resolved to cwd", () => {
     const ctx = makeCtx();
     const dir = join(getPendingDir(ctx.configDir), "memory-project");
@@ -106,7 +103,6 @@ describe("stagePendingWrite / listPending", () => {
         reason: "r",
         durable: true,
         entryDate: "2026-08-11",
-
       }),
     );
     const warnings: string[] = [];
@@ -138,7 +134,6 @@ describe("resolvePendingRef", () => {
 
   test("throws on an ambiguous prefix", () => {
     const ctx = makeCtx();
-
 
     const base = {
       stagedAt: new Date().toISOString(),

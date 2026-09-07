@@ -13,7 +13,6 @@ export type ScreenResult = { outcome: "pass" } | { outcome: "block"; reason: Blo
 
 const SCAN_LIMIT = 65536;
 
-
 export function parseExpectedEnvironment(raw: string | undefined): boolean {
   return raw === "true";
 }
@@ -251,8 +250,6 @@ export function screenCall(subject: string, input: unknown, expected: boolean): 
   }
   if (extracted.status === "empty") return { outcome: "pass" };
   if (expected) return { outcome: "pass" };
-
-
 
   // MCP arguments are JSON, so prefix http:// — they have no curl/wget neighbor for the classifier.
   const raw =

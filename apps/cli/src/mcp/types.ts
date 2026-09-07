@@ -1,8 +1,3 @@
-
-
-
-
-
 // Type-only imports only: a runtime import here would cycle with permissions/store.ts → config/paths.ts.
 import type { ExtensionSource } from "../extensions/discovery";
 
@@ -21,9 +16,6 @@ export type McpToolInfo = {
 
   readonly toolName: string;
   readonly description: string;
-
-
-
 
   readonly inputSchema: unknown;
 };
@@ -45,24 +37,13 @@ export function isMcpToolName(name: string): boolean {
   return name.startsWith(MCP_TOOL_PREFIX);
 }
 
-
-
-
-
 const GRANT_DIGEST_LENGTH = 12;
-
-
-
-
 
 const GRANT_KEY_SHAPE = new RegExp(`^(${MCP_TOOL_PREFIX}.+)@([0-9a-f]{${GRANT_DIGEST_LENGTH}})$`);
 
 export function mcpGrantKey(toolName: string, fingerprint: string): string {
   return `${toolName}@${fingerprint.slice(0, GRANT_DIGEST_LENGTH)}`;
 }
-
-
-
 
 export function parseMcpGrantKey(
   entry: string,
@@ -75,8 +56,6 @@ export function parseMcpGrantKey(
 export function isMcpGrantKey(entry: string): boolean {
   return parseMcpGrantKey(entry) !== undefined;
 }
-
-
 
 export function mcpGrantMatches(entry: string, currentFingerprint: string): boolean {
   const parsed = parseMcpGrantKey(entry);

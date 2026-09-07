@@ -4,11 +4,6 @@ import type { ModelCatalog } from "./types";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
-
-
-
-
-
 async function main(): Promise<void> {
   const outPath = process.argv[2];
   if (!outPath) {

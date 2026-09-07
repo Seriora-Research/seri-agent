@@ -130,5 +130,4 @@ describe("visibleTranscriptWindow", () => {
     expect(win.start).toBe(length - COLD_START_COUNT);
     expect(win.bottomSpacer).toBe(0);
   });
-
 });

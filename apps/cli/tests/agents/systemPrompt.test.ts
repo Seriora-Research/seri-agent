@@ -17,15 +17,10 @@ afterEach(() => {
   configDir = undefined;
 });
 
-
-
 function emptyMemoryCtx(): MemoryContext {
   configDir = mkdtempSync(join(tmpdir(), "seri-memory-"));
   return { configDir, worktree: "/home/x/proj" };
 }
-
-
-
 
 describe("buildSystemPrompt", () => {
   test("the assembled system prompt instructs the model to call tools rather than describe them", () => {
@@ -38,10 +33,6 @@ describe("buildSystemPrompt", () => {
   test("the assembled system prompt teaches the read_file -> edit -> write_file sequence", () => {
     const prompt = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
 
-
-
-
-
     const one = prompt.indexOf("1. `read_file`");
     const two = prompt.indexOf("2. `edit`");
     const three = prompt.indexOf("3. `write_file`");
@@ -51,11 +42,8 @@ describe("buildSystemPrompt", () => {
 
     expect(prompt).toMatch(/writes nothing|nothing (is )?written/i);
 
-
     expect(prompt).toMatch(/exactly once/i);
   });
-
-
 
   test("a project with no AGENTS.md still gets the full tool guidance", () => {
     const withoutAgents = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
@@ -216,10 +204,6 @@ describe("buildSystemPrompt", () => {
     ).toBeUndefined();
   });
 
-
-
-
-
   test("stable tier precedes context tier, with no extra or missing separator", () => {
     const withoutAgents = buildSystemPrompt({ agentsContent: "", skills: [], rules: [] });
     const agentsFixture = "# Project rules\nUse tabs.";
@@ -259,8 +243,6 @@ describe("buildVolatileTier", () => {
     expect(line).not.toContain("groq");
   });
 
-
-
   test("a catalog entry with an empty-string displayName falls back to the raw id, not a blank label", () => {
     const line = buildVolatileTier("some-raw-id", "groq", "", loadMemory(emptyMemoryCtx()));
 
@@ -283,9 +265,6 @@ describe("buildVolatileTier", () => {
     expect(line).not.toContain("minimax/minimax-m3:free");
   });
 
-
-
-
   describe("memory tier (Stage 6b, B2 no-regression)", () => {
     test("an all-empty LoadedMemory renders no memory section — just identity and the machine line", () => {
       const line = buildVolatileTier(
@@ -299,9 +278,6 @@ describe("buildVolatileTier", () => {
       expect(line).toContain("GPT OSS 120B");
       expect(line).toMatch(/this machine is linux/i);
     });
-
-
-
 
     test("a non-empty memory file changes the output, contains the entry, and the identity line still comes first", () => {
       const ctx = emptyMemoryCtx();

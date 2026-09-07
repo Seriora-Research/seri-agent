@@ -6,17 +6,9 @@ import {
   pollDeviceGrant,
 } from "./deviceGrant";
 
-
-
 export const XAI_ISSUER_DEFAULT = "https://auth.x.ai";
 
-
-
 export const XAI_SCOPE = "openid profile email offline_access grok-cli:access api:access";
-
-
-
-
 
 export const XAI_CLIENT_ID_DEFAULT = "b1a00492-073a-47ea-816f-4c329264a828";
 
@@ -37,7 +29,6 @@ export type XaiEndpoints = {
 export function xaiUserinfoUrl(issuer: string): string {
   return `${issuer.replace(/\/$/, "")}/oauth2/userinfo`;
 }
-
 
 export function validXaiAccountId(accountId: string): boolean {
   if (accountId.length === 0 || accountId.length > 1024) return false;
@@ -67,13 +58,6 @@ export async function fetchXaiAccountId(
   return sub;
 }
 
-
-
-
-
-
-
-
 export async function discoverXaiEndpoints(
   issuer: string,
   fetchFn: typeof fetch = fetch,
@@ -89,7 +73,6 @@ export async function discoverXaiEndpoints(
     if (typeof value !== "string" || value.length === 0) {
       throw new Error(`OIDC discovery for ${issuer} returned no ${name}`);
     }
-
 
     // Origin, not host: a host-only check would accept http://auth.x.ai for an https issuer.
     if (new URL(value).origin !== issuerUrl.origin) {
@@ -142,8 +125,6 @@ export type XaiTokens = {
   expiresIn?: number;
   scope?: string;
 };
-
-
 
 export function readXaiTokens(payload: Record<string, unknown>): XaiTokens {
   const accessToken = payload.access_token;

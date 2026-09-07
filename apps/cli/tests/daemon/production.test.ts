@@ -90,7 +90,6 @@ describe("production daemon wiring", () => {
       const stored = probe.loadSession(sessionId!);
       expect(stored).toBeDefined();
 
-
       expect(probe.getArchivistCursor(sessionId!)).toBe(0);
       expect(stored!.messages.length).toBeGreaterThan(0);
     } finally {

@@ -97,9 +97,6 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
   });
 
-
-
-
   test("with no maxIterations option the run stops at the 500-turn default", async () => {
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
@@ -111,13 +108,6 @@ describe("runLoop", () => {
 
     expect(model.doStreamCalls).toHaveLength(500);
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
-
-
-
-
-
-
-
   }, 60_000);
 
   test("yields messages-updated after appending the assistant message and after appending tool results", async () => {
@@ -144,11 +134,6 @@ describe("runLoop", () => {
     });
   });
 
-
-
-
-
-
   test("a provider error is surfaced as an event and never printed by the loop", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => {
@@ -171,13 +156,9 @@ describe("runLoop", () => {
 
     expect(printed).toEqual([]);
 
-
     expect(events).toEqual([{ type: "error", error: "Error: boom from provider" }]);
     expect(events.find((e) => e.type === "done")).toBeUndefined();
   });
-
-
-
 
   test("a non-Error provider error renders its payload instead of [object Object]", async () => {
     const model = new MockLanguageModelV4({
@@ -193,9 +174,6 @@ describe("runLoop", () => {
     expect(errorEvent?.error).toContain("tool call validation failed");
     expect(errorEvent?.error).not.toBe("[object Object]");
 
-
-
-
     const stringModel = new MockLanguageModelV4({
       doStream: async () => {
         throw "ENOENT: no such file";
@@ -206,15 +184,6 @@ describe("runLoop", () => {
     );
     expect(stringEvents.find((e) => e.type === "error")?.error).toBe("ENOENT: no such file");
   });
-
-
-
-
-
-
-
-
-
 
   test("a retryable 429 is retried and reported as a retry event", async () => {
     let attempts = 0;
@@ -227,12 +196,6 @@ describe("runLoop", () => {
             url: "https://api.groq.com/openai/v1/chat/completions",
             requestBodyValues: {},
             statusCode: 429,
-
-
-
-
-
-
 
             responseHeaders: { "retry-after-ms": "10" },
           });
@@ -254,8 +217,6 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
     expect(elapsed).toBeLessThan(1_500);
   });
-
-
 
   test("a non-retryable provider error is not retried and emits no retry event", async () => {
     let attempts = 0;
@@ -428,11 +389,6 @@ describe("runLoop", () => {
     expect(usageEvent?.cost).toBeUndefined();
   });
 
-
-
-
-
-
   test("emits the usage of a call that streamed text and then failed mid-stream", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () =>
@@ -460,10 +416,6 @@ describe("runLoop", () => {
     expect(usageEvents[0]?.usage.inputTokens).toBe(900);
     expect(usageEvents[0]?.usage.outputTokens).toBe(7);
   });
-
-
-
-
 
   test("a turn that streams text and then fails mid-stream still reports a cost, not an absent one", async () => {
     const model = new MockLanguageModelV4({
@@ -496,15 +448,8 @@ describe("runLoop", () => {
       (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
     );
 
-
-
     expect(usageEvent?.cost).toEqual({ amountUsd: undefined, status: "unknown", source: "none" });
   });
-
-
-
-
-
 
   test("a call that produced no output reports the provider's error once and nothing else", async () => {
     const model = new MockLanguageModelV4({
@@ -578,8 +523,6 @@ describe("runLoop", () => {
     expect(compactedEvents[0]?.evictedCount).toBeGreaterThan(0);
     expect(compactedEvents[0]?.tokensBefore).toBeGreaterThan(0);
 
-
-
     expect(compactedEvents[0]?.usage.inputTokens).toBe(20);
     expect(compactedEvents[0]?.usage.outputTokens).toBe(10);
     expect(model.doGenerateCalls).toHaveLength(1);
@@ -593,17 +536,6 @@ describe("runLoop", () => {
     const finalPrompt = model.doStreamCalls.at(-1)?.prompt;
     expect(JSON.stringify(finalPrompt)).toContain(marker);
   });
-
-
-
-
-
-
-
-
-
-
-
 
   test("a retried compaction round-trip is reported as a retry event before the compacted event", async () => {
     const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
@@ -633,7 +565,6 @@ describe("runLoop", () => {
             requestBodyValues: {},
             statusCode: 429,
 
-
             responseHeaders: { "retry-after-ms": "10" },
           });
         }
@@ -659,10 +590,7 @@ describe("runLoop", () => {
       }),
     );
 
-
-
     expect(generateAttempts).toBe(2);
-
 
     expect(events.filter((e) => e.type === "retry")).toEqual([{ type: "retry", attempt: 1 }]);
     expect(events.findIndex((e) => e.type === "retry")).toBeLessThan(
@@ -670,8 +598,6 @@ describe("runLoop", () => {
     );
     expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
   });
-
-
 
   test("a compaction that succeeds first time reports no retry", async () => {
     const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
@@ -760,10 +686,6 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(totalIterations);
   });
 
-
-
-
-
   describe("reasoningEffort re-validation against the resolved catalog entry", () => {
     const reasoningCatalog = {
       fetchedAt: "2026-01-01T00:00:00.000Z",
@@ -806,9 +728,6 @@ describe("runLoop", () => {
       });
     });
 
-
-
-
     test("a tier NOT legal for the resolved catalog entry is silently dropped, not sent", async () => {
       const model = new MockLanguageModelV4({
         doStream: async () => streamResult(textOnlyChunks("Hello")),
@@ -829,8 +748,6 @@ describe("runLoop", () => {
 
       expect(model.doStreamCalls[0]?.providerOptions).toBeUndefined();
     });
-
-
 
     test("a tier set but the resolved model has no reasoningOptions at all is also dropped", async () => {
       const model = new MockLanguageModelV4({

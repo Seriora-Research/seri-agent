@@ -1,8 +1,3 @@
-
-
-
-
-
 import { describe, expect, test } from "bun:test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
@@ -63,7 +58,6 @@ describe("callSubject", () => {
   test("a remapped name, not the ToolSet key, is what reaches the gate", async () => {
     const tools = makeTools(async () => "ok");
 
-
     const stillAsked = await collect(
       runLoop({
         model: twoTurnModel(),
@@ -76,7 +70,6 @@ describe("callSubject", () => {
       }),
     );
     expect(stillAsked.find((e) => e.type === "permission-denied")).toBeTruthy();
-
 
     const events = await collect(
       runLoop({
@@ -133,8 +126,6 @@ describe("callSubject", () => {
       reason: "declined",
     });
   });
-
-
 
   test("the ModelMessage tool-result row still carries the ToolSet key, not the subject", async () => {
     const events = await collect(
@@ -211,9 +202,6 @@ describe("callSubject", () => {
   });
 });
 
-
-
-
 describe("mcpCallSubject as runLoop's callSubject", () => {
   function mcpOnlyTools(): ToolSet {
     return {
@@ -229,9 +217,6 @@ describe("mcpCallSubject as runLoop's callSubject", () => {
   }
 
   test("read-only blocks an mcp call whose input names a built-in read tool", async () => {
-
-
-
     const model = new MockLanguageModelV4({
       doStream: [streamResult(toolCallChunks("call-1", MCP_TOOL_NAME, { tool: "read_file" }))],
     });

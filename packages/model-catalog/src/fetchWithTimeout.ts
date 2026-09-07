@@ -1,26 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 export async function fetchWithTimeout<T>(
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,

@@ -1,7 +1,3 @@
-
-
-
-
 import { truncate } from "../truncate";
 
 export type InjectionCategory =
@@ -17,11 +13,7 @@ export type ScanResult =
 
 type Rule = { category: InjectionCategory; name: string; pattern: RegExp };
 
-
-
-
 const RULES: Rule[] = [
-
   { category: "credential", name: "anthropic-key", pattern: /\bsk-ant-[A-Za-z0-9_-]{16,}/ },
   { category: "credential", name: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}/ },
   { category: "credential", name: "groq-key", pattern: /\bgsk_[A-Za-z0-9]{20,}/ },
@@ -140,16 +132,12 @@ const RULES: Rule[] = [
   { category: "persistence-path", name: "git-hooks", pattern: /\.git[\\/]hooks\b/ },
   // agent-config — path-shaped references to seri's OWN configuration only, never bare
 
-
   { category: "agent-config", name: "seri-dir", pattern: /\.seri[\\/]/ },
   { category: "agent-config", name: "permissions-yaml", pattern: /\bpermissions\.ya?ml\b/ },
   { category: "agent-config", name: "config-json", pattern: /\bconfig\.json\b/ },
   { category: "agent-config", name: "claude-settings", pattern: /\.claude[\\/]settings/ },
   { category: "agent-config", name: "seri-env", pattern: /\bSERI_[A-Z_]+\s*[:=]/ },
 ];
-
-
-
 
 const MAX_MATCH_EXCERPT = 60;
 

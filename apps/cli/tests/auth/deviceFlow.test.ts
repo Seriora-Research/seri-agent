@@ -24,15 +24,10 @@ describe("getWorkosClientId", () => {
   let configDir: string;
 
   beforeEach(() => {
-
-
-
     configDir = mkdtempSync(join(tmpdir(), "seri-clientid-test-"));
   });
 
   afterEach(() => {
-
-
     if (original === undefined) delete process.env.SERI_WORKOS_CLIENT_ID;
     else process.env.SERI_WORKOS_CLIENT_ID = original;
     rmSync(configDir, { recursive: true, force: true });
@@ -156,8 +151,6 @@ describe("pollForToken", () => {
     expect(sleepCalls).toEqual([5000, 5000, 5000]);
   });
 
-
-
   test("succeeds with expiresIn undefined when the response has no expires_in field", async () => {
     const fetchFn = (async () =>
       fakeResponse(true, {
@@ -255,7 +248,6 @@ describe("pollForToken", () => {
       return fakeResponse(false, { error: "authorization_pending" });
     }) as unknown as typeof fetch;
 
-
     const nowValues = [0, 0, 301_000];
     const now = () => nowValues.shift() ?? 301_000;
 
@@ -268,10 +260,6 @@ describe("pollForToken", () => {
     expect(result).toEqual({ status: "expired" });
     expect(calls).toBe(1);
   });
-
-
-
-
 
   test("returns {status: 'aborted'} without polling at all when the signal is already aborted", async () => {
     let calls = 0;
@@ -293,14 +281,9 @@ describe("pollForToken", () => {
     expect(calls).toBe(0);
   });
 
-
-
-
   test("discards an in-flight poll's own success once aborted mid-flight, rather than acting on it a tick late", async () => {
     const controller = new AbortController();
     const fetchFn = (async () => {
-
-
       controller.abort();
       return fakeResponse(true, {
         access_token: "at-1",
@@ -321,9 +304,6 @@ describe("pollForToken", () => {
 });
 
 describe("WorkOS keeps its pre-shared-loop 403 semantics", () => {
-
-
-
   test("a 403 carrying access_denied is still denied, not an error", async () => {
     const device: DeviceAuthorization = {
       deviceCode: "dc",

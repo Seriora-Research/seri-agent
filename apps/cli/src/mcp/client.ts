@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 // listTools/callTool, not toolsFromDefinitions: @ai-sdk/mcp and ai pin different @ai-sdk/provider-utils copies whose schemaSymbol unique symbols do not unify.
 import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
 import { capToolResult } from "../capToolResult";
@@ -34,19 +25,11 @@ export type McpServerStatus =
 export type DialFn = (spec: McpServerSpec, signal?: AbortSignal) => Promise<McpClientHandle>;
 
 export type McpClients = {
-
-
-
   readonly dial: DialFn;
-
-
 
   readonly handles: Map<string, Promise<McpClientHandle>>;
   readonly status: Map<string, McpServerStatus>;
 };
-
-
-
 
 export function flattenContent(result: {
   content?: readonly { type: string; text?: string }[];
@@ -66,9 +49,6 @@ async function dialServer(
   authProvider?: OAuthClientProvider,
 ): Promise<McpClientHandle> {
   const client = await createMCPClient({
-
-
-
     transport: { type: "http", url: spec.url, headers: spec.headers, authProvider },
     clientName: "seri",
     initializationOptions: { signal },
@@ -98,9 +78,6 @@ export function createMcpClients(dial: DialFn = dialServer): McpClients {
   return { dial, handles: new Map(), status: new Map() };
 }
 
-
-
-
 export function createSessionDial(configDir: string): DialFn {
   return (spec, signal) =>
     dialServer(
@@ -109,9 +86,6 @@ export function createSessionDial(configDir: string): DialFn {
       createMcpAuthProvider({ spec, configDir, interaction: { kind: "refuse" } }),
     );
 }
-
-
-
 
 export function isAuthRequired(err: unknown): boolean {
   return err instanceof UnauthorizedError || err instanceof McpLoginRequiredError;
@@ -133,9 +107,6 @@ function dialOnce(
       return handle;
     })
     .catch((err: unknown) => {
-
-
-
       clients.handles.delete(spec.name);
       clients.status.set(
         spec.name,
@@ -161,8 +132,6 @@ export async function callMcpTool(
   try {
     handle = await dialOnce(clients, spec, signal);
   } catch (err) {
-
-
     if (isAuthRequired(err)) {
       throw new Error(
         `MCP server "${spec.name}" needs authentication. Run /mcp auth ${spec.name}.`,
@@ -176,9 +145,6 @@ export async function callMcpTool(
     throw new Error(`MCP server "${spec.name}" tool "${remoteTool}" failed: ${messageOf(err)}`);
   }
 }
-
-
-
 
 export async function fetchCatalog(
   spec: McpServerSpec,
@@ -199,17 +165,11 @@ export async function fetchCatalog(
       })),
     };
   } finally {
-
-
     try {
       await handle.close();
     } catch {}
   }
 }
-
-
-
-
 
 export function closeMcpClients(clients: McpClients, onWarning: (message: string) => void): void {
   for (const [name, handle] of clients.handles) {

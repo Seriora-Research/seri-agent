@@ -12,14 +12,7 @@ export type { McpEntry, McpRegistry } from "./types";
 
 export const SERVERS_FILENAME = "servers.yaml";
 
-
-
-
 export const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
-
-
-
-
 
 const ENV_REF = /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
@@ -88,7 +81,6 @@ function parseOneServer(opts: {
       }
       const { text, missingVar } = expandEnvRefs(value, opts.env);
 
-
       if (missingVar !== undefined) {
         return skip(`header "${key}" references unset environment variable "${missingVar}"`);
       }
@@ -101,8 +93,6 @@ function parseOneServer(opts: {
     warning: undefined,
   };
 }
-
-
 
 export function parseServersFile(opts: {
   text: string;
@@ -165,21 +155,14 @@ function isMcpCatalog(value: unknown): value is McpCatalog {
   });
 }
 
-
-
 export function writeCatalogCache(configDir: string, catalog: McpCatalog): void {
   atomicWriteFile(catalogCachePath(configDir, catalog.server), JSON.stringify(catalog, null, 2));
 }
-
-
-
 
 export function deleteCatalogCache(configDir: string, server: string): void {
   const path = catalogCachePath(configDir, server);
   if (existsSync(path)) unlinkSync(path);
 }
-
-
 
 export function readCatalogCache(
   configDir: string,
@@ -208,14 +191,6 @@ export function readCatalogCache(
   }
   return parsed;
 }
-
-
-
-
-
-
-
-
 
 export function loadMcpRegistry(opts: {
   worktree: string;
@@ -256,8 +231,6 @@ export function loadMcpRegistry(opts: {
   return registry;
 }
 
-
-
 export function findMcpTool(
   registry: McpRegistry,
   toolName: string,
@@ -268,7 +241,6 @@ export function findMcpTool(
   }
   return undefined;
 }
-
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -282,9 +254,6 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-
-
-
 export function toolFingerprint(tool: McpToolInfo): string {
   const canonical = canonicalize({
     name: tool.name,
@@ -293,8 +262,6 @@ export function toolFingerprint(tool: McpToolInfo): string {
   });
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
-
-
 
 export function grantFingerprint(registry: McpRegistry, toolName: string): string | undefined {
   const found = findMcpTool(registry, toolName);
@@ -309,9 +276,6 @@ function readServersDoc(filePath: string): Document {
   }
   return doc;
 }
-
-
-
 
 export function addServerToFile(
   filePath: string,
@@ -332,8 +296,6 @@ export function addServerToFile(
   );
   atomicWriteFile(filePath, String(doc));
 }
-
-
 
 export function removeServerFromFile(filePath: string, name: string): boolean {
   if (!existsSync(filePath)) return false;

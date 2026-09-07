@@ -19,12 +19,6 @@ describe("atomicWriteFile", () => {
     expect(readdirSync(join(dir, "sub"))).toEqual(["MEMORY.md"]);
   });
 
-
-
-
-
-
-
   test("two interleaved writes to the same path never see each other's tmp file", () => {
     dir = mkdtempSync(join(tmpdir(), "seri-atomic-"));
     const target = join(dir, "MEMORY.md");
@@ -33,12 +27,6 @@ describe("atomicWriteFile", () => {
     expect(readFileSync(target, "utf8")).toBe("second");
     expect(readdirSync(dir)).toEqual(["MEMORY.md"]);
   });
-
-
-
-
-
-
 
   test("sweeps a stale tmp file left behind by a dead process before writing", () => {
     dir = mkdtempSync(join(tmpdir(), "seri-atomic-"));
@@ -51,11 +39,6 @@ describe("atomicWriteFile", () => {
     expect(existsSync(stalePath)).toBe(false);
     expect(readdirSync(dir)).toEqual(["MEMORY.md"]);
   });
-
-
-
-
-
 
   test("does not sweep a tmp file whose encoded pid is still alive", () => {
     dir = mkdtempSync(join(tmpdir(), "seri-atomic-"));

@@ -1,6 +1,3 @@
-
-
-
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage, ToolSet } from "ai";
 import { tool } from "ai";
@@ -217,7 +214,6 @@ describe("parallel read-only blast radius", () => {
       }),
     );
     expect(after).toEqual(["read_file", "grep", "glob"]);
-
 
     expect(readAfterBeforeGrepStart).toBe(false);
   });

@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { pollForToken, requestDeviceCode } from "../../src/auth/deviceFlow";
 
-
-
-
-
 describe.skipIf(!process.env.SERI_TEST_WORKOS_CLIENT_ID)(
   "requestDeviceCode + pollForToken (live WorkOS sandbox)",
   () => {
@@ -20,10 +16,6 @@ describe.skipIf(!process.env.SERI_TEST_WORKOS_CLIENT_ID)(
       expect(device.verificationUri.startsWith("https://")).toBe(true);
       expect(device.expiresIn).toBeGreaterThan(0);
       expect(device.interval).toBeGreaterThan(0);
-
-
-
-
 
       let sawPending = false;
       const nowValues = [0, 0, device.expiresIn * 1000 + 1];

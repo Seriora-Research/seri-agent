@@ -1,15 +1,9 @@
-
-
-
-
 import { auth } from "@ai-sdk/mcp";
 import { openBrowser } from "../auth/browser";
 import { messageOf } from "../errors";
 import { createMcpAuthProvider } from "./authProvider";
 import { type CallbackServer, type StartCallbackServer, startCallbackServer } from "./loopback";
 import type { McpServerSpec } from "./types";
-
-
 
 export const MCP_LOGIN_TIMEOUT_MS = 300_000;
 
@@ -19,8 +13,6 @@ export type McpLoginResult =
   | { readonly status: "timeout" }
   | { readonly status: "aborted" }
   | { readonly status: "error"; readonly message: string };
-
-
 
 export async function loginMcpServer(
   spec: McpServerSpec,
@@ -47,9 +39,6 @@ export async function loginMcpServer(
 
   let server: CallbackServer | undefined;
   try {
-
-
-
     server = await listen();
     const provider = createMcpAuthProvider({
       spec,
@@ -58,16 +47,11 @@ export async function loginMcpServer(
         kind: "redirect",
         redirectUri: server.redirectUri,
         onRedirect: (url) => {
-
-
-
           onMessage?.(`Authenticating "${spec.name}". If your browser did not open: ${url.href}`);
           openUrl(url.href);
         },
       },
     });
-
-
 
     if ((await authFn(provider, { serverUrl: spec.url, fetchFn })) === "AUTHORIZED") {
       return { status: "success" };
@@ -95,8 +79,6 @@ export async function loginMcpServer(
   } catch (err) {
     return { status: "error", message: messageOf(err) };
   } finally {
-
-
     server?.close();
   }
 }

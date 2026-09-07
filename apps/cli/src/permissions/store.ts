@@ -7,21 +7,8 @@ import { parseAutoModeOnBlock, type AutoModeOnBlock } from "../gate/classifier";
 import type { PathDenial } from "../gate/gate";
 import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
-
-
-
-
-
 export const PERSISTABLE_TOOL_NAMES = ["write_file", "edit"] as const;
 export const PERSISTABLE_TOOLS: ReadonlySet<string> = new Set(PERSISTABLE_TOOL_NAMES);
-
-
-
-
-
-
-
-
 
 export function isPersistableTool(tool: string): boolean {
   return PERSISTABLE_TOOLS.has(tool) || isMcpToolName(tool);
@@ -33,19 +20,6 @@ export function permissionsPath(configDir: string): string {
   return join(configDir, PERMISSIONS_FILENAME);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 export function projectKey(worktree: string): string {
   const resolved = resolve(worktree);
   // NTFS/APFS fold case; ext4 does not.
@@ -53,11 +27,8 @@ export function projectKey(worktree: string): string {
 }
 
 export type Grants = {
-
-
   readonly global: readonly string[];
   readonly project: readonly string[];
-
 
   readonly otherProjects: number;
 };
@@ -122,17 +93,6 @@ function parseYamlStore(configDir: string): YamlStore {
   return { status: "parsed", path, doc };
 }
 
-
-
-
-
-
-
-
-
-
-
-
 function readStore(configDir: string): StoreState {
   const parsed = parseYamlStore(configDir);
   if (parsed.status === "missing") return { status: "missing" };
@@ -149,12 +109,6 @@ function scalarStrings(seq: YAMLSeq): string[] {
     .map((item) => (item instanceof Scalar ? item.value : item))
     .filter((value): value is string => typeof value === "string");
 }
-
-
-
-
-
-
 
 function extractToolList(
   node: unknown,
@@ -176,8 +130,6 @@ function extractToolList(
 }
 
 const DENIAL_ENTRY = /^([A-Za-z0-9_]+)\((.+)\)$/;
-
-
 
 const DENIABLE_TOOLS: ReadonlySet<string> = new Set(["read_file", "glob", "grep", "write_file"]);
 
@@ -201,13 +153,6 @@ function describeDenyEntry(value: unknown): string {
   if (value instanceof YAMLSeq) return "a list";
   return "an object";
 }
-
-
-
-
-
-
-
 
 export function loadDenials(
   configDir: string,
@@ -253,9 +198,6 @@ export function loadDenials(
   }
   return result;
 }
-
-
-
 
 function bareToolName(entry: string): string {
   return parseMcpGrantKey(entry)?.toolName ?? entry;
@@ -310,10 +252,6 @@ export function loadAutoModeOnBlock(
   return parseAutoModeOnBlock(value);
 }
 
-
-
-
-
 function writeDocument(doc: Document, configDir: string): void {
   ensureOwnerOnlyDir(configDir);
   const path = permissionsPath(configDir);
@@ -322,18 +260,6 @@ function writeDocument(doc: Document, configDir: string): void {
   if (process.platform !== "win32") chmodSync(tmpPath, 0o600);
   renameSync(tmpPath, path);
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 export function rememberGrant(
   configDir: string,
@@ -362,13 +288,6 @@ export function rememberGrant(
   const doc = state.status === "missing" ? parseDocument(TEMPLATE) : state.doc;
   const key = projectKey(worktree);
 
-
-
-
-
-
-
-
   const globalSeq = doc.get("global");
   const projectSeq = doc.getIn(["projects", key]);
   const globalStale =
@@ -387,8 +306,6 @@ export function rememberGrant(
   if (projectStale !== undefined && projectSeq instanceof YAMLSeq) {
     removeFromSeq(projectSeq, projectStale);
   }
-
-
 
   const entry = doc.createNode(value) as Scalar;
   entry.comment = ` added ${new Date().toISOString().slice(0, 10)} by seri`;
@@ -413,11 +330,6 @@ export function rememberGrant(
   return true;
 }
 
-
-
-
-
-
 export function forgetGrant(
   configDir: string,
   worktree: string,
@@ -441,8 +353,6 @@ export function forgetGrant(
   const projectsNode = doc.get("projects");
   const list = doc.getIn(["projects", key]);
   const removedProject = list instanceof YAMLSeq ? removeFromSeq(list, tool) : false;
-
-
 
   if (
     removedProject &&

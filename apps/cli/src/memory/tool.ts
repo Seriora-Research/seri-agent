@@ -11,17 +11,9 @@ import {
   type MemoryWriteRequest,
 } from "./store";
 
-
-
-
-
-
 export const memoryWriteInputSchema = z.object({
   scope: z.enum(["user", "memory-global", "memory-project"]),
   action: z.enum(["add", "replace", "remove"]),
-
-
-
 
   target: z.string().min(1).optional(),
   content: z.string().optional(),
@@ -38,17 +30,10 @@ const DESCRIPTION =
   `existing entry. "reason" and "durable" are always required: they travel with the write for a ` +
   `human to review, never with the entry text itself.`;
 
-
-
-
-
 export function makeMemoryWriteTool(
   ctx: MemoryContext,
   opts: {
     forceStage?: boolean;
-
-
-
 
     onStaged?: (staged: PendingWrite) => void;
   } = {},
@@ -57,8 +42,6 @@ export function makeMemoryWriteTool(
     description: DESCRIPTION,
     inputSchema: memoryWriteInputSchema,
     execute: async (args) => {
-
-
       const scanText = [args.content, args.target, args.reason].filter(Boolean).join("\n");
       const scan = scanForInjection(scanText);
       if (!scan.ok) {
@@ -77,8 +60,6 @@ export function makeMemoryWriteTool(
         durable: args.durable,
       };
       const today = new Date().toISOString().slice(0, 10);
-
-
 
       computeWrite(loadMemoryFile(req.scope, ctx), req, today);
 

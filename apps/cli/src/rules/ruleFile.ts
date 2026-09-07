@@ -3,7 +3,6 @@ import { parse } from "yaml";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
 
-
 export type RuleTrigger = "always" | "globs" | "inert";
 
 export type RuleSpec = {
@@ -35,7 +34,6 @@ function readString(value: unknown): string | undefined {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-
 function splitPatterns(value: string): string[] {
   const out: string[] = [];
   let depth = 0;
@@ -53,9 +51,6 @@ function splitPatterns(value: string): string[] {
   out.push(current);
   return out.map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0);
 }
-
-
-
 
 function readGlobs(value: unknown): string[] {
   if (typeof value === "string") return splitPatterns(value);
@@ -94,15 +89,10 @@ export function parseRuleFile(opts: {
 
   const globs = readGlobs(fields.globs);
 
-
-
-
   const trigger: RuleTrigger =
     fields.alwaysApply === true ? "always" : globs.length > 0 ? "globs" : "inert";
 
   if (trigger === "inert") {
-
-
     warnings.push(
       `rule file ${filePath}: no "alwaysApply" and no "globs", so nothing loads it — seri does not ` +
         `yet support a rule the model pulls in by description`,

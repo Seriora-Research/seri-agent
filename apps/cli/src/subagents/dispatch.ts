@@ -21,10 +21,7 @@ import {
 } from "./registry";
 import type { TaskRouteRequest } from "./routes";
 
-
-
 const MAX_TASKS_PER_DISPATCH = 3;
-
 
 const MAX_CHILD_ITERATIONS = 25;
 
@@ -39,12 +36,9 @@ export type SubagentUsage = {
 export type ChildEventPayload = {
   childId: string;
 
-
-
   role: string;
   goal: string;
   event: LoopEvent | { type: "child-started" };
-
 
   model?: string;
   provider?: ModelProvider;
@@ -64,9 +58,7 @@ export type SubagentResult = SubagentTask & {
   usage: SubagentUsage;
   toolCallsMade: number;
 
-
   doneReason: DoneReason | undefined;
-
 
   model?: string;
   provider?: ModelProvider;
@@ -74,8 +66,6 @@ export type SubagentResult = SubagentTask & {
 };
 
 export type DispatchResult = { results: SubagentResult[]; totalUsage: SubagentUsage };
-
-
 
 export type SubagentRuntime = {
   runLoop: typeof runLoop;
@@ -85,31 +75,21 @@ export type SubagentRuntime = {
   catalog: ModelCatalog;
   contextWindowSize?: number;
 
-
   reasoningEffort: string | undefined;
   credential?: RouteCredential;
   temperature?: number;
   seed?: number;
 
-
   permissionMode: () => PermissionMode;
   allowedTools: readonly string[];
 
-
   pathDenials: readonly PathDenial[];
-
-
 
   checkpointer?: OnBeforeMutation & { onAfterMutation?: OnAfterMutation };
   onChildUsage?: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
 
   onChildEvent?: (payload: ChildEventPayload) => void;
   maxIterations?: number;
-
-
-
-
-
 
   resolveRole?: (
     role: string,
@@ -127,18 +107,7 @@ export type SubagentRuntime = {
   cwd?: string;
   blockReadsOutsideWorkingDirectories?: boolean;
 
-
   outsideConsent?: { current: Consent };
-
-
-
-
-
-
-
-
-
-
 
   onBeforeTool?: (
     subject: string,
@@ -147,14 +116,9 @@ export type SubagentRuntime = {
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
   containmentEscapeExpected?: boolean;
 
-
-
-
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
 };
-
-
 
 function addTokens(total: number | undefined, next: number | undefined): number | undefined {
   return next === undefined ? total : (total ?? 0) + next;
@@ -167,13 +131,6 @@ function sumUsage(a: SubagentUsage, b: SubagentUsage): SubagentUsage {
     totalTokens: addTokens(a.totalTokens, b.totalTokens),
   };
 }
-
-
-
-
-
-
-
 
 function fallbackSummary(
   doneReason: DoneReason | undefined,
@@ -222,10 +179,6 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
   }
 }
 
-
-
-
-
 export async function runSubagent(opts: {
   tools: ToolSet;
   system: string;
@@ -242,11 +195,6 @@ export async function runSubagent(opts: {
   };
 }): Promise<{
   summary: string;
-
-
-
-
-
 
   summaryIsFallback: boolean;
   usage: SubagentUsage;
@@ -295,19 +243,14 @@ export async function runSubagent(opts: {
     if (event.type === "text-delta") {
       segment += event.text;
     } else if (event.type === "tool-call") {
-
       segment = "";
       toolCallsMade++;
     } else if (event.type === "usage" || event.type === "compacted") {
-
-
-
       usage = sumUsage(usage, {
         inputTokens: event.usage.inputTokens,
         outputTokens: event.usage.outputTokens,
         totalTokens: event.usage.totalTokens,
       });
-
 
       runtime.onChildUsage?.(event.usage, event.type === "usage" ? event.cost : undefined);
     } else if (event.type === "permission-denied") {
@@ -344,9 +287,6 @@ export async function runSubagent(opts: {
   };
 }
 
-
-
-
 export function dispatchDescription(agents: AgentRegistry): string {
   const roster = [...agents.values()]
     .filter((spec) => spec.description.length > 0)
@@ -365,10 +305,6 @@ export function dispatchDescription(agents: AgentRegistry): string {
     `that cannot be constructed falls back to the session model.`
   );
 }
-
-
-
-
 
 export function dispatchSchema(agents: AgentRegistry) {
   const names = [...agents.values()]
@@ -393,9 +329,6 @@ export function dispatchSchema(agents: AgentRegistry) {
   });
 }
 
-
-
-
 function hasSpec<T>(entry: {
   task: T;
   spec: AgentSpec | undefined;
@@ -403,20 +336,11 @@ function hasSpec<T>(entry: {
   return entry.spec !== undefined;
 }
 
-
 type ChildIdentity = {
   model: string;
   provider: ModelProvider;
   inherited: boolean;
 };
-
-
-
-
-
-
-
-
 
 async function runAgentChild(opts: {
   runtime: SubagentRuntime & { system: string };
@@ -462,10 +386,6 @@ async function runAgentChild(opts: {
   return { ...settled, identity };
 }
 
-
-
-
-
 export function createDispatchTool(
   runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
 ) {
@@ -476,20 +396,11 @@ export function createDispatchTool(
     execute: async (args, options) => {
       const { tasks } = args;
 
-
-
       const scheduled = tasks
         .slice(0, MAX_TASKS_PER_DISPATCH)
         .map((task) => ({ task, spec: agents.get(task.role) }));
       const runnable = scheduled.filter(hasSpec);
       const overflow = tasks.slice(MAX_TASKS_PER_DISPATCH);
-
-
-
-
-
-
-
 
       if (runnable.some(({ spec }) => agentMutatesFilesystem(spec)) && runtime.checkpointer) {
         const context: MutationContext = {
@@ -518,15 +429,6 @@ export function createDispatchTool(
         });
       }
 
-
-
-
-
-
-
-
-
-
       const settled: Awaited<ReturnType<typeof runOne>>[] = new Array(runnable.length);
       const readerIdx = runnable
         .map((_, i) => i)
@@ -542,10 +444,6 @@ export function createDispatchTool(
           for (const i of writerIdx) settled[i] = await runOne(runnable[i], i);
         })(),
       ]);
-
-
-
-
 
       const results: SubagentResult[] = [];
       let settledIndex = 0;
@@ -579,8 +477,6 @@ export function createDispatchTool(
           goal: task.goal,
           summary: `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`,
 
-
-
           usage: {},
           toolCallsMade: 0,
           doneReason: undefined,
@@ -595,15 +491,12 @@ export function createDispatchTool(
   });
 }
 
-
-
 export function withSubagents(
   tools: ToolSet,
   runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
 ): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
 }
-
 
 /** `/name <task>` engine: one child with the same grant, overlay, checkpoint, and rows a model dispatch gets. */
 export async function dispatchDirect(opts: {
@@ -626,7 +519,6 @@ export async function dispatchDirect(opts: {
       rewindTo: opts.rewindTo,
     });
   }
-
 
   const settled = await runAgentChild({
     runtime,

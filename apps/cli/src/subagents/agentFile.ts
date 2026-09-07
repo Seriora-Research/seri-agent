@@ -5,15 +5,9 @@ import { messageOf } from "../errors";
 import { READ_ONLY_TOOL_NAMES, type ToolName, toolDefinitions } from "../provider/tools";
 import { type AgentSource, type AgentSpec, composeAddendum } from "./registry";
 
-
-
-
 export type AgentFileOutcome =
   | { readonly kind: "spec"; readonly spec: AgentSpec; readonly warnings: readonly string[] }
   | { readonly kind: "skipped"; readonly warning: string };
-
-
-
 
 const TOOL_ALIASES: Readonly<Record<string, ToolName>> = {
   read_file: "read_file",
@@ -27,24 +21,14 @@ const TOOL_ALIASES: Readonly<Record<string, ToolName>> = {
   write: "write_file",
 };
 
-
-
 const MODEL_PARAMS = /^([^[]*)\[([^\]]*)\]\s*$/;
-
-
-
 
 // CRLF-tolerant: these files are edited on Windows.
 const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
-
-
 const MD_EXTENSION = /\.md$/i;
-
-
-
 
 const MAX_DESCRIPTION_LENGTH = 500;
 
@@ -57,11 +41,6 @@ function readString(value: unknown): string | undefined {
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
 }
-
-
-
-
-
 
 function readToolEntries(value: unknown): readonly string[] | undefined {
   if (value === undefined) return undefined;
@@ -85,8 +64,6 @@ export function parseAgentFile(opts: {
 }): AgentFileOutcome {
   const { filePath } = opts;
 
-
-
   // UTF-8 BOM: Notepad and PowerShell redirection write one ahead of the opening fence.
   const text = opts.text.charCodeAt(0) === 0xfeff ? opts.text.slice(1) : opts.text;
   const fence = FRONTMATTER.exec(text);
@@ -101,7 +78,6 @@ export function parseAgentFile(opts: {
   if (typeof front !== "object" || front === null || Array.isArray(front)) {
     return skip(filePath, "its frontmatter is not a mapping of keys to values");
   }
-
 
   const fields = front as Record<string, unknown>;
   const warnings: string[] = [];
@@ -118,8 +94,6 @@ export function parseAgentFile(opts: {
   if (opts.isReserved(name)) {
     return skip(filePath, `"${name}" is already taken by a built-in agent or a slash command`);
   }
-
-
 
   const entries = readToolEntries(fields.tools);
   let toolNames: readonly ToolName[];
@@ -141,7 +115,6 @@ export function parseAgentFile(opts: {
       if (!granted.includes(resolved)) granted.push(resolved);
     }
 
-
     if (granted.length === 0) {
       return skip(filePath, "its `tools:` list names nothing seri recognises");
     }
@@ -157,10 +130,6 @@ export function parseAgentFile(opts: {
     .find(([key]) => key?.trim() === "effort")?.[1]
     ?.trim();
   const effort = readString(bracketEffort) ?? readString(fields.effort);
-
-
-
-
 
   let pair: { model: string; provider: ModelProvider } | undefined;
   if (modelId.length > 0 && modelId.toLowerCase() !== "inherit") {
@@ -180,9 +149,6 @@ export function parseAgentFile(opts: {
     description = description.slice(0, MAX_DESCRIPTION_LENGTH);
   }
   if (description === undefined) {
-
-
-
     warnings.push(
       `agent file ${filePath}: no description, so the model is never told this agent exists`,
     );

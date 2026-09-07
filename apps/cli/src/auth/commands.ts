@@ -14,16 +14,8 @@ export async function login(
     openBrowser?: typeof openBrowser;
     pollForToken?: typeof pollForToken;
 
-
-
-
-
-
     onDeviceCode?: (device: { verificationUri: string; userCode: string }) => void;
     onMessage?: (message: string) => void;
-
-
-
 
     signal?: AbortSignal;
   } = {},
@@ -41,12 +33,6 @@ export async function login(
 
   const device = await requestDeviceCodeFn(clientId);
 
-
-
-
-
-
-
   if (deps.signal?.aborted === true) {
     return;
   }
@@ -55,8 +41,6 @@ export async function login(
   openBrowserFn(device.verificationUriComplete);
 
   const result = await pollForTokenFn(clientId, device, { signal: deps.signal });
-
-
 
   if (result.status === "aborted") {
     return;

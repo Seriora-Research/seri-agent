@@ -47,16 +47,12 @@ export async function fetchUsageReport(
         return parseUsageReport(await response.json());
       },
     );
-  } catch {
-
-  }
+  } catch {}
 
   if (report !== null) {
     try {
       writeUsageSnapshot(configDir, { fetchedAt: now.toISOString(), report });
-    } catch {
-
-    }
+    } catch {}
     return { status: "ok", report };
   }
 

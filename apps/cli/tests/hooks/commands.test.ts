@@ -26,8 +26,6 @@ function makeTree(files: Record<string, string>): { worktree: string; configDir:
   return { worktree, configDir };
 }
 
-
-
 function scriptPair(name: string, label: string): Record<string, string> {
   return {
     [`${name}.sh`]: `#!/bin/sh\necho "${label}"\n`,

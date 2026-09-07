@@ -22,9 +22,6 @@ afterEach(() => {
   roots = [];
 });
 
-
-
-
 function makeTree(files: Record<string, string>): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-mcp-"));
   roots.push(root);
@@ -87,8 +84,6 @@ describe("loadMcpRegistry", () => {
     expect(registry.get("exa")?.spec.source).toBe("project");
   });
 
-
-
   test("a malformed YAML file is skipped with a warning naming it, and the other scope still loads", () => {
     const { registry, warnings } = load({
       "profile/mcp/servers.yaml": "servers:\n  exa: [unclosed\n",
@@ -113,12 +108,6 @@ describe("loadMcpRegistry", () => {
     expect([...registry.keys()]).toEqual(["exa"]);
     expect(warnings.some((w) => w.includes("Bad-Name") && w.includes("name"))).toBe(true);
   });
-
-
-
-
-
-
 
   test("an underscore in a server name is rejected, which is what keeps the tool-name fold injective", () => {
     const { registry, warnings } = load({
@@ -163,10 +152,6 @@ describe("loadMcpRegistry", () => {
       warnings.some((w) => w.includes("exa") && w.includes("SERI_TEST_DEFINITELY_UNSET_VAR")),
     ).toBe(true);
   });
-
-
-
-
 
   test("performs no network I/O: an unreachable server loads synchronously with no catalog", () => {
     const { worktree, configDir } = makeTree({

@@ -92,8 +92,9 @@ describe("ApprovalBox (OpenTUI)", () => {
     );
     const frame = setup.captureCharFrame();
     expect(frame).toContain("Approve edit?");
-    expect(frame).toContain("- old");
-    expect(frame).toContain("+ new");
+    expect(frame).toContain("Edit");
+    expect(frame).toContain("▏1 old");
+    expect(frame).toContain("▏1 new");
   });
 
   test("a write_file approval does not invent an all-adds hunk", async () => {

@@ -20,8 +20,6 @@ afterEach(() => {
   configDir = undefined;
 });
 
-
-
 function callTool(
   toolDef: ReturnType<typeof makeMemoryWriteTool>,
   args: Record<string, unknown>,
@@ -53,9 +51,6 @@ describe("makeMemoryWriteTool", () => {
     expect(missingReason.success).toBe(false);
     expect(missingDurable.success).toBe(false);
   });
-
-
-
 
   test("schema rejects an empty-string target", () => {
     const result = memoryWriteInputSchema.safeParse({

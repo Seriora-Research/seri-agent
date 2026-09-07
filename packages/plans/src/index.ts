@@ -1,13 +1,8 @@
-
-
 export const PLANS = ["free", "pro", "max", "ultra"] as const;
 export type Plan = (typeof PLANS)[number];
 
-
 export const PAID_PLANS = ["pro", "max", "ultra"] as const;
 export type PaidPlan = (typeof PAID_PLANS)[number];
-
-
 
 export const PLAN_MONTHLY_USD: Record<PaidPlan, number> = {
   pro: 20,
@@ -16,8 +11,6 @@ export const PLAN_MONTHLY_USD: Record<PaidPlan, number> = {
 };
 
 export const INCLUDED_SPEND_RATIO = 0.75;
-
-
 
 export const SUBSCRIPTION_STATUSES = ["active", "canceled", "past_due", "revoked"] as const;
 export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
@@ -28,7 +21,6 @@ export const PRODUCT_ENV_VAR: Record<Plan, string> = {
   max: "POLAR_PRODUCT_MAX",
   ultra: "POLAR_PRODUCT_ULTRA",
 };
-
 
 export type ProductEnv = Record<string, string | undefined>;
 
@@ -59,7 +51,6 @@ export function planForProductId(productId: string, env: ProductEnv): Plan | nul
 export function isUpgrade(from: PaidPlan, to: PaidPlan): boolean {
   return PLAN_MONTHLY_USD[to] > PLAN_MONTHLY_USD[from];
 }
-
 
 export function missingProductVars(env: ProductEnv): string[] {
   return Object.values(PRODUCT_ENV_VAR).filter((name) => !env[name]);

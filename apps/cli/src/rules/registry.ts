@@ -7,7 +7,6 @@ import { parseRuleFile, type RuleSpec } from "./ruleFile";
 
 export type { RuleSpec, RuleTrigger } from "./ruleFile";
 
-
 export type RuleRegistry = ReadonlyMap<string, RuleSpec>;
 
 function ruleFilesIn(dir: string, onWarning: (message: string) => void): readonly string[] {
@@ -21,7 +20,6 @@ function ruleFilesIn(dir: string, onWarning: (message: string) => void): readonl
     return [];
   }
 }
-
 
 export function loadRuleRegistry(opts: {
   worktree: string;
@@ -60,7 +58,6 @@ export function loadRuleRegistry(opts: {
   return rules;
 }
 
-
 export function renderRulesTier(rules: readonly RuleSpec[]): string {
   const always = rules.filter((rule) => rule.trigger === "always");
   if (always.length === 0) return "";
@@ -71,27 +68,20 @@ export function renderRulesTier(rules: readonly RuleSpec[]): string {
   ].join("\n");
 }
 
-
-
-
 function toPosix(path: string): string {
   return path.replaceAll("\\", "/");
 }
-
 
 export function worktreeRelativePath(
   worktree: string,
   cwd: string,
   rawPath: string,
 ): string | undefined {
-
-
   const absolute = isAbsolute(rawPath) ? rawPath : resolve(cwd, rawPath);
   const rel = relative(resolve(worktree), absolute);
   if (rel.length === 0 || rel.startsWith("..") || isAbsolute(rel)) return undefined;
   return toPosix(rel);
 }
-
 
 export function ruleMatchesPath(rule: RuleSpec, relativePath: string): boolean {
   return rule.globs.some((pattern) => new Bun.Glob(pattern).match(relativePath));

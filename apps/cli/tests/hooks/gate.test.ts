@@ -1,7 +1,3 @@
-
-
-
-
 import { describe, expect, test } from "bun:test";
 import { createHookRunner, type HookRunner } from "../../src/hooks/gate";
 import type {
@@ -32,9 +28,6 @@ function registryOf(pre: readonly HookSpec[], post: readonly HookSpec[] = []): H
   return registry;
 }
 
-
-
-
 function fakeRun(outcomes: readonly HookOutcome[]) {
   const calls: { spec: HookSpec; payload: HookPayload }[] = [];
   let next = 0;
@@ -46,9 +39,6 @@ function fakeRun(outcomes: readonly HookOutcome[]) {
     },
   };
 }
-
-
-
 
 function builtRunner(opts: Parameters<typeof createHookRunner>[0]): HookRunner {
   const runner = createHookRunner(opts);
@@ -68,9 +58,6 @@ describe("createHookRunner", () => {
     ]);
     expect(createHookRunner({ registry, cwd: "/worktree" })).toBeUndefined();
   });
-
-
-
 
   test("a PostToolUse-only registry builds a runner whose onBeforeTool runs nothing", async () => {
     const fake = fakeRun([]);
@@ -115,7 +102,6 @@ describe("createHookRunner", () => {
       block: "do not touch main",
       errors: [],
     });
-
 
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["guard"]);
   });
@@ -198,11 +184,8 @@ describe("createHookRunner", () => {
       "that file is generated",
     ]);
 
-
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["too-late", "behind-it"]);
   });
-
-
 
   test("the payload carries the event, the subject, the cwd and the tool's own input", async () => {
     const fake = fakeRun([]);
@@ -227,7 +210,6 @@ describe("createHookRunner", () => {
         tool_name: "mcp__github__create_issue",
         cwd: "/worktree",
         tool_input: { title: "a bug" },
-
 
         tool_response: { url: "…/1" },
       },

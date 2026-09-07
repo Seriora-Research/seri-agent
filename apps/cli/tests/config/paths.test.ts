@@ -40,8 +40,6 @@ function restoreEnv(key: string, original: string | undefined): void {
   else process.env[key] = original;
 }
 
-
-
 afterEach(() => {
   setPlatform(originalPlatform);
   restoreEnv("HOME", originalHome);
@@ -71,9 +69,6 @@ describe("getBaseConfigDir", () => {
     expect(getBaseConfigDir()).toBe(join("C:\\Users\\dest", ".seri"));
   });
 
-
-
-
   test("win32 without HOME falls back to homedir()", () => {
     setPlatform("win32");
     delete process.env.HOME;
@@ -86,9 +81,6 @@ describe("getBaseConfigDir", () => {
     process.env.HOME = "/home/test";
     expect(getBaseConfigDir()).toBe(join("/home/test", ".seri"));
   });
-
-
-
 
   test("posix without HOME falls back to homedir()", () => {
     setPlatform("linux");
@@ -114,8 +106,6 @@ describe("getConfigDir default-profile identity", () => {
     process.env.HOME = "/home/test";
     expect(getConfigDir()).toBe(getBaseConfigDir());
   });
-
-
 
   test("each per-profile leaf path equals today's literal value", () => {
     setPlatform("linux");
@@ -145,9 +135,6 @@ describe("getConfigDir default-profile identity", () => {
     process.env.SERI_PROFILE = "default";
     expect(getConfigDir()).toBe(base);
   });
-
-
-
 
   test("a differently-cased default profile folds on win32, stays distinct on linux", () => {
     setPlatform("win32");
@@ -209,18 +196,9 @@ describe("getConfigDir disjointness", () => {
 });
 
 describe("profileNameError", () => {
-
-
-
   test("every reserved name is rejected", () => {
     for (const name of getReservedProfileNames()) expect(profileNameError(name)).toBeDefined();
   });
-
-
-
-
-
-
 
   test("the reserved set is exactly the file and directory names it collides with", () => {
     const expected = [
@@ -249,7 +227,6 @@ describe("profileNameError", () => {
     expect([...getReservedProfileNames()].sort()).toEqual([...expected].sort());
   });
 
-
   test.each([
     "agents",
     "skills",
@@ -271,9 +248,6 @@ describe("profileNameError", () => {
     expect(profileNameError(name)).toBeDefined();
   });
 
-
-
-
   test("reserved names are rejected case-folded on win32", () => {
     setPlatform("win32");
     expect(profileNameError("Sessions")).toBeDefined();
@@ -283,8 +257,6 @@ describe("profileNameError", () => {
     setPlatform("darwin");
     expect(profileNameError("Sessions")).toBeDefined();
   });
-
-
 
   test("a differently-cased name is valid on linux", () => {
     setPlatform("linux");
@@ -311,7 +283,6 @@ describe("resolveProfile precedence (D1)", () => {
     expect(resolveProfile(undefined)).toEqual({ profile: "envd", source: "env" });
   });
 
-
   test("an empty SERI_PROFILE reads as unset", () => {
     process.env.SERI_PROFILE = "";
     expect(resolveProfile(undefined)).toEqual({ profile: DEFAULT_PROFILE, source: "default" });
@@ -321,9 +292,6 @@ describe("resolveProfile precedence (D1)", () => {
     delete process.env.SERI_PROFILE;
     expect(resolveProfile(undefined)).toEqual({ profile: DEFAULT_PROFILE, source: "default" });
   });
-
-
-
 
   test("an empty --profile flag reads as unset, same as an empty SERI_PROFILE", () => {
     delete process.env.SERI_PROFILE;

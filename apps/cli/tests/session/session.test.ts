@@ -179,8 +179,6 @@ describe("recent SQLite sessions", () => {
   );
 });
 
-
-
 test("separate profile roots never see each other's sessions", () => {
   const parent = mkdtempSync(join(tmpdir(), "seri-profile-session-test-"));
   const first = join(parent, "first", "sessions");

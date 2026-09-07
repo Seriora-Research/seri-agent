@@ -86,9 +86,6 @@ describe("loadMemoryFile / loadMemory", () => {
     expect(memory.project.path).not.toContain("harness");
   });
 
-
-
-
   test("a file written with a trailing newline loads with the correct entry count, no phantom entry", () => {
     const ctx = makeCtx();
     const path = memoryFilePath("user", ctx);
@@ -99,13 +96,6 @@ describe("loadMemoryFile / loadMemory", () => {
     expect(file.entries[0].text).toBe("one entry");
     expect(file.text).toBe("- [2026-08-11] one entry");
   });
-
-
-
-
-
-
-
 
   test("a global file with just a trailing newline still renders '(nothing recorded yet)', not a stray blank line", () => {
     const ctx = makeCtx();
@@ -121,11 +111,8 @@ describe("loadMemoryFile / loadMemory", () => {
     const lines = renderMemoryTier(loadMemory(ctx)).split("\n");
     const headingIndex = lines.findIndex((l) => l.startsWith("## Global notes"));
 
-
     expect(lines[headingIndex + 1]).toBe("(nothing recorded yet)");
   });
-
-
 
   test("a CRLF file loads with LF-only text and the CRLF-inflated char count is not used", () => {
     const ctx = makeCtx();
@@ -246,11 +233,6 @@ describe("computeWrite: action semantics", () => {
     ).toThrow(/no entry contains/);
   });
 
-
-
-
-
-
   test("an empty target throws rather than matching every entry", () => {
     const file: MemoryFile = {
       ...emptyFile(),
@@ -284,7 +266,6 @@ describe("computeWrite: action semantics", () => {
 describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
   test("user cap: an add that lands over 1375 chars throws, lists every current entry, and the file on disk stays byte-identical to a captured before that differs from the write attempt", () => {
     const ctx = makeCtx();
-
 
     const seedEntry = `- [2026-08-01] ${"x".repeat(1_320)}`;
     applyWrite(

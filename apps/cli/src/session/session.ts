@@ -42,8 +42,6 @@ export function saveSession(
   withDatabase(
     sessionsDir,
     (db) => {
-
-
       if (database === undefined) db.importLegacySessions(sessionsDir);
       db.saveSession(state);
     },

@@ -82,10 +82,6 @@ describe("pruneTrajectories", () => {
     }
   });
 
-
-
-
-
   test(
     "deletes database sessions older than the window and keeps keepSessionId",
     () => {

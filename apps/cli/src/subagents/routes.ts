@@ -9,10 +9,6 @@ export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "arc
 
 export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
 
-
-
-
-
 export function isRoutableRole(value: string): value is RoutableRole {
   return (ROUTABLE_ROLES as readonly string[]).includes(value);
 }
@@ -53,9 +49,6 @@ function pinFromSource(
   return { model, provider };
 }
 
-
-
-
 export function parseRolePins(
   env: Record<string, string | undefined>,
   config: Record<string, string>,
@@ -80,9 +73,6 @@ export function pinFromTask(request: TaskRouteRequest | undefined): RolePin | un
   return { model: request.model, provider: request.provider };
 }
 
-
-
-
 export function resolveChildRoute(
   role: RoutableRole | undefined,
   parent: ResolvedRoute,
@@ -91,9 +81,6 @@ export function resolveChildRoute(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
-
-
-
 
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
   hostedActive = false,
@@ -161,8 +148,6 @@ export function effortForChild(
   return effortForRole(parent, child);
 }
 
-
-
 export function realizedRoute(
   intended: RoleRoute,
   parent: ResolvedRoute,
@@ -177,8 +162,6 @@ export function realizedRoute(
     inherited: true,
   };
 }
-
-
 
 export function roleConstructionWarning(
   role: string,

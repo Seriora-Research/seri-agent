@@ -3,10 +3,6 @@ import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
 import { HOOK_BLOCK_EXIT_CODE, type HookOutcome, type HookPayload, type HookSpec } from "./types";
 
-
-
-
-
 const REASON_MAX_CHARS = 300;
 
 function truncate(text: string): string {
@@ -16,7 +12,6 @@ function truncate(text: string): string {
 function blockReason(spec: HookSpec, stderr: string): string {
   const trimmed = stderr.trim();
 
-
   return truncate(trimmed || `${spec.script} blocked the call but printed nothing on stderr`);
 }
 
@@ -24,21 +19,6 @@ function failureMessage(spec: HookSpec, cause: string, stderr: string): string {
   const trimmed = stderr.trim();
   return truncate(trimmed ? `${spec.script} ${cause}: ${trimmed}` : `${spec.script} ${cause}`);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function resolveInterpreter(spec: HookSpec): { executable: string; args: string[] } | undefined {
   // win32 → powershell.exe. Git Bash on Windows is still win32 here (process.platform).
@@ -77,9 +57,6 @@ export async function runHook(
       JSON.stringify(payload),
     );
   } catch (err) {
-
-
-
     if (signal?.aborted === true) throw err;
     return {
       kind: "failed",

@@ -1,8 +1,3 @@
-
-
-
-
-
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, simulateReadableStream, type ToolSet, tool } from "ai";
 import { z } from "zod";
@@ -78,9 +73,6 @@ export function multiToolCallChunks(
 export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs?: number) {
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }
-
-
-
 
 export function repeatedWriteCalls(turns: number) {
   return Array.from({ length: turns }, (_, i) =>

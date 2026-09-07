@@ -1,8 +1,6 @@
 import { canonicalizeLoopbackHost } from "@seri/daemon-client";
 import { MCP_CALLBACK_PATH, MCP_CALLBACK_PORTS, mcpCallbackUri } from "./authProvider";
 
-
-
 export type McpCallbackWait =
   | { readonly kind: "code"; readonly code: string; readonly state?: string; readonly iss?: string }
   | { readonly kind: "denied"; readonly message: string }
@@ -25,14 +23,6 @@ export type StartCallbackServer = (opts?: {
   redirectHost?: string;
   fallbackEphemeral?: boolean;
 }) => Promise<CallbackServer>;
-
-
-
-
-
-
-
-
 
 function callbackPage(title: string, detail: string): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
@@ -73,9 +63,6 @@ type ActiveWait = {
   readonly settle: (result: McpCallbackWait) => void;
 };
 
-
-
-
 // RFC 8252 native-app loopback: bind 127.0.0.1 only, never 0.0.0.0.
 export const startCallbackServer: StartCallbackServer = async (opts) => {
   const ports = opts?.ports ?? MCP_CALLBACK_PORTS;
@@ -84,14 +71,11 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
   let active: ActiveWait | undefined;
   let stopped = false;
 
-
   let listener: { server: ReturnType<typeof Bun.serve>; port: number } | undefined;
 
   function close(): void {
     if (stopped) return;
     stopped = true;
-
-
 
     listener?.server.stop();
   }
@@ -99,17 +83,12 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
   function handle(req: Request): Response {
     const url = new URL(req.url);
 
-
     if (req.method !== "GET" || url.pathname !== callbackPath) {
       return new Response("Not found", { status: 404 });
     }
 
-
     const wait = active;
     if (wait === undefined) return new Response("Not found", { status: 404 });
-
-
-
 
     if (wait.expectedState !== undefined && url.searchParams.get("state") !== wait.expectedState) {
       return new Response("Unexpected OAuth state.", { status: 400 });
@@ -141,10 +120,7 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
     try {
       listener = { server: Bun.serve({ hostname: "127.0.0.1", port, fetch: handle }), port };
       break;
-    } catch {
-
-
-    }
+    } catch {}
   }
   if (listener === undefined && opts?.fallbackEphemeral === true) {
     const ephemeral = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handle });
@@ -160,7 +136,6 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
     );
   }
 
-
   listener.server.unref();
   const redirectUri =
     opts?.path !== undefined || opts?.redirectHost !== undefined
@@ -172,9 +147,6 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
     timeoutMs: number;
     signal?: AbortSignal;
   }): Promise<McpCallbackWait> {
-
-
-
     return new Promise<McpCallbackWait>((resolve) => {
       let settled = false;
       function settle(result: McpCallbackWait): void {

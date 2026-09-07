@@ -14,7 +14,11 @@ import { createMcpClients } from "../../src/mcp/client";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
-import { createArchivistState, drainArchivist, ARCHIVIST_TOOL_CALL_INTERVAL } from "../../src/memory/archivist";
+import {
+  createArchivistState,
+  drainArchivist,
+  ARCHIVIST_TOOL_CALL_INTERVAL,
+} from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
@@ -325,8 +329,6 @@ describe("driveLoop options", () => {
 });
 
 describe("driveLoop directDispatch", () => {
-
-
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
     return {
@@ -378,14 +380,11 @@ describe("driveLoop directDispatch", () => {
     );
     await run;
 
-
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[0]).toEqual({ role: "user", content: "grade the diff" });
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
   });
-
-
 
   test("the user row is the plain task text, and the tool-call names the agent and the goal", async () => {
     const persisted: SessionState<ModelMessage>[] = [];
@@ -545,7 +544,6 @@ describe("driveLoop directDispatch", () => {
 
     expect(result.doneReason).toBe("aborted");
 
-
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
@@ -584,20 +582,9 @@ describe("driveLoop directDispatch", () => {
       },
     );
 
-
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
   });
-
-
-
-
-
-
-
-
-
-
 
   test("a session with a PreToolUse hook hands the runner down to the child loop", async () => {
     const spec: HookSpec = {
@@ -814,8 +801,6 @@ describe("driveLoop mcp composition", () => {
     inputSchema: {},
   };
 
-
-
   test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);
@@ -835,10 +820,6 @@ describe("driveLoop mcp composition", () => {
     expect(MCP_TOOL_NAME in (capture()?.tools ?? {})).toBe(true);
     expect(capture()?.callSubject).toBe(mcpCallSubject);
   });
-
-
-
-
 
   test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
     const prepared = preparedStub();

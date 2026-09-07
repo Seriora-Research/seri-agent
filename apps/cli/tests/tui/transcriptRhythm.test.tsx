@@ -270,8 +270,12 @@ describe("transcript vertical rhythm", () => {
       />,
     );
     const spans = setup.captureSpans();
-    const addSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("+4"));
-    const delSpan = spans.lines.flatMap((line) => line.spans).find((span) => span.text.includes("−1"));
+    const addSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("+4"));
+    const delSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("−1"));
     expect(addSpan?.fg.equals(parseColor(theme.diffAdd))).toBe(true);
     expect(delSpan?.fg.equals(parseColor(theme.diffDel))).toBe(true);
     const rows = paintedRows(setup);

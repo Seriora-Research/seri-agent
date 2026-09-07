@@ -15,12 +15,6 @@ import { pendingLabel } from "./pending";
 import { type LoadedMemory, loadMemory, type MemoryContext, renderArchivistMemory } from "./store";
 import { makeMemoryWriteTool } from "./tool";
 
-
-
-
-
-
-
 export const ARCHIVIST_PROMPT = `You are seri's archivist. You are handed a transcript slice and the current contents of the three memory files. Decide what is worth keeping: a fact with memory_write, a procedure with skill_write. Those are your only tools: you cannot read files, search, run commands, or edit anything. Most passes end with no write, and that is a complete answer. Evaluate memory and skill independently — a good fact is not evidence against a skill.
 
 Write a fact only if it will still be true and still be useful in a session next week. If you would mark durable false, write nothing. Corrections the user made, conventions of this repo, which toolchain it uses, and stated preferences qualify. Do not record what happened in this session, what you did, or anything the conversation itself already carries. If the line needs a past-tense verb about the work ("we", "fixed", "turned out"), it is a diary entry.
@@ -45,11 +39,7 @@ Every call also requires "reason" (one short phrase: which turn or fact in the t
 
 Close with one line: what you wrote, or that nothing was.`;
 
-
-
-
 export const ARCHIVIST_TOOL_CALL_INTERVAL = 10;
-
 
 export const ARCHIVIST_NEAR_COMPACTION_FRACTION = 0.9;
 
@@ -61,8 +51,6 @@ export type ArchivistState = {
   inflight: Promise<void>;
   lastReport: ArchivistReport | undefined;
 };
-
-
 
 export function createArchivistState(
   session: SessionState<ModelMessage>,
@@ -94,25 +82,10 @@ export function drainArchivist(state: ArchivistState): Promise<void> {
   return state.inflight;
 }
 
-
-
-
-
-
-
-
-
-
 export function resetArchivistForRewind(state: ArchivistState, messages: ModelMessage[]): void {
   state.messageCursor = 0;
   state.messages = messages;
 }
-
-
-
-
-
-
 
 export function observeArchivistEvent(state: ArchivistState, event: LoopEvent): void {
   if (event.type === "messages-updated") state.messages = event.messages;
@@ -120,26 +93,10 @@ export function observeArchivistEvent(state: ArchivistState, event: LoopEvent): 
   if (event.type === "usage")
     state.lastInputTokens = event.usage.inputTokens ?? state.lastInputTokens;
 
-
-
-
-
-
-
-
   if (event.type === "compacted") state.messageCursor = 0;
 }
 
 export type ArchivistTrigger = "tool-count" | "near-compaction" | "idle-timeout";
-
-
-
-
-
-
-
-
-
 
 export function shouldRunArchivist(
   state: ArchivistState,
@@ -160,25 +117,7 @@ export function shouldRunArchivist(
   return undefined;
 }
 
-
-
-
-
 const MAX_ARCHIVIST_TRANSCRIPT_CHARS = 40_000;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function truncateTranscript(serialized: string): string {
   if (serialized.length <= MAX_ARCHIVIST_TRANSCRIPT_CHARS) return serialized;
@@ -186,8 +125,6 @@ function truncateTranscript(serialized: string): string {
   const omitted = serialized.length - MAX_ARCHIVIST_TRANSCRIPT_CHARS;
   return `${serialized.slice(0, half)}\n... [${omitted} characters omitted] ...\n${serialized.slice(-half)}`;
 }
-
-
 
 export function buildArchivistGoal(
   transcript: ModelMessage[],
@@ -203,10 +140,6 @@ export function buildArchivistGoal(
   );
 }
 
-
-
-
-
 export type ArchivistStagedWrite = {
   kind: "memory" | "skill";
   id: string;
@@ -216,27 +149,13 @@ export type ArchivistStagedWrite = {
 export type ArchivistReport = {
   trigger: ArchivistTrigger;
 
-
-
-
-
-
-
   staged: ArchivistStagedWrite[];
-
-
-
-
 
   summary: string | undefined;
   usage: LanguageModelUsage;
   cost: CostReport | undefined;
   toolCallsMade: number;
 };
-
-
-
-
 
 export async function runArchivist(args: {
   state: ArchivistState;
@@ -251,40 +170,19 @@ export async function runArchivist(args: {
   onWarning: (message: string) => void;
   forceStage?: boolean;
 
-
-
-
-
   onBeforeTool?: SubagentRuntime["onBeforeTool"];
   onAfterTool?: SubagentRuntime["onAfterTool"];
   containmentEscapeExpected?: boolean;
   classifyToolCall?: SubagentRuntime["classifyToolCall"];
   autoModeOnBlock?: SubagentRuntime["autoModeOnBlock"];
 
-
-
   runLoop?: typeof runLoop;
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
 
-
-
-
-
-
   const transcript = args.state.messages.slice(args.state.messageCursor);
 
-
-
-
-
-
   const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
-
-
-
-
-
 
   const staged: ArchivistStagedWrite[] = [];
   const tools: ToolSet = {
@@ -292,8 +190,6 @@ export async function runArchivist(args: {
       forceStage: args.forceStage === true,
       onStaged: (p) => staged.push({ kind: "memory", id: p.id, label: pendingLabel(p) }),
     }),
-
-
 
     skill_write: makeSkillWriteTool(args.ctx, {
       onStaged: (p) => staged.push({ kind: "skill", id: p.id, label: p.name }),
@@ -305,9 +201,6 @@ export async function runArchivist(args: {
     provider: args.route.provider,
     modelId: args.route.model,
     catalog: args.catalog,
-
-
-
 
     contextWindowSize: args.contextWindow,
     permissionMode: () => "auto",
@@ -332,9 +225,6 @@ export async function runArchivist(args: {
     });
   } catch (err) {
     if (args.signal.aborted) return undefined;
-
-
-
 
     args.state.toolCallsSinceRun = 0;
     args.onWarning(`archivist run failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -370,16 +260,10 @@ export async function runArchivist(args: {
   return report;
 }
 
-
-
-
-
 export async function maybeRunArchivist(args: {
   state: ArchivistState;
   ctx: MemoryContext;
   contextWindow: number | undefined;
-
-
 
   compactionThreshold?: number;
   model: LanguageModel;
@@ -399,19 +283,9 @@ export async function maybeRunArchivist(args: {
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
 
-
-
-
-
-
-
-
   if (args.state.messageCursor > args.state.messages.length) args.state.messageCursor = 0;
 
   const enabled = loadMemoryConfig(args.ctx.configDir).archivistEnabled;
-
-
-
 
   const trigger = shouldRunArchivist(
     args.state,
@@ -420,9 +294,6 @@ export async function maybeRunArchivist(args: {
     enabled,
   );
   if (!trigger) return undefined;
-
-
-
 
   const childEntry = findCatalogEntry(args.catalog, args.route.model, args.route.provider);
   return runArchivist({

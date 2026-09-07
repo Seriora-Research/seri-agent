@@ -17,15 +17,9 @@ export type HooksLoad = {
   };
 };
 
-
-
-
-
-
 function scriptCountIn(dir: string): number {
   return [...digestHooksDir(dir).keys()].filter((name) => name !== HOOKS_FILENAME).length;
 }
-
 
 export function loadHookRegistry(opts: {
   worktree: string;
@@ -43,11 +37,6 @@ export function loadHookRegistry(opts: {
   for (const scope of scopes) {
     if (!existsSync(scope.dir)) continue;
 
-
-
-
-
-
     if (scope.source === "project") {
       const verdict = checkTrust({
         configDir: opts.configDir,
@@ -61,7 +50,6 @@ export function loadHookRegistry(opts: {
     }
 
     const filePath = join(scope.dir, HOOKS_FILENAME);
-
 
     if (!existsSync(filePath)) continue;
     let text: string;
@@ -79,12 +67,6 @@ export function loadHookRegistry(opts: {
       source: scope.source,
     });
     for (const warning of warnings) opts.onWarning(warning);
-
-
-
-
-
-
 
     for (const spec of specs) {
       const list = registry.get(spec.event);

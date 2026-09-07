@@ -10,8 +10,6 @@ export type RunUsageOpts = {
 };
 
 function presentLines(presenter: UsageCommandPresenter, text: string): void {
-
-
   for (const line of text.split("\n")) presenter.message(line);
 }
 

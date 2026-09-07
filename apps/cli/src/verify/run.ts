@@ -3,17 +3,9 @@ import { spawnCollect as spawnCollectReal } from "../tools/spawnCollect";
 import type { CheckOutcome } from "./outcome";
 import { parseDiagnostics } from "./parse";
 
-
-
-
 export type { CheckOutcome } from "./outcome";
 
-
-
-
 export const MAX_DIAGNOSTICS = 20;
-
-
 
 const RAW_TAIL_CHARS = 600;
 
@@ -22,8 +14,6 @@ export type RunCheckOptions = { spawn?: typeof spawnCollectReal };
 function tail(text: string): string {
   return text.length > RAW_TAIL_CHARS ? text.slice(-RAW_TAIL_CHARS) : text;
 }
-
-
 
 export async function runCheck(
   command: string | undefined,
@@ -38,14 +28,7 @@ export async function runCheck(
     };
   }
 
-
-
-
-
   const [executable, ...args] = command.trim().split(/\s+/);
-
-
-
 
   const startedAt = Date.now();
 
@@ -53,9 +36,6 @@ export async function runCheck(
   try {
     result = await (options.spawn ?? spawnCollectReal)(executable, args, undefined, signal);
   } catch (err) {
-
-
-
     return {
       status: "failed",
       reason: `${command} could not be run: ${err instanceof Error ? err.message : String(err)}`,
@@ -63,13 +43,6 @@ export async function runCheck(
   }
 
   const elapsedMs = Date.now() - startedAt;
-
-
-
-
-
-
-
 
   const all = parseDiagnostics(`${result.stdout}\n${result.stderr}`);
 
@@ -83,14 +56,6 @@ export async function runCheck(
     };
   }
 
-
-
-
-
-
-
-
-
   const writtenAbsolute = resolve(writtenPath);
   const here = all.filter((diagnostic) => resolve(diagnostic.file) === writtenAbsolute);
   const elsewhere = all.filter((diagnostic) => resolve(diagnostic.file) !== writtenAbsolute);
@@ -101,8 +66,6 @@ export async function runCheck(
     elapsedMs,
     diagnostics: [...here, ...elsewhere].slice(0, MAX_DIAGNOSTICS),
     inWrittenFile: Math.min(here.length, MAX_DIAGNOSTICS),
-
-
 
     truncated: result.stdoutTruncated || result.stderrTruncated || result.timedOut,
     total: all.length,

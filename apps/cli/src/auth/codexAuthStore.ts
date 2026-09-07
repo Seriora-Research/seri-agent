@@ -137,8 +137,6 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-
-
 export function loadCodexAuth(env: NodeJS.ProcessEnv = process.env): CodexAuth | undefined {
   const path = codexAuthPath(env);
   if (!existsSync(path)) return undefined;

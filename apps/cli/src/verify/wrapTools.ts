@@ -4,33 +4,16 @@ import { buildFileChange, isFileChangeView } from "../fileChange";
 import type { CheckOutcome, WriteFileResult } from "./outcome";
 import { runCheck as runCheckReal } from "./run";
 
-
-
-
-
-
-
-
 const VERIFIED_TOOL = "write_file";
 
 const DISABLED: CheckOutcome = { status: "unavailable", reason: "verification is disabled" };
 
 export type VerifyDeps = {
-
-
   enabled?: boolean;
 
   command?: string;
   runCheck?: typeof runCheckReal;
 };
-
-
-
-
-
-
-
-
 
 export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet {
   const runCheck = deps.runCheck ?? runCheckReal;
@@ -39,7 +22,6 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
   return Object.fromEntries(
     Object.entries(tools).map(([name, definition]) => {
       const execute = definition.execute;
-
 
       if (name !== VERIFIED_TOOL || execute === undefined) return [name, definition];
 
@@ -51,16 +33,9 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
             args: unknown,
             options: ToolExecutionOptions<Record<string, unknown>>,
           ) => {
-
-
             const produced = await execute(args, options);
 
-
-
             const { path, content } = args as { path: string; content: string };
-
-
-
 
             const verification = enabled
               ? await runCheck(deps.command, path, options.abortSignal)

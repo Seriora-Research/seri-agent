@@ -6,19 +6,7 @@ export type RefreshResult =
   | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
 
-
-
-
-
-
-
 const REFRESH_TIMEOUT_MS = 10_000;
-
-
-
-
-
-
 
 export async function refreshAccessToken(
   clientId: string,
@@ -31,10 +19,6 @@ export async function refreshAccessToken(
       AUTHENTICATE_URL,
       REFRESH_TIMEOUT_MS,
       async (response): Promise<RefreshResult> => {
-
-
-
-
         let body: Record<string, unknown>;
         try {
           body = await parseResponseBody(response);
@@ -50,9 +34,6 @@ export async function refreshAccessToken(
             message: `WorkOS refresh failed with status ${response.status}: ${JSON.stringify(body)}`,
           };
         }
-
-
-
 
         if (
           typeof body.access_token !== "string" ||
@@ -84,12 +65,6 @@ export async function refreshAccessToken(
   }
 }
 
-
-
-
-
-
-
 const inFlightRefreshes = new Map<string, Promise<AuthSession | undefined>>();
 
 export function refreshSession(
@@ -102,15 +77,9 @@ export function refreshSession(
   const promise = refreshSessionOnce(configDir, fetchFn);
   inFlightRefreshes.set(configDir, promise);
 
-
-
-
-
   promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
 }
-
-
 
 async function refreshSessionOnce(
   configDir: string,
@@ -125,9 +94,6 @@ async function refreshSessionOnce(
     fetchFn,
   );
   if (result.status === "error") return undefined;
-
-
-
 
   const updated: AuthSession = {
     ...session,

@@ -63,9 +63,6 @@ describe("findPackedRendererUpload", () => {
     );
   });
 
-
-
-
   test("the payload threshold is MIN_PACKED_PAYLOAD_CHARS, inclusive", () => {
     const atMin = "A".repeat(MIN_PACKED_PAYLOAD_CHARS);
     expect(findPackedRendererUpload(`https://kroki.io/plantuml/png/${atMin}`)).toEqual({
@@ -135,8 +132,6 @@ describe("humanAskedForPackedRender", () => {
   test("is false for a render verb with no renderer named", () => {
     expect(humanAskedForPackedRender("render the README as HTML")).toBe(false);
   });
-
-
 
   test("is false when render is only a prefix of another word", () => {
     expect(humanAskedForPackedRender("the mermaid renderer crashed")).toBe(false);

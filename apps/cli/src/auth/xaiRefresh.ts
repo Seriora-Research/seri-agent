@@ -11,19 +11,9 @@ import { discoverXaiEndpoints, readXaiTokens, xaiClientId, xaiIssuer } from "./x
 export type XaiRefreshResult =
   | { status: "ok"; subscription: XaiSubscription }
   | { status: "not-connected" }
-
-
   | { status: "tier-denied"; message: string }
-
-
-
   | { status: "reconnect-required"; message: string }
   | { status: "error"; message: string };
-
-
-
-
-
 
 const inFlightRefreshes = new Map<string, Promise<XaiRefreshResult>>();
 
@@ -36,8 +26,6 @@ export function refreshXaiSubscription(
 
   const promise = refreshXaiSubscriptionOnce(configDir, fetchFn);
   inFlightRefreshes.set(configDir, promise);
-
-
 
   promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
@@ -83,8 +71,6 @@ async function refreshXaiSubscriptionOnce(
       };
     }
 
-
-
     const updated = subscriptionFromTokens({
       ...readXaiTokens(payload),
       accountId: current.accountId,
@@ -95,9 +81,6 @@ async function refreshXaiSubscriptionOnce(
     return { status: "error", message: err instanceof Error ? err.message : String(err) };
   }
 }
-
-
-
 
 export function xaiAuthedFetch(configDir: string, fetchFn: typeof fetch = fetch): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {

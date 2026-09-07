@@ -72,7 +72,6 @@ function rawApiResponse() {
       },
     },
 
-
     "other-provider": {
       models: {
         "ignored-model": {
@@ -178,12 +177,6 @@ describe("loadCatalog", () => {
     expect(calls).toBe(1);
   });
 
-
-
-
-
-
-
   test("two concurrent calls before either resolves share the same in-flight fetch, not two", async () => {
     let calls = 0;
     let resolveFetch!: (value: unknown) => void;
@@ -203,11 +196,6 @@ describe("loadCatalog", () => {
     expect(calls).toBe(1);
     expect(firstResult).toEqual(secondResult);
   });
-
-
-
-
-
 
   test("fetch failure: the fallback IS cached for the process — a later call does not re-fetch", async () => {
     let calls = 0;
@@ -334,10 +322,6 @@ describe("findCatalogEntry", () => {
 function entryWithPricing(pricing: ModelCatalogEntry["pricing"]): ModelCatalogEntry {
   return { ...(fallbackManifest.entries[0] as ModelCatalogEntry), pricing };
 }
-
-
-
-
 
 describe("isZeroPriceEntry", () => {
   test("false for an absent entry", () => {

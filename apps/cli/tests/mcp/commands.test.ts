@@ -21,9 +21,6 @@ afterEach(() => {
   roots = [];
 });
 
-
-
-
 function makeTree(files: Record<string, string> = {}): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-mcp-commands-"));
   roots.push(root);
@@ -83,8 +80,6 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["auth", "exa"])).toBe(true);
   });
 
-
-
   test("does not accept a task that merely starts with /mcp", () => {
     expect(mcpCommandAccepts(["is", "broken,", "fix", "it"])).toBe(false);
   });
@@ -138,12 +133,6 @@ describe("mcpPanelRows", () => {
     ]);
   });
 
-
-
-
-
-
-
   test("a project-scope header renders worktree-relative, a user-scope header renders absolute", () => {
     const { registry, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -195,10 +184,6 @@ describe("mcpPanelRows", () => {
     });
   });
 
-
-
-
-
   test("reflects the session's registry, not disk — a later edit to servers.yaml does not change the rows", () => {
     const { registry, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -242,7 +227,6 @@ describe("decideMcpCommand: list", () => {
     });
     expect(lines).toEqual([expect.stringContaining("exa"), expect.stringContaining("notion")]);
 
-
     expect(lines.find((l) => l.includes("exa"))).toContain(
       "idle, connects on first use, 1 tool cached",
     );
@@ -250,10 +234,6 @@ describe("decideMcpCommand: list", () => {
       "notion  user  idle, connects on first use",
     );
   });
-
-
-
-
 
   test("a server whose pool status is failed reports unreachable, not idle", () => {
     const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
@@ -284,9 +264,6 @@ describe("decideMcpCommand: list", () => {
     });
     expect(lines[0]).toContain("needs authentication");
   });
-
-
-
 
   test("list and mcpPanelRows report the same status word for the same server, across all four states", () => {
     const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
@@ -340,9 +317,6 @@ describe("decideMcpCommand: add", () => {
     expect(readFileSync(projectFile, "utf8")).not.toContain("exa:");
   });
 
-
-
-
   test("negative control target: the profile file, specifically, is what add targets", () => {
     const { configDir } = makeTree({});
     const registry: McpRegistry = new Map();
@@ -395,9 +369,6 @@ describe("decideMcpCommand: add", () => {
     expect(lines[0]).toContain("not changed");
   });
 
-
-
-
   test("the session that ran add can see the server without restarting", () => {
     const { configDir, worktree } = makeTree({});
     const registry = new Map<string, McpEntry>();
@@ -414,9 +385,6 @@ describe("decideMcpCommand: add", () => {
     expect(rows.filter((row) => row.kind === "server").map((row) => row.name)).toEqual(["exa"]);
   });
 
-
-
-
   test("the entry add hands back is the entry a restart would load from the file it wrote", () => {
     const { configDir, worktree } = makeTree({});
     const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
@@ -432,8 +400,6 @@ describe("decideMcpCommand: add", () => {
       reloaded?.spec as McpEntry["spec"],
     );
   });
-
-
 
   test("the added entry carries no catalog", () => {
     const { configDir, worktree } = makeTree({});
@@ -509,8 +475,6 @@ describe("decideMcpCommand: remove", () => {
     expect(change).toBeUndefined();
   });
 
-
-
   test("the session that ran remove stops listing the server", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -544,9 +508,6 @@ describe("one login outcome, worded once", () => {
       'Authenticating "supabase" was cancelled.',
     );
   });
-
-
-
 
   test("an authorization server's own error is flattened to one bounded line", () => {
     const raw = [

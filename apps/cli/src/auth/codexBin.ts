@@ -29,10 +29,6 @@ function quoteCmdPath(command: string): string {
   return `"${command.replace(/"/g, '""')}"`;
 }
 
-
-
-
-
 export function resolveCodexSpawn(
   command: string,
   args: readonly string[],

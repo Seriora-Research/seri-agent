@@ -11,18 +11,10 @@ import type { PromptChannel } from "../permissions/promptChannel";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
-
-
-
-
-
 type DenialReason<E extends { type: string }> = Extract<
   E,
   { type: "permission-denied"; reason: string }
 >["reason"];
-
-
-
 
 type Assert<T extends true> = T;
 type _WireCarriesEveryDenialReason = Assert<

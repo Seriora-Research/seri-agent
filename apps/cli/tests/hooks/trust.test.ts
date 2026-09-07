@@ -63,9 +63,6 @@ describe("digestHooksDir", () => {
     expect(digestHooksDir(join(root, "nope")).size).toBe(0);
   });
 
-
-
-
   test("a helper in a subdirectory is inside the digest, keyed by its relative path", () => {
     const { hooksDir } = makeHooks({ "project/.seri/hooks/lib/common.sh": SH });
     expect([...digestHooksDir(hooksDir).keys()]).toEqual([
@@ -106,9 +103,6 @@ describe("checkTrust", () => {
     expect(checkTrust({ configDir, dir: hooksDir })).toEqual({ kind: "trusted" });
   });
 
-
-
-
   test("a trusted directory emptied of every file is untrusted, not changed", () => {
     const { configDir, hooksDir } = makeHooks();
     trustHooksDir(configDir, hooksDir);
@@ -127,8 +121,6 @@ describe("checkTrust", () => {
       files: ["block-dangerous.sh"],
     });
   });
-
-
 
   test("editing hooks.yaml alone is changed, with no script edited", () => {
     const { configDir, hooksDir } = makeHooks();
@@ -211,7 +203,6 @@ describe("the store file", () => {
 
     trustHooksDir(configDir, hooksDir, (m) => warnings.push(m));
     expect(readFileSync(path, "utf8")).toBe(before);
-
 
     expect(warnings).toHaveLength(2);
     expect(warnings[1]).toContain(path);

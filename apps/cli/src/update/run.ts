@@ -112,9 +112,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     }
     try {
       unlinkSync(backupPath);
-    } catch {
-
-    }
+    } catch {}
   } catch (error) {
     unlinkIfExists(tmpPath);
     return { code: 1, lines: [messageOf(error)] };

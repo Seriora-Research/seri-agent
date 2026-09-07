@@ -39,8 +39,6 @@ description: Reviews a diff.
 Review this: $ARGUMENTS
 `;
 
-
-
 function run(tools: ReturnType<typeof withSkills>, args: unknown): Promise<unknown> {
   const definition = tools[SKILL_TOOL_NAME] as {
     execute: (args: unknown, options: unknown) => Promise<unknown>;
@@ -72,9 +70,6 @@ describe("withSkills", () => {
     expect(await run(withSkills({}, skills), { name: "reviewer" })).toBe("Review this: ");
   });
 
-
-
-
   test("a disable-model-invocation skill is not in the enum and is refused by name", async () => {
     const { skills } = load({
       "project/.seri/skills/manual/SKILL.md":
@@ -91,7 +86,6 @@ describe("withSkills", () => {
     const tools = withSkills({}, mixed);
     const definition = tools[SKILL_TOOL_NAME] as { inputSchema: unknown };
 
-
     expect(JSON.stringify(definition.inputSchema)).toContain("reviewer");
     expect(JSON.stringify(definition.inputSchema)).not.toContain("manual");
     await expect(run(tools, { name: "manual" })).rejects.toThrow(/no skill named "manual"/);
@@ -103,9 +97,6 @@ describe("withSkills", () => {
     rmSync(join(worktree, ".seri", "skills", "reviewer"), { recursive: true, force: true });
     await expect(run(tools, { name: "reviewer" })).rejects.toThrow(/could not load the "reviewer"/);
   });
-
-
-
 
   test("the permission gate allows it in every mode, including read-only", () => {
     for (const mode of ["read-only", "approve-each", "auto"] as const) {

@@ -36,9 +36,6 @@ function registryOf(entries: Record<string, McpEntry>): McpRegistry {
   return new Map(Object.entries(entries));
 }
 
-
-
-
 function run(
   tools: ToolSet,
   args: unknown,
@@ -70,7 +67,6 @@ describe("withMcp", () => {
   });
 
   test("is absent entirely for a registry with no cataloged tools", () => {
-
     const registry = registryOf({ exa: entry("exa", undefined) });
     const tools = withMcp(
       {},
@@ -117,10 +113,6 @@ describe("withMcp", () => {
   });
 
   test("sorts by code unit, not by locale", () => {
-
-
-
-
     const registry = registryOf({
       x: entry("x", [
         toolInfo("x", "n1", { toolName: "mcp_a1" }),
@@ -250,10 +242,6 @@ describe("mcpCallSubject", () => {
     expect(mcpCallSubject(MCP_TOOL_NAME, undefined)).toBe(MCP_TOOL_NAME);
     expect(mcpCallSubject(MCP_TOOL_NAME, { tool: 123 })).toBe(MCP_TOOL_NAME);
   });
-
-
-
-
 
   test("a built-in's name in input.tool never passes through as the subject", () => {
     expect(mcpCallSubject(MCP_TOOL_NAME, { tool: "read_file" })).toBe(MCP_TOOL_NAME);

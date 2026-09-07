@@ -5,22 +5,13 @@ import {
   worktreeRelativePath,
 } from "./registry";
 
-
 export type RulesState = { readonly fired: Set<string> };
 
 export function createRulesState(): RulesState {
   return { fired: new Set() };
 }
 
-
-
-
 export const RULE_MARKER_OPEN = "<project-rules";
-
-
-
-
-
 
 const PATH_TOOLS = new Set(["read_file", "write_file"]);
 
@@ -29,7 +20,6 @@ function pathOf(input: unknown): string | undefined {
   const path = (input as { path?: unknown }).path;
   return typeof path === "string" && path.length > 0 ? path : undefined;
 }
-
 
 export function createRuleInjector(opts: {
   rules: RuleRegistry;
@@ -58,7 +48,6 @@ export function createRuleInjector(opts: {
       if (opts.state.fired.has(rule.filePath)) continue;
       const hit = paths.find((path) => ruleMatchesPath(rule, path));
       if (hit === undefined) continue;
-
 
       opts.state.fired.add(rule.filePath);
       newlyFired.push({ rule, path: hit });

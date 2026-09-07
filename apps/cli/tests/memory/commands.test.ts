@@ -39,8 +39,6 @@ describe("memoryCommandAccepts", () => {
     expect(memoryCommandAccepts(["archivist", "off"])).toBe(true);
   });
 
-
-
   test("does not accept a task that merely starts with /memory", () => {
     expect(memoryCommandAccepts(["is", "broken,", "fix", "it"])).toBe(false);
   });
@@ -72,7 +70,6 @@ describe("decideMemoryCommand", () => {
 
     const pending = decideMemoryCommand(["pending"], ctx);
 
-
     expect(pending.lines[0]?.text).toContain(staged.id.slice(0, 7));
     expect(pending.lines[0]?.text).toContain("USER.md");
 
@@ -84,12 +81,6 @@ describe("decideMemoryCommand", () => {
     decideMemoryCommand(["reject", staged.id], ctx);
     expect(decideMemoryCommand(["pending"], ctx).lines[0]?.text).toContain("No staged");
   });
-
-
-
-
-
-
 
   test("pending/diff show which project a memory-project entry targets, not just MEMORY.md", () => {
     const ctx = makeCtx("/home/x/other-repo");
@@ -173,9 +164,6 @@ describe("decideMemoryCommand", () => {
     expect(decideMemoryCommand(["archivist", "maybe"], ctx).lines[0]?.text).toContain("Usage:");
   });
 
-
-
-
   test("diff all still shows a good entry's diff plus an inline error for a bad one", () => {
     const ctx = makeCtx();
     stagePendingWrite(
@@ -184,8 +172,6 @@ describe("decideMemoryCommand", () => {
       new Date(),
     );
     stagePendingWrite(
-
-
       { scope: "user", action: "remove", target: "does not exist", reason: "r", durable: true },
       ctx,
       new Date(),
@@ -195,13 +181,6 @@ describe("decideMemoryCommand", () => {
     expect(result.lines.some((l) => l.text.includes("a fine entry"))).toBe(true);
     expect(result.lines.some((l) => l.text.startsWith("Could not diff"))).toBe(true);
   });
-
-
-
-
-
-
-
 
   test("reject all still rejects a good entry and reports an inline error for one whose own id resolves to a missing file", () => {
     const ctx = makeCtx();
@@ -228,7 +207,6 @@ describe("decideMemoryCommand", () => {
     );
 
     const result = decideMemoryCommand(["reject", "all"], ctx);
-
 
     expect(result.lines[0]).toEqual({ text: "1 memory rejected." });
     expect(result.lines.some((l) => l.text.startsWith(`Could not reject ${staleId}`))).toBe(true);
@@ -257,9 +235,6 @@ describe("decideMemoryCommand", () => {
     expect(result.lines).toEqual([{ text: "3 memories approved." }]);
     expect(decideMemoryCommand(["pending"], ctx).lines[0]?.text).toContain("No staged");
   });
-
-
-
 
   test("reject all reports one count, not one line per entry", () => {
     const ctx = makeCtx();
@@ -323,7 +298,6 @@ describe("memoryPanelRows", () => {
       reason: "said so",
       durable: true,
     });
-
 
     expect(rows[1]?.detail).toBe("old → new");
     expect(rows[1]?.durable).toBe(false);

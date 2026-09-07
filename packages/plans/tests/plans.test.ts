@@ -35,8 +35,6 @@ describe("productIdForPlan / planForProductId", () => {
     expect(planForProductId("prod_from_the_other_environment", ENV)).toBeNull();
   });
 
-
-
   test("returns null for every plan when nothing is configured", () => {
     for (const plan of PLANS) expect(productIdForPlan(plan, {})).toBeNull();
     expect(planForProductId("prod_free", {})).toBeNull();
@@ -79,15 +77,12 @@ describe("toSubscriptionStatus", () => {
     });
   }
 
-
-
   test.each([null, undefined, "", "trialing", "incomplete", 1])("maps %p to null", (value) => {
     expect(toSubscriptionStatus(value)).toBeNull();
   });
 });
 
 describe("isUpgrade", () => {
-
   test("PAID_PLANS is ordered by ascending price", () => {
     const prices = PAID_PLANS.map((plan) => PLAN_MONTHLY_USD[plan]);
     expect(prices).toEqual([...prices].sort((a, b) => a - b));
@@ -108,8 +103,6 @@ describe("isUpgrade", () => {
   ] as const)("%s -> %s is not an upgrade", (from, to) => {
     expect(isUpgrade(from, to)).toBe(false);
   });
-
-
 
   for (const plan of PAID_PLANS) {
     test(`${plan} -> itself is not an upgrade`, () => {

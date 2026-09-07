@@ -18,8 +18,6 @@ type SpawnCall = {
   signal: AbortSignal | undefined;
 };
 
-
-
 function fakeSpawn(result: Partial<ProcessResult>, calls: SpawnCall[] = []) {
   return {
     calls,
@@ -31,8 +29,6 @@ function fakeSpawn(result: Partial<ProcessResult>, calls: SpawnCall[] = []) {
 }
 
 describe("runCheck", () => {
-
-
   test("reports unavailable, and spawns nothing at all, when no command is configured", async () => {
     const runner = fakeSpawn({});
     const outcome = await runCheck(undefined, "src/written.ts", undefined, { spawn: runner.spawn });
@@ -49,9 +45,6 @@ describe("runCheck", () => {
     expect(runner.calls[0].executable).toBe("bun");
     expect(runner.calls[0].args).toEqual(["run", "typecheck"]);
   });
-
-
-
 
   test("threads the caller's AbortSignal through to the process runner", async () => {
     const controller = new AbortController();
@@ -113,9 +106,6 @@ describe("runCheck", () => {
     expect(outcome.total).toBe(57);
   });
 
-
-
-
   test("puts diagnostics in the file just written first, and counts them", async () => {
     const runner = fakeSpawn({
       stdout: [
@@ -166,8 +156,6 @@ describe("runCheck", () => {
     expect(outcome).toMatchObject({ status: "diagnostics", truncated: true });
   });
 
-
-
   test("a non-zero exit with nothing parseable is failed, not ok, and carries the raw tail", async () => {
     const runner = fakeSpawn({ stderr: "cargo: no such subcommand `typecheck`", exitCode: 101 });
     const outcome = await runCheck("cargo typecheck", "src/written.ts", undefined, {
@@ -189,8 +177,6 @@ describe("runCheck", () => {
     if (outcome.status !== "failed") throw new Error("unreachable");
     expect(outcome.reason).toContain("timed out");
   });
-
-
 
   test("a rejecting runner becomes a failed outcome rather than a thrown write", async () => {
     const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {

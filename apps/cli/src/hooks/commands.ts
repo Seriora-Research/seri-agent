@@ -12,10 +12,6 @@ export type HooksCommandDeps = {
   readonly configDir: string;
 };
 
-
-
-
-
 export function hooksCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
   if (sub === undefined || sub === "list" || sub === "show" || sub === "trust" || sub === "untrust")
@@ -25,8 +21,6 @@ export function hooksCommandAccepts(args: string[]): boolean {
 
 const UNTRUSTED_LINE =
   "Not reviewed. Nothing in it runs. /hooks show to read the scripts, /hooks trust to turn them on.";
-
-
 
 const CHANGED_FILES_CAP = 5;
 
@@ -38,9 +32,6 @@ function changedFilesLine(files: readonly string[]): string {
     "Nothing runs until it is reviewed again."
   );
 }
-
-
-
 
 function matcherLabel(spec: HookSpec): string {
   if (spec.matcher === undefined) return "(every tool)";
@@ -57,13 +48,6 @@ function wiringRows(registry: HookRegistry, source: ExtensionSource): string[] {
   }
   return rows;
 }
-
-
-
-
-
-
-
 
 function listLines(deps: HooksCommandDeps): string[] {
   const storeWarnings: string[] = [];
@@ -97,11 +81,6 @@ function listLines(deps: HooksCommandDeps): string[] {
   });
   lines.push(...storeWarnings);
   if (verdict.kind === "trusted") {
-
-
-
-
-
     lines.push("Trusted.");
     const rows = wiringRows(hooksLoad.registry, "project");
     lines.push(...(rows.length > 0 ? rows : ["No hooks configured."]));
@@ -113,9 +92,6 @@ function listLines(deps: HooksCommandDeps): string[] {
   lines.push(`${fileCount} file${fileCount === 1 ? "" : "s"} in this directory.`);
   return lines;
 }
-
-
-
 
 function showLines(deps: HooksCommandDeps): string[] {
   const projectDir = findProjectExtensionDir(deps.worktree, HOOKS_DIRNAME);
@@ -133,8 +109,6 @@ function showLines(deps: HooksCommandDeps): string[] {
       continue;
     }
     try {
-
-
       lines.push(...new TextDecoder("utf-8", { fatal: true }).decode(bytes).split(/\r?\n/));
     } catch {
       lines.push(`${key} is not decodable as text.`);
@@ -150,7 +124,6 @@ function trustResult(deps: HooksCommandDeps): string[] {
 
   const warnings: string[] = [];
   trustHooksDir(deps.configDir, projectDir, (message) => warnings.push(message));
-
 
   if (warnings.length > 0) return warnings;
 

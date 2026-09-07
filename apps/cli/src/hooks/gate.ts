@@ -13,13 +13,10 @@ export type HookRunner = {
   ) => Promise<readonly string[]>;
 };
 
-
 export function createHookRunner(opts: {
   registry: HookRegistry;
   cwd: string;
   signal?: AbortSignal;
-
-
 
   run?: typeof runHook;
 }): HookRunner | undefined {
@@ -27,10 +24,6 @@ export function createHookRunner(opts: {
   const afterSpecs = opts.registry.get("PostToolUse") ?? [];
   if (beforeSpecs.length === 0 && afterSpecs.length === 0) return undefined;
   const run = opts.run ?? runHook;
-
-
-
-
 
   return {
     onBeforeTool: async (subject, input) => {
@@ -42,8 +35,6 @@ export function createHookRunner(opts: {
           { hook_event_name: "PreToolUse", tool_name: subject, cwd: opts.cwd, tool_input: input },
           opts.signal,
         );
-
-
 
         if (outcome.kind === "block") return { block: outcome.reason, errors };
         if (outcome.kind === "failed") errors.push(outcome.message);
@@ -65,9 +56,6 @@ export function createHookRunner(opts: {
           },
           opts.signal,
         );
-
-
-
 
         if (outcome.kind !== "ok") {
           messages.push(outcome.kind === "block" ? outcome.reason : outcome.message);

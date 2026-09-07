@@ -855,7 +855,6 @@ describe("App", () => {
       expect(setup.captureCharFrame()).toContain("↑ scrolled");
     });
 
-
     test("duplicate/out-of-order turn-lifecycle dispatches do not move a scrolled-up reader's view", async () => {
       const { setup, dispatch } = await connect();
 

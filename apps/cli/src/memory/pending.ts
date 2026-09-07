@@ -31,9 +31,6 @@ export function pendingPath(configDir: string, scope: MemoryScope, id: string): 
   return join(getPendingDir(configDir), scope, `${id}.pending`);
 }
 
-
-
-
 function writePendingFile(path: string, record: PendingWrite): void {
   atomicWriteFile(path, JSON.stringify(record, null, 2));
 }
@@ -53,8 +50,6 @@ export function stagePendingWrite(
     reason: req.reason,
     durable: req.durable,
 
-
-
     projectPath: req.scope === "memory-project" ? projectKey(ctx.worktree) : undefined,
     entryDate: now.toISOString().slice(0, 10),
   };
@@ -73,20 +68,12 @@ function isPendingWrite(value: unknown): value is PendingWrite {
     typeof v.reason === "string" &&
     typeof v.durable === "boolean" &&
     typeof v.entryDate === "string" &&
-
-
-
-
-
     (v.scope !== "memory-project" ||
       (typeof v.projectPath === "string" && v.projectPath.length > 0))
   );
 }
 
 const SCOPES: MemoryScope[] = ["user", "memory-global", "memory-project"];
-
-
-
 
 export function listPending(
   configDir: string,
@@ -113,14 +100,11 @@ export function listPending(
     }
   }
 
-
   results.sort((a, b) => a.stagedAt.localeCompare(b.stagedAt));
   return results;
 }
 
 const ID_REF_RE = /^[0-9a-f]{4,40}$/;
-
-
 
 export function resolvePendingRef(configDir: string, ref: string): PendingWrite[] {
   const all = listPending(configDir);
@@ -133,19 +117,9 @@ export function resolvePendingRef(configDir: string, ref: string): PendingWrite[
   return matches;
 }
 
-
-
-
 function ctxForPending(configDir: string, p: PendingWrite): MemoryContext {
   return { configDir, worktree: p.projectPath ?? "" };
 }
-
-
-
-
-
-
-
 
 export function pendingLabel(p: PendingWrite): string {
   if (p.scope === "user") return "USER.md";
@@ -164,9 +138,6 @@ function toRequest(p: PendingWrite): MemoryWriteRequest {
   };
 }
 
-
-
-
 export function diffPending(configDir: string, p: PendingWrite): { path: string; lines: string[] } {
   const ctx = ctxForPending(configDir, p);
   const file = loadMemoryFile(p.scope, ctx);
@@ -183,10 +154,6 @@ export function diffPending(configDir: string, p: PendingWrite): { path: string;
     ],
   };
 }
-
-
-
-
 
 export function approvePending(configDir: string, p: PendingWrite): { path: string } {
   const ctx = ctxForPending(configDir, p);

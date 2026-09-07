@@ -8,9 +8,6 @@ import { truncate } from "../truncate";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
 
-
-
-
 export const MEMORY_CAPS: Record<MemoryScope, number> = {
   user: 1_375,
   "memory-global": 2_200,
@@ -18,10 +15,6 @@ export const MEMORY_CAPS: Record<MemoryScope, number> = {
 };
 
 export type MemoryContext = { configDir: string; worktree: string };
-
-
-
-
 
 export function projectDirToken(worktree: string): string {
   return createHash("sha256").update(projectKey(worktree)).digest("hex").slice(0, 16);
@@ -34,9 +27,6 @@ export function memoryFilePath(scope: MemoryScope, ctx: MemoryContext): string {
   return join(dir, projectDirToken(ctx.worktree), "MEMORY.md");
 }
 
-
-
-
 export type MemoryEntry = { date: string; text: string; line: string };
 export type MemoryFile = {
   scope: MemoryScope;
@@ -45,9 +35,6 @@ export type MemoryFile = {
   chars: number;
   cap: number;
   entries: MemoryEntry[];
-
-
-
 
   label: string;
 };
@@ -72,13 +59,6 @@ function labelFor(scope: MemoryScope, ctx: MemoryContext): string {
 export function loadMemoryFile(scope: MemoryScope, ctx: MemoryContext): MemoryFile {
   const path = memoryFilePath(scope, ctx);
   const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
-
-
-
-
-
-
-
 
   // CRLF (Notepad's default) would blow the char cap differently on Windows vs Linux.
   const text = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
@@ -110,9 +90,6 @@ export type MemoryWriteRequest = {
   durable: boolean;
 };
 
-
-
-
 function currentEntriesBlock(file: MemoryFile): string {
   const lines = [`Current entries (${file.entries.length}, ${file.chars} chars):`];
   for (const entry of file.entries) lines.push(`  ${entry.line}`);
@@ -120,12 +97,6 @@ function currentEntriesBlock(file: MemoryFile): string {
 }
 
 function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
-
-
-
-
-
-
   if (target.length === 0) {
     throw new Error(`memory_write refused: "target" must not be empty.`);
   }
@@ -143,8 +114,6 @@ function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
   return matches[0];
 }
 
-
-
 function assertSingleLine(content: string): void {
   if (content.includes("\n")) {
     throw new Error(
@@ -152,10 +121,6 @@ function assertSingleLine(content: string): void {
     );
   }
 }
-
-
-
-
 
 export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: string): string {
   const lines = file.text.length === 0 ? [] : file.text.split("\n");
@@ -174,7 +139,6 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
     const match = findUniqueMatch(file, req.target);
     const index = lines.indexOf(match.line);
 
-
     lines[index] = `- [${today}] ${req.content}`;
   } else {
     if (req.target === undefined) {
@@ -184,8 +148,6 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
     const index = lines.indexOf(match.line);
     lines.splice(index, 1);
   }
-
-
 
   const nextText = lines.join("\n");
   if (nextText.length > file.cap) {
@@ -198,10 +160,6 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
   }
   return nextText;
 }
-
-
-
-
 
 export function applyWrite(
   req: MemoryWriteRequest,
@@ -246,16 +204,10 @@ function memorySections(memory: LoadedMemory): string {
   ].join("\n");
 }
 
-
-
-
 export function renderMemoryTier(memory: LoadedMemory): string {
   if (memoryFilesEmpty(memory)) return "";
   return ["# Memory", MEMORY_TIER_INTRO, "", memorySections(memory)].join("\n");
 }
-
-
-
 
 export function renderArchivistMemory(memory: LoadedMemory): string {
   if (memoryFilesEmpty(memory)) return "";

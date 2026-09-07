@@ -79,16 +79,12 @@ describe("stage, preview, approve", () => {
     expect(loaded?.filePath).toBe(path);
   });
 
-
-
   test("an approved skill is marked as the archivist's, on disk and in the panel", () => {
     const ctx = makeCtx();
     approvePendingSkill(ctx.configDir, stagePendingSkill(INPUT, ctx, new Date()));
     const text = readFileSync(approvedSkillPath(ctx.worktree, INPUT.name), "utf8");
     expect(text).toContain("author: archivist");
     expect(text).toContain(`reason: ${JSON.stringify(INPUT.reason)}`);
-
-
 
     const rows = skillsPanelRows(ctx, loadSkillRegistry({ ...ctx, onWarning: () => {} }));
     expect(rows).toHaveLength(1);
@@ -147,8 +143,6 @@ describe("skill_write", () => {
     expect(result.replacesExisting).toBe(true);
   });
 
-
-
   test("refuses a body that looks like a prompt injection", async () => {
     const ctx = makeCtx();
     await expect(
@@ -198,7 +192,6 @@ describe("approve guards the human's own edits", () => {
     const staged = stagePendingSkill(INPUT, ctx, new Date());
     const previewed = liveSkillFile(staged);
 
-
     const path = approvedSkillPath(ctx.worktree, INPUT.name);
     writeFileSync(
       path,
@@ -218,8 +211,6 @@ Hand-written addition.
     const staged = stagePendingSkill(INPUT, ctx, new Date());
     expect(() => approvePendingSkill(ctx.configDir, staged, liveSkillFile(staged))).not.toThrow();
   });
-
-
 
   test("approves with no preview recorded", () => {
     const ctx = makeCtx();

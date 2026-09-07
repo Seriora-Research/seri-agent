@@ -5,15 +5,8 @@ import { scanForInjection } from "../memory/injectionScan";
 import { isRoutableRole } from "../subagents/routes";
 import { existingSkillBody, type PendingSkill, stagePendingSkill } from "./pending";
 
-
-
-
-
 export const MAX_SKILL_BODY_LENGTH = 8_000;
 const MAX_SKILL_DESCRIPTION_LENGTH = 500;
-
-
-
 
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -34,10 +27,8 @@ const DESCRIPTION =
   `where the task's own subject belongs. Nothing is written to disk: the skill is staged for a ` +
   `human to read and approve first.`;
 
-
 export function makeSkillWriteTool(
   ctx: { configDir: string; worktree: string },
-
 
   opts: { onStaged?: (staged: PendingSkill) => void } = {},
 ) {
@@ -67,9 +58,6 @@ export function makeSkillWriteTool(
         );
       }
 
-
-
-
       const scan = scanForInjection(
         [args.name, args.description, args.body, args.reason].join("\n"),
       );
@@ -91,8 +79,6 @@ export function makeSkillWriteTool(
         new Date(),
       );
       opts.onStaged?.(staged);
-
-
 
       const replaces = existingSkillBody(ctx.worktree, name) !== undefined;
       return {

@@ -12,21 +12,6 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 export function ensureOwnerOnlyDir(dir: string): boolean {
   // mkdirSync `mode` is a no-op on an existing dir; chmod is skipped on win32.
   const created = mkdirSync(dir, { recursive: true, mode: 0o700 }) !== undefined;
@@ -34,34 +19,13 @@ export function ensureOwnerOnlyDir(dir: string): boolean {
   return created;
 }
 
-
-
-
-
-
-
-
-
-
-
-
 export function atomicWriteFile(path: string, content: string): void {
   const dir = dirname(path);
-
-
-
-
 
   if (existsSync(dir)) {
     accessSync(dir, constants.W_OK);
   }
   ensureOwnerOnlyDir(dir);
-
-
-
-
-
-
 
   if (existsSync(path)) {
     accessSync(path, constants.W_OK);
@@ -74,19 +38,6 @@ export function atomicWriteFile(path: string, content: string): void {
 }
 
 const TMP_SUFFIX_RE = /^\.(\d+)\.[0-9a-f]{8}\.tmp$/;
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function sweepStaleTmp(dir: string, path: string): void {
   const prefix = basename(path);
@@ -103,13 +54,9 @@ function sweepStaleTmp(dir: string, path: string): void {
     if (isProcessAlive(Number(match[1]))) continue;
     try {
       unlinkSync(join(dir, name));
-    } catch {
-
-    }
+    } catch {}
   }
 }
-
-
 
 function isProcessAlive(pid: number): boolean {
   try {

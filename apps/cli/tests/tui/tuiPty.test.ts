@@ -1307,7 +1307,6 @@ function childScriptMaxTurns(dir: string): string {
   ].join("\n");
 }
 
-
 function childScriptContinue(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,

@@ -49,16 +49,6 @@ export function denialBlocks(
   });
 }
 
-
-
-
-
-
-
-
-
-
-
 export function checkPermission(
   toolName: string,
   mode: PermissionMode,

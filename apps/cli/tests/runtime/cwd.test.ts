@@ -23,10 +23,6 @@ function makeDir(): string {
   return dir;
 }
 
-
-
-
-
 function sameResolvedPath(a: string, b: string): boolean {
   return realpathSync(a).toLowerCase() === realpathSync(b).toLowerCase();
 }

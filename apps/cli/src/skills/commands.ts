@@ -22,8 +22,6 @@ export type SkillsCommandDeps = {
 
 const ID_ARG_RE = /^(all|[0-9a-f]{4,40})$/;
 
-
-
 export function skillsCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
   if (sub === undefined || sub === "list" || sub === "pending") return rest.length === 0;
@@ -35,9 +33,6 @@ export function skillsCommandAccepts(args: string[]): boolean {
 function summaryLine(p: PendingSkill): string {
   return `${p.id}  ${p.name}  ${truncate(p.description, 70)}`;
 }
-
-
-
 
 function forEachMatch(
   configDir: string,
@@ -65,21 +60,17 @@ function forEachMatch(
   return lines;
 }
 
-
 export function skillsPanelRows(deps: SkillsCommandDeps, skills: SkillRegistry): SkillsPanelRow[] {
   return [...skills.values()].map((skill) => ({
     name: skill.name,
     description: skill.description,
     scope: skill.source === "project" ? "project" : "global",
 
-
     where: skill.source === "project" ? relative(deps.worktree, skill.filePath) : skill.filePath,
     author: skill.author,
     modelInvocable: skill.modelInvocable,
   }));
 }
-
-
 
 export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { lines: string[] } {
   const [sub, ...rest] = args;
@@ -93,8 +84,6 @@ export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { 
   if (sub === "diff" && rest.length === 1) {
     return {
       lines: forEachMatch(deps.configDir, rest[0] as string, "diff", true, (p) => {
-
-
         deps.previewed?.set(p.id, liveSkillFile(p));
         return diffPendingSkill(p).lines;
       }),
@@ -104,12 +93,7 @@ export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { 
   if (sub === "approve" && rest.length === 1) {
     return {
       lines: forEachMatch(deps.configDir, rest[0] as string, "approve", false, (p) => {
-
-
-
         const { path } = approvePendingSkill(deps.configDir, p, deps.previewed?.get(p.id));
-
-
 
         return [`Approved ${p.id}: wrote ${path}. It loads in the next session, or after /clear.`];
       }),

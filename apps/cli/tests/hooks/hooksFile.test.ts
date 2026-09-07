@@ -139,9 +139,6 @@ describe("parseHooksFile", () => {
     }
   });
 
-
-
-
   test.each(["../../evil", "sub/evil", "sub\\\\evil", "..", "guard:stream"])(
     'a script of "%s" is rejected',
     (script) => {

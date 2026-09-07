@@ -8,9 +8,6 @@ import {
 } from "../../src/provider/tools";
 import { type AgentFileOutcome, parseAgentFile } from "../../src/subagents/agentFile";
 
-
-
-
 const CURSOR_FIXTURE = readFileSync(
   join(import.meta.dir, "fixtures", "cursor-reviewer-verifier.md"),
   "utf8",
@@ -123,9 +120,6 @@ describe("parseAgentFile — tool grants", () => {
     expect(outcome.kind === "skipped" && outcome.warning).toContain("/agents/reviewer.md");
   });
 
-
-
-
   test("a bare tools: line skips the file instead of granting every tool", () => {
     const outcome = parse("---\ndescription: d\ntools:\n---\nb\n");
     expect(outcome.kind).toBe("skipped");
@@ -147,8 +141,6 @@ describe("parseAgentFile — names", () => {
       spec(parse("---\ndescription: d\n---\nb\n", { filePath: "/a/Deep-Reviewer.md" })).name,
     ).toBe("deep-reviewer");
   });
-
-
 
   test("an uppercase .MD extension is stripped from the default name", () => {
     expect(spec(parse("---\ndescription: d\n---\nb\n", { filePath: "/a/Reviewer.MD" })).name).toBe(
@@ -239,8 +231,6 @@ describe("parseAgentFile — a missing description", () => {
   });
 });
 
-
-
 describe("parseAgentFile — a very long description", () => {
   test("beyond 500 characters it is truncated, with a warning naming the file", () => {
     const outcome = parse(`---\ndescription: ${"d".repeat(600)}\n---\nb\n`, {
@@ -258,8 +248,6 @@ describe("parseAgentFile — CRLF", () => {
     expect(spec(parse(crlf)).toolNames).toEqual(spec(parse(lf)).toolNames);
     expect(spec(parse(crlf)).description).toBe("d");
   });
-
-
 
   test("a leading UTF-8 BOM does not defeat the frontmatter fence", () => {
     const parsed = spec(parse("﻿---\r\nname: r\r\ndescription: d\r\n---\r\nbody line\r\n"));

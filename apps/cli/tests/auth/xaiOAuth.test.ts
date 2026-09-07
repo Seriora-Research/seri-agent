@@ -19,8 +19,6 @@ function jsonResponse(ok: boolean, status: number, body: unknown): Response {
   return { ok, status, text: async () => JSON.stringify(body) } as Response;
 }
 
-
-
 function asFetch(fn: (url: any, init?: any) => Promise<Response>): typeof fetch {
   return fn as unknown as typeof fetch;
 }
@@ -56,8 +54,6 @@ function withTempConfig<T>(fn: (dir: string) => T): T {
 }
 
 describe("client id configuration", () => {
-
-
   test("the default is Grok Build's borrowed client id", () => {
     withTempConfig((dir) => {
       expect(xaiClientId(dir)).toBe(XAI_CLIENT_ID_DEFAULT);
@@ -91,8 +87,6 @@ describe("discoverXaiEndpoints", () => {
     );
     expect(endpoints).toEqual(ENDPOINTS);
   });
-
-
 
   test("refuses a token endpoint on a different origin than the issuer", async () => {
     await expect(
@@ -183,8 +177,6 @@ describe("requestXaiDeviceCode", () => {
 });
 
 describe("readXaiTokens", () => {
-
-
   test("rejects a payload with no refresh token", () => {
     expect(() => readXaiTokens({ access_token: "a" })).toThrow(/refresh_token/);
   });
@@ -240,8 +232,6 @@ describe("pollForXaiToken", () => {
     expect(waits).toEqual([5000, 10000]);
   });
 
-
-
   test("a 403 is tier-denied, is distinct from error, and stops polling", async () => {
     let call = 0;
     const result = await pollForXaiToken("client-1", DEVICE, ENDPOINTS, {
@@ -286,8 +276,6 @@ describe("pollForXaiToken", () => {
     expect(result).toEqual({ status: "aborted" });
     expect(called).toBe(false);
   });
-
-
 
   test("discards a success when the abort lands during the in-flight request", async () => {
     const controller = new AbortController();
@@ -339,8 +327,6 @@ describe("fetchXaiAccountId", () => {
 });
 
 describe("discovery scheme pinning", () => {
-
-
   test("refuses an http endpoint for an https issuer", async () => {
     await expect(
       discoverXaiEndpoints(
