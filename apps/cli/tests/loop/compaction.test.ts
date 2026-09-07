@@ -53,7 +53,6 @@ function summarizerUserText(model: MockLanguageModelV4): string {
     .join("");
 }
 
-// One leading user message, then `pairs` adjacent {assistant tool-call, tool result} pairs.
 function buildAlternatingMessages(pairs: number): ModelMessage[] {
   const messages: ModelMessage[] = [{ role: "user", content: "do the task" }];
   for (let i = 0; i < pairs; i++) {
@@ -79,7 +78,7 @@ describe("findSafeEvictionBoundary", () => {
 
   test("walks forward past a tool message when the naive cut would split a tool-call/tool-result pair", () => {
     const messages = buildAlternatingMessages(10);
-    const candidateIndex = 6; // even index -> lands on a tool message
+    const candidateIndex = 6;
     expect(messages[candidateIndex]?.role).toBe("tool");
     const keep = keepTokensForLast(messages, messages.length - candidateIndex);
 
@@ -97,9 +96,6 @@ describe("findSafeEvictionBoundary", () => {
   });
 
   test("a huge 19-message tail is cut while a tiny 20-message tail is kept", () => {
-    // 20k tokens / 19 ≈ 4 KiB of text; each result is well over that so the
-    // suffix alone exceeds the keep budget and a count-20 rule cannot treat
-    // the whole tail as recent.
     const hugeBody = "H".repeat(20_000);
     const huge: ModelMessage[] = [];
     for (let i = 0; i < 9; i++) {
@@ -172,6 +168,21 @@ describe("elideOversizedStrings", () => {
       elided: true,
       originalBytes: Buffer.byteLength(overByBytes, "utf8"),
     });
+  });
+});
+
+describe("estimateTokens additivity", () => {
+  test("the array estimate equals the sum of per-message estimates, including tool payloads", () => {
+    const body = "x".repeat(50_000);
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("call-1"),
+      toolResultMsg("call-1", body),
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ];
+    let running = 0;
+    for (const message of messages) running += estimateTokens(message);
+    expect(running).toBe(estimateTokens(messages));
   });
 });
 

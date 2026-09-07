@@ -43,7 +43,7 @@ export type TrajectoryKind =
       tool?: string;
       toolCallId?: string;
     }
-  | { kind: "denial"; name: string; reason: "blocked" | "declined" | "hook" }
+  | { kind: "denial"; name: string; reason: "blocked" | "declined" | "hook" | "containment" }
   | {
       kind: "usage";
       usage: LanguageModelUsage;

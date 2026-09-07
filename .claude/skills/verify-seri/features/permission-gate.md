@@ -36,3 +36,4 @@ Preconditions:
 - Grants (run-scoped and persisted) do not survive cycling into `read-only`.
 - The mode cycle order matters for scripted drives: from a fresh session one Shift+Tab lands on `bypass permissions on`; wait for the label text, don't count presses.
 - Answering `n` three times in a row ends the run (`repeated-denials`) — a drive that means to test denial once must not queue extra `n`s.
+- `--permission-prompts none` is a real product flag but a run using it proves nothing about the ApprovalBox.

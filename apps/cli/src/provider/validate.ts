@@ -8,31 +8,19 @@ import { getOpenAIModel } from "./openai";
 import { getOpenRouterModel } from "./openrouter";
 import { getXaiModel } from "./xai";
 
-// D5 (feature-plan.md): the cheapest model per provider, verified present in the bundled manifest
-// and aligned with nativeProviders.live.test.ts's own choices where they overlap (anthropic,
-// openai, google) — that file's own opt-in `validateProviderKey` round-trips (extending its
-// existing get<X>Model round-trips, all skip-by-default behind SERI_LIVE_PROVIDER_CHECK=1) reuse
-// these same ids for groq/openrouter too, rather than inventing a second probe-model convention.
 export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
   groq: "openai/gpt-oss-20b",
   openrouter: "openai/gpt-oss-20b",
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4.1-mini",
   google: "gemini-2.5-flash",
-  // Cheapest xai row that still carries tool_call in the bundled manifest, and undated so it does
-  // not rot the way the grok-4.20-0309-* ids would.
+
   xai: "grok-4.3",
 };
 
-// Not a real session — this call never touches loop.ts's own turn machinery, so there is no
-// session id to reuse. A fixed, recognizable placeholder rather than a random one: identical on
-// every call, which is what a future OpenRouter dashboard reading session_id would want to see
-// grouped together as "the validation probe," not one-off noise.
 const VALIDATION_SESSION_ID = "seri-setup-key-validation";
 
 export type ValidateKeyDeps = {
-  // Injected so no test ever calls the real AI SDK — SERI_SKIP_KEY_VALIDATION is the OTHER escape
-  // hatch (below), for callers that want to skip the probe outright rather than fake its result.
   generate?: typeof generateTextReal;
 };
 
@@ -40,23 +28,12 @@ export type ValidateKeyResult =
   | { ok: true; checked: boolean; warning?: string }
   | { ok: false; reason: "auth"; message: string };
 
-// AI SDK errors surface as `APICallError`, which carries `statusCode` — read structurally (duck
-// typed) rather than importing the class, since every provider funnels through the same shape and
-// this file has no other reason to depend on the SDK's own error hierarchy.
+// AI SDK errors surface as APICallError with statusCode; read structurally.
 function isAuthFailure(err: unknown): boolean {
   const statusCode = (err as { statusCode?: unknown } | null)?.statusCode;
   return statusCode === 401 || statusCode === 403;
 }
 
-// D5's own mechanism: one minimal `generateText` call against the candidate key (never the
-// caller's already-stored one — `apiKey` is always the value /setup's panel just typed, not yet
-// persisted), `maxOutputTokens: 1` and `maxRetries: 0` to keep cost and latency negligible, a 10s
-// timeout matching catalog.ts's own FETCH_TIMEOUT_MS precedent. Classification: ONLY 401/403
-// rejects the key outright; everything else (network blip, timeout, 429, an unfamiliar probe
-// model id, a non-Error throw) stores the key anyway with a warning — refusing to store on a
-// transient failure would make /setup unusable offline or behind a restrictive proxy, and an
-// unverifiable-but-wrong key still fails loudly on first real use, which is today's baseline
-// (no validation at all), so this can only be an improvement, never a regression.
 export async function validateProviderKey(
   provider: ModelProvider,
   apiKey: string,
@@ -66,7 +43,6 @@ export async function validateProviderKey(
     return { ok: false, reason: "auth", message: "API key cannot be empty." };
   }
 
-  // The escape hatch every pty test uses — checked before anything else touches the network.
   if (process.env.SERI_SKIP_KEY_VALIDATION === "1") {
     return { ok: true, checked: false };
   }
@@ -74,21 +50,6 @@ export async function validateProviderKey(
   const modelId = VALIDATION_MODEL_IDS[provider];
   const generate = deps.generate ?? generateTextReal;
   try {
-    // A five-case switch, mirroring getModel's own dispatch (provider/model.ts) — including that
-    // function's own reasoning for a switch over a ternary/lookup table: an unrecognized value is
-    // unreachable through the real ModelProvider union (this function's own caller reads a value
-    // the panel itself already constrained to CATALOG_PROVIDERS), but unlike getModel's own switch
-    // this function's documented contract is "never throws" (its own callers, cli.ts's
-    // onSetupKeyEntered included, rely on that) — so the default case returns an ok:false result
-    // naming the bad value instead of throwing, dead code today but consistent with the contract
-    // rather than a second, silent way to break it later.
-    //
-    // Inside this try, not above it (code-review finding, PR #73, round 2, item #3): each
-    // get<X>Model constructor has its own `if (!apiKey) throw missingKeyError(...)` guard, and the
-    // empty-key check above this function already closes THAT one known synchronous-throw path —
-    // but if any constructor ever throws for a DIFFERENT reason (a future SDK version validating
-    // key format up front, say), this is what keeps the "never throws" contract intact regardless,
-    // rather than only for the one failure mode anticipated today.
     let model: ReturnType<typeof getGroqModel>;
     switch (provider) {
       case "groq":

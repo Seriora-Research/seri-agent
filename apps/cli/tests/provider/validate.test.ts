@@ -27,10 +27,6 @@ describe("validateProviderKey", () => {
     expect(called).toBe(false);
   });
 
-  // The AI SDK's own APICallError is an Error subclass carrying `statusCode` (isAuthFailure's own
-  // comment) — mirrored here as `Object.assign(new Error(...), {statusCode})` rather than a plain
-  // object literal, so this fixture matches what the real SDK actually throws instead of a shape
-  // that happens to satisfy `isAuthFailure`'s structural check without also being a real Error.
   test("a 401 rejects the key", async () => {
     const result = await validateProviderKey("anthropic", "fake-key", {
       generate: (async () => {
@@ -92,13 +88,6 @@ describe("validateProviderKey", () => {
     expect(result).toEqual({ ok: true, checked: true });
   });
 
-  // Bug fixed here (reviewer-verifier, multi-provider-byok-phase-2): an empty key used to reach
-  // getAnthropicModel(modelId, "")'s own `if (!apiKey) throw` guard from inside the (then-
-  // unguarded) provider switch, making this function REJECT instead of resolve — an unhandled
-  // rejection cli.ts's onSetupKeyEntered had no try/catch for (it trusts the "never throws"
-  // contract), deadlocking /setup's own "busy" state on an empty submit. Deliberately does NOT set
-  // SERI_SKIP_KEY_VALIDATION — this negative control only means something with validation actually
-  // enabled, the one condition every other test in this file (and every pty test) never exercises.
   test("an empty key resolves as an auth rejection instead of throwing, with validation enabled", async () => {
     let called = false;
     const result = await validateProviderKey("anthropic", "", {
@@ -109,7 +98,7 @@ describe("validateProviderKey", () => {
     });
 
     expect(result).toEqual({ ok: false, reason: "auth", message: "API key cannot be empty." });
-    // Never even reaches the network call — rejected before the provider switch, not caught after.
+
     expect(called).toBe(false);
   });
 
@@ -120,10 +109,6 @@ describe("validateProviderKey", () => {
     expect(result).toEqual({ ok: false, reason: "auth", message: "API key cannot be empty." });
   });
 
-  // Bug fixed here (code-review, PR #73): an unrecognized provider (unreachable through the real
-  // ModelProvider union — this is belt-and-braces, mirroring getModel's own default case, model.ts)
-  // used to `throw`, breaking this function's own documented "never throws" contract. Now returns
-  // an ok:false result instead, same as every other rejection here.
   test("an unrecognized provider returns ok:false instead of throwing", async () => {
     const badProvider = "mistral" as unknown as Parameters<typeof validateProviderKey>[0];
     let called = false;

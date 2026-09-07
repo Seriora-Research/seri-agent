@@ -40,8 +40,7 @@ import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
 import { getCachedEol, setCachedEol } from "../../src/tools/eolCache";
 
-// The cold first snapshot measured 300 ms on Windows and these tests take several each. Same
-// 30 s margin as shadowGit.test.ts, for the same reason.
+// Cold first snapshot measured 300 ms on Windows; bun's default timeout is too tight on a loaded runner.
 const GIT_TEST_TIMEOUT_MS = 30_000;
 
 let root: string;
@@ -51,10 +50,7 @@ let warnings: string[];
 
 const SESSION = "session-1";
 
-// Absolute paths, because a declared relative path is resolved against process.cwd() — which is
-// the repo root under `bun test`, not the temp worktree. That is the resolution the tools
-// themselves use, so anchoring these to `workTree` by hand is what a real `write_file` call in
-// this worktree would have declared.
+// `bun test` cwd is the repo root, not the temp worktree, so declared paths here are absolute.
 function mutation(overrides: Partial<MutationContext> = {}): MutationContext {
   return {
     tool: "write_file",
@@ -84,8 +80,6 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-// Deliberately not routed through shadowGit: evidence about the store should not come from the
-// module that wrote it.
 function plainGit(gitDir: string, args: string[]): string {
   const result = spawnSync("git", [`--git-dir=${gitDir}`, ...args], {
     encoding: "utf8",
@@ -115,10 +109,6 @@ describe("checkpointStoreDir", () => {
     );
   });
 
-  // Neither development box can run this one: Windows skips it and WSL skips it, so CI's macOS leg
-  // is the only thing anywhere that will ever execute it. That is the reason it has to exist —
-  // APFS is case-insensitive by default exactly as NTFS is, and without this nothing checks that
-  // the folding still covers darwin.
   test.skipIf(process.platform !== "darwin")("keys /Proj and /proj to one store on darwin", () => {
     expect(checkpointStoreDir("cfg", "/Users/x/Projects/App")).toBe(
       checkpointStoreDir("cfg", "/users/x/projects/app"),
@@ -214,10 +204,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "keeps checkpointing the worktree after a write to a path outside it",
     () => {
-      // Writing a scratch file to a temp dir or ~/.config is ordinary model behaviour. `git
-      // check-ignore` exits 128 for such a path ("is outside repository"), which used to throw
-      // into the error latch and turn checkpointing off for the whole session — measured: zero
-      // records in the log and one warning, with every later edit unprotected.
       const outside = join(root, "notes.md");
       const snapshot = checkpointer();
 
@@ -242,11 +228,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "checkpoints the project root, so a repo-root .gitignore applies to a session started below it",
     () => {
-      // gitignore(5) reads .gitignore files only up to the top level of the work tree, so with the
-      // work-tree pointed at the subdirectory the root's rules were never consulted. Measured:
-      // `--work-tree=repo/pkg add -A` staged `.env` and `node_modules/x.js` against a repo-root
-      // .gitignore naming both, i.e. `cd repo/pkg && seri "…"` copied the project's secrets into
-      // <configDir>, outside the repo where git clean never reaches them.
       const repo = join(root, "repo");
       const sub = join(repo, "pkg");
       mkdirSync(join(sub, "node_modules"), { recursive: true });
@@ -257,8 +238,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       writeFileSync(join(sub, "a.txt"), "a\n");
 
       const worktree = projectRoot(sub);
-      // Compared by name, not by string: on macOS the toplevel comes back through /private and
-      // would not equal the path the test built.
+      // On macOS, git's toplevel comes back through /private and would not equal the path the test built.
       expect(basename(worktree)).toBe("repo");
 
       createCheckpointer({
@@ -289,10 +269,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "honours the user's .git/info/exclude, so a locally-excluded file is neither copied nor deleted",
     () => {
-      // `--exclude-standard` reads $GIT_DIR/info/exclude, and $GIT_DIR is the shadow store, so the
-      // user's local excludes were invisible in both directions: the file was copied into
-      // <configDir> (outside the repo, where git clean never reaches it) and a locally-excluded
-      // file made after a snapshot was deleted by the removal pass without appearing in the plan.
       spawnSync("git", ["init", "-q"], { cwd: workTree, windowsHide: true });
       mkdirSync(join(workTree, ".git", "info"), { recursive: true });
       writeFileSync(join(workTree, ".git", "info", "exclude"), "local-secret.txt\n*.local\n");
@@ -304,13 +280,11 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       writeFileSync(join(workTree, "made-later.local"), "notes\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
-      // Half one: never copied into the store.
       const tree = toolRecords()[0]?.tree ?? "";
       expect(plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", tree])).not.toContain(
         "local-secret.txt",
       );
 
-      // Half two: never deleted by the removal pass.
       const result = undo(2);
 
       expect(result.deleted).not.toContain("made-later.local");
@@ -324,11 +298,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "resolves a declared relative path the way the tool that declared it will",
     () => {
-      // process.cwd() under `bun test` is the repo root, not this temp worktree — the same
-      // divergence as `seri --resume <id>` run from a subdirectory. write_file passes the declared
-      // path straight to node:fs, so it would create <cwd>/a.txt; resolving it against the worktree
-      // instead answered about a different file, and with a root-anchored rule in .gitignore that
-      // produced a warning about a file that had in fact been checkpointed.
       checkpointer()(mutation({ args: { path: "a.txt" } }));
 
       expect(warnings).toEqual([
@@ -341,10 +310,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "warns that a nested git repository is not covered, rather than reporting an undo that missed it",
     () => {
-      // `add -A` records a nested repo as a gitlink holding only its HEAD sha. Measured: editing
-      // nested/a.txt and creating nested/b.txt left write-tree returning the identical sha, so
-      // /undo restores the outer files, prints "restored …" and leaves every change under a
-      // submodule or vendored clone in place — green and empty, in a narrower form.
       const nested = join(workTree, "nested");
       mkdirSync(nested, { recursive: true });
       spawnSync("git", ["init", "-q"], { cwd: nested, windowsHide: true });
@@ -371,7 +336,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
 
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1" }));
-      // Second call: the warning is once per session, not once per tool call.
       writeFileSync(join(nested, "a.txt"), "v2\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
@@ -398,7 +362,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
     () => {
       checkpointer()(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      // A second process resuming the same session: a fresh checkpointer over the same store.
       checkpointer()(mutation({ toolCallId: "c2" }));
 
       const records = toolRecords();
@@ -412,11 +375,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "a resumed session's first call snapshots for real even when it is a non-destructive bash command",
     () => {
-      // --resume seeds `previousTree` from the log's last checkpoint before this process has taken
-      // any snapshot of its own. Without a per-process flag a harmless `ls` right after resuming
-      // reused that stale tree and missed the change made below, which is exactly the gap `/undo`
-      // could fall into if the filesystem changed between the previous process exiting and this one
-      // resuming.
       checkpointer()(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       const snapshot = checkpointer();
@@ -491,14 +449,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "git apply patch.diff",
     "tee out.txt",
     "patch -p1 < patch.diff",
-    // \b does not fire between "n" and "i" (both word characters) — /\binstall\b/ alone never
-    // matched "uninstall" (verified: false against this exact string before the fix). "git rm"/
-    // "git mv" are NOT added here even though a review flagged them as missing: the plain
-    // /\brm\b/ and /\bmv\b/ patterns already match "git rm ..."/"git mv ..." as a substring word,
-    // verified directly — a dedicated git-rm/git-mv pattern would have been dead weight.
     "npm uninstall lodash",
-    // A standard POSIX single-file delete, distinct from `rm` — not a substring of any covered
-    // word, so it needs its own pattern rather than being caught incidentally.
     "unlink file.txt",
   ])(
     "a destructive bash call restages the worktree: %s",
@@ -517,10 +468,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     GIT_TEST_TIMEOUT_MS,
   );
 
-  // Regression guard for the missing `s` (dotAll) flag: without it, `.` in `/\bsed\b.*-i\b/` cannot
-  // cross a newline, so a command split by a backslash line-continuation — a real, plausible shape
-  // for a multi-line bash command, not a contrived one — never matched and silently skipped the
-  // snapshot a genuine `sed -i` should have forced.
   test(
     "a destructive bash call restages the worktree even when split across lines by a backslash continuation",
     () => {
@@ -543,7 +490,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     GIT_TEST_TIMEOUT_MS,
   );
 
-  // Same dotAll gap on the PowerShell side: /\bCopy-Item\b.*-Force\b/i needed the same fix.
   test(
     "a destructive PowerShell call restages the worktree even when split across lines by a backtick continuation",
     () => {
@@ -662,9 +608,6 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      // Stands in for write_file's own onAfterMutation (checkpoint.ts's real createCheckpointer
-      // calls this after every successful write_file) — the ledger is what proves seri, not the
-      // user, made this file, which is what the removal pass below now requires before deleting it.
       recordWrite(storeDir, join(workTree, "new.txt"), "new\n");
       snapshot(mutation({ toolCallId: "c2" }));
 
@@ -688,12 +631,10 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     () => {
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1" }));
-      snapshot(mutation({ toolCallId: "c2" })); // nothing changed: same tree
+      snapshot(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       snapshot(mutation({ toolCallId: "c3" }));
 
-      // Three records, two distinct trees — so `/undo 2` must reach the original content rather
-      // than land on the duplicate.
       expect(toolRecords()).toHaveLength(3);
       undo(2);
 
@@ -705,22 +646,17 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   test(
     "ranks a tree that reappears later by its newest occurrence, not its oldest",
     () => {
-      // The ordinary flow, not a contrived one: an undo restores an earlier tree, and the next
-      // checkpoint records that same tree again — a non-adjacent duplicate the undo itself
-      // created. Rank it at its first occurrence and `/undo 1` steps FORWARD onto a state the
-      // user just reverted, while printing that it undid.
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // v0
+      snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v1\n");
-      snapshot(mutation({ toolCallId: "c2" })); // v1
+      snapshot(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      undo(2); // back to v0
-      snapshot(mutation({ toolCallId: "c3" })); // v0 again — the duplicate
+      undo(2);
+      snapshot(mutation({ toolCallId: "c3" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
 
       undo(1);
 
-      // "before" is v0 — the seeded content the first checkpoint captured.
       expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("before\n");
     },
     GIT_TEST_TIMEOUT_MS,
@@ -730,13 +666,11 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "never counts the state an earlier undo replaced as a step",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // captures "before"
+      snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" })); // captures "v2"
+      snapshot(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
 
-      // Undoing now writes a pre-undo record whose tree ("v3") appears in no tool record, so if
-      // the selection counted pre-undo records the step below would land on it and stop at "v2".
       undo(1);
       undo(2);
 
@@ -758,9 +692,6 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       writeFileSync(join(workTree, "a.txt"), "v4\n");
       const second = undo(1);
 
-      // Read with plain git: /undo hands each of these hashes to the user as the way back to the
-      // state it replaced, and pruneSessions runs `gc` at the start of every session, so a commit
-      // that is not an ancestor of the ref is a promise with an expiry date on it.
       const gitDir = join(storeDir, "git");
       const reachable = plainGit(gitDir, ["rev-list", `refs/seri/sessions/${SESSION}`]).split("\n");
       expect(reachable).toContain(first.preUndoCommit);
@@ -793,9 +724,6 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   test(
     "reports only the ignored writes at or after the checkpoint it restores to",
     () => {
-      // Session-wide, `/undo 1` announced a gitignored file written twenty tool calls earlier in
-      // the same breath as the paths it had just restored — an undo that was never going to touch
-      // it either way.
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }));
@@ -805,8 +733,6 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       snapshot(mutation({ toolCallId: "c3" }));
 
       expect(undo(1).ignored).toEqual([]);
-      // Stepping back to the checkpoint the ignored write happened at does report it: the record is
-      // appended just before that call's own tool record.
       expect(undo(3).ignored).toEqual([join(workTree, "secret.log")]);
     },
     GIT_TEST_TIMEOUT_MS,
@@ -815,14 +741,10 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   test(
     "drops a truncated final log line instead of latching checkpointing off for the session",
     () => {
-      // The log is appended to with no fsync, so a kill or an ENOSPC mid-appendFileSync leaves half
-      // a line. A JSON.parse throw for it used to latch checkpointing off with a raw SyntaxError
-      // as the warning, and leave /undo, /rewind and /restore unusable for that session forever.
       const snapshot = checkpointer();
       snapshot(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
       snapshot(mutation({ toolCallId: "c2" }));
-      // The process died here, mid-append, leaving half a record as the last line.
       appendFileSync(join(storeDir, `${SESSION}.jsonl`), '{"kind":"tool","seq":2,"tre');
 
       expect(toolRecords()).toHaveLength(2);
@@ -849,8 +771,6 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
         }),
       ).toThrow("deadbeef is not a checkpoint in this session's store.");
 
-      // The point of validating first: a typo used to leave a minted commit, a moved ref and a
-      // pre-undo record behind, and every retry appended another.
       expect(readLog(storeDir, SESSION)).toHaveLength(before);
     },
     GIT_TEST_TIMEOUT_MS,

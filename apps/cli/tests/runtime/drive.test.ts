@@ -7,13 +7,18 @@ import { MockLanguageModelV4 } from "ai/test";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import { loadVerifyConfig } from "../../src/config/config";
+import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
-import { createArchivistState } from "../../src/memory/archivist";
+import {
+  createArchivistState,
+  drainArchivist,
+  ARCHIVIST_TOOL_CALL_INTERVAL,
+} from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
@@ -26,6 +31,7 @@ import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -61,6 +67,7 @@ function preparedStub(): PreparedRun {
     permissionMode: "read-only",
     worktree: dir,
     allowedTools: [],
+    pathDenials: [],
     catalog: { fetchedAt: "", entries: [] },
     catalogEntry: undefined,
     route: {
@@ -148,6 +155,46 @@ describe("driveLoop options", () => {
     expect(TODO_TOOL_NAME in (withoutDispatch.capture()?.tools ?? {})).toBe(false);
   });
 
+  test("passes session.cwd as workingDirectory and treats the approvalPrompt as a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(capture.capture()?.workingDirectory).toBe(prepared.session.cwd);
+    expect(capture.capture()?.askOutsideFs).toBe(true);
+    expect(capture.capture()?.outsideConsent?.current).toBe("unasked");
+  });
+
+  test("askOutsideFs false reaches the loop so a dummy prompt is not a live human", async () => {
+    const prepared = preparedStub();
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false, askOutsideFs: false },
+    );
+    expect(capture.capture()?.askOutsideFs).toBe(false);
+  });
+
   test("bindProcessCancel false leaves the process cancel slot untouched", async () => {
     let preserved = false;
     const unregister = onSignalCancel(() => {
@@ -228,11 +275,60 @@ describe("driveLoop options", () => {
     );
     expect(recorded).toBe(0);
   });
+
+  test("a tool-count archivist does not block driveLoop returning", async () => {
+    const prepared = preparedStub();
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const toolCalls: LoopEvent[] = Array.from({ length: ARCHIVIST_TOOL_CALL_INTERVAL }, () => ({
+      type: "tool-call",
+      name: "read_file",
+      args: {},
+    }));
+    async function* fake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      if ((opts.system ?? "").includes("You are seri's archivist")) {
+        started = true;
+        await hold;
+        yield { type: "done", reason: "no-tool-call" };
+        return opts.messages;
+      }
+      for (const event of toolCalls) yield event;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+    const state = createArchivistState(prepared.session);
+    const recorded: unknown[] = [];
+    prepared.trajectory.recordArchivist = (report) => {
+      recorded.push(report);
+    };
+
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      state,
+      undefined,
+      { composeSubagents: false },
+    );
+
+    expect(result.archivist).toBeUndefined();
+    expect(recorded).toHaveLength(0);
+    expect(started).toBe(true);
+    release();
+    await drainArchivist(state);
+    expect(recorded).toHaveLength(1);
+  });
 });
 
 describe("driveLoop directDispatch", () => {
-  // Built-in explore/plan and a file-defined agent are registry entries alike, so `/explore …`
-  // reaches this path with no source change; a file-defined agent reaches it identically.
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
     return {
@@ -284,15 +380,12 @@ describe("driveLoop directDispatch", () => {
     );
     await run;
 
-    // The three rows this dispatch appended, past whatever the session already held.
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[0]).toEqual({ role: "user", content: "grade the diff" });
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
   });
 
-  // Providers want a user-first, alternating history, and the user row carries the plain task —
-  // never the `/reviewer …` line, which is syntax the model cannot itself issue.
   test("the user row is the plain task text, and the tool-call names the agent and the goal", async () => {
     const persisted: SessionState<ModelMessage>[] = [];
     const { run } = runDirect(
@@ -450,8 +543,7 @@ describe("driveLoop directDispatch", () => {
     );
 
     expect(result.doneReason).toBe("aborted");
-    // An assistant tool-call with no matching tool-result is AI_MissingToolResultsError on the
-    // next resume, which is the one thing a cancel must never leave behind.
+
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
@@ -489,22 +581,11 @@ describe("driveLoop directDispatch", () => {
         runArchivist: false,
       },
     );
-    // preparedStub's session starts with one message, so the user row this dispatch appends lands
-    // at index 1 — a rewind to it undoes the whole submission, the request included.
+
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
   });
 
-  // A child's tool calls never reach the parent's runLoop, so a PreToolUse hook is only a rail for
-  // a child if the SubagentRuntime carries the runner down — which is why this asserts on the opts
-  // the CHILD loop was handed rather than on anything the parent did. A dispatch is the vehicle
-  // because it is the shortest one: `/name` runs exactly one child and no parent model call, so
-  // the single captured opts object is the child's.
-  //
-  // The matcher is written to match nothing, so the runner is exercised without spawning anything:
-  // a real HookRunner short-circuits on hookMatches and resolves `{ errors: [] }`, where any other
-  // function of that shape would not. The empty-registry half is the negative control — without it
-  // this test would pass identically against a wiring that always passed some callback down.
   test("a session with a PreToolUse hook hands the runner down to the child loop", async () => {
     const spec: HookSpec = {
       event: "PreToolUse",
@@ -550,6 +631,143 @@ describe("driveLoop directDispatch", () => {
     });
     expect(await childSees(new Map())).toEqual({ sawOpt: false, before: undefined });
   });
+
+  test("SERI_CONTAINMENT_ESCAPE_EXPECTED threads onto the parent loop and a /name child", async () => {
+    const key = "SERI_CONTAINMENT_ESCAPE_EXPECTED";
+    const original = process.env[key];
+
+    async function seenFlag(
+      raw: string | undefined,
+      driveOpts: { directDispatch?: { agent: AgentSpec; goal: string } },
+    ): Promise<boolean | undefined> {
+      if (raw === undefined) delete process.env[key];
+      else process.env[key] = raw;
+      let seen: boolean | undefined;
+      const prepared = preparedStub();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        {
+          runLoop: async function* (opts) {
+            seen = opts.containmentEscapeExpected;
+            yield { type: "done", reason: "no-tool-call" as const };
+            return opts.messages;
+          },
+        },
+        1,
+        () => {},
+        () => "auto",
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { ...driveOpts, runArchivist: false, composeSubagents: false },
+      );
+      return seen;
+    }
+
+    try {
+      expect(await seenFlag(undefined, {})).toBe(false);
+      expect(await seenFlag("true", {})).toBe(true);
+      expect(await seenFlag("TRUE", {})).toBe(false);
+      expect(await seenFlag("true", { directDispatch: { agent: reviewer(), goal: "grade" } })).toBe(
+        true,
+      );
+      expect(
+        await seenFlag(undefined, { directDispatch: { agent: reviewer(), goal: "grade" } }),
+      ).toBe(false);
+    } finally {
+      if (original === undefined) delete process.env[key];
+      else process.env[key] = original;
+    }
+  });
+
+  test("a child's runLoop receives the prepared path denials and cwd", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "glob", pattern: "/secret/**" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "glob", pattern: "/secret/**" }],
+      cwd: prepared.worktree,
+    });
+  });
+
+  test("the parent runLoop receives session cwd with the path denials", async () => {
+    const prepared = preparedStub();
+    prepared.pathDenials = [{ tool: "read_file", pattern: ".env" }];
+    let received: { pathDenials: RunLoopOpts["pathDenials"]; cwd: RunLoopOpts["cwd"] } | undefined;
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          received = { pathDenials: opts.pathDenials, cwd: opts.cwd };
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+    );
+    expect(received).toEqual({
+      pathDenials: [{ tool: "read_file", pattern: ".env" }],
+      cwd: prepared.session.cwd,
+    });
+  });
+
+  test("a session classifier is handed down to the child loop", async () => {
+    const classify = () => ({ kind: "allow" as const });
+    const prepared = preparedStub();
+    prepared.classifyToolCall = classify;
+    prepared.autoModeOnBlock = "ask";
+    let childClassify: RunLoopOpts["classifyToolCall"];
+    let childDisposition: RunLoopOpts["autoModeOnBlock"];
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          childClassify = opts.classifyToolCall;
+          childDisposition = opts.autoModeOnBlock;
+          yield { type: "done", reason: "no-tool-call" as const };
+          return opts.messages;
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { directDispatch: { agent: reviewer(), goal: "grade the diff" }, runArchivist: false },
+    );
+    expect(childClassify).toBe(classify);
+    expect(childDisposition).toBe("ask");
+  });
 });
 
 describe("driveLoop mcp composition", () => {
@@ -583,8 +801,6 @@ describe("driveLoop mcp composition", () => {
     inputSchema: {},
   };
 
-  // Seen red first: with `withMcp(...)` deleted from the tools composition in runtime/drive.ts,
-  // MCP_TOOL_NAME never appears in what runLoop is handed, regardless of what prepared.mcp holds.
   test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);
@@ -605,10 +821,6 @@ describe("driveLoop mcp composition", () => {
     expect(capture()?.callSubject).toBe(mcpCallSubject);
   });
 
-  // Seen red first: with the trailing `grantFingerprint(prepared.mcp, event.name)` argument
-  // removed from the rememberGrant call in runtime/drive.ts, the MCP entry below is refused
-  // (rememberGrant requires a fingerprint for an mcp_ name) and this test's own `mcpEntry` search
-  // finds nothing.
   test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);
@@ -695,6 +907,53 @@ describe("driveLoop mcp composition", () => {
       { composeSubagents: false, bindProcessCancel: false },
     );
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
+  });
+
+  test("permission mode does not change the assembled system or messages", async () => {
+    const modes = [
+      "read-only",
+      "approve-each",
+      "auto",
+    ] as const satisfies readonly PermissionMode[];
+    const _allModes: Record<PermissionMode, true> = {
+      "read-only": true,
+      "approve-each": true,
+      auto: true,
+    };
+    void _allModes;
+
+    const captured: { system: string; messages: RunLoopOpts["messages"] }[] = [];
+    for (const mode of modes) {
+      const prepared = preparedStub();
+      prepared.permissionMode = mode;
+      prepared.session.permissionMode = mode;
+      const capture = fakeRunLoop();
+      await driveLoop(
+        prepared,
+        unusedCtx(prepared.session.cwd),
+        { runLoop: capture.fake },
+        1,
+        () => {},
+        () => mode,
+        () => {},
+        async () => "no",
+        createArchivistState(prepared.session),
+        undefined,
+        { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+      );
+      const opts = capture.capture();
+      expect(opts?.system).toBeDefined();
+      expect(opts?.messages).toBeDefined();
+      expectNoBashFirstSteer(opts?.system ?? "");
+      captured.push({ system: opts?.system as string, messages: opts!.messages });
+    }
+
+    const [first, ...rest] = captured;
+    expect(first).toBeDefined();
+    for (const row of rest) {
+      expect(row.system).toBe(first!.system);
+      expect(row.messages).toEqual(first!.messages);
+    }
   });
 });
 

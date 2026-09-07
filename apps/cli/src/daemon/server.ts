@@ -150,6 +150,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
       createRunScheduled({
         configDir: opts.configDir,
         sessionsDir,
+        permissionsDir,
         deps,
         database,
       });
@@ -186,7 +187,13 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
           const parsed = turnRequestSchema.safeParse(body);
           if (!parsed.success) return json(400, { error: "invalid turn request" });
           try {
-            const started = await manager.startTurn(parsed.data);
+            const started = await manager.startTurn({
+              task: parsed.data.task,
+              sessionId: parsed.data.sessionId,
+              cwd: parsed.data.cwd,
+              permissionMode: parsed.data.permissionMode,
+              promptChannel: parsed.data.permissionPrompts === "none" ? "none" : undefined,
+            });
             return sseResponse(started.subscribe, req.signal);
           } catch (error) {
             if (error instanceof SessionNotFoundError) return json(404, { error: error.message });

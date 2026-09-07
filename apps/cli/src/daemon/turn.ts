@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { CliDeps, RunContext } from "../cli";
+import { printWarning } from "../cli/output";
 import type { ApprovalPrompt } from "../loop/loop";
-import { createArchivistState } from "../memory/archivist";
+import { closeMcpClients } from "../mcp/client";
+import { createArchivistState, drainArchivist } from "../memory/archivist";
 import { driveLoop, exitCodeFromDriveResult } from "../runtime/drive";
 import { prepareSession } from "../runtime/prepare";
 import type { SessionDatabase } from "../session/database";
@@ -31,49 +33,61 @@ export function createAttendedExecuteTurn(opts: {
     const prepared = await prepareSession(ctx, opts.deps, false, false);
     if (typeof prepared === "number") return { exitCode: 1 };
 
-    const approvalPrompt: ApprovalPrompt = async (toolName, args, signal) => {
-      if (signal?.aborted) return "no";
-      const requestId = randomUUID();
-      const pending = input.requestApproval(requestId, toolName, args);
-      if (signal === undefined) return pending;
-      return await new Promise((resolve, reject) => {
-        const onAbort = () => resolve("no");
-        signal.addEventListener("abort", onAbort, { once: true });
-        pending.then(
-          (answer) => {
-            signal.removeEventListener("abort", onAbort);
-            resolve(answer);
-          },
-          (error) => {
-            signal.removeEventListener("abort", onAbort);
-            reject(error);
-          },
-        );
-      });
-    };
+    try {
+      const approvalPrompt: ApprovalPrompt | undefined =
+        input.promptChannel === "none"
+          ? undefined
+          : async (toolName, args, signal) => {
+              if (signal?.aborted) return "no";
+              const requestId = randomUUID();
+              const pending = input.requestApproval(requestId, toolName, args);
+              if (signal === undefined) return pending;
+              return await new Promise((resolve, reject) => {
+                const onAbort = () => resolve("no");
+                signal.addEventListener("abort", onAbort, { once: true });
+                pending.then(
+                  (answer) => {
+                    signal.removeEventListener("abort", onAbort);
+                    resolve(answer);
+                  },
+                  (error) => {
+                    signal.removeEventListener("abort", onAbort);
+                    reject(error);
+                  },
+                );
+              });
+            };
 
-    const archivistState = createArchivistState(
-      prepared.session,
-      opts.database.getArchivistCursor(input.sessionId),
-    );
-    const result = await driveLoop(
-      prepared,
-      ctx,
-      opts.deps,
-      undefined,
-      (event) => input.emitLoop(event),
-      () => input.permissionMode,
-      (session) => saveSession(session, ctx.sessionsDir, opts.database),
-      approvalPrompt,
-      archivistState,
-      undefined,
-      {
-        signal: input.signal,
-        bindProcessCancel: false,
-        composeSubagents: true,
-      },
-    );
-    opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
-    return { exitCode: exitCodeFromDriveResult(result) };
+      const archivistState = createArchivistState(
+        prepared.session,
+        opts.database.getArchivistCursor(input.sessionId),
+      );
+      const persistCursor = (): void => {
+        opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
+      };
+      const result = await driveLoop(
+        prepared,
+        ctx,
+        opts.deps,
+        undefined,
+        (event) => input.emitLoop(event),
+        () => input.permissionMode,
+        (session) => saveSession(session, ctx.sessionsDir, opts.database),
+        approvalPrompt,
+        archivistState,
+        undefined,
+        {
+          signal: input.signal,
+          bindProcessCancel: false,
+          composeSubagents: true,
+          onArchivist: persistCursor,
+        },
+      );
+      persistCursor();
+      void drainArchivist(archivistState).then(persistCursor);
+      return { exitCode: exitCodeFromDriveResult(result) };
+    } finally {
+      closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
+    }
   };
 }

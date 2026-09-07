@@ -1,5 +1,5 @@
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
-import type { DaemonDescriptor } from "@seri/daemon-client";
+import { canonicalizeLoopbackUrl, type DaemonDescriptor } from "@seri/daemon-client";
 import { atomicWriteFile, ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { getDaemonDescriptorPath, getDaemonLockPath } from "../config/paths";
 
@@ -81,7 +81,11 @@ export function acquireDaemonLock(configDir: string): AcquiredDaemonLock {
 }
 
 export function writeDaemonDescriptor(configDir: string, descriptor: DaemonDescriptor): void {
-  atomicWriteFile(getDaemonDescriptorPath(configDir), `${JSON.stringify(descriptor, null, 2)}\n`);
+  const next: DaemonDescriptor = {
+    ...descriptor,
+    endpoint: canonicalizeLoopbackUrl(descriptor.endpoint),
+  };
+  atomicWriteFile(getDaemonDescriptorPath(configDir), `${JSON.stringify(next, null, 2)}\n`);
 }
 
 export function readDaemonDescriptorFile(configDir: string): DaemonDescriptor | undefined {
@@ -103,7 +107,8 @@ export function readDaemonDescriptorFile(configDir: string): DaemonDescriptor | 
   ) {
     return undefined;
   }
-  return parsed as DaemonDescriptor;
+  const descriptor = parsed as DaemonDescriptor;
+  return { ...descriptor, endpoint: canonicalizeLoopbackUrl(descriptor.endpoint) };
 }
 
 export function removeOwnedDescriptor(configDir: string, token: string): void {

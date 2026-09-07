@@ -5,6 +5,7 @@ export const turnRequestSchema = z.object({
   sessionId: z.string().min(1).optional(),
   cwd: z.string().min(1).optional(),
   permissionMode: z.enum(["read-only", "approve-each"]).optional(),
+  permissionPrompts: z.literal("none").optional(),
 });
 
 export const approvalBodySchema = z.object({

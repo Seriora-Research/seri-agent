@@ -1,12 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// runtime/renderer.ts's own `unmountBeforeRender` — the fix for `@opentui/react`'s own
-// `createRoot(renderer).render(node)` creating a brand new reconciler container on every call
-// rather than reconciling into (or tearing down) the previous one, which otherwise leaves whatever
-// `useKeyboard`/`usePaste` handlers the previous tree registered permanently attached alongside the
-// next tree's own (see runtime/renderer.ts's own comment for the full mechanism and the Ctrl-C bug
-// this originally surfaced as), and `runtime/renderOptions.ts`'s own `applyTuiBackground` — the
-// other thing `getTuiRenderer` does to a freshly created renderer before anything is mounted into
-// it.
+// @opentui/react createRoot(renderer).render creates a new reconciler each call and leaves the previous useKeyboard/usePaste handlers attached.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -32,8 +25,7 @@ async function settle(setup: TestRendererSetup): Promise<void> {
   await setup.renderOnce();
 }
 
-// Two settled passes, not one — the same finding App.test.tsx's own `flush` comment records: a
-// fresh mount's own `useKeyboard` doesn't actually subscribe until a second settled pass.
+// A fresh mount's useKeyboard does not subscribe until a second settled pass.
 async function flush(setup: TestRendererSetup): Promise<void> {
   await settle(setup);
   await settle(setup);
@@ -56,9 +48,6 @@ describe("unmountBeforeRender", () => {
     root.render(<PageUpCounter onPageUp={() => fireCount++} />);
     await flush(setup);
 
-    // Simulates the next phase transition (welcomeSplash.ts -> cli.ts's runTui, in the real app):
-    // the same root renders a fresh instance of the same component, exactly like every one of the
-    // three real `root.render(createElement(App, ...))` call sites does.
     root.render(<PageUpCounter onPageUp={() => fireCount++} />);
     await flush(setup);
 
@@ -66,8 +55,6 @@ describe("unmountBeforeRender", () => {
     expect(fireCount).toBe(1);
   });
 
-  // The negative control this file's own claim needs: without `unmountBeforeRender`, the same
-  // scenario really does double-fire — proving the assertion above is not vacuous.
   test("without unmountBeforeRender, the same scenario double-fires (negative control)", async () => {
     const setup = await createTestRenderer({ width: 40, height: 10 });
     mountedRenderers.push(setup);
@@ -87,8 +74,7 @@ describe("unmountBeforeRender", () => {
 
 describe("applyTuiBackground", () => {
   let configDir: string;
-  // Env hygiene: `configValue` reads process.env before config.json, so a dev box or CI runner
-  // with SERI_TUI_BACKGROUND genuinely exported would otherwise decide both assertions below.
+  // configValue reads process.env before config.json, so a runner with SERI_TUI_BACKGROUND exported would decide both assertions.
   const originalBackground = process.env.SERI_TUI_BACKGROUND;
 
   beforeEach(() => {
@@ -98,9 +84,7 @@ describe("applyTuiBackground", () => {
 
   afterEach(() => {
     rmSync(configDir, { recursive: true, force: true });
-    // Teardown must `delete`, never reassign `undefined` — Bun/Node coerce
-    // `process.env.X = undefined` to the literal string "undefined" (code-quality.md's own
-    // cross-platform env-var lesson).
+    // Bun/Node coerce process.env.X = undefined to the string "undefined"; teardown must delete.
     if (originalBackground === undefined) delete process.env.SERI_TUI_BACKGROUND;
     else process.env.SERI_TUI_BACKGROUND = originalBackground;
   });
@@ -111,10 +95,7 @@ describe("applyTuiBackground", () => {
     return setup.renderer;
   }
 
-  // Reads past `backgroundColor`'s `private` declaration on purpose: the claim is that the
-  // renderer's OWN ground moved, and a spy on `setBackgroundColor` would pass just as happily
-  // against `CliRendererConfig.backgroundColor`, which @opentui/core 0.5.6 accepts and then never
-  // reads (see runtime/renderOptions.ts).
+  // @opentui/core 0.5.6 accepts CliRendererConfig.backgroundColor and never reads it; the private backgroundColor is the ground that actually moved.
   function ground(renderer: CliRenderer): [number, number, number, number] {
     return (renderer as unknown as { backgroundColor: RGBA }).backgroundColor.toInts();
   }
@@ -142,8 +123,7 @@ describe("applyTuiBackground", () => {
 
     applyTuiBackground(renderer, configDir);
 
-    // Fully transparent — the renderer's own untouched default, which is what lets a terminal's
-    // transparency and blur survive.
+    // Fully transparent is the renderer's untouched default, which is what lets terminal transparency survive.
     expect(ground(renderer)).toEqual([0, 0, 0, 0]);
   });
 });

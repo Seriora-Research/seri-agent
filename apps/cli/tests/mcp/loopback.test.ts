@@ -1,6 +1,3 @@
-// The one file in this feature that opens a real socket. It is still not a network test: every
-// listener binds 127.0.0.1 on a port this file discovered itself, and every request is a fetch to
-// that same loopback address.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mcpCallbackUri } from "../../src/mcp/authProvider";
 import { type CallbackServer, startCallbackServer } from "../../src/mcp/loopback";
@@ -12,8 +9,6 @@ afterEach(() => {
   opened = [];
 });
 
-// Bound all at once and only then released, so the ports are guaranteed distinct — probing them
-// one at a time would hand back the same port twice.
 function freePorts(count: number): number[] {
   const probes = Array.from({ length: count }, () =>
     Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") }),
@@ -107,6 +102,27 @@ describe("close", () => {
   });
 });
 
+describe("a mapped redirect host is advertised as 127.0.0.1", () => {
+  test("startCallbackServer rewrites ::ffff:127.0.0.1 on the redirect URI", async () => {
+    const server = await startCallbackServer({
+      ports: freePorts(1),
+      redirectHost: "::ffff:127.0.0.1",
+    });
+    opened.push(server);
+    expect(new URL(server.redirectUri).hostname).toBe("127.0.0.1");
+    expect(server.redirectUri).not.toContain("ffff");
+  });
+
+  test("localhost stays localhost so a registered Codex redirect URI still matches", async () => {
+    const server = await startCallbackServer({
+      ports: freePorts(1),
+      redirectHost: "localhost",
+    });
+    opened.push(server);
+    expect(new URL(server.redirectUri).hostname).toBe("localhost");
+  });
+});
+
 describe("a taken port falls through to the next candidate", () => {
   test("the redirect URI names the port that actually bound", async () => {
     const [busy, spare] = freePorts(2) as [number, number];
@@ -120,8 +136,6 @@ describe("a taken port falls through to the next candidate", () => {
   });
 });
 
-// This page is the last thing a login shows, and the only seri surface a browser renders rather
-// than a terminal — so it has to hold up on its own, offline, in either theme.
 describe("the page the browser is left on", () => {
   async function bodyFor(query: string): Promise<string> {
     const server = await start(freePorts(1));
@@ -135,17 +149,12 @@ describe("the page the browser is left on", () => {
     expect(body).toContain("Returning you to seri. You can close this tab.");
   });
 
-  // The browser is the wrong place to explain a failure: the TUI already has the authorization
-  // server's own error_description on its transcript line, and this page has none of that context.
   test("a declined login points back at seri rather than explaining itself", async () => {
     const body = await bodyFor("?error=access_denied");
     expect(body).toContain("Authorization failed");
     expect(body).toContain("Return to seri for details.");
   });
 
-  // A listener that closes moments later cannot depend on a CDN or a webfont: a blocked or slow
-  // request would land on the last screen of a login, and a font that swapped in late would do so
-  // after this little text had already been read.
   test("is self-contained, so nothing on it can fail to load", async () => {
     const body = await bodyFor("?code=abc");
     expect(body).not.toContain("http://");
@@ -158,9 +167,6 @@ describe("the page the browser is left on", () => {
     expect(body).toContain("prefers-color-scheme:dark");
   });
 
-  // Nothing from the request reaches the markup, so a crafted callback cannot put anything on the
-  // page. Asserted rather than assumed, because the page is served to a browser and the day
-  // someone interpolates a parameter into it is the day this stops being true for free.
   test("puts nothing from the request into the page", async () => {
     const body = await bodyFor('?code=%3Cimg%20src%3Dx%20onerror%3D"alert(1)"%3E&state=x');
     expect(body).not.toContain("<img");

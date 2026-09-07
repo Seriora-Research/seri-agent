@@ -10,12 +10,9 @@ import type { SessionState } from "./session";
 
 export { DATABASE_FILENAME };
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 const BUSY_TIMEOUT_MS = 5_000;
 
-// Production layout is `<configDir>/sessions` and `<configDir>/trajectories`. Tests inject a
-// throwaway directory as the store itself; using dirname of that would chmod the system temp
-// root. Only peel off the layout leaf when it is actually present.
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
   const resolved = resolve(dir);
   return basename(resolved) === layoutLeaf ? dirname(resolved) : resolved;
@@ -128,6 +125,20 @@ const MIGRATIONS = [
         started_at TEXT NOT NULL,
         finished_at TEXT
       );
+    `,
+  },
+  {
+    version: 4,
+    sql: `
+      DROP TRIGGER IF EXISTS messages_au;
+      CREATE TRIGGER messages_au AFTER UPDATE OF search_text ON messages
+      WHEN old.search_text IS NOT new.search_text
+      BEGIN
+        INSERT INTO session_fts(session_fts, rowid, search_text)
+        VALUES ('delete', old.id, old.search_text);
+        INSERT INTO session_fts(rowid, search_text)
+        VALUES (new.id, new.search_text);
+      END;
     `,
   },
 ] as const;
@@ -352,15 +363,13 @@ export class SessionDatabase {
     ensureOwnerOnlyDir(configDir);
     this.database = new Database(join(configDir, DATABASE_FILENAME), { create: true });
     try {
-      // busy_timeout first: `journal_mode=WAL` is a write, and a second connection opening the
-      // same file hits SQLITE_BUSY on that pragma if the timeout is not already set.
+      // SQLITE_BUSY if another process has the same file and the timeout is not already set.
       this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
       this.migrate();
-      // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, so a missing FTS5 build
-      // would not throw. A hyphenated token is FTS column syntax (`fts-probe` means column
-      // `probe`), so the probe string has to be a bare term.
+
+      // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, hiding a missing FTS5 build. Hyphenated tokens are FTS column syntax, so the probe is a bare term.
       this.database
         .query("SELECT rowid FROM session_fts WHERE session_fts MATCH ? LIMIT 1")
         .all("probe");
@@ -564,10 +573,6 @@ export class SessionDatabase {
     ).map((row) => JSON.parse(row.json));
   }
 
-  // Selected and deleted in one transaction, not two statements: another seri process can resume a
-  // session this query has already called stale and append to it, and a delete outside the read's
-  // own snapshot would take that fresh record with the rest. Inside one, SQLite refuses the write
-  // instead, which the writer reports as a warning and the next session start retries.
   pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
     return this.database.transaction(() => {
       const stale = (
@@ -830,6 +835,17 @@ export class SessionDatabase {
     ) {
       commonPrefix++;
     }
+    let commonSuffix = 0;
+    if (commonPrefix === 0) {
+      const maxSuffix = Math.min(messages.length, encoded.length);
+      while (
+        commonSuffix < maxSuffix &&
+        messages[messages.length - 1 - commonSuffix]!.json ===
+          encoded[encoded.length - 1 - commonSuffix]
+      ) {
+        commonSuffix++;
+      }
+    }
     const headerChanged =
       existing === null ||
       existing.cwd !== state.cwd ||
@@ -870,6 +886,28 @@ export class SessionDatabase {
         updatedAt,
       );
     if (!messagesChanged) return;
+
+    if (commonPrefix === 0 && commonSuffix > 0) {
+      const oldHead = messages.length - commonSuffix;
+      const newHead = encoded.length - commonSuffix;
+      const seqBeyondOccupied = messages.length + encoded.length + 1;
+      this.database
+        .query("UPDATE messages SET seq = seq + ? WHERE session_id = ? AND seq >= ?")
+        .run(seqBeyondOccupied, state.id, oldHead);
+      this.database
+        .query("DELETE FROM messages WHERE session_id = ? AND seq < ?")
+        .run(state.id, oldHead);
+      const insertHead = this.database.query(
+        "INSERT INTO messages(session_id, seq, json, search_text) VALUES (?, ?, ?, ?)",
+      );
+      for (let index = 0; index < newHead; index++) {
+        insertHead.run(state.id, index, encoded[index]!, textFromMessage(state.messages[index]));
+      }
+      this.database
+        .query("UPDATE messages SET seq = seq - ? WHERE session_id = ? AND seq >= ?")
+        .run(seqBeyondOccupied + oldHead - newHead, state.id, seqBeyondOccupied);
+      return;
+    }
 
     this.database
       .query("DELETE FROM messages WHERE session_id = ? AND seq >= ?")

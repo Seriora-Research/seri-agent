@@ -38,9 +38,7 @@ afterEach(async () => {
   for (const database of openDatabases) {
     try {
       database.close();
-    } catch {
-      // already closed
-    }
+    } catch {}
   }
   openDatabases = [];
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -79,6 +77,13 @@ describe("scheduled toolset", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     const call = src.slice(start, src.indexOf("model: route.model", start));
     expect(call).toContain("composeSubagents: false");
+  });
+
+  test("createRunScheduled loads path denials from permissionsDir", async () => {
+    const src = await Bun.file(new URL("../../src/daemon/scheduled.ts", import.meta.url)).text();
+    expect(src).toMatch(/loadDenials\(\s*opts\.permissionsDir/);
+    expect(src).toMatch(/permissionsDir:\s*opts\.permissionsDir/);
+    expect(src).not.toMatch(/loadDenials\(\s*opts\.configDir/);
   });
 });
 

@@ -1,7 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// Structurally identical to routes/setup/SetupPanel.tsx's own family (same step shape, same key
-// bindings), adapted from arbitrary config.json keys/values rather than provider API keys.
-
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import { useState } from "react";
@@ -17,9 +14,6 @@ import { ListRow } from "../../ui/ListRow";
 import { singleLine } from "../../util/format";
 import { isDismiss, isEnter, isPrintableKey } from "../../util/keys";
 
-// /config's own live state (state/reducer.ts's pendingConfig) — mirrors SetupPanel's
-// step-dispatcher shape: one branch per step that still owns input handling and local state;
-// the confirm-unset step delegates to the shared ConfirmPrompt (ui/ConfirmPrompt.tsx) instead.
 export function ConfigPanel({
   pendingConfig,
   onConfigSelect,
@@ -77,8 +71,6 @@ function ConfigList({
   onConfigClose?: (leftoverInput?: string) => void;
 }) {
   const { rows } = pendingConfig;
-  // Seeded from the reducer's own `selected`, then moved locally — SetupList's own split between
-  // "reducer supplies the starting point, the component owns live navigation".
   const { selected, visible, remainingCount, handleArrowKey } = useListWindow(
     rows,
     pendingConfig.selected,
@@ -91,9 +83,6 @@ function ConfigList({
     }
     if (handleArrowKey(key)) return;
     const row = rows[selected];
-    // "return"/"delete" are checked before the printable-key guard below: `isPrintableKey` excludes
-    // named keys like these, so checking them AFTER the guard would let it silently return before
-    // their own branch ever ran.
     if (isEnter(key)) {
       if (row !== undefined) onConfigSelect?.(row.key);
       return;
@@ -126,11 +115,6 @@ function ConfigList({
       ))}
       {remainingCount > 0 && <text fg={theme.muted}>+{remainingCount} more</text>}
       {selectedDescription && (
-        // Same reasoning as ListRow's own comment (ui/ListRow.tsx): a config key's own description
-        // is fixed copy today (state/commands.ts trims it to fit an assumed 80-column terminal),
-        // but nothing here reads the REAL terminal width, so a narrower real TTY reproduces the
-        // exact overflow that fix closed for the default width only. Truncating is the one
-        // guarantee that holds at any width.
         <text fg={theme.muted} truncate>
           {selectedDescription}
         </text>
@@ -142,8 +126,6 @@ function ConfigList({
   );
 }
 
-// Total over ConfigRow["source"], so both branches below share one definition instead of one
-// calling this and the other re-inlining a near-twin ternary that has to be kept in sync by hand.
 function sourceTag(row: ConfigRow): string {
   if (row.source === "unset") return "";
   return row.source === "env" ? " (env)" : " (config)";
@@ -168,8 +150,6 @@ function ConfigEnterValue({
   onConfigClose?: (leftoverInput?: string) => void;
 }) {
   const { key, error, busy } = pendingConfig;
-  // Never rendered raw — the same credential-disclosure reasoning SetupEnterKey's own `value`
-  // has: any config value could be secret-shaped, so this always renders `"*".repeat(...)`.
   const [value, setValue] = useState("");
   const { label, description } = configKeyInfo(key);
 
@@ -195,10 +175,7 @@ function ConfigEnterValue({
     setValue((current) => current + inputKey.sequence);
   });
 
-  // OpenTUI delivers a terminal paste as its own event, never through `useKeyboard` — see
-  // components/InputBox.tsx's own comment. A pasted config value (an API key is the common case)
-  // is appended the same way typed text is, newlines stripped; unlike InputBox/ModelPicker, a
-  // paste here never submits on a terminator — this step only ever submits on Enter.
+  // OpenTUI delivers bracketed paste to usePaste, never useKeyboard.
   function insertPastedText(text: string) {
     if (busy) return;
     setValue((current) => current + text.replace(/[\r\n]/g, ""));
@@ -206,8 +183,6 @@ function ConfigEnterValue({
 
   usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
 
-  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
-  // `insertPastedText` so a key pasted either way is stripped of newlines the same.
   useClipboardPaste(insertPastedText);
 
   return (

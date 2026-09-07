@@ -54,24 +54,9 @@ function estimatePartTokens(part: unknown): number {
   return 0;
 }
 
-// Deliberately the same 2 the SDK already applies when nothing passes it (ai@7.0.48
-// dist/index.js:2789), so this changes no behaviour: every streamText and generateText call in
-// this repo has been retrying a 429 or a 5xx twice, with a 2 s first backoff, before the failure
-// ever reached the user. Stated here because a spend question ("why three calls for one turn?")
-// cannot be answered from a default that no line of this repo mentions. The delay is the SDK's and
-// is not configurable through streamText: it honours a `retry-after-ms`/`retry-after` response
-// header when that is shorter than its own backoff (dist/index.js:2718).
-//
-// It lives in this module, which is the lower of the two — loop.ts already imports compaction.ts,
-// so the import goes the way that exists and no cycle is created. One constant rather than two
-// equal literals in two files: what the number means is "the SDK's default, restated", and two
-// copies of that can drift into disagreeing about a shared claim.
+// ai@7.0.48 defaults maxRetries to 2 with a 2s first backoff and honours a shorter retry-after / retry-after-ms header.
 export const MAX_RETRIES = 2;
 
-// Per-string cap for the summarizer prompt only. Identifiers, paths, and short command
-// output fit; file bodies and write_file content do not. The session still evicts the raw
-// messages; this stops the extra model call from ingesting them. Clone-on-walk, never
-// mutate the caller's transcript.
 export const SUMMARIZER_STRING_CAP_BYTES = 2048;
 
 export function elideOversizedStrings(
@@ -94,11 +79,7 @@ export function elideOversizedStrings(
   return out;
 }
 
-// A cut is only safe immediately before a "user"/"assistant" message, never before a
-// "tool" message — a `role:"tool"` message is always the second half of an adjacent
-// {assistant tool-call, tool result} pair pushed by loop.ts, and evicting one half while
-// keeping the other reproduces the AI_MissingToolResultsError class of bug (fixed in
-// 24c2aa1).
+// ai errors (AI_MissingToolResultsError) if a `role:"tool"` message is kept without its adjacent assistant tool-call.
 const OVERFLOW_MARKERS = ["too many tokens", "maximum context", "context_length", "token limit"];
 
 function errorSearchText(err: unknown): string {
@@ -251,23 +232,7 @@ export async function compactMessages(
   const tokensBefore = estimateTokens(messages);
   const evicted = messages.slice(0, evictBoundary);
 
-  // Counted through a middleware, not through onLanguageModelCallStart the way loop.ts counts the
-  // main call's retries: generateText notifies that callback ONCE per step, before it enters the
-  // retry wrapper (ai@7.0.48 dist/index.js:5599, with the `retry(...)` at 5607), where streamText
-  // notifies from inside it. Measured with a doGenerate that 429s once then succeeds: two
-  // doGenerate calls, one callback notification, two wrapGenerate invocations — the retry wrapper
-  // re-invokes the model, so the wrapper around the model is the only place an attempt is visible.
-  // Returned rather than printed, and rather than taking a callback, because this module does no
-  // I/O and its caller is a generator that cannot yield from a callback: the count travels out the
-  // same way `usage` already does. A compaction that exhausts its retries throws instead of
-  // returning, so those attempts are not reported — that path reports the error itself.
-  //
-  // A string `model` is a model id the SDK resolves through its own registry and there is nothing
-  // to wrap; nothing in this repo passes one (cli.ts hands over getGroqModel's instance), so it
-  // reports no retries rather than growing a resolver for a caller that does not exist.
-  //
-  // `opts.stream` is required on the ChatGPT-plan Responses host, which rejects generateText with
-  // "Stream must be set to true". Other providers keep generateText so existing mocks keep working.
+  // generateText fires onLanguageModelCallStart once per step before its retry wrapper (ai@7.0.48); wrapGenerate is the only retry counter. ChatGPT-plan Responses rejects generateText unless stream is true.
   let attempts = 0;
   const countedModel =
     typeof model === "string"
@@ -291,9 +256,6 @@ export async function compactMessages(
 
   const { system, prompt } = buildSummarizerPrompt(evicted, opts?.customInstructions);
 
-  // Summarizing is a full model round-trip that can run for seconds. Leaving it un-abortable
-  // would make "Ctrl-C cancels the turn" conditionally false in a way the user cannot predict:
-  // the same keypress would do nothing at all if it landed here.
   let text: string;
   let usage: LanguageModelUsage;
   const sampling = {

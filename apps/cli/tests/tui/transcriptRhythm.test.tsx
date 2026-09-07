@@ -1,8 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// spacing.test.ts proves GAP_TABLE's values and reducer.test.ts proves nothing fake is pushed into
-// the transcript to produce a blank row. Neither proves the margin reaches the screen. This does,
-// by rendering TranscriptList and counting the rows between entries in the frame.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseColor } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -13,8 +9,7 @@ import { TranscriptList } from "../../src/tui/components/TranscriptList";
 import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 
-// See inputBox.test.tsx: each createTestRenderer registers its own listener on the process-wide
-// TerminalConsoleCache singleton, and leaking those across files makes order-dependent flakiness.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -35,8 +30,7 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   await settle(setup);
 }
 
-// The frame is padded to the renderer's full height, so trailing blanks are the empty screen below
-// the content, not rhythm. Only rows between the first and last painted row count.
+// The frame is padded to the renderer height, so trailing blanks are empty screen, not rhythm.
 function paintedRows(setup: TestRendererSetup): string[] {
   const rows = setup
     .captureCharFrame()
@@ -54,11 +48,9 @@ async function render(transcript: TranscriptEntry[]): Promise<string[]> {
   return paintedRows(setup);
 }
 
-// An assistant row shows as a bare "●" here: `<markdown>` parses on the tree-sitter client, which
-// has not resolved by the time this harness captures. The bullet is painted by the row itself, so
-// it still pins where the row landed, which is all these tests read.
+// <markdown> has not resolved on the tree-sitter client by capture time; the row bullet still pins where the assistant row landed.
 describe("transcript vertical rhythm", () => {
-  test("a user turn is fenced by a blank row on each side, and the turn under it runs together", async () => {
+  test("a user turn is fenced by a blank row on each side", async () => {
     const rows = await render([
       { role: "system", text: "Session created.", muted: true },
       { role: "user", text: "> hello" },
@@ -66,7 +58,7 @@ describe("transcript vertical rhythm", () => {
       { role: "assistant", text: "done" },
     ]);
 
-    expect(rows).toEqual(["Session created.", "", "> hello", "", "Read biome.json", "●"]);
+    expect(rows).toEqual(["Session created.", "", "> hello", "", "Read biome.json", "", "●"]);
   });
 
   test("the first entry never opens the transcript on a blank row", async () => {
@@ -141,17 +133,17 @@ describe("transcript vertical rhythm", () => {
           removed: 1,
           hidden: 3,
           lines: [
-            { kind: "del", text: "- old" },
-            { kind: "add", text: "+ new" },
+            { kind: "del", text: "- old", lineNumber: 1 },
+            { kind: "add", text: "+ new", lineNumber: 2 },
           ],
         },
       },
     ]);
 
-    expect(rows).toEqual(["> edit it", "", "Write a.ts  +1 −1", "- old", "+ new", "… 3 more"]);
+    expect(rows).toEqual(["> edit it", "", "Write a.ts  +1 −1", "▏1 old", "▏2 new", "… 3 more"]);
   });
 
-  test("add lines paint diffAdd and del lines paint diffDel", async () => {
+  test("add/del rows wash the line and keep a hairline edge, not a saturated cell", async () => {
     const setup = await createTestRenderer({ width: 60, height: 14 });
     await mount(
       setup,
@@ -168,8 +160,8 @@ describe("transcript vertical rhythm", () => {
               removed: 1,
               hidden: 0,
               lines: [
-                { kind: "del", text: "- old" },
-                { kind: "add", text: "+ new" },
+                { kind: "del", text: "- old", lineNumber: 1 },
+                { kind: "add", text: "+ new", lineNumber: 2 },
               ],
             },
           },
@@ -179,14 +171,32 @@ describe("transcript vertical rhythm", () => {
     const spans = setup.captureSpans();
     const addSpan = spans.lines
       .flatMap((line) => line.spans)
-      .find((span) => span.text.includes("+ new"));
+      .find((span) => span.text.includes("new"));
     const delSpan = spans.lines
       .flatMap((line) => line.spans)
-      .find((span) => span.text.includes("- old"));
-    expect(addSpan, "no span found containing + new").toBeDefined();
-    expect(delSpan, "no span found containing - old").toBeDefined();
-    expect(addSpan?.fg.equals(parseColor(theme.diffAdd))).toBe(true);
-    expect(delSpan?.fg.equals(parseColor(theme.diffDel))).toBe(true);
+      .find((span) => span.text.includes("old"));
+    expect(addSpan, "no span found containing new").toBeDefined();
+    expect(delSpan, "no span found containing old").toBeDefined();
+    expect(addSpan?.fg.equals(parseColor(theme.text))).toBe(true);
+    expect(delSpan?.fg.equals(parseColor(theme.text))).toBe(true);
+    expect(addSpan?.bg.equals(parseColor(theme.diffAddBg))).toBe(true);
+    expect(delSpan?.bg.equals(parseColor(theme.diffDelBg))).toBe(true);
+    const addEdge = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("▏") && span.fg.equals(parseColor(theme.diffAdd)));
+    const delEdge = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("▏") && span.fg.equals(parseColor(theme.diffDel)));
+    expect(addEdge, "no add hairline").toBeDefined();
+    expect(delEdge, "no del hairline").toBeDefined();
+    const fatAdd = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.bg.equals(parseColor(theme.diffAdd)));
+    const fatDel = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.bg.equals(parseColor(theme.diffDel)));
+    expect(fatAdd, "saturated add fill must not return").toBeUndefined();
+    expect(fatDel, "saturated del fill must not return").toBeUndefined();
   });
 
   test("a long hunk line truncates on one row instead of wrapping", async () => {
@@ -215,8 +225,81 @@ describe("transcript vertical rhythm", () => {
     const rows = paintedRows(setup);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toContain("Edit");
-    expect(rows[1]?.startsWith("+ ")).toBe(true);
+    expect(rows[1]?.includes("x")).toBe(true);
     expect(rows[1]?.length).toBeLessThanOrEqual(40);
-    expect(rows.some((row) => row.includes("xx") && !row.startsWith("+"))).toBe(false);
+  });
+
+  test("two file-change blocks are separated by a blank row", async () => {
+    const hunk = (title: string): TranscriptEntry => ({
+      role: "system",
+      text: `${title}  +1 −0`,
+      kind: "file-change",
+      fileChange: {
+        kind: "update",
+        title,
+        added: 1,
+        removed: 0,
+        hidden: 0,
+        lines: [{ kind: "add", text: "+ x" }],
+      },
+    });
+    const rows = await render([hunk("Edit"), hunk("Write b.ts")]);
+    expect(rows).toEqual(["Edit  +1 −0", "▏x", "", "Write b.ts  +1 −0", "▏x"]);
+  });
+
+  test("hunk header +/- is green and red, and is the only stats row", async () => {
+    const setup = await createTestRenderer({ width: 60, height: 8 });
+    await mount(
+      setup,
+      <TranscriptList
+        transcript={[
+          {
+            role: "system",
+            text: "Write a.ts  +4 −1",
+            kind: "file-change",
+            fileChange: {
+              kind: "update",
+              title: "Write a.ts",
+              added: 4,
+              removed: 1,
+              hidden: 0,
+              lines: [{ kind: "add", text: "+ x", lineNumber: 1 }],
+            },
+          },
+        ]}
+      />,
+    );
+    const spans = setup.captureSpans();
+    const addSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("+4"));
+    const delSpan = spans.lines
+      .flatMap((line) => line.spans)
+      .find((span) => span.text.includes("−1"));
+    expect(addSpan?.fg.equals(parseColor(theme.diffAdd))).toBe(true);
+    expect(delSpan?.fg.equals(parseColor(theme.diffDel))).toBe(true);
+    const rows = paintedRows(setup);
+    expect(rows.filter((row) => row.includes("+4")).length).toBe(1);
+  });
+
+  test("file-change then tool-summary then the answer is one blank row each", async () => {
+    const rows = await render([
+      {
+        role: "system",
+        text: "Edit  +0 −4",
+        kind: "file-change",
+        fileChange: {
+          kind: "update",
+          title: "Edit",
+          added: 0,
+          removed: 4,
+          hidden: 0,
+          lines: [{ kind: "del", text: "- gone", lineNumber: 1 }],
+        },
+      },
+      { role: "system", text: "Read 1 file", muted: true, kind: "tool-summary" },
+      { role: "assistant", text: "Listo." },
+    ]);
+    expect(rows).toEqual(["Edit  +0 −4", "▏1 gone", "", "Read 1 file", "", "●"]);
   });
 });

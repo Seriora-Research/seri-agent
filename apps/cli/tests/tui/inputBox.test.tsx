@@ -1,18 +1,13 @@
 /** @jsxImportSource @opentui/react */
-// InputBox.tsx (apps/cli/src/tui/components/InputBox.tsx), the OpenTUI port of the old
-// panels/InputBox.tsx. Verifies the rapid-backspace throttle (THROTTLE_MS/pendingValueRef, ported
-// from the Ink component) still does real work on this renderer, not just an Ink-only artifact.
-// Mirrors tests/tui/inputThrottle.test.tsx's own spy-on-setTimeout technique (that file's own
-// comment explains why: frame/render count alone can't isolate this component's own throttle from
-// React 18's automatic batching of synchronous state updates).
-
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { parseColor } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import type { ReactNode } from "react";
 
-import { InputBox } from "../../src/tui/components/InputBox";
-import { INPUT_PLACEHOLDER } from "../../src/tui/util/format";
+import { InputBox, inputCaretLayout } from "../../src/tui/components/InputBox";
+import { theme } from "../../src/tui/theme/theme";
+import { DEFAULT_COLUMNS, INPUT_PLACEHOLDER } from "../../src/tui/util/format";
 
 const THROTTLE_MS = 50;
 
@@ -20,10 +15,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Each `createTestRenderer()` call registers its own listener on the process-wide
-// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
-// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
-// whatever this file's own tests created.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -32,11 +24,7 @@ afterEach(() => {
   }
 });
 
-// @opentui/react's reconciler commits on a macrotask, not a microtask:
-// `useKeyboard`/`usePaste` subscribe from a plain (passive) `useEffect`, which needs a SECOND
-// settled render pass after mount before the subscription actually exists — a single settle()
-// after mount produced zero recorded keypresses when this was first verified against this
-// harness.
+// @opentui/react commits on a macrotask; useKeyboard/usePaste subscribe on the second settled pass.
 async function settle(setup: TestRendererSetup): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
   await setup.renderOnce();
@@ -45,8 +33,8 @@ async function settle(setup: TestRendererSetup): Promise<void> {
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   mountedRenderers.push(setup);
   createRoot(setup.renderer).render(node);
-  await settle(setup); // commits the mount
-  await settle(setup); // lets passive effects (useKeyboard/usePaste's useEffect) subscribe
+  await settle(setup);
+  await settle(setup);
 }
 
 describe("InputBox (OpenTUI)", () => {
@@ -57,7 +45,7 @@ describe("InputBox (OpenTUI)", () => {
     await setup.mockInput.typeText("hello");
     await settle(setup);
     await sleep(THROTTLE_MS + 20); // only the leading-edge character flushes immediately
-    await settle(setup); // paint the trailing-edge flush; captureCharFrame reads the last render
+    await settle(setup);
 
     expect(setup.captureCharFrame()).toContain("> hello");
   });
@@ -68,7 +56,7 @@ describe("InputBox (OpenTUI)", () => {
 
     await setup.mockInput.typeText("x".repeat(30));
     await settle(setup);
-    await sleep(THROTTLE_MS + 20); // let the leading edge from typing cool down before the burst
+    await sleep(THROTTLE_MS + 20);
 
     const setTimeoutSpy = spyOn(globalThis, "setTimeout");
     const callsBefore = setTimeoutSpy.mock.calls.length;
@@ -80,19 +68,10 @@ describe("InputBox (OpenTUI)", () => {
     const scheduled = setTimeoutSpy.mock.calls.length - callsBefore;
     setTimeoutSpy.mockRestore();
 
-    // Verified this bound is not a vacuous pass: temporarily forcing every `scheduleUpdate` call to
-    // also schedule its own timer ahead of the `timerRef.current !== null` guard (simulating that
-    // guard being dropped/forgotten — the realistic regression this assertion exists to catch)
-    // makes `scheduled` come back 16 (one per backspace, plus the leading-edge timer from typing),
-    // failing this assertion. A separate, unthrottled measurement (calling `setValue` directly
-    // instead of going through `scheduleUpdate` at all) found OpenTUI's own native frame scheduler
-    // already coalesces a synchronous 15-keystroke burst down to ~1-2 real terminal paints
-    // regardless — so unlike Ink (where this throttle capped real terminal writes), on OpenTUI it
-    // caps REACT-level re-render/state-churn count instead. Smaller win than under Ink, but a real
-    // and free one: kept.
+    // OpenTUI's native scheduler already coalesces the burst to ~1–2 paints, so this spies setTimeout rather than frames.
     expect(scheduled).toBeLessThanOrEqual(1);
 
-    await sleep(THROTTLE_MS + 30); // let the coalesced flush land
+    await sleep(THROTTLE_MS + 30);
     expect(setup.captureCharFrame()).toContain("x".repeat(30 - n));
   });
 
@@ -126,11 +105,6 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> second line");
   });
 
-  // The completion popup's own scroll regression: Down used to be clamped to
-  // `Math.min(matches.length, COMPLETION_POPUP_ROWS) - 1`, so the selection stopped dead on the
-  // sixth visible row and every match below it was unreachable no matter how long the user held
-  // the key. This drives the real component through the real keypress path, so it fails on the old
-  // clamp even though the popup itself renders correctly given the right index.
   test("arrowing past the sixth completion row scrolls the window to matches below it", async () => {
     const items = Array.from({ length: 26 }, (_, i) => ({
       value: `/cmd${i}`,
@@ -199,9 +173,6 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).not.toContain("> x");
   });
 
-  // The whole of this feature's Escape precedence, asserted where it is implemented. An App-level
-  // handler cannot see the popup — that state is local to this component — so it would cancel the
-  // in-flight turn while the user was only closing a completion list.
   test("Escape with the completion popup open dismisses the popup and does not call onEscape", async () => {
     const escapes: number[] = [];
     const setup = await createTestRenderer({ width: 40, height: 12 });
@@ -241,9 +212,7 @@ describe("InputBox (OpenTUI)", () => {
     await mount(setup, <InputBox onSubmit={() => {}} onEscape={() => escapes.push(1)} />);
 
     setup.mockInput.pressEscape();
-    // A bare Escape byte is ambiguous with the start of a longer ANSI sequence, so OpenTUI's parser
-    // holds it for a short disambiguation window before delivering it — longer than the plain
-    // macrotask tick `settle` waits. App.test.tsx's own picker-cancel test records the same.
+    // OpenTUI holds a bare ESC for a disambiguation window longer than settle's macrotask tick.
     await sleep(30);
     await settle(setup);
 
@@ -262,8 +231,6 @@ describe("InputBox (OpenTUI)", () => {
     expect(escapes).toEqual([]);
   });
 
-  // `bare` is what lets a queued row hold an editor without the row becoming three rows tall and
-  // growing a second "> " prompt where its ordinal should be.
   test("bare renders the value with no border and no marker", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     await mount(setup, <InputBox bare prefill="already typed" onSubmit={() => {}} />);
@@ -285,11 +252,9 @@ describe("InputBox (OpenTUI)", () => {
     expect(setup.captureCharFrame()).toContain("> already typed");
   });
 
-  // 60 columns, not this file's usual 40: the placeholder renders with `truncate`, so a narrower
-  // box would clip it and `toContain` on the whole string would fail for a reason the test does
-  // not mean to assert.
+  // DEFAULT_COLUMNS, not 40 or 60: truncate clips INPUT_PLACEHOLDER on a 60-column box.
   test("the placeholder renders on an empty input and is gone after one character", async () => {
-    const setup = await createTestRenderer({ width: 60, height: 5 });
+    const setup = await createTestRenderer({ width: DEFAULT_COLUMNS, height: 5 });
     await mount(setup, <InputBox onSubmit={() => {}} />);
 
     expect(setup.captureCharFrame()).toContain(INPUT_PLACEHOLDER);
@@ -300,5 +265,52 @@ describe("InputBox (OpenTUI)", () => {
 
     expect(setup.captureCharFrame()).toContain("> h");
     expect(setup.captureCharFrame()).not.toContain(INPUT_PLACEHOLDER);
+  });
+
+  test("the block cursor sits on the last wrapped row, not the first", async () => {
+    const setup = await createTestRenderer({ width: 24, height: 8 });
+    await mount(setup, <InputBox prefill={`${"word ".repeat(12)}end`} onSubmit={() => {}} />);
+    await settle(setup);
+    await sleep(THROTTLE_MS + 20);
+
+    const frame = setup.captureCharFrame();
+    expect(frame).toContain("> word");
+    expect(frame).toContain("end");
+
+    const lines = setup.captureSpans().lines;
+    const cursorLine = lines.findIndex((line) =>
+      line.spans.some((span) => span.bg.equals(parseColor(theme.accent))),
+    );
+    const firstTextLine = lines.findIndex((line) =>
+      line.spans.some((span) => span.text.includes(">")),
+    );
+    expect(firstTextLine).toBeGreaterThanOrEqual(0);
+    expect(cursorLine).toBeGreaterThan(firstTextLine);
+    const cursorSpans = lines[cursorLine]?.spans ?? [];
+    expect(cursorSpans.some((span) => span.text.includes("end") || span.text === " ")).toBe(true);
+  });
+});
+
+describe("inputCaretLayout", () => {
+  test("an empty value is a caret on the first row", () => {
+    expect(inputCaretLayout("", 10)).toEqual({ above: [], last: "" });
+  });
+
+  test("text shorter than the width stays on one row with the caret", () => {
+    expect(inputCaretLayout("> hello", 20)).toEqual({ above: [], last: "> hello" });
+  });
+
+  test("text longer than the width leaves the caret on the last chunk", () => {
+    expect(inputCaretLayout("abcdefghij", 4)).toEqual({
+      above: ["abcd", "efgh"],
+      last: "ij",
+    });
+  });
+
+  test("an exact multiple of the width drops the caret to a new row", () => {
+    expect(inputCaretLayout("abcdefgh", 4)).toEqual({
+      above: ["abcd", "efgh"],
+      last: "",
+    });
   });
 });

@@ -16,8 +16,6 @@ const commands: CompletionSource = {
   ],
 };
 
-// The second source exists in this file only to prove the engine is a table rather than a `/`
-// branch: nothing about resolveCompletion changes to support it.
 const files: CompletionSource = {
   id: "files",
   trigger: "@",
@@ -48,14 +46,11 @@ describe("resolveCompletion", () => {
     expect(resolveCompletion(sources, "/zzzz")).toBeUndefined();
   });
 
-  // The rule that makes `/name ` stop offering names and start accepting arguments.
   test("a trailing space ends completion", () => {
     expect(resolveCompletion(sources, "/perf-review ")).toBeUndefined();
   });
 
-  // Negative control for lineStartOnly. The token has to actually START with the trigger for the
-  // guard to be the thing under test — "look at src/cli.ts" would pass with the guard deleted,
-  // because its caret token is "src/cli.ts", which never opened the source in the first place.
+  // The caret token must start with / so deleting lineStartOnly cannot still pass on src/cli.ts.
   test("a token starting with a slash mid-line is a path, not a trigger", () => {
     expect(resolveCompletion(sources, "cd /perf")).toBeUndefined();
     expect(resolveCompletion(sources, "ls /mode")).toBeUndefined();

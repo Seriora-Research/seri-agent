@@ -4,13 +4,16 @@ import { join } from "node:path";
 import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
 import { isGitAvailable } from "../checkpoint/shadowGit";
-import { inspectConfig } from "../config/config";
+import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
-import { loadGrants } from "../permissions/store";
+import { loadDenials, loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
+import { probeConfinement } from "../sandbox/confine";
+import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
+import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
 import { SessionDatabase } from "../session/database";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
@@ -27,6 +30,7 @@ export type DoctorDeps = {
   arch: string;
   cwd: string;
   configDir?: string;
+  probeIoUring?: () => IoUringProbe;
 };
 
 export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> {
@@ -42,8 +46,10 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     catalogCheck(deps.env),
     gitCheck(),
     bashCheck(),
+    sandboxCheck(configDir, deps.cwd, deps.platform),
     sessionStoreCheck(configDir),
     await daemonCheck(configDir, deps.fetch),
+    ioUringDoctorCheck((deps.probeIoUring ?? probeIoUringSetup)(), deps.platform),
   ];
 }
 
@@ -156,13 +162,23 @@ function credentialsCheck(configDir: string): CheckResult {
 }
 
 function permissionsCheck(configDir: string, cwd: string): CheckResult {
-  const warnings: string[] = [];
-  const grants = loadGrants(configDir, cwd, (message) => warnings.push(message));
-  if (warnings.length > 0) {
+  const grantWarnings: string[] = [];
+  const denyWarnings: string[] = [];
+  const grants = loadGrants(configDir, cwd, (message) => grantWarnings.push(message));
+  loadDenials(configDir, (message) => denyWarnings.push(message));
+  if (denyWarnings.length > 0) {
     return {
       name: "permissions",
       status: "fail",
-      detail: warnings[0] ?? "permissions.yaml is malformed",
+      detail: denyWarnings[0] ?? "permissions.yaml deny list is malformed",
+      fix: "edit the deny list in permissions.yaml (do not delete the file; that would drop sibling path denials)",
+    };
+  }
+  if (grantWarnings.length > 0) {
+    return {
+      name: "permissions",
+      status: "fail",
+      detail: grantWarnings[0] ?? "permissions.yaml is malformed",
       fix: "fix or delete permissions.yaml",
     };
   }
@@ -250,4 +266,32 @@ async function daemonCheck(configDir: string, fetchFn: typeof fetch): Promise<Ch
       fix: "remove the stale daemon.json or start a new one with seri serve",
     };
   }
+}
+
+function sandboxCheck(configDir: string, cwd: string, platform: NodeJS.Platform): CheckResult {
+  const { allowUnsandboxedCommands } = loadSandboxConfig(configDir);
+  const confinement = { available: probeConfinement(platform) };
+  const idle = idleSandboxTier(confinement, allowUnsandboxedCommands);
+  const bang = resolveShellLaunch("bang", { allowUnsandboxedCommands, root: cwd }, confinement);
+  const detail = formatSandboxDoctorDetail(idle, bang, allowUnsandboxedCommands);
+  if (bang.kind === "refused") {
+    return {
+      name: "sandbox",
+      status: "warn",
+      detail,
+      fix: "set SERI_ALLOW_UNSANDBOXED_COMMANDS or wait for OS sandbox support",
+    };
+  }
+  if (bang.kind === "unsandboxed") {
+    return {
+      name: "sandbox",
+      status: "warn",
+      detail,
+      fix: "set SERI_ALLOW_UNSANDBOXED_COMMANDS=false to keep ! inside the OS sandbox",
+    };
+  }
+  if (idle === "os") {
+    return { name: "sandbox", status: "ok", detail };
+  }
+  return { name: "sandbox", status: "info", detail };
 }

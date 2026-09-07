@@ -54,4 +54,19 @@ describe("approvalCopy", () => {
     expect(optionLabels(true)).toEqual(["[y]es", "[a]lways", "[N]o"]);
     expect(optionLabels(false)).toEqual(["[y]es", "[N]o"]);
   });
+
+  test("a classifier reason is attached without replacing the question", () => {
+    expect(
+      approvalCopy(
+        "bash",
+        { command: "git push origin v0.42.0" },
+        "tag push publishes the package",
+      ),
+    ).toEqual({
+      question: "Run git push origin v0.42.0?",
+      headline: "Run git push origin v0.42.0",
+      detail: "",
+      classifierReason: "tag push publishes the package",
+    });
+  });
 });

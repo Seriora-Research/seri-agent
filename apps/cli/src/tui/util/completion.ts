@@ -39,18 +39,11 @@ export type Completion = {
   matches: readonly CompletionItem[];
 };
 
-// The token being completed is the run of non-whitespace at the caret, and the caret is always at
-// the end here — InputBox only ever appends to and deletes from the end of its value, so there is
-// no cursor position to consult. A trailing space therefore ends completion, which is the rule that
-// makes `/name ` stop offering names and start accepting arguments.
 function tokenStartOf(value: string): number {
   const match = /\S*$/.exec(value);
   return match === null ? value.length : match.index;
 }
 
-// Prefix matches first, then substring. Deliberately not a fuzzy subsequence match: a user typing
-// `/perf` expects `/perf-review` at the top, and a subsequence matcher fills the list with names
-// that share no readable relationship to what was typed.
 function matchItems(items: readonly CompletionItem[], token: string): CompletionItem[] {
   const query = token.toLowerCase();
   const body = query.slice(1);
@@ -75,8 +68,6 @@ export function resolveCompletion(
     if (!token.startsWith(source.trigger)) continue;
     if (source.lineStartOnly === true && tokenStart !== 0) continue;
     const matches = matchItems(source.items, token);
-    // An open source with nothing left to offer resolves to nothing, so the popup closes rather
-    // than sitting there empty while the user keeps typing a name it does not have.
     if (matches.length === 0) return undefined;
     return { source, tokenStart, token, matches };
   }

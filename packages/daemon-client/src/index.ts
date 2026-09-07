@@ -5,6 +5,15 @@ export {
   iterateSse,
   readDaemonDescriptor,
 } from "./client";
+export type { LoopbackVerifyCase, LoopbackVerifyExpectation } from "./loopback";
+export {
+  canonicalizeLoopbackHost,
+  canonicalizeLoopbackUrl,
+  LOOPBACK_MAPPED_V4,
+  LOOPBACK_V4,
+  LOOPBACK_V6,
+  LOOPBACK_VERIFY_BAR,
+} from "./loopback";
 export type {
   ApprovalAnswer,
   DaemonDescriptor,

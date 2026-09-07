@@ -1,10 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// The live status region's elapsed-time + token-count indicator. Mounted only for the duration of
-// an in-flight turn, keyed on `startedAt` — see app.tsx's own comment on that `key` for why this
-// component's `useState(() => Date.now())` initializer needs a genuinely fresh mount per turn. A
-// single derived clock, not a running counter: every tick recomputes `Date.now() - startedAt`
-// instead of incrementing a number, so a late/drifted `setInterval` tick self-corrects instead of
-// accumulating error (vercel-labs/fx's own technique).
 import { useEffect, useState } from "react";
 import { theme } from "../theme/theme";
 import {
@@ -46,13 +40,7 @@ export function TurnStatus({
     return subscribePendingLive(sync);
   }, [subscribePendingLive, pendingLiveOutputEstimate]);
 
-  // `truncate wrapMode="none"`: app.tsx reserves exactly one row for this component
-  // (`scrollboxHeight = transcriptHeight - 1` while a turn is active), inside a wrapping box with
-  // `overflow="hidden"`. Without this prop, a long elapsed+token string could soft-wrap onto a
-  // second row, which that fixed one-row budget has no room for — the second row would overflow
-  // the wrapping box and get silently clipped by `overflow="hidden"` instead of just truncating
-  // gracefully, the same reasoning `ErrorLine.tsx`/`ListRow.tsx` apply to their own single-line
-  // rows.
+  // Without truncate wrapMode none, OpenTUI soft-wraps this string onto a second row the one-row reservation cannot keep.
   const elapsed = formatElapsed(now - startedAt);
   const tokens = formatTokenProgress({
     ...tokenProgress,

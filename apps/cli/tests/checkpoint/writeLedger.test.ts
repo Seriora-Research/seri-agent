@@ -30,9 +30,6 @@ describe("loadLedger", () => {
     expect(loadLedger(storeDir)).toEqual({});
   });
 
-  // Valid JSON that isn't a plain object -- null[path] throws on both read and write, and
-  // filterSafeToDelete's call site in restoreTo has no try/catch around it, so an unguarded
-  // `null` here would fail /undo outright instead of degrading to "nothing verified".
   test.each(["null", "[]", "42", '"a string"'])(
     "fails safe (empty ledger) on valid but non-object JSON: %s",
     (content) => {

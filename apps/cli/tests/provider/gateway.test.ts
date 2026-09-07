@@ -35,7 +35,6 @@ function seedAuthJson(configDir: string, session: Record<string, unknown> = {}):
   );
 }
 
-// The exact SSE shape @ai-sdk/openai's chat model expects to stream.
 function sseResponse(): Response {
   const chunks = [
     'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}\n\n',
@@ -70,10 +69,6 @@ const refreshNeverCalled: typeof refreshSessionReal = (async () => {
   throw new Error("refreshSession should not have been called");
 }) as unknown as typeof refreshSessionReal;
 
-// Unlike fakeRefresh above, this persists to disk — the property under test is that a LATER,
-// separate authedFetch invocation reads the refreshed token off disk rather than a value baked
-// into createOpenAI's config at construction time, and only a real (or disk-writing) refresh
-// exercises that.
 function fakeRefreshPersisting(configDir: string, accessToken: string): typeof refreshSessionReal {
   return (async () => {
     const session = loadAuthSession(configDir);
@@ -85,8 +80,6 @@ function fakeRefreshPersisting(configDir: string, accessToken: string): typeof r
 }
 
 describe("getGatewayModel — BYOK guard", () => {
-  // The verify-bar item: a provider with a locally-configured key must never reach the gateway
-  // route. Recorded as failing with the guard removed — see the removal below.
   test("throws when the requested provider already has a locally-configured key", () => {
     process.env.OPENROUTER_API_KEY = "byok-key";
     seedAuthJson(tmpRoot);
@@ -236,9 +229,6 @@ describe("getGatewayModel — 401 retry", () => {
     expect(calls).toHaveLength(1);
   });
 
-  // A refresh triggered by one request's retry must not be forgotten the instant that request
-  // finishes: every LATER request through the same model should use the new token immediately,
-  // not repeat the same 401 -> refresh -> retry cycle every single time.
   test("a token refreshed during one request's retry is used directly by the next request", async () => {
     process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";
     seedAuthJson(tmpRoot);
@@ -254,8 +244,7 @@ describe("getGatewayModel — 401 retry", () => {
     expect(calls).toHaveLength(3);
     expect(calls[0]?.headers.get("Authorization")).toBe("Bearer at-1");
     expect(calls[1]?.headers.get("Authorization")).toBe("Bearer at-2");
-    // The second turn's very first attempt already carries the refreshed token — no second
-    // 401 -> retry cycle.
+
     expect(calls[2]?.headers.get("Authorization")).toBe("Bearer at-2");
   });
 });

@@ -47,16 +47,12 @@ export async function fetchUsageReport(
         return parseUsageReport(await response.json());
       },
     );
-  } catch {
-    // Fall through to the snapshot. A timeout or network error is not a crash.
-  }
+  } catch {}
 
   if (report !== null) {
     try {
       writeUsageSnapshot(configDir, { fetchedAt: now.toISOString(), report });
-    } catch {
-      // Snapshot is best-effort. A live report still prints.
-    }
+    } catch {}
     return { status: "ok", report };
   }
 

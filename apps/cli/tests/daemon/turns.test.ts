@@ -3,9 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-client";
+import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
 import { SessionDatabase } from "../../src/session/database";
+import { fakeRunLoop } from "../cli/fakeRunLoop";
+import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -54,10 +57,9 @@ describe("daemon turns", () => {
     expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
   });
 
-  test("reconnecting with after replays only later persisted events", async () => {
+  test("after a finished turn, events after the last live delta seq still return compact rows", async () => {
     const executeTurn: ExecuteTurn = async (input) => {
       input.emitLoop({ type: "text-delta", text: "one" });
-      await delay(80);
       input.emitLoop({ type: "text-delta", text: "two" });
       input.emitLoop({ type: "done", reason: "no-tool-call" });
       return { exitCode: 0 };
@@ -65,16 +67,112 @@ describe("daemon turns", () => {
     const daemon = await startDaemon({ configDir: makeDir(), executeTurn });
     stop = daemon.stop;
     const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
-    const live = client.startTurn({ task: "split" });
-    const first: DaemonEvent[] = [];
-    for await (const event of live) {
-      first.push(event);
-      if (event.seq === 1) break;
+    const live = await collect(client.startTurn({ task: "split" }));
+    let lastDelta: DaemonEvent | undefined;
+    for (const event of live) {
+      if (isLoopDaemonEvent(event.event) && event.event.value.type === "text-delta")
+        lastDelta = event;
     }
-    expect(first[0]?.event).toEqual({ type: "loop", value: { type: "text-delta", text: "one" } });
-    const rest = await collect(client.events(first[0]!.turnId, 1));
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
-    expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+    expect(lastDelta?.seq).toBe(2);
+    expect(live.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    const rest = await collect(client.events(live[0]!.turnId, lastDelta!.seq));
+    expect(rest.some((event) => JSON.stringify(event).includes("text-delta"))).toBe(false);
+    expect(
+      rest.some((event) => isLoopDaemonEvent(event.event) && event.event.value.type === "done"),
+    ).toBe(true);
+    expect(rest.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+  });
+
+  test("reconnecting after a missed text-delta still replays it", async () => {
+    const sawOne = Promise.withResolvers<void>();
+    const twoReady = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const executeTurn: ExecuteTurn = async (input) => {
+      input.emitLoop({ type: "text-delta", text: "one" });
+      await sawOne.promise;
+      input.emitLoop({ type: "text-delta", text: "two" });
+      twoReady.resolve();
+      await released.promise;
+      input.emitLoop({ type: "done", reason: "no-tool-call" });
+      return { exitCode: 0 };
+    };
+    const daemon = await startDaemon({ configDir: makeDir(), executeTurn });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const liveIter = client.startTurn({ task: "split" })[Symbol.asyncIterator]();
+    const first = (await liveIter.next()).value as DaemonEvent;
+    expect(first.event).toEqual({ type: "loop", value: { type: "text-delta", text: "one" } });
+    await liveIter.return?.();
+    sawOne.resolve();
+    await twoReady.promise;
+    const restIter = client.events(first.turnId, 1)[Symbol.asyncIterator]();
+    try {
+      const second = await Promise.race([
+        restIter.next(),
+        delay(2000).then(() => {
+          throw new Error("timed out waiting for replayed text-delta two");
+        }),
+      ]);
+      expect(second.done).toBe(false);
+      expect(second.value?.event).toEqual({
+        type: "loop",
+        value: { type: "text-delta", text: "two" },
+      });
+      released.resolve();
+      const rest = [second.value!, ...(await collect({ [Symbol.asyncIterator]: () => restIter }))];
+      expect(rest.some((event) => JSON.stringify(event).includes('"text":"one"'))).toBe(false);
+      expect(rest.some((event) => JSON.stringify(event).includes('"text":"two"'))).toBe(true);
+    } finally {
+      released.resolve();
+    }
+  });
+
+  test("daemon_events omit text-delta and reasoning-delta after the turn finishes", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        for (let i = 0; i < 50; i++) input.emitLoop({ type: "text-delta", text: "x" });
+        input.emitLoop({ type: "reasoning-delta", text: "think" });
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      { idleMs: 0 },
+    );
+    try {
+      const started = await manager.startTurn({ task: "stream" });
+      const live: DaemonEvent[] = [];
+      await new Promise<void>((resolve) => {
+        started.subscribe((event) => {
+          live.push(event);
+          if (event.event.type === "turn-complete") resolve();
+        });
+      });
+      await manager.waitForIdle();
+      const liveLoop = live.flatMap((event) =>
+        isLoopDaemonEvent(event.event) ? [event.event.value.type] : [],
+      );
+      expect(liveLoop.filter((type) => type === "text-delta")).toHaveLength(50);
+      expect(liveLoop).toContain("reasoning-delta");
+      const persisted = database.listDaemonEventsAfter(started.turnId, 0) as DaemonEvent[];
+      const persistedLoop = persisted.flatMap((event) =>
+        isLoopDaemonEvent(event.event) ? [event.event.value.type] : [],
+      );
+      expect(persistedLoop).not.toContain("text-delta");
+      expect(persistedLoop).not.toContain("reasoning-delta");
+      expect(persistedLoop).toEqual(["done"]);
+      expect(persisted.map((event) => event.seq)).toEqual([52, 53]);
+      expect(persisted).toHaveLength(2);
+      expect(persisted.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+      expect(manager.getTurn(started.turnId)).toBeUndefined();
+      const afterLastDelta = database.listDaemonEventsAfter(started.turnId, 51) as DaemonEvent[];
+      expect(afterLastDelta.map((event) => event.seq)).toEqual([52, 53]);
+    } finally {
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
   });
 
   test("disconnecting resolves a pending approval as no but does not cancel the turn", async () => {
@@ -106,6 +204,62 @@ describe("daemon turns", () => {
     expect(answer).toBe("no");
     expect(aborted).toBe(false);
     expect(finished).toBe(true);
+  });
+
+  test("startTurn with permissionPrompts none never emits approval-request when executeTurn would have requested one", async () => {
+    const configDir = makeDir();
+    const originalKey = process.env.GROQ_API_KEY;
+    const originalDisable = process.env.SERI_DISABLE_MODELS_FETCH;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const { fake, capture } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
+    async function* wouldPrompt(opts: Parameters<typeof fake>[0]) {
+      const gen = fake(opts);
+      if (opts.approvalPrompt !== undefined) {
+        await opts.approvalPrompt("write_file", { path: "a.txt" }, opts.signal);
+      }
+      yield* gen;
+    }
+    try {
+      const daemon = await startDaemon({
+        configDir,
+        idleMs: 0,
+        deps: {
+          runLoop: wouldPrompt,
+          getGroqModel: () =>
+            new MockLanguageModelV4({
+              doStream: async () => streamResult(textOnlyChunks("ready")),
+            }),
+          loadAgentsFile: () => "",
+        },
+      });
+      stop = daemon.stop;
+      const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+      const live = client.startTurn({ task: "write live" });
+      const liveIter = live[Symbol.asyncIterator]();
+      let liveApproval: { turnId: string; requestId: string } | undefined;
+      while (liveApproval === undefined) {
+        const next = await liveIter.next();
+        expect(next.done).toBe(false);
+        const event = next.value!;
+        if (event.event.type === "approval-request" && typeof event.event.requestId === "string") {
+          liveApproval = { turnId: event.turnId, requestId: event.event.requestId };
+        }
+      }
+      await client.approve(liveApproval.turnId, liveApproval.requestId, "once");
+      await collect({ [Symbol.asyncIterator]: () => liveIter });
+      const events = await collect(
+        client.startTurn({ task: "write none", permissionPrompts: "none" }),
+      );
+      expect(events.some((event) => event.event.type === "approval-request")).toBe(false);
+      expect(capture()?.approvalPrompt).toBeUndefined();
+      expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    } finally {
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+      if (originalDisable === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+      else process.env.SERI_DISABLE_MODELS_FETCH = originalDisable;
+    }
   });
 
   test("matching approval resumes a turn; a mismatched pair returns 404", async () => {

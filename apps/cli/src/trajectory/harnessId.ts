@@ -1,10 +1,7 @@
 import { execFileSync } from "node:child_process";
 import pkg from "../../package.json";
+import { gitArgv } from "../checkpoint/gitArgv";
 
-// `bun build --define SERI_BAKED_COMMIT='"…"'` replaces this identifier with a
-// string literal. `typeof` on the undeclared name is safe and yields
-// "undefined" for `bun test` / `bun run`, so those paths still fall through
-// to env / git instead of throwing.
 declare const SERI_BAKED_COMMIT: string | undefined;
 
 export function readBakedCommit(): string | undefined {
@@ -33,7 +30,7 @@ export function harnessId(
 
 export function readGitHead(): string | undefined {
   try {
-    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+    const sha = execFileSync("git", gitArgv(["rev-parse", "HEAD"]), {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();

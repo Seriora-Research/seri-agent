@@ -41,10 +41,7 @@ export function createStreamDispatch(setState: (updater: (state: TuiState) => Tu
 
   const drainThen = (action: TuiAction): void => {
     clearPaintTimer();
-    // Snapshot here, not inside the updater: React may defer `setState` until the next
-    // macrotask, and a later text-delta would otherwise be visible to already-queued
-    // updaters (transcript-append flushes `streaming`, which would commit buffered
-    // answer text as a transcript row before the action this drain belongs to).
+    // Snapshot buffers before setState; React may defer the updater, and a later text-delta would otherwise leak into this drain.
     const parentDrain = parentBuf;
     parentBuf = "";
     pendingLive = 0;

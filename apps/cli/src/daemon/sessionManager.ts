@@ -1,23 +1,21 @@
 import { randomUUID } from "node:crypto";
-import type { ApprovalAnswer, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
+import {
+  type ApprovalAnswer,
+  type DaemonEvent,
+  isLoopDaemonEvent,
+  type PublicLoopEvent,
+} from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
+import type { PromptChannel } from "../permissions/promptChannel";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
-// The `as PublicLoopEvent` cast below is what puts a LoopEvent on the wire without the compiler
-// ever comparing the two unions, so a member added to one and not the other ships silently. This
-// line is the comparison that cast skips. It fired for real: `permission-denied` grew a "hook"
-// reason in loop.ts and the daemon emitted it for a week's worth of edits under a wire type that
-// said it could not occur. Widen protocol.ts when you widen loop.ts, and this stays green.
 type DenialReason<E extends { type: string }> = Extract<
   E,
   { type: "permission-denied"; reason: string }
 >["reason"];
-// Assert<T extends true>, not a bare conditional resolving to a message string: a conditional type
-// that evaluates to something other than `true` is still a perfectly legal type and compiles
-// silently. Verified by narrowing protocol.ts back and watching this line, and only this line, go
-// red. A conditional alone did nothing at all.
+
 type Assert<T extends true> = T;
 type _WireCarriesEveryDenialReason = Assert<
   DenialReason<LoopEvent> extends DenialReason<PublicLoopEvent> ? true : false
@@ -29,6 +27,7 @@ export type ExecuteTurnInput = {
   task: string;
   cwd: string;
   permissionMode: PermissionMode;
+  promptChannel?: PromptChannel;
   signal: AbortSignal;
   emitLoop: (event: { type: string } & Record<string, unknown>) => void;
   requestApproval: (requestId: string, toolName: string, args: unknown) => Promise<ApprovalAnswer>;
@@ -47,6 +46,7 @@ type TurnHandle = {
   sessionId: string;
   abort: AbortController;
   seq: number;
+  replay: DaemonEvent[];
   subscribers: Set<Subscriber>;
   pendingApproval: PendingApproval | undefined;
   finished: boolean;
@@ -93,6 +93,7 @@ export class DaemonSessionManager {
     sessionId?: string;
     cwd?: string;
     permissionMode?: PermissionMode;
+    promptChannel?: PromptChannel;
   }): Promise<{ turnId: string; sessionId: string; subscribe: (send: Subscriber) => () => void }> {
     const session = this.resolveSession(request);
     const turnId = randomUUID();
@@ -101,6 +102,7 @@ export class DaemonSessionManager {
       sessionId: session.id,
       abort,
       seq: 0,
+      replay: [],
       subscribers: new Set(),
       pendingApproval: undefined,
       finished: false,
@@ -118,7 +120,14 @@ export class DaemonSessionManager {
     sessionHandle.tail = sessionHandle.tail
       .then(async () => {
         await gate.promise;
-        await this.runTurn(turnId, handle, session, request.task, request.permissionMode);
+        await this.runTurn(
+          turnId,
+          handle,
+          session,
+          request.task,
+          request.permissionMode,
+          request.promptChannel,
+        );
       })
       .catch(() => {});
 
@@ -138,14 +147,20 @@ export class DaemonSessionManager {
 
   replayAndFollow(turnId: string, afterSeq: number, send: Subscriber): (() => void) | undefined {
     const handle = this.turns.get(turnId);
+    if (handle !== undefined) {
+      for (const event of handle.replay) {
+        if (event.seq > afterSeq) send(event);
+      }
+      if (handle.finished) return undefined;
+      handle.subscribers.add(send);
+      return () => {
+        handle.subscribers.delete(send);
+        this.onSubscriberGone(handle);
+      };
+    }
     const persisted = this.database.listDaemonEventsAfter(turnId, afterSeq) as DaemonEvent[];
     for (const event of persisted) send(event);
-    if (handle === undefined || handle.finished) return undefined;
-    handle.subscribers.add(send);
-    return () => {
-      handle.subscribers.delete(send);
-      this.onSubscriberGone(handle);
-    };
+    return undefined;
   }
 
   resolveApproval(turnId: string, requestId: string, answer: ApprovalAnswer): boolean {
@@ -216,6 +231,7 @@ export class DaemonSessionManager {
     session: SessionState,
     task: string,
     permissionMode: PermissionMode | undefined,
+    promptChannel: PromptChannel | undefined,
   ): Promise<void> {
     const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
@@ -226,7 +242,11 @@ export class DaemonSessionManager {
         seq: handle.seq,
         event,
       };
-      this.database.appendDaemonEvent(turnId, handle.seq, envelope);
+      handle.replay.push(envelope);
+      const persist =
+        !isLoopDaemonEvent(event) ||
+        (event.value.type !== "text-delta" && event.value.type !== "reasoning-delta");
+      if (persist) this.database.appendDaemonEvent(turnId, handle.seq, envelope);
       for (const subscriber of handle.subscribers) subscriber(envelope);
     };
 
@@ -237,6 +257,7 @@ export class DaemonSessionManager {
         task,
         cwd: session.cwd,
         permissionMode: permissionMode ?? session.permissionMode,
+        promptChannel,
         signal: handle.abort.signal,
         emitLoop: (value) => {
           if (value.type === "messages-updated") return;

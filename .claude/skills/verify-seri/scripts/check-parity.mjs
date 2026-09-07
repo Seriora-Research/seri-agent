@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// Asserts the attributes measured off how_tui_should_be_uxui.png against a captured frame.json
-// (scripts/frame-from-transcript.mjs). The mock and a real session never share text, so an image
-// diff cannot settle parity; these are the attributes that can be compared.
+// Asserts TUI chrome tokens against a captured frame.json (scripts/frame-from-transcript.mjs).
+// A mock screenshot and a real session never share text, so an image diff cannot settle parity;
+// these are the attributes that can be compared.
 //
 // Usage: node check-parity.mjs <frame.json>
 
 import { readFileSync } from "node:fs";
 
 const GROUND = "#141413";
-const BAND = "#333333";
-const BORDER = "#4a463b";
-const MUTED = "#8a8a8a";
-const TEXT = "#d4d4d4";
+const BAND = "#3e3e3a";
+const BORDER = "#e8e4d8";
+const MUTED = "#8f8d85";
+const TEXT = "#e8e4d8";
 
 const BORDER_CHARS = new Set(["┌", "┐", "└", "┘", "─", "│", "├", "┤", "┬", "┴", "┼"]);
 
@@ -53,7 +53,7 @@ const isBorder = (row, i) =>
 const borders = grid.flatMap((row) => row.filter((_, i) => isBorder(row, i)));
 const badBorders = borders.filter((c) => norm(c.fg) !== BORDER);
 check(
-  "every border glyph is #4A463B",
+  "every border glyph is #e8e4d8",
   borders.length > 0 && badBorders.length === 0,
   `${borders.length} border cells, ${badBorders.length} off-target (${[...new Set(badBorders.map((c) => norm(c.fg)))].join(",") || "none"})`,
 );
@@ -62,10 +62,10 @@ const strayGray = all.filter((c) => norm(c.fg) === "#808080");
 check("no #808080 left anywhere", strayGray.length === 0, `${strayGray.length} cells`);
 
 const muted = all.filter((c) => norm(c.fg) === MUTED && (c.ch ?? " ").trim() !== "");
-check("muted text is #8A8A8A", muted.length > 0, `${muted.length} cells`);
+check("muted text is #8F8D85", muted.length > 0, `${muted.length} cells`);
 
 const prose = all.filter((c) => norm(c.fg) === TEXT && (c.ch ?? " ").trim() !== "");
-check("prose text is #D4D4D4", prose.length > 0, `${prose.length} cells`);
+check("prose text is #e8e4d8", prose.length > 0, `${prose.length} cells`);
 
 const bandRows = grid.filter(
   (row) => row.filter((c) => norm(c.bg) === BAND).length > frame.cols / 2,

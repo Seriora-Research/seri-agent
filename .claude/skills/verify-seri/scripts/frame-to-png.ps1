@@ -1,7 +1,7 @@
 # Paints a frame-from-transcript.mjs JSON grid into a PNG screenshot.
 #
 #   powershell -File frame-to-png.ps1 -Json <frame.json> -Out <frame.png> [-CellW 9] [-CellH 20]
-#              [-Font Consolas] [-FontSize 16.5] [-DefaultFg '#d4d4d4'] [-DefaultBg '#141413']
+#              [-Font Consolas] [-FontSize 16.5] [-DefaultFg '#e8e4d8'] [-DefaultBg '#141413']
 #
 # 16.5px is the size at which Consolas fills the 9px cell, so box-drawing rows render as solid
 # rules. Below it they render dashed and read as a defect in the TUI. Past ~17 the block glyphs
@@ -13,7 +13,7 @@ param(
   [int]$CellH = 20,
   [string]$Font = 'Consolas',
   [single]$FontSize = 16.5,
-  [string]$DefaultFg = '#d4d4d4',
+  [string]$DefaultFg = '#e8e4d8',
   [string]$DefaultBg = '#141413'
 )
 
