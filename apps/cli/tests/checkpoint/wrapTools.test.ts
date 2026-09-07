@@ -179,10 +179,6 @@ describe("withCheckpoints", () => {
     });
   });
 
-  // fakeTools' own definitions are built via tool(), which is an identity function, not an async
-  // wrapper — so a hand-built ToolSet whose execute is a plain, non-async function (unlike every
-  // fakeTools case above) is the only way to prove a throw from execute is turned into a rejected
-  // promise rather than propagating as a synchronous throw out of wrapped.execute itself.
   test("wraps a synchronous throw from a non-async execute as a rejected promise", async () => {
     const tools: ToolSet = {
       write_file: {
@@ -262,14 +258,6 @@ describe("withMutationRecording", () => {
   });
 });
 
-// The snapshot must be proven to happen BEFORE the tool wrote, not after.
-// opencode's own test suite records this as "a real bug" in their design — the SDK executes the
-// tool before their start-step handler can snapshot, so both the before and after snapshots carry
-// the same tree hash and the diff comes back empty. A checkpoint feature can be fully green and
-// completely empty, so this test is the one that has to be seen failing.
-//
-// Neither assertion depends on timing or on how slowly the tool returns, which is precisely what
-// opencode's race destroyed: the fake tool below writes synchronously and returns immediately.
 describe.skipIf(!isGitAvailable())("withCheckpoints (snapshot precedes the write)", () => {
   let root: string;
   let gitDir: string;
@@ -290,8 +278,6 @@ describe.skipIf(!isGitAvailable())("withCheckpoints (snapshot precedes the write
     writeFileSync(join(workTree, "a.txt"), "before");
     initShadow(gitDir);
 
-    // A checkpointer with the same shape as the real one: snapshot on every mutating call, and
-    // dedupe by tree so a call that changed nothing is not offered as somewhere to undo to.
     const log: { toolCallId: string; tree: string }[] = [];
     const onBeforeMutation = (context: MutationContext): void => {
       log.push({ toolCallId: context.toolCallId, tree: writeTree(gitDir, workTree) });
@@ -309,9 +295,6 @@ describe.skipIf(!isGitAvailable())("withCheckpoints (snapshot precedes the write
     );
     await inert.write_file?.execute?.({ path: "a.txt" }, execOpts("c2"));
 
-    // (i) content: the tree checkpoint 1 recorded still holds "before" while the disk holds
-    // "after". Read with plain git rather than through our own module, so the evidence does not
-    // depend on the code under test. Under a post-hoc or start-step design this reads "after".
     const catFile = spawnSync(
       "git",
       [`--git-dir=${gitDir}`, "cat-file", "-p", `${log[0]?.tree}:a.txt`],
@@ -323,9 +306,6 @@ describe.skipIf(!isGitAvailable())("withCheckpoints (snapshot precedes the write
     expect(catFile.stdout).toBe("before");
     expect(readFileSync(join(workTree, "a.txt"), "utf8")).toBe("after");
 
-    // (ii) count: two calls, two distinct trees, so `/undo` has two places to go. Under a
-    // post-hoc design both snapshots see "after", the trees are identical, and the dedupe
-    // collapses them into a single undo target.
     expect(log).toHaveLength(2);
     expect([...new Set(log.map((record) => record.tree))]).toHaveLength(2);
   }, 15_000);

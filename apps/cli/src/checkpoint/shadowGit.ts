@@ -3,37 +3,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { isAbsolute, join, resolve } from "node:path";
 import { gitArgv } from "./gitArgv";
 
-// spawnSync buffers the child's entire stdout and kills it the moment the buffer fills, and the
-// overflow arrives as `status: null` with an empty stderr — indistinguishable from a crashed git.
-// `git diff` against a checkpoint is the one command here that can produce real volume, so this
-// borrows runRipgrep.ts's 8 MB rather than Node's 1 MB default. spawnCollect is deliberately not
-// used: it has neither `cwd` nor `env` (both mandatory below) and caps each stream at 30 000
-// characters, which would silently truncate a diff the user is being asked to review.
+// spawnSync reports a filled maxBuffer as status: null with empty stderr, indistinguishable from a crashed git.
 const MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
-// Applied to every single invocation, from this one place, because the cost of a call site
-// forgetting them is silent corruption of exactly the files the agent edited:
-//
-//   - core.autocrlf: Git for Windows' installer sets this to `true` in the system config, so it is
-//     on for most Windows users and on the windows-latest CI runner. Measured on this repo's
-//     dev box: an LF file snapshotted and restored through `add -A` + `checkout-index -a -f` came
-//     back as CRLF (2751a3a2… → 4ad3ef64…). Worse, the damage is selective — `checkout-index`
-//     skips files whose stat still matches the index, so only the files that were actually edited
-//     get mangled. It must be false at BOTH snapshot and restore time: with `true` at snapshot the
-//     CRLF files are normalised to LF in the object database, so flipping it only at restore
-//     corrupts the other direction. Measured caveat, so this is not read as stronger than it is:
-//     with initShadow's `info/attributes` in place these three are belt to its braces — flipping
-//     core.autocrlf back to true leaves every round trip byte-identical, because a path attribute
-//     outranks config. They are what protects a store whose attributes file went missing.
-//   - user.name / user.email: `commit-tree` refuses to run without an identity ("Please tell me
-//     who you are"), and GitHub's runners have no global one. Supplying it per-invocation keeps
-//     the shadow store from depending on the user's git identity at all.
-//   - gc.auto=0: git's automatic gc would otherwise be free to fire in the middle of a tool call,
-//     turning a ~100 ms snapshot into a multi-hundred-millisecond stall at random. Retention runs
-//     `gc` explicitly instead, once per session, off the hot path.
-//
-// Measured cost of carrying twelve `-c` arguments on every spawn: 21.3 ms vs 21.8 ms for a bare
-// `git --version`, i.e. inside the noise.
+// Git for Windows' installer sets core.autocrlf=true in system config.
+// commit-tree refuses to run without user.name/email, and GitHub runners have none.
 const SHADOW_CONFIG = [
   "-c",
   "core.autocrlf=false",
@@ -49,15 +23,7 @@ const SHADOW_CONFIG = [
   "gc.auto=0",
 ];
 
-// seri can be launched from inside a git hook or a `git rebase -x` step, which export these into
-// every child. An inherited GIT_INDEX_FILE would redirect our `add -A` straight into the USER's
-// index — staging their whole worktree as a side effect of an edit — and GIT_DIR/GIT_WORK_TREE
-// would fight the flags below. Nothing else in this design would catch that, so they are removed
-// from the child environment rather than merely overridden.
-// GIT_CONFIG_COUNT is here for a narrower reason: it is a second route to setting
-// core.autocrlf=true underneath the -c flags, which would defeat the crlf defence specifically.
-// Removing it is enough on its own — git ignores GIT_CONFIG_KEY_n/GIT_CONFIG_VALUE_n without a
-// count to say how many of them there are.
+// An inherited GIT_INDEX_FILE redirects `add -A` into the user's index.
 const INHERITED_GIT_VARS = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -87,52 +53,22 @@ function spawnGit(args: string[], cwd: string | undefined): GitResult {
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
-// `cwd: workTree` as well as `--work-tree`: `checkout-index` and `ls-files` report paths relative
-// to the current directory, and running from outside the worktree makes them relative to a
-// directory the caller never named.
+// `checkout-index` and `ls-files` report paths relative to cwd, so run() must spawn from the worktree.
 function run(gitDir: string, workTree: string | undefined, args: string[]): GitResult {
   const prefix = [...SHADOW_CONFIG, `--git-dir=${gitDir}`];
   if (workTree !== undefined) prefix.push(`--work-tree=${workTree}`);
   return spawnGit([...prefix, ...args], workTree);
 }
 
-// The two questions about the USER's repository, asked of git rather than assumed. Both run
-// without --git-dir, because the answer has to come from discovery around `from`, not from the
-// shadow store.
-
-// The directory a checkpoint is *of*. Everything downstream is derived from it — the `--work-tree`
-// passed to every command, and therefore which .gitignore files are in scope; where the user's
-// exclude file lives; and the store key — because deriving those separately is what produced the
-// same defect three times in three different configurations.
-//
-// gitignore(5) reads .gitignore files only "up to the top-level of the work tree", so pointing
-// --work-tree at a subdirectory silently drops every rule the repo root declares. Measured on git
-// 2.54.0.windows.1, repo/.gitignore naming `node_modules/` and `.env`, with those files inside
-// repo/apps/api: `--work-tree=repo/apps/api add -A` staged `.env` and `node_modules/x.js`;
-// `--work-tree=repo` staged neither. So `cd repo/apps/api && seri "…"` copied the project's
-// secrets into <configDir>/checkpoints, outside the repo where `git clean` and even deleting the
-// repo never reach them.
-//
-// Falls back to the directory itself when there is no repository — checkpointing a project that is
-// not a git repo at all is a deliberate property of this design, not an edge case.
+// gitignore(5) reads .gitignore only up to the work-tree top, so --work-tree must be the project root.
 export function projectRoot(from: string): string {
   const result = spawnGit(["rev-parse", "--show-toplevel"], from);
   const top = result.stdout.trim();
-  // --show-toplevel answers with forward slashes on Windows; resolve() puts it back into the
-  // platform's own form, which matters because this string is both compared with `relative()` and
-  // hashed into the store key.
+  // --show-toplevel answers with forward slashes on Windows; resolve() converts to the platform form.
   return result.status === 0 && top !== "" ? resolve(top) : resolve(from);
 }
 
-// Where this repository's exclude file actually is. Not `<root>/.git/info/exclude`: `.git` is a
-// FILE in a linked worktree (`git worktree add`) and in a submodule, and git shares `info/` from
-// the common dir rather than the per-worktree one. Measured: from a linked worktree, `--git-path
-// info/exclude` answers with the MAIN repo's `.git/info/exclude`, which is the file the user
-// actually edits, while `join(workTree, ".git", …)` does not exist at all — and an existsSync miss
-// there silently wrote an empty shadow exclude, disabling the protection entirely.
-//
-// The answer is relative to the cwd it was asked from (`.git/info/exclude`, `../../.git/…`) and
-// absolute for a linked worktree, so it is resolved against that same directory.
+// `.git` is a file in a linked worktree or submodule; `--git-path info/exclude` locates the real exclude file.
 function localExcludePath(root: string): string | undefined {
   const result = spawnGit(["rev-parse", "--git-path", "info/exclude"], root);
   return result.status === 0 ? resolve(root, result.stdout.trim()) : undefined;
@@ -147,12 +83,6 @@ function git(gitDir: string, workTree: string | undefined, args: string[]): stri
 
 let available: boolean | undefined;
 
-// Resolved once, on the first mutating tool call, mirroring resolveRg()'s lazy-once shape:
-// `--version`, `login`, `config` and any read-only session never spawn git at all. There is
-// deliberately no minimum-version check — every command this module uses (`init --bare`, `add -A`,
-// `write-tree`, `commit-tree`, `update-ref`, `read-tree`, `ls-files`, `checkout-index`,
-// `check-ignore`, `gc`) predates git 1.7 (2010), and a machine with a git that old cannot run Bun.
-// A version gate here would be code that can never fire.
 export function isGitAvailable(): boolean {
   available ??= probeGit();
   return available;
@@ -169,16 +99,6 @@ function probeGit(): boolean {
 export function initShadow(gitDir: string): void {
   git(gitDir, undefined, ["init", "--bare"]);
 
-  // The same crlf settings the -c flags above carry, persisted into the store's own config. Those
-  // flags only protect calls made through this module, and /undo prints a plain-git command for
-  // recovering the state it replaced — run on a Windows box, that would otherwise inherit the
-  // installer's system-wide core.autocrlf=true.
-  //
-  // Measured, so it is not oversold: the `* -text` below is already sufficient on its own — the
-  // printed command round-trips an LF file byte-identically with these three removed and
-  // core.autocrlf=true in the system config, because a path attribute outranks config. This is the
-  // second layer under the one command a user pastes when they need their work back, and it costs
-  // three spawns once per session on the already-cold first checkpoint.
   for (const [key, value] of [
     ["core.autocrlf", "false"],
     ["core.safecrlf", "false"],
@@ -187,45 +107,11 @@ export function initShadow(gitDir: string): void {
     git(gitDir, undefined, ["config", key as string, value as string]);
   }
 
-  // The second, independent CRLF vector. A worktree `.gitattributes` saying `* text eol=crlf`
-  // overrides the core.* config and re-enables conversion — measured: `lf.txt` 2751a3a2 →
-  // 4ad3ef64 with the config already applied. `$GIT_DIR/info/attributes` has the highest
-  // precedence in gitattributes(5), so `* -text` there neutralises it. Side effect:
-  // attribute-driven diff drivers are disabled inside the shadow repo, which only affects the
-  // cosmetics of /undo's diff.
-  //
-  // mkdirSync first rather than trusting `init --bare` to have made `info/`: a user whose
-  // init.templateDir omits it would otherwise get an ENOENT here, and this mitigation is the one
-  // that must never be conditional.
   mkdirSync(join(gitDir, "info"), { recursive: true });
   writeFileSync(join(gitDir, "info", "attributes"), "* -text\n");
 }
 
-// The user's own exclude file, mirrored into the shadow store. Called on every session start, so
-// removing an entry takes effect rather than living on in the store — which is also why the file
-// is written even when there is no source to copy.
-//
-// `root` must be the project root from `projectRoot`, and the source is located by asking git (see
-// localExcludePath) rather than by joining `.git/info/exclude` onto it. That join was wrong for a
-// linked worktree, for a submodule, and for any launch from a subdirectory, and in all three the
-// existsSync miss wrote an EMPTY shadow exclude — silently turning off the protection the rest of
-// this comment describes.
-//
-// `--exclude-standard` resolves "the repository's exclude file" against $GIT_DIR, and $GIT_DIR here
-// is the shadow store, so without this the user's local excludes are invisible in BOTH directions.
-// Measured on git 2.54.0.windows.1 with `local-secret.txt` in `.git/info/exclude`:
-//   - `add -A` STAGED it — copied verbatim into <configDir>/checkpoints, outside the repo, where
-//     `git clean` and even deleting the repo never reach it. `.git/info/exclude` is the
-//     conventional home for `.env.local` and personal scratch files, so this is precisely the leak
-//     the "never override the project's own declarations" policy exists to prevent.
-//   - a locally-excluded file created after a snapshot appeared in the output of
-//     `ls-files --others --exclude-standard` — the removal list — so /undo deleted it, without
-//     ever naming it in the plan.
-// Mirroring the file is the only lever available: `git add` has no `--exclude-from`.
-//
-// The user's global `core.excludesFile` needs nothing done to it: git reads the global config
-// regardless of --git-dir, so it is already honoured. `.gitignore` likewise, being read from the
-// worktree.
+// `--exclude-standard` reads info/exclude from $GIT_DIR, which here is the shadow store.
 export function mirrorLocalExcludes(gitDir: string, root: string): void {
   const source = localExcludePath(root);
   mkdirSync(join(gitDir, "info"), { recursive: true });
@@ -235,50 +121,18 @@ export function mirrorLocalExcludes(gitDir: string, root: string): void {
   );
 }
 
-// The tip of a session's commit chain, or undefined when the session has no ref yet. This is the
-// authority on "what should the next commit's parent be" — deriving it from the log instead means
-// two rules for one fact, and they disagree the moment a record that carries a commit is filtered
-// out of one of them.
 export function resolveRef(gitDir: string, ref: string): string | undefined {
   const result = run(gitDir, undefined, ["rev-parse", "--verify", "--quiet", ref]);
   return result.status === 0 ? result.stdout.trim() : undefined;
 }
 
-// Whether a commit or tree named by a user is actually in this store. Asked before a restore
-// touches anything: `/restore` takes a sha out of the user's scrollback, and a typo — or a sha
-// from a session that retention has since pruned — used to fail only at the diff, by which point
-// the session ref had moved, a commit had been minted and a `pre-undo` record appended, with every
-// retry appending another.
 export function treeExists(gitDir: string, treeish: string): boolean {
   return (
     run(gitDir, undefined, ["rev-parse", "--verify", "--quiet", `${treeish}^{tree}`]).status === 0
   );
 }
 
-// `add -A` then `write-tree` — two spawns, no `git commit`. Measured on this repo: the porcelain
-// `add` + `commit` path is 233.5 ms against 107.2 ms for the four-command plumbing path, because
-// `git commit` alone costs ~217 ms and neither --no-verify nor gc.auto=0 moves it.
-//
-// The project's own ignore rules are honoured even though the git-dir is foreign — but only
-// because `workTree` is the PROJECT ROOT and nothing else. gitignore(5) reads .gitignore files
-// only up to the top level of the work tree, so passing any subdirectory here silently drops every
-// rule the root declares; and `--exclude-standard` reads `info/exclude` from $GIT_DIR, which is
-// the shadow store, so the user's local excludes reach this only via mirrorLocalExcludes. Both of
-// those were once assumed rather than arranged, and both leaked. Callers get the root from
-// `projectRoot`; this function cannot check that for them, which is exactly why the derivation
-// happens in one place.
-//
-// The reason it matters: an ignored path is the only declaration a project makes about what is not
-// its source, and overriding it means copying the user's `.env` into <configDir> — outside the
-// repo, where no `.gitignore`, no `git clean` and no repo deletion will ever reach it. That is a
-// security regression traded for an undo nobody asked for. `.claude/` and `dist/` fall outside the
-// undo for the same reason.
-//
-// `paths` omitted: `add -A`, the whole worktree minus ignores — first snapshot, shell, restore.
-// `paths` provided: `git add -- <those that exist>` then `write-tree`. `--` so a path that
-// looks like a flag is still a path. Missing entries are skipped (`git add -- missing` exits
-// 128); callers must not pass ignored paths (`git add -- ignored` exits 1, no `-f`). Empty
-// after that filter is write-tree only: the index is already the snapshot.
+// `git add -- missing` exits 128; `git add -- ignored` exits 1.
 export function writeTree(gitDir: string, workTree: string, paths?: readonly string[]): string {
   if (paths === undefined) {
     git(gitDir, workTree, ["add", "-A"]);
@@ -291,11 +145,7 @@ export function writeTree(gitDir: string, workTree: string, paths?: readonly str
   return git(gitDir, workTree, ["write-tree"]).trim();
 }
 
-// One pass over the staged index, for the two things a snapshot cannot say about itself. Run once
-// per session by the caller, on the already-cold first snapshot, because it costs a spawn.
-//
-// `ls-files --stage -z` emits `<mode> <sha> <stage>\t<path>` per entry, and mode 160000 is a
-// gitlink — how `add -A` records any directory that is itself a git repository.
+// git add -A records a nested repo as a gitlink (mode 160000) holding only HEAD.
 export function summarizeIndex(
   gitDir: string,
   workTree: string,
@@ -324,8 +174,7 @@ export function updateRef(gitDir: string, ref: string, commit: string): void {
   git(gitDir, undefined, ["update-ref", ref, commit]);
 }
 
-// Sorted oldest-first by the tip commit's date, which for a session ref is the time of its last
-// snapshot. Not by the ref file's mtime: `gc` packs refs, and a packed ref has no file to stat.
+// `gc` packs refs, and a packed ref has no file to stat.
 export function listSessionRefs(gitDir: string): string[] {
   const out = git(gitDir, undefined, [
     "for-each-ref",
@@ -340,32 +189,16 @@ export function deleteRef(gitDir: string, ref: string): void {
   git(gitDir, undefined, ["update-ref", "-d", ref]);
 }
 
-// Default prune expiry, never --prune=now: the latter is documented as unsafe with a concurrent
-// writer, and two seri processes in one project is an ordinary situation. Nothing recoverable is
-// lost by the delay — reachability is decided by refs, and the expiry window only governs when the
-// disk is reclaimed.
+// Default prune expiry, never --prune=now: git documents that as unsafe with a concurrent writer.
 export function gc(gitDir: string): void {
   git(gitDir, undefined, ["gc", "--quiet"]);
 }
 
-// `-z` on every command that reports paths, and never a `\n` split. core.quotePath defaults to
-// true, so without it git emits `"caf\303\251-\303\261.txt"` — surrounding quotes and octal
-// escapes included — for any path with a non-ASCII byte, a control character, a quote or a
-// backslash. Handing that raw string to rmSync fails with EFAULT on Windows *after* read-tree and
-// before checkout-index, leaving nothing restored; on POSIX `force: true` swallows the ENOENT and
-// the path is still reported as deleted, so the report claims a deletion that did not happen. NUL
-// separation also covers a filename containing a newline, which no `\n` split can.
+// core.quotePath defaults to true, so without -z git emits quoted octal escapes for non-ASCII paths.
 function paths(out: string): string[] {
   return out.split("\0").filter(Boolean);
 }
 
-// Split from the apply below so `/undo` can show the user what it is about to delete before it
-// deletes it. `read-tree` only rewrites the index, so the worktree is untouched until
-// applyRestore runs.
-//
-// The removal list comes from git's own `ls-files --others --exclude-standard` against the target
-// tree, so it is computed from the tree rather than from what a tool claimed to touch, and can
-// never contain a gitignored path.
 export function planRestore(
   gitDir: string,
   workTree: string,
@@ -378,43 +211,16 @@ export function planRestore(
     git(gitDir, workTree, ["ls-files", "--others", "--exclude-standard", "-z"]),
   );
 
-  // A path that is about to be deleted also shows up in the diff (the index still held it), so it
-  // is subtracted here — reporting a file as both restored and deleted is the kind of thing that
-  // makes a user stop believing the report.
   const removed = new Set(deleted);
   return { restored: changed.filter((path) => !removed.has(path)), deleted };
 }
 
-// `checkout-index -a -f` is additive: it recreates deleted files and overwrites modified ones, but
-// it does NOT remove a file created after the snapshot (nor does `checkout -f HEAD` — both
-// measured). Without the removal pass, undo would leave the agent's new files on disk while
-// reporting success, which is the worst failure a trust feature can have.
-//
-// Empty directories left behind by the removal are git's own behaviour — it does not track
-// directories — so `newdir/` survives with its contents gone. Asserted in the tests rather than
-// worked around.
-//
-// Not defensible from here: a backgrounded `bash` command still writing while `checkout-index`
-// runs. spawnCollect detaches into its own process group and resolves on the direct child's
-// close, so nothing outside the shell can know a grandchild is still going.
-//
-// Restore first, remove second, and the order is chosen for what a partial failure leaves behind.
-// `force: true` swallows only ENOENT; on Windows a file held open by a watcher or a dev server
-// throws EPERM/EBUSY, and with the removal running first that threw after the files were gone and
-// before anything had been checked out — nothing restored, files deleted, and printUndoPlan had
-// already told the user both lists. Checking out first means the same failure leaves the worktree
-// restored with some post-snapshot files still on it, which is recoverable by rerunning; the other
-// order is strictly worse than either state.
+// `checkout-index -a -f` is additive: it recreates and overwrites but does not remove files created after the snapshot.
 export function applyRestore(gitDir: string, workTree: string, deleted: string[]): void {
   git(gitDir, workTree, ["checkout-index", "-a", "-f"]);
   for (const path of deleted) rmSync(join(workTree, path), { force: true });
 }
 
-// Display only, and deliberately non-fatal. `git diff` is the one command here that can produce
-// real volume, and spawnSync reports a run past MAX_BUFFER_BYTES as an error rather than truncated
-// output — so a throw here failed `/undo` outright for exactly the large change a user most wants
-// to undo. Nothing about the restore depends on this string; the paths that are actually acted on
-// come from planRestore, which reports names and not contents and so cannot overflow the same way.
 export function diffTree(gitDir: string, workTree: string, tree: string): string {
   try {
     return git(gitDir, workTree, ["diff", tree]);
@@ -423,7 +229,6 @@ export function diffTree(gitDir: string, workTree: string, tree: string): string
   }
 }
 
-// exit 0 = ignored, exit 1 = not ignored. Measured at 23.5 ms per path.
 export function isIgnored(gitDir: string, workTree: string, path: string): boolean {
   const result = run(gitDir, workTree, ["check-ignore", "-q", "--", path]);
   if (result.status !== 0 && result.status !== 1) {
