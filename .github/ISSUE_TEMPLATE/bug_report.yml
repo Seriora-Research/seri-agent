@@ -15,7 +15,7 @@ body:
     attributes:
       label: seri version
       description: Output of `seri --version`. If you're running from source, the commit sha.
-      placeholder: seri 0.1.2
+      placeholder: seri 0.1.3
     validations:
       required: true
 
