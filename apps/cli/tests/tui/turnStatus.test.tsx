@@ -1,8 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// TurnStatus.tsx — real-timer test, matching inputThrottle.test.tsx's own harness (no fake-timer
-// library anywhere in this repo): `createTestRenderer`/`createRoot`, real `setTimeout`-based
-// sleep/settle, and `spyOn(globalThis, ...)` to assert scheduling without controlling time.
-
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
@@ -38,10 +34,7 @@ async function settle(setup: TestRendererSetup): Promise<void> {
   await setup.renderOnce();
 }
 
-// `useEffect` can land later than a fixed settle pass count when the runner is busy. Poll a
-// real macrotick (settle) instead of the renderer's scheduler: OpenTUI's waitFor stops as soon
-// as the scheduler reports idle, which can happen before React has run the passive effect that
-// publishes the host setter. Do not use Date.now() as a deadline here — the key tests mock it.
+// OpenTUI waitFor stops when the scheduler reports idle, which can be before the passive effect publishes the host setter; do not use Date.now() as a deadline here, the key tests mock it.
 async function waitUntil(
   setup: TestRendererSetup,
   pred: () => boolean,
@@ -57,8 +50,8 @@ async function waitUntil(
 
 async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   createRoot(setup.renderer).render(node);
-  await settle(setup); // commits the mount
-  await settle(setup); // lets the passive useEffect above run and schedule its interval
+  await settle(setup);
+  await settle(setup);
 }
 
 describe("TurnStatus", () => {
@@ -68,11 +61,9 @@ describe("TurnStatus", () => {
 
     await mount(setup, <TurnStatus startedAt={Date.now()} tokenProgress={ZERO_TOKEN_PROGRESS} />);
     await sleep(1100);
-    await settle(setup); // flushes the 1Hz tick's own setState into a render
+    await settle(setup);
 
-    // Any positive elapsed-seconds value, not exactly "1s": a CI scheduler delaying the interval
-    // callback or render by more than a second is a real, harmless possibility this assertion must
-    // tolerate — the only thing under test is that elapsed time advances past "0s" at all.
+    // Any positive elapsed, not exactly "1s": a CI scheduler delaying the interval by more than a second is harmless.
     expect(setup.captureCharFrame()).toMatch(/\b[1-9]\d*s\b/);
   });
 
@@ -152,9 +143,6 @@ describe("TurnStatus", () => {
     expect(frame).toMatch(/\d+s/);
   });
 
-  // `truncate`/`wrapMode="none"` (TurnStatus.tsx's own comment: app.tsx reserves exactly one row
-  // for this component) keep a long elapsed+token string on one row instead of soft-wrapping
-  // onto a second, the same fix `ErrorLine.tsx`/`ListRow.tsx` already apply to their own rows.
   test("truncates to one row instead of soft-wrapping onto a second row on a narrow terminal", async () => {
     const setup = await createTestRenderer({ width: 10, height: 5 });
     mountedRenderers.push(setup);
@@ -180,10 +168,6 @@ describe("TurnStatus", () => {
     for (const line of lines.slice(1)) expect(line.trim()).toBe("");
   });
 
-  // The live input estimate must be visible on the very FIRST rendered frame of a turn — before
-  // any tick, before any real usage event — since cli.ts computes it upfront from the turn's own
-  // newly-submitted text (turn-started's `inputEstimate`), unlike the output estimate, which only
-  // grows once text starts streaming.
   test("renders the live input estimate on the very first frame, with no tick and no reconciliation", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
@@ -249,22 +233,13 @@ describe("TurnStatus", () => {
 
     const clearIntervalSpy = spyOn(globalThis, "clearInterval");
     root.unmount();
-    // `unmount` (createRoot's own `cleanup`, @opentui/react) commits the teardown via
-    // `flushSyncWork`, but a plain `useEffect` cleanup (as opposed to `useLayoutEffect`) still runs
-    // as a passive effect on its own tick, not synchronously inside that flush — a real event-loop
-    // tick is what lets React actually run it before this test reads the spy.
+    // @opentui/react unmount flushSyncWork still runs a plain useEffect cleanup on its own tick, not inside that flush.
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(clearIntervalSpy).toHaveBeenCalled();
   });
 });
 
-// A stand-in for app.tsx's own `state.turn !== undefined && <TurnStatus key={...} .../>`
-// conditional-mount site, driven by a real `useState` inside a PERSISTENT tree (not a fresh
-// `root.render()` call per turn, which would exercise a different, top-level reconciliation path
-// than the nested one app.tsx's own long-lived component tree actually goes through). `withKey`
-// toggles between app.tsx's real `key={startedAt}` and a fixed key, so the same harness proves both
-// the fix and its own negative control.
 function TurnStatusHost({
   withKey,
   onReady,
@@ -283,15 +258,6 @@ function TurnStatusHost({
   );
 }
 
-// app.tsx's own `key={state.turn.startedAt}` on the conditionally-mounted TurnStatus: without a
-// changed key, a prop-only update reuses the existing fiber, and this component's own
-// `useState(() => Date.now())` initializer — which only runs on a genuine mount — does not re-run.
-// `Date.now()` is mocked here (not real elapsed time) so both scenarios below are deterministic:
-// each turn's `startedAt` is set to MATCH whatever `Date.now()` is mocked to return at that moment,
-// so a fresh mount's own `now` always lands on `startedAt` (elapsed "0s"), while a stale,
-// carried-over `now` from the FIRST mount lands far away from the second turn's `startedAt` (a
-// large, wrong elapsed) — the two are unambiguous in the rendered frame regardless of how much real
-// wall-clock time this test itself takes to run.
 describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mounts it", () => {
   test("a changed key (app.tsx's real behavior) forces a fresh mount for the new turn's own now", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
@@ -315,7 +281,6 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
         "first turn never rendered 0s",
       );
 
-      // The next turn, with a genuinely different startedAt.
       nowSpy.mockReturnValue(500);
       setStartedAt?.(500);
       await waitUntil(
@@ -328,8 +293,6 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
     }
   });
 
-  // The negative control: the identical transition, but with a key that does NOT change — proving
-  // the fresh-mount guarantee above genuinely depends on the key, not on something else.
   test("without a key change, the same transition reuses the stale now instead", async () => {
     const setup = await createTestRenderer({ width: 40, height: 5 });
     mountedRenderers.push(setup);
@@ -354,8 +317,7 @@ describe("TurnStatus: the key app.tsx supplies decides whether a new turn re-mou
 
       nowSpy.mockReturnValue(500);
       setStartedAt?.(500);
-      // The reused instance's `now` is still 100_000 (the first mount's value, never re-initialized)
-      // against the new `startedAt` of 500 — a 99_500ms elapsed ("1m 39s"), not "0s".
+      // The reused now is 100_000 against startedAt 500, which is 99_500ms ("1m 39s"), not "0s".
       await waitUntil(
         setup,
         () => setup.captureCharFrame().includes("1m 39s"),

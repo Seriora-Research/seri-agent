@@ -75,9 +75,7 @@ describe("visibleTranscriptWindow", () => {
     expect(win.bottomSpacer).toBe(length - win.end);
   });
 
-  // App's first layout frame reports scrollTop=0 even while sticky is still true.
-  // Treating that as Home would mount the oldest rows and leave the tail in the
-  // bottom spacer — follow-tail would show blank. Sticky must win.
+  // OpenTUI's first layout frame reports scrollTop=0 while sticky is still true; sticky must win.
   test("sticky with scrollTop 0 still tail-walks, not Home", () => {
     const length = 80;
     const offsets = offsetsFromHeights(heightsOf(length), length);
@@ -133,10 +131,4 @@ describe("visibleTranscriptWindow", () => {
     expect(win.bottomSpacer).toBe(0);
   });
 
-  // Negative control, recorded rather than executed: feeding the scrollbox
-  // `transcript.slice(start, end)` with both spacers at 0 collapses
-  // `content.height` to the mounted slice. Home then sets scrollTop=0 onto
-  // that short content, so the frame shows the old tail sitting at the new
-  // top and the App.test.tsx `line 0` assertions fail. Spacers are what
-  // keep a mount window from shrinking scrollHeight.
 });

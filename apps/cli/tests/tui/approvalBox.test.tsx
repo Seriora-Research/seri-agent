@@ -1,8 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// ApprovalBox.tsx (apps/cli/src/tui/components/ApprovalBox.tsx), the OpenTUI port of the old
-// panels/ApprovalBox.tsx. Mirrors inputBox.test.tsx's own harness (settle/mount) and its own
-// finding: @opentui/react's reconciler needs a second settled render pass after mount before
-// useKeyboard's subscription is live.
+// @opentui/react needs a second settled pass after mount before useKeyboard is live.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -11,10 +8,7 @@ import type { ReactNode } from "react";
 import type { ApprovalAnswer } from "../../src/loop/loop";
 import { ApprovalBox } from "../../src/tui/components/ApprovalBox";
 
-// Each `createTestRenderer()` call registers its own listener on the process-wide
-// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
-// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
-// whatever this file's own tests created.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -28,12 +22,7 @@ async function settle(setup: TestRendererSetup): Promise<void> {
   await setup.renderOnce();
 }
 
-// One settle after pressEnter can return before useKeyboard delivers the key, so `answers`
-// stays []. Poll a real 20ms tick instead of 50 zero-delay macroticks: on a loaded macOS CI
-// runner those 50 passes finish in ~90ms, before a delayed useKeyboard useEffect has subscribed,
-// and a pressKey emitted then is dropped. OpenTUI's waitFor is the wrong helper: it stops when
-// the scheduler reports idle, which can happen before the handler runs. A second press after
-// 400ms covers the dropped-key case without doubling when the first press already landed.
+// On loaded macOS CI, 50 zero-delay passes finish in ~90ms before useKeyboard has subscribed; OpenTUI waitFor stops at scheduler idle, so this polls 20ms and retries the press after 400ms.
 async function waitUntil(
   setup: TestRendererSetup,
   pred: () => boolean,

@@ -411,8 +411,6 @@ describe("dispatchConfigList (via onConfigBack)", () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  // Guards the existing fix against regression and pins the symmetry item 1 restores between
-  // /setup, /config and /permissions.
   test("a corrupted config.json refreshes the list instead of closing the panel", () => {
     writeFileSync(join(configDir, "config.json"), "{ not json");
     const { actions, dispatch } = actionsCollector();
@@ -430,20 +428,13 @@ describe("dispatchConfigList (via onConfigBack)", () => {
   });
 });
 
-// The TUI header's effort-tier suffix (app.tsx) reads `state.config` via `loadReasoningEffortConfig`
-// and has no turn to wait for on a /config-only edit — regression coverage for the gap a review
-// found: saving/unsetting a config value here used to dispatch nothing, so the header kept showing
-// whatever it last saw until the next turn ran.
 describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/onConfigUnset)", () => {
   let configDir: string;
   let originalReasoningEffort: string | undefined;
 
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), "seri-tui-handlers-test-"));
-    // resolveConfigValue (config/config.ts) is env-first, so a developer's own shell exporting this
-    // would make loadReasoningEffortConfig see it regardless of what these tests write to
-    // config.json. Saved, not just deleted: bun runs every test file in one process, so leaving it
-    // deleted here would affect every test after this describe block too.
+    // resolveConfigValue is env-first; restore the var because bun shares one process across files.
     originalReasoningEffort = process.env.SERI_REASONING_EFFORT;
     delete process.env.SERI_REASONING_EFFORT;
   });
@@ -454,10 +445,6 @@ describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/
     else process.env.SERI_REASONING_EFFORT = originalReasoningEffort;
   });
 
-  // A latent gap a review found: this is the only one of the three /config write paths that
-  // toggles rather than saves/unsets, and it was the one still missing this dispatch after the
-  // other two were fixed — every boolean key happens not to be config-derived display state today,
-  // which is exactly why it went unnoticed rather than why it was safe.
   test("toggling a boolean config value dispatches config-updated with the fresh record", () => {
     const { actions, dispatch } = actionsCollector();
     const { onConfigSelect } = createConfigHandlers({
@@ -468,8 +455,6 @@ describe("config-updated live dispatch (via onConfigSelect/onConfigValueEntered/
 
     onConfigSelect("SERI_VERIFY_ENABLED");
 
-    // configBoolean(undefined) is true (config.ts: `value !== "false"`), so the very first toggle
-    // of an unset key flips it to "false", not "true".
     expect(actions).toContainEqual({
       type: "config-updated",
       config: { SERI_VERIFY_ENABLED: "false" },
@@ -553,10 +538,6 @@ describe("dispatchPermissionsList (via onPermissionsBack)", () => {
     rmSync(worktree, { recursive: true, force: true });
   });
 
-  // decidePermissionsOpen's own loadGrants call does NOT throw on a malformed permissions.yaml —
-  // it degrades to an empty result and reports through the onWarning callback instead, which
-  // dispatchPermissionsList wires straight to command-error (warnOnMalformedStore). The list step
-  // still refreshes successfully right after, unlike the actual-throw case below.
   test("a malformed permissions.yaml surfaces the warning as a command-error", () => {
     writeFileSync(join(permissionsDir, "permissions.yaml"), ":::not yaml:::");
     const { actions, dispatch } = actionsCollector();
@@ -589,10 +570,6 @@ describe("dispatchPermissionsList (via onPermissionsBack)", () => {
   });
 });
 
-// createEffortHandlers is the plumbing
-// leftoverInput flows through end-to-end — verified directly at the unit level, since
-// EffortPanel itself never produces a non-undefined leftoverInput today (it has no text-entry/
-// paste concept — see EffortPanel.tsx's own comment).
 describe("createEffortHandlers", () => {
   test("onEffortSelected dispatches effort-resolved with the tier and leftoverInput", () => {
     const { actions, dispatch } = actionsCollector();

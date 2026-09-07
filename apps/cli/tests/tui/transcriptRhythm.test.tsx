@@ -1,8 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// spacing.test.ts proves GAP_TABLE's values and reducer.test.ts proves nothing fake is pushed into
-// the transcript to produce a blank row. Neither proves the margin reaches the screen. This does,
-// by rendering TranscriptList and counting the rows between entries in the frame.
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseColor } from "@opentui/core";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -13,8 +9,7 @@ import { TranscriptList } from "../../src/tui/components/TranscriptList";
 import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 
-// See inputBox.test.tsx: each createTestRenderer registers its own listener on the process-wide
-// TerminalConsoleCache singleton, and leaking those across files makes order-dependent flakiness.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -35,8 +30,7 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   await settle(setup);
 }
 
-// The frame is padded to the renderer's full height, so trailing blanks are the empty screen below
-// the content, not rhythm. Only rows between the first and last painted row count.
+// The frame is padded to the renderer height, so trailing blanks are empty screen, not rhythm.
 function paintedRows(setup: TestRendererSetup): string[] {
   const rows = setup
     .captureCharFrame()
@@ -54,9 +48,7 @@ async function render(transcript: TranscriptEntry[]): Promise<string[]> {
   return paintedRows(setup);
 }
 
-// An assistant row shows as a bare "●" here: `<markdown>` parses on the tree-sitter client, which
-// has not resolved by the time this harness captures. The bullet is painted by the row itself, so
-// it still pins where the row landed, which is all these tests read.
+// <markdown> has not resolved on the tree-sitter client by capture time; the row bullet still pins where the assistant row landed.
 describe("transcript vertical rhythm", () => {
   test("a user turn is fenced by a blank row on each side", async () => {
     const rows = await render([

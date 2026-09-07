@@ -1,10 +1,5 @@
 /** @jsxImportSource @opentui/react */
-// ModelPicker.tsx (apps/cli/src/tui/components/ModelPicker.tsx), the OpenTUI port of the old
-// panels/ModelPicker.tsx. Mirrors inputBox.test.tsx's own harness (settle/mount). Also the
-// re-test site for the documented Yoga flexShrink arbitration bug (ModelPicker.tsx's own filter-row
-// comment): a bare `<text>` cursor sibling (not wrapped in its own `<box>`) reliably keeps its own
-// space at every terminal width tried here, so the manual JS truncation workaround from the Ink
-// version is not carried over.
+// A bare <text> cursor sibling keeps its space at every width tried here, so the Ink Yoga flexShrink truncation workaround is not carried over.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing";
@@ -14,10 +9,7 @@ import type { ReactNode } from "react";
 import { ModelPicker } from "../../src/tui/components/ModelPicker";
 import type { ModelPickerEntry } from "../../src/tui/state/commands";
 
-// Each `createTestRenderer()` call registers its own listener on the process-wide
-// `TerminalConsoleCache` singleton (see App.test.tsx's own comment on this) — leaking it across
-// test FILES within one bun test process causes order-dependent flakiness. `afterEach` destroys
-// whatever this file's own tests created.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -146,9 +138,7 @@ describe("ModelPicker (OpenTUI)", () => {
     );
 
     setup.mockInput.pressEscape();
-    // A bare ESC byte is ambiguous with the start of every other escape sequence (arrow keys,
-    // etc.) — the parser waits out its own 20ms disambiguation timeout before emitting it as a
-    // standalone "escape" keypress, unlike an already-unambiguous multi-byte sequence.
+    // OpenTUI holds a bare ESC for a ~20ms disambiguation window before emitting it as escape.
     await new Promise((resolve) => setTimeout(resolve, 30));
     await settle(setup);
 
@@ -191,9 +181,6 @@ describe("ModelPicker (OpenTUI)", () => {
     expect(leftover).toBe("next task");
   });
 
-  // Re-test of the Ink-side Yoga flexShrink arbitration bug (documented in ModelPicker.tsx's own
-  // filter-row comment): the cursor must remain visible at every width, even once the filter query
-  // and the row content can no longer all fit on one line.
   for (const width of [80, 43, 42, 30, 20]) {
     test(`cursor stays visible at width ${width} with a long filter query`, async () => {
       const setup = await createTestRenderer({ width, height: 10 });
@@ -202,9 +189,7 @@ describe("ModelPicker (OpenTUI)", () => {
       await setup.mockInput.typeText("x".repeat(60));
       await settle(setup);
 
-      // The cursor renders as a single space — captureCharFrame() returns plain
-      // characters, so this only asserts the row didn't go blank (the actual bug's symptom: the
-      // whole line, including the "> " prompt, vanished) rather than the space's own styling.
+      // The cursor is a single space; captureCharFrame has no styling, so this only asserts the row did not go blank.
       const frame = setup.captureCharFrame();
       expect(frame).toContain(">");
     });
@@ -237,8 +222,6 @@ describe("ModelPicker (OpenTUI)", () => {
     expect(frame).toContain("$0.15/$0.60");
   });
 
-  // Re-test of ui/ListRow.tsx's own truncate-with-multiple-children bug (see that file's comment):
-  // a selectable row whose label overflows the terminal width must still render, not go blank.
   test("a row whose label overflows the terminal width still renders, not blank", async () => {
     const longEntries = [
       entry(
