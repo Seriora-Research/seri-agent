@@ -14,7 +14,7 @@ import { createMcpClients } from "../../src/mcp/client";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
-import { createArchivistState } from "../../src/memory/archivist";
+import { createArchivistState, drainArchivist, ARCHIVIST_TOOL_CALL_INTERVAL } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
@@ -270,6 +270,57 @@ describe("driveLoop options", () => {
       { composeSubagents: false, runArchivist: false },
     );
     expect(recorded).toBe(0);
+  });
+
+  test("a tool-count archivist does not block driveLoop returning", async () => {
+    const prepared = preparedStub();
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const toolCalls: LoopEvent[] = Array.from({ length: ARCHIVIST_TOOL_CALL_INTERVAL }, () => ({
+      type: "tool-call",
+      name: "read_file",
+      args: {},
+    }));
+    async function* fake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      if ((opts.system ?? "").includes("You are seri's archivist")) {
+        started = true;
+        await hold;
+        yield { type: "done", reason: "no-tool-call" };
+        return opts.messages;
+      }
+      for (const event of toolCalls) yield event;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+    const state = createArchivistState(prepared.session);
+    const recorded: unknown[] = [];
+    prepared.trajectory.recordArchivist = (report) => {
+      recorded.push(report);
+    };
+
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      state,
+      undefined,
+      { composeSubagents: false },
+    );
+
+    expect(result.archivist).toBeUndefined();
+    expect(recorded).toHaveLength(0);
+    expect(started).toBe(true);
+    release();
+    await drainArchivist(state);
+    expect(recorded).toHaveLength(1);
   });
 });
 

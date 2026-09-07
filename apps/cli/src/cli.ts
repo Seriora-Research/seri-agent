@@ -113,6 +113,7 @@ import {
   type ArchivistReport,
   type ArchivistState,
   createArchivistState,
+  drainArchivist,
   resetArchivistForRewind,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
@@ -1534,6 +1535,16 @@ async function runTui(
               ? { askQuestions: tuiAskPlanQuestions, configDir }
               : undefined,
           askUser: askUserPark.present,
+          onArchivist: (report) => {
+            archivist = report;
+            pushTranscriptLine(dispatch, archivistStatsLine(report), { muted: true });
+            for (const line of archivistStagedLines(report)) {
+              pushTranscriptLine(dispatch, line, { muted: true });
+            }
+            if (report.summary !== undefined) {
+              pushTranscriptLine(dispatch, report.summary, { muted: true, markdown: true });
+            }
+          },
         },
       );
       usage = {
@@ -1546,15 +1557,6 @@ async function runTui(
       archivist = result.archivist;
       if (result.directSummary !== undefined) {
         pushTranscriptLine(dispatch, result.directSummary, { muted: true, markdown: true });
-      }
-      if (result.archivist) {
-        pushTranscriptLine(dispatch, archivistStatsLine(result.archivist), { muted: true });
-        for (const line of archivistStagedLines(result.archivist)) {
-          pushTranscriptLine(dispatch, line, { muted: true });
-        }
-        if (result.archivist.summary !== undefined) {
-          pushTranscriptLine(dispatch, result.archivist.summary, { muted: true, markdown: true });
-        }
       }
       if (result.submittedPlan !== undefined) {
         dispatch({ type: "plan-review-requested", plan: result.submittedPlan });
@@ -1608,8 +1610,12 @@ async function runTui(
       );
       await renderer.idle();
       deliverSignal("SIGINT");
-      void currentTurn.then(finishQuit);
+      void currentTurn.then(async () => {
+        await drainArchivist(archivistState);
+        finishQuit();
+      });
     } else {
+      await drainArchivist(archivistState);
       finishQuit();
     }
   }
@@ -2303,6 +2309,7 @@ async function finishCliRun(
     const shouldRunTurn =
       start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
     if (shouldRunTurn) {
+      const oneShotArchivist = createArchivistState(prepared.session);
       runResult = await driveLoop(
         prepared,
         ctx,
@@ -2314,8 +2321,12 @@ async function finishCliRun(
         promptChannel === "live"
           ? makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd)
           : undefined,
-        createArchivistState(prepared.session),
+        oneShotArchivist,
       );
+      await drainArchivist(oneShotArchivist);
+      if (runResult.archivist === undefined && oneShotArchivist.lastReport !== undefined) {
+        runResult = { ...runResult, archivist: oneShotArchivist.lastReport };
+      }
     } else {
       runResult = {
         doneReason: undefined,

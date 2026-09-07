@@ -135,8 +135,8 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   { kind: "egress-evasion", pattern: /\bproxychains/i, label: "proxychains" },
   { kind: "egress-evasion", pattern: /\b(?:nc|ncat)\b[\s\S]*\s-e(?:\s|$)/i, label: "nc -e" },
   { kind: "egress-evasion", pattern: /\bncat\b[\s\S]*--(?:exec|sh-exec)\b/i, label: "ncat --exec" },
-  { kind: "egress-evasion", pattern: /\/dev\/tcp\
-  { kind: "egress-evasion", pattern: /\/dev\/udp\
+  { kind: "egress-evasion", pattern: /\/dev\/tcp\//, label: "/dev/tcp/" },
+  { kind: "egress-evasion", pattern: /\/dev\/udp\//, label: "/dev/udp/" },
   {
     kind: "egress-evasion",
     pattern: /\bcurl\b[\s\S]*\s-x(?:\s|$|=|\S)/,

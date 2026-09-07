@@ -369,4 +369,35 @@ describe("runLoop compaction trigger", () => {
     expect(events.filter((e) => e.type === "compacted").length).toBeGreaterThanOrEqual(2);
     expect(model.doGenerateCalls.length).toBeGreaterThanOrEqual(2);
   });
+
+  test("onBeforeCompact runs before the summarizer evicts messages", async () => {
+    const order: string[] = [];
+    const messages = fatHistory(12, 400);
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => {
+        order.push("summarizer");
+        return summaryGenerate();
+      },
+    });
+
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 2_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+        onBeforeCompact: async () => {
+          order.push("archivist");
+        },
+      }),
+    );
+
+    expect(order[0]).toBe("archivist");
+    expect(order).toContain("summarizer");
+  });
 });

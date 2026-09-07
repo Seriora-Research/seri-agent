@@ -18,6 +18,8 @@ import {
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
   createArchivistState,
+  drainArchivist,
+  enqueueArchivist,
   maybeRunArchivist,
   observeArchivistEvent,
   resetArchivistForRewind,
@@ -125,7 +127,38 @@ describe("createArchivistState", () => {
     expect(s.messageCursor).toBe(3);
     expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
+    expect(s.lastReport).toBeUndefined();
   });
+
+describe("enqueueArchivist", () => {
+  test("serializes tasks and drainArchivist waits for the last one", async () => {
+    const s = createArchivistState(emptySession());
+    const order: number[] = [];
+    let releaseFirst: () => void = () => {};
+    const firstHold = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = enqueueArchivist(s, async () => {
+      order.push(1);
+      await firstHold;
+      order.push(2);
+      return undefined;
+    });
+    const second = enqueueArchivist(s, async () => {
+      order.push(3);
+      return undefined;
+    });
+
+    await Promise.resolve();
+    expect(order).toEqual([1]);
+    releaseFirst();
+    await drainArchivist(s);
+    expect(order).toEqual([1, 2, 3]);
+    await first;
+    await second;
+  });
+});
 
 
 
@@ -621,6 +654,13 @@ describe("ARCHIVIST_PROMPT", () => {
     expect(ARCHIVIST_PROMPT).toMatch(/one line/i);
     expect(ARCHIVIST_PROMPT).toContain("$ARGUMENTS");
     expect(ARCHIVIST_PROMPT).toMatch(/durable false/i);
+  });
+
+  test("forbids tool-use constraints as facts or as standing skills", () => {
+    expect(ARCHIVIST_PROMPT).toMatch(/do not run the full test suite/i);
+    expect(ARCHIVIST_PROMPT).toMatch(/not how to use tools/i);
+    expect(ARCHIVIST_PROMPT).toMatch(/standing constraint/i);
+    expect(ARCHIVIST_PROMPT).not.toMatch(/bun test runs the whole suite/i);
   });
 });
 

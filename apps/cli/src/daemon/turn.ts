@@ -3,7 +3,7 @@ import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import type { ApprovalPrompt } from "../loop/loop";
 import { closeMcpClients } from "../mcp/client";
-import { createArchivistState } from "../memory/archivist";
+import { createArchivistState, drainArchivist } from "../memory/archivist";
 import { driveLoop, exitCodeFromDriveResult } from "../runtime/drive";
 import { prepareSession } from "../runtime/prepare";
 import type { SessionDatabase } from "../session/database";
@@ -62,6 +62,9 @@ export function createAttendedExecuteTurn(opts: {
         prepared.session,
         opts.database.getArchivistCursor(input.sessionId),
       );
+      const persistCursor = (): void => {
+        opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
+      };
       const result = await driveLoop(
         prepared,
         ctx,
@@ -77,9 +80,11 @@ export function createAttendedExecuteTurn(opts: {
           signal: input.signal,
           bindProcessCancel: false,
           composeSubagents: true,
+          onArchivist: persistCursor,
         },
       );
-      opts.database.setArchivistCursor(input.sessionId, archivistState.messageCursor);
+      persistCursor();
+      void drainArchivist(archivistState).then(persistCursor);
       return { exitCode: exitCodeFromDriveResult(result) };
     } finally {
       closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
