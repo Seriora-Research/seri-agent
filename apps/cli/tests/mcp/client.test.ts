@@ -26,7 +26,7 @@ function fakeHandle(overrides: Partial<McpClientHandle> = {}): McpClientHandle {
   };
 }
 
-// Every DialFn in this file is a fake. No test may contact a network.
+
 describe("dial once, reuse for the session", () => {
   test("callMcpTool twice against one server dials once", async () => {
     let dialCount = 0;
@@ -72,10 +72,10 @@ describe("a failed dial is evicted", () => {
   });
 });
 
-// A fake whose call settles only on an abort it never received would otherwise hang forever
-// rather than fail — exactly what the client.ts negative control hit when the signal was dropped
-// from callTool's options, and it burned an outer 30s kill with no assertion message. Racing the
-// call against a short timer turns "never rejects" into a fast, named failure instead.
+
+
+
+
 async function expectRejectsPromptly(promise: Promise<unknown>, ms = 200): Promise<void> {
   let timedOut = false;
   const timer = new Promise<never>((_resolve, reject) => {
@@ -105,9 +105,9 @@ describe("the signal reaches both the dial and the call", () => {
     const controller = new AbortController();
     const handle: McpClientHandle = {
       listTools: async () => [],
-      // "prime" resolves immediately so the call below that dials and caches the handle does not
-      // itself hang waiting on a signal nobody aborts; every other name hangs until aborted, which
-      // is what makes the signal reaching the CALL (not the dial) the thing this test exercises.
+
+
+
       callTool: (name, _args, opts) =>
         name === "prime"
           ? Promise.resolve("primed")
@@ -119,10 +119,10 @@ describe("the signal reaches both the dial and the call", () => {
     const clients = createMcpClients(async () => handle);
     await callMcpTool(clients, spec(), "prime", {});
     const promise = callMcpTool(clients, spec(), "web_search", {}, controller.signal);
-    // The reused dial is itself a resolved promise, so callMcpTool still crosses a microtask
-    // boundary before it reaches handle.callTool and registers the abort listener. Aborting
-    // before that registration would fire on no listeners at all — a macrotask tick is what
-    // guarantees the call is actually in flight before the signal fires.
+
+
+
+
     await new Promise((resolve) => setTimeout(resolve, 0));
     controller.abort();
     await expectRejectsPromptly(promise);
@@ -164,8 +164,8 @@ describe("callTool flattens content to a string", () => {
 });
 
 describe("a dial that only needs a login says so", () => {
-  // What the model actually reads back. "is unreachable" would make it report a broken server and
-  // the user would never learn the one command that fixes it.
+
+
   test("callMcpTool names /mcp auth instead of reporting the server unreachable", async () => {
     for (const err of [new UnauthorizedError(), new McpLoginRequiredError("exa")]) {
       const clients = createMcpClients(async () => {
@@ -219,9 +219,9 @@ describe("mcpServerStatus", () => {
     expect(mcpServerStatus(clients, "exa")).toEqual({ state: "needs-auth" });
   });
 
-  // The refuse persona (mcp/authProvider.ts) throws before the transport ever sends a request, so
-  // this never becomes an UnauthorizedError — without isAuthRequired covering both it would land
-  // on "failed" and the panel would offer no way out.
+
+
+
   test("needs-auth when the dial rejects with McpLoginRequiredError", async () => {
     const clients = createMcpClients(async () => {
       throw new McpLoginRequiredError("exa");
@@ -307,8 +307,8 @@ describe("closeMcpClients", () => {
     closeMcpClients(clients, (m) => warnings.push(m));
     expect(clients.handles.size).toBe(0);
 
-    // The close call itself is fire-and-forget, chained through two `.then`/`.catch` hops on an
-    // already-resolved promise, so a macrotask tick is what reliably lets it settle.
+
+
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(closeCalls).toBe(1);
     expect(warnings).toEqual([]);

@@ -81,14 +81,14 @@ describe("loadMemoryFile / loadMemory", () => {
     const memory = loadMemory(ctx);
     expect(memory.user.label).toBe("USER.md");
     expect(memory.global.label).toBe("MEMORY.md");
-    // basename(worktree), never the hash token or the full path.
+
     expect(memory.project.label).toBe("harness/MEMORY.md");
     expect(memory.project.path).not.toContain("harness");
   });
 
-  // A trailing "\n" (any editor's default save behavior) would otherwise split into a phantom
-  // {date:"",text:"",line:""} entry via text.split("\n") — inflating entries.length and making an
-  // otherwise-empty file look non-empty.
+
+
+
   test("a file written with a trailing newline loads with the correct entry count, no phantom entry", () => {
     const ctx = makeCtx();
     const path = memoryFilePath("user", ctx);
@@ -100,13 +100,13 @@ describe("loadMemoryFile / loadMemory", () => {
     expect(file.text).toBe("- [2026-08-11] one entry");
   });
 
-  // The same phantom-entry bug specifically breaks section()'s OWN "(nothing recorded yet)" case
-  // (renderMemoryTier's per-file `entries.length === 0` check — not the whole-tier trim-based
-  // shortcut, which a trailing-newline-only file already satisfies on its own and would mask this
-  // bug if that were the only thing asserted). Reproduced with the user file genuinely non-empty
-  // (so the whole-tier shortcut does NOT short-circuit rendering) and the global file holding
-  // nothing but a trailing newline: its own section must still say "(nothing recorded yet)", not
-  // render a stray blank line for the phantom entry.
+
+
+
+
+
+
+
   test("a global file with just a trailing newline still renders '(nothing recorded yet)', not a stray blank line", () => {
     const ctx = makeCtx();
     applyWrite(
@@ -120,13 +120,13 @@ describe("loadMemoryFile / loadMemory", () => {
 
     const lines = renderMemoryTier(loadMemory(ctx)).split("\n");
     const headingIndex = lines.findIndex((l) => l.startsWith("## Global notes"));
-    // The bug this guards against: a phantom entry's own `.line` is "", so section() would emit a
-    // literal blank line here instead of "(nothing recorded yet)".
+
+
     expect(lines[headingIndex + 1]).toBe("(nothing recorded yet)");
   });
 
-  // CRLF would blow the char cap differently on Windows vs Linux (the same class of issue
-  // computeWrite's own \n-only write already avoids); loading normalizes it away.
+
+
   test("a CRLF file loads with LF-only text and the CRLF-inflated char count is not used", () => {
     const ctx = makeCtx();
     const path = memoryFilePath("user", ctx);
@@ -246,11 +246,11 @@ describe("computeWrite: action semantics", () => {
     ).toThrow(/no entry contains/);
   });
 
-  // "".includes() is always true — without this guard, an empty target would match every entry,
-  // and in a file with exactly one entry that match is unique, so remove/replace would silently
-  // succeed against zero genuine match. The schema (memory/tool.ts) already blocks this from a
-  // model call, but computeWrite is also reached from pending.ts's approve/diff re-validation
-  // path against a hand-editable .pending file the schema never sees — this test covers THAT path.
+
+
+
+
+
   test("an empty target throws rather than matching every entry", () => {
     const file: MemoryFile = {
       ...emptyFile(),
@@ -284,8 +284,8 @@ describe("computeWrite: action semantics", () => {
 describe("computeWrite: cap enforcement (BUILD-PLAN verify bar)", () => {
   test("user cap: an add that lands over 1375 chars throws, lists every current entry, and the file on disk stays byte-identical to a captured before that differs from the write attempt", () => {
     const ctx = makeCtx();
-    // Seed 1340 chars of entries whose TEXT DIFFERS from the attempted write below — the negative
-    // control code-quality.md requires: a self-comparison would pass vacuously.
+
+
     const seedEntry = `- [2026-08-01] ${"x".repeat(1_320)}`;
     applyWrite(
       {
@@ -467,7 +467,7 @@ describe("renderArchivistMemory", () => {
     expect(rendered).not.toContain("You cannot edit these directly");
     expect(rendered).not.toContain("frozen for this session");
     expect(rendered).not.toContain("# Memory");
-    // Parent renderer still carries the intro — this function is not a replacement for it.
+
     expect(renderMemoryTier(loadMemory(ctx))).toContain("You cannot edit these directly");
   });
 });

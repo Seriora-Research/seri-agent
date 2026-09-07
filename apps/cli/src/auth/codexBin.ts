@@ -29,10 +29,10 @@ function quoteCmdPath(command: string): string {
   return `"${command.replace(/"/g, '""')}"`;
 }
 
-// Node and Bun cannot spawn a .cmd/.bat as the executable: uv_spawn returns EINVAL
-// (the kernel only CreateProcess's PE images). cmd.exe /d /s /c with a verbatim
-// command line is the same rewrite npm's shims need. Args here are the app-server
-// argv, not a user shell string.
+
+
+
+
 export function resolveCodexSpawn(
   command: string,
   args: readonly string[],

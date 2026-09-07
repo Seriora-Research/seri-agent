@@ -5,16 +5,16 @@ import { scanForInjection } from "../memory/injectionScan";
 import { isRoutableRole } from "../subagents/routes";
 import { existingSkillBody, type PendingSkill, stagePendingSkill } from "./pending";
 
-// A skill body is read on demand, so it costs nothing per turn the way a memory entry does and
-// needs no cap for that reason. This one is a different guard: an agent-authored file that grows
-// without bound is a runaway write, and a procedure that cannot be stated in this much text is one
-// a human should be writing rather than approving.
+
+
+
+
 export const MAX_SKILL_BODY_LENGTH = 8_000;
 const MAX_SKILL_DESCRIPTION_LENGTH = 500;
 
-// The same shape parseSkillFile enforces on load. Checked here too rather than only there, so the
-// archivist is told at write time instead of staging a file that would be skipped on the next
-// session start.
+
+
+
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
 export const skillWriteInputSchema = z.object({
@@ -34,20 +34,11 @@ const DESCRIPTION =
   `where the task's own subject belongs. Nothing is written to disk: the skill is staged for a ` +
   `human to read and approve first.`;
 
-/**
- * The archivist's second write path, alongside memory_write, and the only one seri has that
- * produces a whole file. Same discipline the memory write already carries: an injection scan
- * before anything is touched, required `reason`/`durable` provenance, and staging behind a
- * default-on preview rather than a direct write.
- *
- * Unlike memory_write there is no approval-off branch. A memory entry is one line into a file
- * outside the repository; a skill is a standing artifact that lands inside the user's own tree and
- * steers later sessions, so it always waits for a human.
- */
+
 export function makeSkillWriteTool(
   ctx: { configDir: string; worktree: string },
-  // The same seam makeMemoryWriteTool carries, for the same reason: the caller names what this run
-  // staged from the records themselves rather than diffing a queue two sessions can write to.
+
+
   opts: { onStaged?: (staged: PendingSkill) => void } = {},
 ) {
   return tool({
@@ -76,9 +67,9 @@ export function makeSkillWriteTool(
         );
       }
 
-      // Scanned across every field the model wrote, together, BEFORE anything is staged — the same
-      // ordering memory_write uses, and for the same reason: the queue is reviewed by a human who
-      // should never be shown a credential or a prompt-injection attempt to approve.
+
+
+
       const scan = scanForInjection(
         [args.name, args.description, args.body, args.reason].join("\n"),
       );
@@ -100,9 +91,9 @@ export function makeSkillWriteTool(
         new Date(),
       );
       opts.onStaged?.(staged);
-      // Told at write time, not discovered at approval time: the human's diff will show a replace,
-      // and the archivist should know it is proposing one so it can decide whether it really means
-      // to supersede what is already there.
+
+
+
       const replaces = existingSkillBody(ctx.worktree, name) !== undefined;
       return {
         staged: true,

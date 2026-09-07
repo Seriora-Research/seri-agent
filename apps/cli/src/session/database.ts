@@ -13,9 +13,9 @@ export { DATABASE_FILENAME };
 const CURRENT_SCHEMA_VERSION = 4;
 const BUSY_TIMEOUT_MS = 5_000;
 
-// Production layout is `<configDir>/sessions` and `<configDir>/trajectories`. Tests inject a
-// throwaway directory as the store itself; using dirname of that would chmod the system temp
-// root. Only peel off the layout leaf when it is actually present.
+
+
+
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
   const resolved = resolve(dir);
   return basename(resolved) === layoutLeaf ? dirname(resolved) : resolved;
@@ -366,15 +366,17 @@ export class SessionDatabase {
     ensureOwnerOnlyDir(configDir);
     this.database = new Database(join(configDir, DATABASE_FILENAME), { create: true });
     try {
-      // busy_timeout first: `journal_mode=WAL` is a write, and a second connection opening the
-      // same file hits SQLITE_BUSY on that pragma if the timeout is not already set.
+
+
+      // SQLITE_BUSY if another process has the same file and the timeout is not already set.
       this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
       this.migrate();
-      // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, so a missing FTS5 build
-      // would not throw. A hyphenated token is FTS column syntax (`fts-probe` means column
-      // `probe`), so the probe string has to be a bare term.
+
+
+
+      // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, hiding a missing FTS5 build. Hyphenated tokens are FTS column syntax, so the probe is a bare term.
       this.database
         .query("SELECT rowid FROM session_fts WHERE session_fts MATCH ? LIMIT 1")
         .all("probe");
@@ -578,10 +580,10 @@ export class SessionDatabase {
     ).map((row) => JSON.parse(row.json));
   }
 
-  // Selected and deleted in one transaction, not two statements: another seri process can resume a
-  // session this query has already called stale and append to it, and a delete outside the read's
-  // own snapshot would take that fresh record with the rest. Inside one, SQLite refuses the write
-  // instead, which the writer reports as a warning and the next session start retries.
+
+
+
+
   pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
     return this.database.transaction(() => {
       const stale = (

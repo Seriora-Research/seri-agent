@@ -36,7 +36,7 @@ describe("daemon-client", () => {
     });
     await client.health();
     for await (const _event of client.startTurn({ task: "x" })) {
-      // drain
+
     }
     server.stop();
     expect(headers.every((header) => header === "Bearer secret-token")).toBe(true);

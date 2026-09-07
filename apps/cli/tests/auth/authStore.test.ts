@@ -108,9 +108,9 @@ describe("expiresAtFrom", () => {
     expect(new Date(result as string).getTime()).toBeGreaterThanOrEqual(before + 300 * 1000);
   });
 
-  // Number.isFinite(expiresIn) alone does not guarantee Date.now() + expiresIn * 1000 stays
-  // inside Date's representable range (~±273,790 years from the epoch) — a huge-but-finite
-  // value produces an internally-invalid Date whose toISOString() would throw.
+
+
+
   test("a finite but out-of-Date-range expiresIn returns undefined instead of throwing", () => {
     expect(() => expiresAtFrom(1e300)).not.toThrow();
     expect(expiresAtFrom(1e300)).toBeUndefined();

@@ -97,9 +97,9 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
   });
 
-  // Nothing else in this file omits maxIterations, so nothing else observed DEFAULT_MAX_ITERATIONS
-  // and a revert of it was invisible to the suite. 500 mocked rounds rather than a smaller stand-in,
-  // because a stand-in only pins the wiring and not the pinned number itself.
+
+
+
   test("with no maxIterations option the run stops at the 500-turn default", async () => {
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
@@ -111,13 +111,13 @@ describe("runLoop", () => {
 
     expect(model.doStreamCalls).toHaveLength(500);
     expect(events.at(-1)).toEqual({ type: "done", reason: "max-iterations" });
-    // 60s, not 30s: measured on native Windows (bun 1.3.14), these 500 mocked rounds complete
-    // correctly in 33730 ms — 67.46 ms/round — so the old cap failed here while passing on Linux CI,
-    // which is the one platform combination nobody watching CI would ever see. Not a hang: the run
-    // finished with 500 rounds and `done: max-iterations`, measured with the cap lifted. The margin
-    // is ~1.8x rather than generous, because this test's cost is proportional to
-    // DEFAULT_MAX_ITERATIONS and a cap far above the real number would stop reporting a regression
-    // in per-round cost as anything but a slow suite.
+
+
+
+
+
+
+
   }, 60_000);
 
   test("yields messages-updated after appending the assistant message and after appending tool results", async () => {
@@ -144,11 +144,11 @@ describe("runLoop", () => {
     });
   });
 
-  // ai@7.0.48 defaults streamText's onError to `({ error }) => console.error(error)`
-  // (dist/index.js:8792), so every provider failure put Bun's inspection of the whole error object
-  // — request body, every response header including set-cookie, a node_modules stack — on stderr
-  // from inside the generator AGENTS.md documents as never touching stdout/stdin. The same error
-  // arrives on fullStream and is yielded below, so that print was a duplicate, not the only report.
+
+
+
+
+
   test("a provider error is surfaced as an event and never printed by the loop", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => {
@@ -170,15 +170,15 @@ describe("runLoop", () => {
     }
 
     expect(printed).toEqual([]);
-    // Proves the loop really ran and really reported the failure, so a green `printed` can only
-    // mean the print was suppressed rather than that nothing happened.
+
+
     expect(events).toEqual([{ type: "error", error: "Error: boom from provider" }]);
     expect(events.find((e) => e.type === "done")).toBeUndefined();
   });
 
-  // The payload is verbatim the `responseBody` of a live Groq 401 — a provider is free to reject
-  // with a plain object, and String() of one is "[object Object]", which names neither the failure
-  // nor its origin.
+
+
+
   test("a non-Error provider error renders its payload instead of [object Object]", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => {
@@ -193,9 +193,9 @@ describe("runLoop", () => {
     expect(errorEvent?.error).toContain("tool call validation failed");
     expect(errorEvent?.error).not.toBe("[object Object]");
 
-    // A bare string is the other non-Error shape in reach, and JSON.stringify wraps it in quotes:
-    // a rejection of "ENOENT: no such file" rendered as `"ENOENT: no such file"`, quotes included,
-    // both to the user and into the model's context.
+
+
+
     const stringModel = new MockLanguageModelV4({
       doStream: async () => {
         throw "ENOENT: no such file";
@@ -207,15 +207,15 @@ describe("runLoop", () => {
     expect(stringEvents.find((e) => e.type === "error")?.error).toBe("ENOENT: no such file");
   });
 
-  // ai@7.0.48 already retries a failed model call before the failure ever surfaces: streamText
-  // issues every call inside prepareRetries' wrapper (dist/index.js:9684) and that wrapper's
-  // default is 2 retries (dist/index.js:2789). Nothing in this repo passed maxRetries, so the
-  // retrying below was happening unstated and unobserved — this pins existing behaviour, it does
-  // not introduce it. onLanguageModelCallStart is the only per-attempt hook the SDK exposes:
-  // streamLanguageModelCall notifies it immediately before doStream (dist/index.js:8320) and the
-  // whole of that function runs inside the retry closure, so a second notification within one
-  // streamText call IS a retry. It carries neither the error nor the delay, which is why the event
-  // carries neither.
+
+
+
+
+
+
+
+
+
   test("a retryable 429 is retried and reported as a retry event", async () => {
     let attempts = 0;
     const model = new MockLanguageModelV4({
@@ -227,13 +227,13 @@ describe("runLoop", () => {
             url: "https://api.groq.com/openai/v1/chat/completions",
             requestBodyValues: {},
             statusCode: 429,
-            // The SDK's first backoff is 2000 ms (dist/index.js:2747); getRetryDelayInMs replaces
-            // it with a `retry-after-ms`/`retry-after` header when that is shorter
-            // (dist/index.js:2718). The elapsed assertion below is what makes that honouring
-            // visible rather than assumed: measured, this test runs in 79 ms with the header and
-            // 2084 ms with it renamed away. The bound sits at 1500 ms rather than nearer the
-            // measurement because this is a wall clock in CI: it only has to separate 79 from
-            // 2084, and every ms of headroom below 2084 is free.
+
+
+
+
+
+
+
             responseHeaders: { "retry-after-ms": "10" },
           });
         }
@@ -255,8 +255,8 @@ describe("runLoop", () => {
     expect(elapsed).toBeLessThan(1_500);
   });
 
-  // The negative control for the test above: a `retry` event that appeared here would mean the
-  // loop was announcing retries the SDK never performed.
+
+
   test("a non-retryable provider error is not retried and emits no retry event", async () => {
     let attempts = 0;
     const model = new MockLanguageModelV4({
@@ -428,11 +428,11 @@ describe("runLoop", () => {
     expect(usageEvent?.cost).toBeUndefined();
   });
 
-  // The exit that dropped 907 billed tokens. A call that streams text and then fails is charged
-  // for the text it streamed, and this path returned before the usage was ever read — on the one
-  // kind of turn whose cost is otherwise completely unaccounted for. Measured against ai@7.0.48:
-  // consuming the `error` part and then awaiting result.usage resolves with the provider's own
-  // numbers, so this is recoverable and was simply being discarded.
+
+
+
+
+
   test("emits the usage of a call that streamed text and then failed mid-stream", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () =>
@@ -461,10 +461,10 @@ describe("runLoop", () => {
     expect(usageEvents[0]?.usage.outputTokens).toBe(7);
   });
 
-  // Code-review finding: this exact usage event used to be yielded with no `cost` field at all —
-  // not even a defined "unknown" one — so `addCost` (cli.ts) treated it as "nothing new happened"
-  // and real billed tokens from a turn that streamed partway then failed silently vanished from a
-  // session's running cost total instead of degrading it to unknown.
+
+
+
+
   test("a turn that streams text and then fails mid-stream still reports a cost, not an absent one", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () =>
@@ -495,17 +495,17 @@ describe("runLoop", () => {
     const usageEvent = events.find(
       (e): e is Extract<LoopEvent, { type: "usage" }> => e.type === "usage",
     );
-    // Unlisted model -> reportFromCatalogPricing's own "unknown" case -- but a DEFINED
-    // CostReport, not an absent `cost` field, which is what addCost's contract needs to tell
-    // "nothing happened" apart from "something happened whose cost we can't compute".
+
+
+
     expect(usageEvent?.cost).toEqual({ amountUsd: undefined, status: "unknown", source: "none" });
   });
 
-  // The other half of that exit, and the reason the await is caught rather than bare: when the
-  // failure IS the call — doStream rejecting, nothing streamed — result.usage rejects with
-  // AI_NoOutputGeneratedError instead of resolving. That rejection lands in the same try that
-  // wraps the stream, so an uncaught await would report a SECOND, invented error on top of the
-  // provider's real one and hand the user "No output generated" as the cause of their failure.
+
+
+
+
+
   test("a call that produced no output reports the provider's error once and nothing else", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => {
@@ -539,7 +539,7 @@ describe("runLoop", () => {
     };
 
     const totalIterations = 25;
-    const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
+    const compactAtIteration = 11;
     const doStream = Array.from({ length: totalIterations }, (_, i) => {
       const inputTokens = i === compactAtIteration ? 6000 : 100;
       const path = i === 0 ? "marker.txt" : "a.txt";
@@ -577,15 +577,15 @@ describe("runLoop", () => {
     expect(compactedEvents).toHaveLength(1);
     expect(compactedEvents[0]?.evictedCount).toBeGreaterThan(0);
     expect(compactedEvents[0]?.tokensBefore).toBeGreaterThan(0);
-    // The summariser's own round-trip is billed like any other, and compactMessages has always
-    // returned its usage — the loop dropped it, so no caller could see it. These are doGenerate's
-    // usage(20, 10) above, which is the only place they can have come from.
+
+
+
     expect(compactedEvents[0]?.usage.inputTokens).toBe(20);
     expect(compactedEvents[0]?.usage.outputTokens).toBe(10);
     expect(model.doGenerateCalls).toHaveLength(1);
 
     expect(model.doStreamCalls).toHaveLength(totalIterations);
-    const compactedAtCallIndex = compactAtIteration + 1; // compaction runs before this iteration's streamText call
+    const compactedAtCallIndex = compactAtIteration + 1;
     const beforePromptSize = model.doStreamCalls[compactAtIteration]?.prompt.length ?? 0;
     const afterPromptSize = model.doStreamCalls[compactedAtCallIndex]?.prompt.length ?? 0;
     expect(afterPromptSize).toBeLessThan(beforePromptSize);
@@ -594,22 +594,22 @@ describe("runLoop", () => {
     expect(JSON.stringify(finalPrompt)).toContain(marker);
   });
 
-  // The compaction round-trip was the one model call in the repo whose retries were unobservable:
-  // maxRetries was stated on it, so a 429'd summariser was already being re-issued ~2 s and ~4 s
-  // apart, and the user saw nothing at all until `⚙ compacted` arrived — the "looks hung" symptom
-  // the retry event exists to remove, on a call they never asked for.
-  //
-  // onLanguageModelCallStart is NOT the hook here, unlike the streamText case above. Measured
-  // against ai@7.0.48 with a doGenerate that 429s once: doGenerate ran twice and the callback fired
-  // ONCE, because generateText notifies it before entering the retry wrapper (dist/index.js:5599,
-  // with the `retry(...)` at 5607) where streamText notifies from inside it. A middleware's
-  // wrapGenerate is what the retry wrapper re-invokes, and it ran twice — which is why
-  // compactMessages counts there.
+
+
+
+
+
+
+
+
+
+
+
   test("a retried compaction round-trip is reported as a retry event before the compacted event", async () => {
     const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
 
     const totalIterations = 25;
-    const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
+    const compactAtIteration = 11;
     const doStream = Array.from({ length: totalIterations }, (_, i) =>
       streamResult(
         toolCallChunks(
@@ -632,8 +632,8 @@ describe("runLoop", () => {
             url: "https://api.groq.com/openai/v1/chat/completions",
             requestBodyValues: {},
             statusCode: 429,
-            // Same 10 ms as the streamText retry test above, for the same reason: without the
-            // header this waits out the SDK's own 2000 ms first backoff.
+
+
             responseHeaders: { "retry-after-ms": "10" },
           });
         }
@@ -659,11 +659,11 @@ describe("runLoop", () => {
       }),
     );
 
-    // Proves the SDK really retried, so the assertion below cannot go green on a run where there
-    // was no retry to report.
+
+
     expect(generateAttempts).toBe(2);
-    // Exactly one, and it can only be the summariser's: every streamText call in this run succeeds
-    // on its first attempt.
+
+
     expect(events.filter((e) => e.type === "retry")).toEqual([{ type: "retry", attempt: 1 }]);
     expect(events.findIndex((e) => e.type === "retry")).toBeLessThan(
       events.findIndex((e) => e.type === "compacted"),
@@ -671,8 +671,8 @@ describe("runLoop", () => {
     expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
   });
 
-  // The negative control for the test above: a compaction whose first attempt succeeds is not a
-  // retry, and announcing one would tell the user the provider is rate-limiting them when it is not.
+
+
   test("a compaction that succeeds first time reports no retry", async () => {
     const summaryObj = { goal: "g", progress: "p", blockers: "none", nextSteps: "continue" };
 
@@ -724,7 +724,7 @@ describe("runLoop", () => {
     );
 
     const totalIterations = 25;
-    const compactAtIteration = 11; // the doStream call whose usage crosses the threshold
+    const compactAtIteration = 11;
     const doStream = Array.from({ length: totalIterations }, (_, i) => {
       const inputTokens = i === compactAtIteration ? 6000 : 100;
       const path = i === 0 ? "marker.txt" : "a.txt";
@@ -760,10 +760,10 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(totalIterations);
   });
 
-  // opts.reasoningEffort must be re-validated against the CURRENTLY
-  // resolved catalog entry on every call, not just trusted from whatever set it — a stale tier
-  // from a route that has since changed (e.g. a /model switch to a model with different or no
-  // reasoningOptions) must never reach the provider.
+
+
+
+
   describe("reasoningEffort re-validation against the resolved catalog entry", () => {
     const reasoningCatalog = {
       fetchedAt: "2026-01-01T00:00:00.000Z",
@@ -806,9 +806,9 @@ describe("runLoop", () => {
       });
     });
 
-    // The concrete break the reviewer named: a tier legal on one route (or set before a /model
-    // switch) that is no longer legal for the route actually in force this call — silently
-    // dropped, never sent, and the turn is not failed over it.
+
+
+
     test("a tier NOT legal for the resolved catalog entry is silently dropped, not sent", async () => {
       const model = new MockLanguageModelV4({
         doStream: async () => streamResult(textOnlyChunks("Hello")),
@@ -830,8 +830,8 @@ describe("runLoop", () => {
       expect(model.doStreamCalls[0]?.providerOptions).toBeUndefined();
     });
 
-    // Same drop, for a model with no reasoningOptions at all (rather than one whose options don't
-    // include this particular tier) — the other half of the regression class.
+
+
     test("a tier set but the resolved model has no reasoningOptions at all is also dropped", async () => {
       const model = new MockLanguageModelV4({
         doStream: async () => streamResult(textOnlyChunks("Hello")),

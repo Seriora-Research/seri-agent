@@ -49,9 +49,9 @@ describe("round trip", () => {
 });
 
 describe("the patch merges rather than replaces", () => {
-  // The order auth() (@ai-sdk/mcp) actually saves in: client information, then the authorization
-  // server's metadata, then the tokens. A save that replaced instead of merging would leave the
-  // last of the three alone on disk and force a full re-registration on the next run.
+
+
+
   test("three separate saves accumulate into one record", () => {
     const configDir = makeConfigDir();
     saveMcpServerAuth(configDir, "exa", { clientInformation: { client_id: "cid" } }, URL_A);

@@ -73,7 +73,7 @@ async function refreshCodexSubscriptionOnce(
     try {
       accountId = extractCodexAccountId(tokens.accessToken);
     } catch {
-      // keep stored accountId
+
     }
     const updated = subscriptionFromCodexTokens({ ...tokens, accountId });
     saveCodexSubscription(updated, configDir);
@@ -209,9 +209,9 @@ function rememberPlanType(result: unknown): void {
 
 const MODEL_LIST_PAGE = 100;
 const MODEL_LIST_MAX_PAGES = 20;
-// GET /models requires client_version. seri 0.0.1 and the 0.0.0 sentinel
-// both return an empty list. 0.148.0 is the live-validated Codex protocol
-// version vercel-labs/fx uses.
+
+
+
 export const CODEX_PROTOCOL_CLIENT_VERSION = "0.148.0";
 
 function nextCursorOf(result: unknown): string | undefined {
@@ -242,8 +242,8 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
   if (cachedModels !== undefined && now - cachedModelsAt < MODEL_LIST_CACHE_MS) {
     return cachedModels;
   }
-  // A caller-supplied rpc is owned by that caller. The HTTP list is shared
-  // across overlapping getModelCatalog fetches (prepareSession and run both call it).
+
+
   if (opts.rpc !== undefined) {
     return listCodexModelsOnce(opts);
   }
@@ -274,7 +274,7 @@ async function listCodexModelsViaRpc(rpc: CodexJsonRpc): Promise<CodexListedMode
   try {
     rememberPlanType(await rpc.request("account/read"));
   } catch {
-    // planType is chrome; a failed account/read must not drop the model list
+
   }
   return listed;
 }

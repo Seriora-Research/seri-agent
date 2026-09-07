@@ -4,11 +4,11 @@ import type { ModelCatalog } from "./types";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 
-// Maintainer-run only — not wired to `postinstall` or CI (research-spec.md's open questions).
-// Fetches models.dev LIVE today; pinning to a specific commit/snapshot is preferable for
-// reproducibility (upstream's schema has migrated before), but the mechanism for that is left as
-// a follow-up, not required for this initial version. Run by hand:
-//   bun run packages/model-catalog/src/generate.ts <output-path>
+
+
+
+
+
 async function main(): Promise<void> {
   const outPath = process.argv[2];
   if (!outPath) {

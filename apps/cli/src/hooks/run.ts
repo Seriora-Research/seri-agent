@@ -3,10 +3,10 @@ import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
 import { HOOK_BLOCK_EXIT_CODE, type HookOutcome, type HookPayload, type HookSpec } from "./types";
 
-// spawnCollect's own 30,000-char cap exists for a tool result the model can read in full and act
-// on. A hook's reason or failure message is not that — it is a one-line denial or a "this could not
-// run" note that has to sit next to the rest of the transcript on every future turn, so it gets a
-// budget an order of magnitude smaller rather than inheriting the tool-output one.
+
+
+
+
 const REASON_MAX_CHARS = 300;
 
 function truncate(text: string): string {
@@ -15,8 +15,8 @@ function truncate(text: string): string {
 
 function blockReason(spec: HookSpec, stderr: string): string {
   const trimmed = stderr.trim();
-  // A script that blocks silently is still a block the model has to explain to the user, and an
-  // empty reason would leave it nothing to say.
+
+
   return truncate(trimmed || `${spec.script} blocked the call but printed nothing on stderr`);
 }
 
@@ -25,22 +25,23 @@ function failureMessage(spec: HookSpec, cause: string, stderr: string): string {
   return truncate(trimmed ? `${spec.script} ${cause}: ${trimmed}` : `${spec.script} ${cause}`);
 }
 
-// win32 → powershell.exe. Elsewhere → whatever bash bash.ts resolved (Git Bash on a PATH-less
-// Windows counts as win32 here, not "elsewhere" — this is process.platform, not a
-// bash-vs-powershell content check).
-//
-// `-ExecutionPolicy Bypass` is not padding, and it is the one flag .cursor/hooks.json does NOT
-// pass. Measured on a stock box: every scope of Get-ExecutionPolicy reads Undefined, so the
-// effective policy is Restricted, and `-File` refuses to load ANY .ps1 under it — exit 1, a
-// SecurityError on stderr, and nothing the script contains ever runs. `-Command` (what
-// powershell.ts uses for model-issued commands) is not subject to the script policy at all, which
-// is why nothing here has hit it before. Without the flag every PowerShell hook on a default
-// consumer Windows install would fail open silently, which is the CONSTITUTION's silent-degradation
-// line landing on the platform constraint #2 makes first-class. It grants nothing new either: the
-// bytes were already trusted by construction (profile root) or by an explicit content-bound grant
-// (project), and powershell.ts already runs arbitrary MODEL-authored commands under no policy at
-// all, so a user-reviewed script is strictly the smaller permission.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function resolveInterpreter(spec: HookSpec): { executable: string; args: string[] } | undefined {
+  // win32 → powershell.exe. Git Bash on Windows is still win32 here (process.platform).
   if (process.platform === "win32") {
     return {
       executable: "powershell.exe",
@@ -76,9 +77,9 @@ export async function runHook(
       JSON.stringify(payload),
     );
   } catch (err) {
-    // A cancelled hook is not this function's decision to make sense of — the loop's own
-    // cancellation path already knows how to unwind a rejected tool call, and duplicating that
-    // here would be a second, divergent way of handling the same event.
+
+
+
     if (signal?.aborted === true) throw err;
     return {
       kind: "failed",

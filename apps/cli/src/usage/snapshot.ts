@@ -36,7 +36,7 @@ export function clearUsageSnapshot(configDir: string): void {
   try {
     unlinkSync(path);
   } catch {
-    // Best-effort: logout must still clear auth.json even if this file is stuck.
+
   }
 }
 

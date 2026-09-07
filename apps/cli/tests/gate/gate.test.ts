@@ -6,7 +6,7 @@ import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/
 
 const READ_TOOL_NAMES = ["read_file", "grep", "glob"];
 
-// A name no classifier has ever seen, shaped the way an MCP server's would be (mcp_<server>_<tool>).
+
 const UNKNOWN_TOOL_NAME = "mcp_exa_web_search";
 
 test("the gate's write class over the built-ins is exactly WRITE_TOOL_NAMES", () => {
@@ -78,8 +78,8 @@ describe("checkPermission", () => {
     });
   });
 
-  // The inversion, asserted where it bites: a name the gate has never heard of is not "safe by
-  // absence" any more, it takes the same path bash does in all three modes.
+
+
   describe("an unrecognised tool name", () => {
     test("is blocked in read-only", () => {
       expect(checkPermission(UNKNOWN_TOOL_NAME, "read-only")).toBe("block");
@@ -99,7 +99,7 @@ describe("checkPermission", () => {
     });
   });
 
-  // The seam a caller composing a non-built-in tool set uses; the default is only a default.
+
   describe("a caller-supplied classify", () => {
     test("decides in both directions, overriding the built-in classification", () => {
       expect(checkPermission("bash", "read-only", undefined, { classify: () => "read" })).toBe(

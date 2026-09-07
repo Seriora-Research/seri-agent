@@ -6,20 +6,20 @@ export type RefreshResult =
   | { status: "success"; accessToken: string; refreshToken: string; expiresIn?: number }
   | { status: "error"; message: string };
 
-// Matches accountStatus.ts's own ACCOUNT_STATUS_TIMEOUT_MS — the established value for this
-// codebase's best-effort, fail-closed network calls. This bounds the refresh regardless of
-// whether any caller ever supplies its own signal: refreshSession's own in-flight dedup (below)
-// shares this one call across every concurrent 401 for a configDir, so its lifetime cannot depend
-// on any single caller's own deadline — see authedFetch.ts's own comment on why binding a
-// caller's signal here would let that caller's cancellation abort every other caller's wait too.
+
+
+
+
+
+
 const REFRESH_TIMEOUT_MS = 10_000;
 
-// A raw fetch POST, matching deviceFlow.ts's pollForToken/requestDeviceCode style rather than
-// introducing @workos-inc/node client-side. Never throws — a caller (refreshSession below, or
-// gateway.ts's authedFetch) treats a failed refresh as "could not refresh", not as an
-// exception to propagate. That includes fetchFn itself rejecting (offline, DNS failure, or this
-// call's own REFRESH_TIMEOUT_MS deadline firing): caught here so authedFetch's fallback to the
-// original 401 response is reached instead of an uncaught rejection replacing it.
+
+
+
+
+
+
 export async function refreshAccessToken(
   clientId: string,
   refreshToken: string,
@@ -31,10 +31,10 @@ export async function refreshAccessToken(
       AUTHENTICATE_URL,
       REFRESH_TIMEOUT_MS,
       async (response): Promise<RefreshResult> => {
-        // response.text() (inside parseResponseBody) can reject if the connection drops mid-read
-        // — caught here, inside the same deadline `fetchWithTimeout` still has armed, so a body
-        // that stalls mid-stream trips REFRESH_TIMEOUT_MS same as a connection that never
-        // responds at all, rather than escaping refreshAccessToken's no-throw contract.
+
+
+
+
         let body: Record<string, unknown>;
         try {
           body = await parseResponseBody(response);
@@ -50,10 +50,10 @@ export async function refreshAccessToken(
             message: `WorkOS refresh failed with status ${response.status}: ${JSON.stringify(body)}`,
           };
         }
-        // A 200 with an unexpected body shape must not persist undefined tokens into auth.json —
-        // the same trust boundary as pollForToken's own response.ok check, applied to the fields
-        // inside it. expires_in is deliberately NOT required here: WorkOS's real response carries
-        // no such field (confirmed live), so its absence is the normal shape, not a malformed one.
+
+
+
+
         if (
           typeof body.access_token !== "string" ||
           !body.access_token ||
@@ -84,12 +84,12 @@ export async function refreshAccessToken(
   }
 }
 
-// Concurrent 401s against the same configDir (e.g. dispatch_subagents running several reader
-// subagents against the same gateway model) can each read the same on-disk refresh token before
-// either submits it. WorkOS accepts only one use of a rotating refresh token, so the loser would
-// get {status: "error"} and strand its caller on the original 401 even though a valid rotated
-// pair now exists on disk. One in-flight promise per configDir makes every concurrent caller
-// share the same refresh instead of racing separate ones.
+
+
+
+
+
+
 const inFlightRefreshes = new Map<string, Promise<AuthSession | undefined>>();
 
 export function refreshSession(
@@ -101,17 +101,17 @@ export function refreshSession(
 
   const promise = refreshSessionOnce(configDir, fetchFn);
   inFlightRefreshes.set(configDir, promise);
-  // .finally() returns a NEW promise that also rejects when `promise` does — discarding it
-  // uncaught would be a second, unhandled rejection on top of the one `promise` itself carries
-  // back to the caller, even though the caller handles that one. The .catch(() => {}) here is
-  // only for THIS derived promise; it does not touch `promise`'s own rejection, which the caller
-  // returned below still carries and must still handle.
+
+
+
+
+
   promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
 }
 
-// WorkOS rotates refresh tokens on every use, so the response's refresh_token — not the one
-// this call started with — is what has to be persisted, or the next refresh fails.
+
+
 async function refreshSessionOnce(
   configDir: string,
   fetchFn: typeof fetch,
@@ -126,9 +126,9 @@ async function refreshSessionOnce(
   );
   if (result.status === "error") return undefined;
 
-  // A stale expiresAt carried over from the previous session would describe the OLD token, not
-  // this one — worse than no hint at all — so a missing expiresIn clears it rather than keeping
-  // the old value.
+
+
+
   const updated: AuthSession = {
     ...session,
     accessToken: result.accessToken,

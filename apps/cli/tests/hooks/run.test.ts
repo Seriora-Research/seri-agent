@@ -65,7 +65,7 @@ describe("runHook (injected spawn)", () => {
     );
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("silent-blocker");
-    // Never handed the model an empty string to explain to the user.
+
     expect(outcome.kind === "block" && outcome.reason.length > 0).toBe(true);
   });
 
@@ -119,15 +119,15 @@ describe("runHook (injected spawn)", () => {
       fakeResult({ exitCode: HOOK_BLOCK_EXIT_CODE, stderr: "x".repeat(10_000) }),
     );
     expect(outcome.kind).toBe("block");
-    // Comfortably under the stream cap spawnCollect itself allows, proving this is a second,
-    // tighter budget rather than a pass-through of the tool-output one.
+
+
     expect(outcome.kind === "block" && outcome.reason.length).toBeLessThan(1_000);
   });
 });
 
-// Real subprocesses, via the actual spawnCollect (no injected spawn), split by which interpreter
-// the platform under test actually has. CI runs Linux, macOS, and Windows, and each block only
-// proves anything on the platform it can run on.
+
+
+
 const describeSh = process.platform === "win32" ? describe.skip : describe;
 const describePs1 = process.platform === "win32" ? describe : describe.skip;
 
@@ -178,9 +178,9 @@ describeSh("runHook (real bash subprocess)", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain("blocked: dangerous command");
   }, 15_000);
 
-  // This is the test that proves the stdin contract actually works: the script only blocks if it
-  // can read the tool name back out of its own stdin, so a pass here means the JSON payload really
-  // crossed the pipe rather than the script blocking (or not) for an unrelated reason.
+
+
+
   test("reads the JSON payload from stdin and finds the tool name in it", async () => {
     const dir = makeTempDir();
     const path = writeShScript(
@@ -245,17 +245,17 @@ describePs1("runHook (real powershell subprocess)", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain("blocked: dangerous command");
   }, 20_000);
 
-  // This is the test that proves the stdin contract actually works: the script only blocks if it
-  // can read the tool name back out of its own stdin, so a pass here means the JSON payload really
-  // crossed the pipe rather than the script blocking (or not) for an unrelated reason.
+
+
+
   test("reads the JSON payload from stdin and finds the tool name in it", async () => {
     const dir = makeTempDir();
     const path = writePs1Script(
       dir,
       "stdin-check",
-      // Parsed, not pattern-matched, because a structural reader is the case a regex reader hides:
-      // the reference .ps1 in .cursor/hooks/ does exactly this, and it is what caught the payload
-      // envelope being wrong when a text-matching probe was still passing.
+
+
+
       "$payload = [Console]::In.ReadToEnd()\n" +
         'if (($payload | ConvertFrom-Json).tool_name -eq "probe-tool") {\n' +
         '  [Console]::Error.WriteLine("saw the tool name on stdin")\n  exit 2\n}\nexit 0',

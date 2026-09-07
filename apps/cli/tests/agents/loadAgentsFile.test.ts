@@ -33,11 +33,11 @@ describe("findAgentsFile", () => {
     expect(findAgentsFile(nestedDir)).toBe(nestedAgentsPath);
   });
 
-  // findAgentsFile walks all the way up to the filesystem root if no AGENTS.md is found,
-  // so this test's "not found" guarantee only holds within tmpRoot's ancestry. There's a
-  // theoretical (very unlikely) flakiness risk if a real AGENTS.md happens to exist
-  // somewhere between the OS temp dir and the filesystem root on the machine running this
-  // test. Not worth a stop-at-boundary parameter that isn't part of the plan's signature.
+
+
+
+
+
   test("returns undefined when no AGENTS.md exists in a fresh temp dir", () => {
     expect(findAgentsFile(tmpRoot)).toBeUndefined();
   });

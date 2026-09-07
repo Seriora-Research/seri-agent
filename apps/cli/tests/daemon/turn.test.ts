@@ -166,8 +166,8 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     const { execute, sessionId, cwd } = setupExecute(dialThenDone);
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
     expect(closesSeenWhileRunning).toBe(0);
-    // closeMcpClients is fire-and-forget through two then/catch hops on an already-resolved
-    // promise. A macrotask tick is what lets the handle close settle, same as bindSession's test.
+
+
     await macrotick();
     expect(closeCount()).toBe(1);
     expect(pools[0]?.handles.size).toBe(0);

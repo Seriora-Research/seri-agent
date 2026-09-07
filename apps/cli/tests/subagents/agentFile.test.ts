@@ -8,9 +8,9 @@ import {
 } from "../../src/provider/tools";
 import { type AgentFileOutcome, parseAgentFile } from "../../src/subagents/agentFile";
 
-// A verbatim copy of a real Cursor agent file, committed beside this test rather than read out of
-// the repository it came from: it is the fixture for the "a Cursor file parses unchanged" claim,
-// and that claim must keep being made about the same bytes however the source file moves or goes.
+
+
+
 const CURSOR_FIXTURE = readFileSync(
   join(import.meta.dir, "fixtures", "cursor-reviewer-verifier.md"),
   "utf8",
@@ -123,9 +123,9 @@ describe("parseAgentFile — tool grants", () => {
     expect(outcome.kind === "skipped" && outcome.warning).toContain("/agents/reviewer.md");
   });
 
-  // A bare `tools:` is a YAML null, not an absent key: the author plainly meant to restrict the
-  // grant and got as far as typing the key, so falling through to the full toolset would hand
-  // bash to exactly the file that was trying to give it up.
+
+
+
   test("a bare tools: line skips the file instead of granting every tool", () => {
     const outcome = parse("---\ndescription: d\ntools:\n---\nb\n");
     expect(outcome.kind).toBe("skipped");
@@ -148,8 +148,8 @@ describe("parseAgentFile — names", () => {
     ).toBe("deep-reviewer");
   });
 
-  // The directory scan accepts `.MD`, so the default name has to strip it too — otherwise the file
-  // loads far enough to be refused for a name it was never given.
+
+
   test("an uppercase .MD extension is stripped from the default name", () => {
     expect(spec(parse("---\ndescription: d\n---\nb\n", { filePath: "/a/Reviewer.MD" })).name).toBe(
       "reviewer",
@@ -239,8 +239,8 @@ describe("parseAgentFile — a missing description", () => {
   });
 });
 
-// The description is resent inside the dispatch tool's own description on every parent turn, so an
-// essay in that field is a per-turn tax on the whole session, not a one-off cost of the file.
+
+
 describe("parseAgentFile — a very long description", () => {
   test("beyond 500 characters it is truncated, with a warning naming the file", () => {
     const outcome = parse(`---\ndescription: ${"d".repeat(600)}\n---\nb\n`, {
@@ -259,8 +259,8 @@ describe("parseAgentFile — CRLF", () => {
     expect(spec(parse(crlf)).description).toBe("d");
   });
 
-  // Notepad and PowerShell's own redirection both write one, and it lands before the opening
-  // fence — where it is the difference between an agent file and "a stray note in agents/".
+
+
   test("a leading UTF-8 BOM does not defeat the frontmatter fence", () => {
     const parsed = spec(parse("﻿---\r\nname: r\r\ndescription: d\r\n---\r\nbody line\r\n"));
     expect(parsed.name).toBe("r");

@@ -79,8 +79,8 @@ describe("stage, preview, approve", () => {
     expect(loaded?.filePath).toBe(path);
   });
 
-  // The "visibly distinguishable from a human-authored one" requirement, at the two places a
-  // reader actually looks: the file on disk, and the panel row.
+
+
   test("an approved skill is marked as the archivist's, on disk and in the panel", () => {
     const ctx = makeCtx();
     approvePendingSkill(ctx.configDir, stagePendingSkill(INPUT, ctx, new Date()));
@@ -88,8 +88,8 @@ describe("stage, preview, approve", () => {
     expect(text).toContain("author: archivist");
     expect(text).toContain(`reason: ${JSON.stringify(INPUT.reason)}`);
 
-    // The panel is fed the registry a session loaded, so this reloads it explicitly — which is
-    // also the assertion that an approved skill is only visible once something re-reads disk.
+
+
     const rows = skillsPanelRows(ctx, loadSkillRegistry({ ...ctx, onWarning: () => {} }));
     expect(rows).toHaveLength(1);
     expect(rows[0]?.author).toBe("archivist");
@@ -118,7 +118,7 @@ describe("stage, preview, approve", () => {
     const ctx = makeCtx();
     const staged = stagePendingSkill(INPUT, ctx, new Date());
     const elsewhere = makeCtx();
-    // Approving from a different worktree still targets the repository it was staged in.
+
     const { path } = approvePendingSkill(ctx.configDir, staged);
     expect(path.startsWith(elsewhere.worktree)).toBe(false);
     expect(existsSync(approvedSkillPath(elsewhere.worktree, INPUT.name))).toBe(false);
@@ -147,8 +147,8 @@ describe("skill_write", () => {
     expect(result.replacesExisting).toBe(true);
   });
 
-  // Negative controls. Each is a way an agent-authored file could reach a human's approval prompt
-  // carrying something it should never have been allowed to stage.
+
+
   test("refuses a body that looks like a prompt injection", async () => {
     const ctx = makeCtx();
     await expect(
@@ -198,7 +198,7 @@ describe("approve guards the human's own edits", () => {
     const staged = stagePendingSkill(INPUT, ctx, new Date());
     const previewed = liveSkillFile(staged);
 
-    // The human edits their own copy after looking at the diff.
+
     const path = approvedSkillPath(ctx.worktree, INPUT.name);
     writeFileSync(
       path,
@@ -219,8 +219,8 @@ Hand-written addition.
     expect(() => approvePendingSkill(ctx.configDir, staged, liveSkillFile(staged))).not.toThrow();
   });
 
-  // A first-time approve has no preview to compare against, and demanding one would refuse
-  // every new skill.
+
+
   test("approves with no preview recorded", () => {
     const ctx = makeCtx();
     const staged = stagePendingSkill(INPUT, ctx, new Date());
@@ -264,7 +264,7 @@ describe("/skills review subcommands", () => {
   test("an ambiguous id prefix refuses rather than picking one", () => {
     const ctx = makeCtx();
     const a = stagePendingSkill(INPUT, ctx, new Date());
-    // Force a second record sharing the first four hex characters of the first one's id.
+
     const b = { ...a, id: `${a.id.slice(0, 4)}999999ff` };
     writeFileSync(pendingSkillPath(ctx.configDir, b.id), JSON.stringify(b));
     const { lines } = decideSkillsCommand(["approve", a.id.slice(0, 4)], ctx);

@@ -49,25 +49,25 @@ describe("permissions store", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // 1. A missing file reads empty and is not created.
+
   test("a missing file reads empty and is not created", () => {
     expect(loadGrants(dir, "/w")).toEqual({ global: [], project: [], otherProjects: 0 });
     expect(existsSync(permissionsPath(dir))).toBe(false);
   });
 
-  // 2. Write-then-read-back at module level.
+
   test("a grant written by rememberGrant is visible to a fresh loadGrants call", () => {
     expect(rememberGrant(dir, "/w", "write_file")).toBe(true);
     expect(loadGrants(dir, "/w").project).toEqual(["write_file"]);
   });
 
-  // 3. bash and powershell are refused on write.
+
   test.each(["bash", "powershell"])("%s is refused on write, and nothing is created", (tool) => {
     expect(rememberGrant(dir, "/w", tool)).toBe(false);
     expect(existsSync(permissionsPath(dir))).toBe(false);
   });
 
-  // 4. bash is refused on read — the hand-edit hole, and the most important case in the file.
+
   test("a hand-written bash entry is dropped on read and warned about exactly once", () => {
     writeFileSync(
       permissionsPath(dir),
@@ -81,7 +81,7 @@ describe("permissions store", () => {
     expect(warnings[0]).toContain(permissionsPath(dir));
   });
 
-  // 5. Comments survive a rewrite — the entire justification for the yaml dependency.
+
   test("a rewrite preserves an existing hand-written comment and both entries", () => {
     rememberGrant(dir, "/w", "write_file");
     const withComment = readFileSync(permissionsPath(dir), "utf8").replace(
@@ -98,7 +98,7 @@ describe("permissions store", () => {
     expect(final).toContain("edit");
   });
 
-  // 6. Project isolation.
+
   test("a grant under one project does not leak into another, which sees itself counted as other", () => {
     rememberGrant(dir, "/a", "write_file");
     const grants = loadGrants(dir, "/b");
@@ -106,7 +106,7 @@ describe("permissions store", () => {
     expect(grants.otherProjects).toBe(1);
   });
 
-  // 7. Case folding matches checkpointStoreDir's rule.
+
   test("case folding follows checkpointStoreDir's platform rule", () => {
     rememberGrant(dir, "C:\\Proj", "write_file");
     const grants = loadGrants(dir, "c:\\proj");
@@ -117,13 +117,13 @@ describe("permissions store", () => {
     }
   });
 
-  // 8. A Windows-shaped key round-trips, on every platform.
+
   test("a drive-letter, backslash-shaped key round-trips", () => {
     rememberGrant(dir, "C:\\Users\\me\\code\\app", "write_file");
     expect(loadGrants(dir, "C:\\Users\\me\\code\\app").project).toEqual(["write_file"]);
   });
 
-  // 9. A hand-written global entry applies to every project.
+
   test("a hand-written global entry applies to every project", () => {
     writeFileSync(permissionsPath(dir), "global: [edit]\nprojects: {}\n");
     const grants = loadGrants(dir, "/anything");
@@ -131,7 +131,7 @@ describe("permissions store", () => {
     expect(effectiveTools(grants)).toContain("edit");
   });
 
-  // 10. forgetGrant clears both sections and is idempotent.
+
   test("forgetGrant clears both the global and project sections, and is idempotent", () => {
     writeFileSync(
       permissionsPath(dir),
@@ -143,10 +143,10 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/w")).toEqual({ global: [], project: [], otherProjects: 0 });
   });
 
-  // scope: "project" leaves an existing global grant of the same tool untouched — the TUI's
-  // /permissions panel only ever shows a project-tier grant as removable (decidePermissionsOpen
-  // collapses a tool present in both tiers into a single "persisted" row), so its removal must not
-  // silently take the invisible global pre-approval with it.
+
+
+
+
   test("forgetGrant with scope 'project' clears only the project section, leaving global intact", () => {
     writeFileSync(
       permissionsPath(dir),
@@ -157,8 +157,8 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/w")).toEqual({ global: ["edit"], project: [], otherProjects: 0 });
   });
 
-  // Bug 1: forgetGrant must warn on a malformed/unreadable store instead of silently reporting
-  // "nothing removed" indistinguishably from a genuinely empty store.
+
+
   test("forgetGrant warns on a malformed store instead of silently reporting nothing removed", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");
 
@@ -170,8 +170,8 @@ describe("permissions store", () => {
     expect(warnings).toHaveLength(1);
   });
 
-  // Bug 2, part 1: an emptied project entry must be pruned, not left as `key: []` — an orphaned
-  // empty list would otherwise count toward otherProjects forever.
+
+
   test("forgetGrant deletes the project's key once its list is empty, instead of leaving []", () => {
     rememberGrant(dir, "/w", "write_file");
 
@@ -180,8 +180,8 @@ describe("permissions store", () => {
     expect(readFileSync(permissionsPath(dir), "utf8")).not.toContain(projectKey("/w"));
   });
 
-  // The otherProjects overcount this fixes: grant-then-fully-revoke in project B must not leave
-  // project A seeing a phantom "other project" forever.
+
+
   test("otherProjects does not count a project whose only grant was fully revoked", () => {
     rememberGrant(dir, "/b", "write_file");
     forgetGrant(dir, "/b", "write_file", "both");
@@ -189,7 +189,7 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/a").otherProjects).toBe(0);
   });
 
-  // 11. Malformed YAML degrades, and is not overwritten.
+
   test("malformed content degrades to empty, warns, and rememberGrant leaves the bytes untouched", () => {
     writeFileSync(permissionsPath(dir), ":::not yaml:::");
     const before = readFileSync(permissionsPath(dir), "utf8");
@@ -211,17 +211,17 @@ describe("permissions store", () => {
     writeFileSync(permissionsPath(dir), raw);
 
     expect(loadGrants(dir, "/w")).toEqual({ global: [], project: [], otherProjects: 0 });
-    // The half that pins the shape check specifically: without it, rememberGrant would silently
-    // replace the malformed `projects: "hello"` with a fresh map instead of refusing to touch it.
+
+
     expect(rememberGrant(dir, "/w", "write_file")).toBe(false);
     expect(readFileSync(permissionsPath(dir), "utf8")).toBe(raw);
   });
 
-  // A path that exists but cannot be READ, not merely parsed — existsSync is true for both a
-  // permission-denied file and a directory sitting at the same path, so it cannot be relied on to
-  // predict whether readFileSync will succeed. A directory reproduces this on every platform
-  // (EISDIR on POSIX and on Windows alike), unlike a chmod-based approach, which only works on
-  // POSIX. Not skipIf(win32).
+
+
+
+
+
   test("a directory at the store's path degrades to empty instead of throwing", () => {
     mkdirSync(permissionsPath(dir));
 
@@ -236,39 +236,39 @@ describe("permissions store", () => {
     expect(rememberGrant(dir, "/w", "write_file", (m) => warnings.push(m))).toBe(false);
   });
 
-  // 12. Permissions and the constant.
+
   test.skipIf(process.platform === "win32")("the written file and directory are owner-only", () => {
     rememberGrant(dir, "/w", "write_file");
     expect(statSync(permissionsPath(dir)).mode & 0o777).toBe(0o600);
     expect(statSync(dir).mode & 0o777).toBe(0o700);
   });
 
-  // The hard constraint, pinned as a test: no accumulation of grants this store can hold ever
-  // reproduces --dangerously-skip-permissions, because bash/powershell can never be in it.
+
+
   test("PERSISTABLE_TOOL_NAMES is a subset of WRITE_TOOL_NAMES and excludes bash and powershell", () => {
     for (const name of PERSISTABLE_TOOL_NAMES) expect(WRITE_TOOL_NAMES).toContain(name);
     expect(PERSISTABLE_TOOL_NAMES).not.toContain("bash");
     expect(PERSISTABLE_TOOL_NAMES).not.toContain("powershell");
   });
 
-  // A built-in name with a fingerprint is refused — the digest would mean nothing, since there is
-  // no third-party contract to pin it to.
+
+
   test("a built-in name with a fingerprint is refused, and nothing is created", () => {
     expect(rememberGrant(dir, "/w", "write_file", undefined, toolFingerprint(tool()))).toBe(false);
     expect(existsSync(permissionsPath(dir))).toBe(false);
   });
 
-  // NEGATIVE CONTROL 1: an mcp_ name with no fingerprint must be refused — an unbound MCP grant is
-  // exactly the rug pull this design exists to stop. Made rememberGrant accept it with no
-  // fingerprint (dropped the `if (fingerprint === undefined) return false` branch): this test went
-  // red, failing on `expect(false).toBe(true)` — rememberGrant returned true and wrote the entry.
+
+
+
+
   test("an mcp_ name with no fingerprint is refused, and nothing is created", () => {
     expect(rememberGrant(dir, "/w", "mcp_exa_web_search")).toBe(false);
     expect(existsSync(permissionsPath(dir))).toBe(false);
   });
 
-  // bash and powershell stay refused even with a fingerprint attached — a fingerprint does not
-  // launder a shell name into a persistable one.
+
+
   test.each(["bash", "powershell"])(
     "%s is refused even with a fingerprint, and nothing is created",
     (name) => {
@@ -277,17 +277,17 @@ describe("permissions store", () => {
     },
   );
 
-  // An mcp_ name with a fingerprint stores mcpGrantKey(tool, fingerprint), and it round-trips
-  // through loadGrants.
+
+
   test("an mcp_ name with a fingerprint stores the composed grant key", () => {
     const fingerprint = toolFingerprint(tool());
     expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, fingerprint)).toBe(true);
     expect(loadGrants(dir, "/w").project).toEqual([mcpGrantKey("mcp_exa_web_search", fingerprint)]);
   });
 
-  // Re-granting the same MCP tool after its catalog changed REPLACES the stale entry rather than
-  // appending a second one for the same tool — two entries would let the old contract keep
-  // authorising the call.
+
+
+
   test("re-granting an mcp_ tool under a new fingerprint replaces the stale entry", () => {
     const before = toolFingerprint(tool({ description: "Search the web." }));
     const after = toolFingerprint(tool({ description: "Search the web, differently." }));
@@ -300,8 +300,8 @@ describe("permissions store", () => {
     expect(grants.project).not.toContain(mcpGrantKey("mcp_exa_web_search", before));
   });
 
-  // Re-granting the exact same tool under the exact same fingerprint is a true no-op: nothing is
-  // rewritten, and no second entry appears.
+
+
   test("re-granting an mcp_ tool under the same fingerprint is a no-op", () => {
     const fingerprint = toolFingerprint(tool());
     expect(rememberGrant(dir, "/w", "mcp_exa_web_search", undefined, fingerprint)).toBe(true);
@@ -309,12 +309,12 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/w").project).toEqual([mcpGrantKey("mcp_exa_web_search", fingerprint)]);
   });
 
-  // A stale entry for the same tool can live in the GLOBAL tier by hand — rememberGrant itself
-  // never writes there, but the template's own header invites editing it. Re-granting must still
-  // replace it rather than leave a stale global digest sitting alongside a fresh project one,
-  // which would let the old contract keep authorising the call. Asserted against the reparsed
-  // file, not the in-memory document, so a fix that only mutates the doc object without writing
-  // it back would not be mistaken for correct.
+
+
+
+
+
+
   test("re-granting an mcp_ tool removes a stale entry that lives in the global tier", () => {
     const before = toolFingerprint(tool({ description: "Search the web." }));
     const after = toolFingerprint(tool({ description: "Search the web, differently." }));
@@ -333,8 +333,8 @@ describe("permissions store", () => {
     expect(effectiveTools(grants)).toEqual([mcpGrantKey("mcp_exa_web_search", after)]);
   });
 
-  // The built-in path must be unaffected by the global-tier lookup added above: a global grant of
-  // write_file still makes a project re-grant a no-op, exactly as before.
+
+
   test("a global write_file entry still makes a project re-grant a no-op", () => {
     writeFileSync(permissionsPath(dir), "global: [write_file]\nprojects: {}\n");
     const before = readFileSync(permissionsPath(dir), "utf8");
@@ -349,8 +349,8 @@ describe("permissions store", () => {
     });
   });
 
-  // A hand-written entry with a malformed digest is dropped on read, with a warning — the same
-  // hand-edit hole as a bash entry, for the MCP shape.
+
+
   test("a hand-written mcp entry with a malformed digest is dropped on read and warned about", () => {
     writeFileSync(
       permissionsPath(dir),
@@ -363,7 +363,7 @@ describe("permissions store", () => {
     expect(warnings[0]).toContain("mcp_exa_web_search@short");
   });
 
-  // A well-shaped mcp grant key round-trips through loadGrants unmolested.
+
   test("a hand-written, well-shaped mcp entry round-trips through loadGrants", () => {
     writeFileSync(
       permissionsPath(dir),
@@ -372,10 +372,10 @@ describe("permissions store", () => {
     expect(loadGrants(dir, "/w").project).toEqual(["mcp_exa_web_search@a1b2c3d4e5f6"]);
   });
 
-  // isPersistableTool is the single "may this be remembered at all" answer both approval-prompt
-  // call sites in cli.ts and rememberGrant's own whether-check now read — previously written
-  // three times independently, which is what let one copy drift without a test catching it until
-  // a negative control against each site individually. One function, tested here directly.
+
+
+
+
   test("isPersistableTool: true for write_file, edit, and an mcp_ name", () => {
     expect(isPersistableTool("write_file")).toBe(true);
     expect(isPersistableTool("edit")).toBe(true);
@@ -505,12 +505,12 @@ describe("permissions store", () => {
     expect(isPersistableTool("frobnicate")).toBe(false);
   });
 
-  // The invariant that actually matters: whatever isPersistableTool says may be offered at the
-  // prompt, rememberGrant must actually accept — otherwise a user answers "[a]lways" to a question
-  // the store silently discards, with no error and no saved grant. Seen red first: with
-  // isPersistableTool changed to return false for an mcp_ name, this fails at the assertion below
-  // (isPersistableTool("mcp_exa_web_search") is false, so the loop's own `if` never reaches
-  // rememberGrant for it at all — the missing offer is the bug this test exists to catch).
+
+
+
+
+
+
   test("every name isPersistableTool allows, rememberGrant actually persists", () => {
     for (const name of ["write_file", "edit", "mcp_exa_web_search"]) {
       expect(isPersistableTool(name)).toBe(true);

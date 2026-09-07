@@ -40,8 +40,8 @@ function connect(refreshToken = "refresh-1"): void {
   );
 }
 
-// Routes discovery vs token by URL so one fake covers the whole refresh, the way a real refresh
-// makes both calls.
+
+
 function fakeIssuer(onToken: (body: string) => Response): typeof fetch {
   return (async (url: string, init?: RequestInit) => {
     if (String(url).includes(".well-known")) return jsonResponse(true, 200, DISCOVERY);
@@ -56,7 +56,7 @@ describe("the store", () => {
     expect(hasXaiSubscription(dir)).toBe(true);
   });
 
-  // Same total degrade as loadAuthSession: unreadable genuinely means not connected.
+
   test("a malformed file reads as not connected rather than throwing", () => {
     writeFileSync(join(dir, XAI_AUTH_FILENAME), "{ not json");
     expect(loadXaiSubscription(dir)).toBeUndefined();
@@ -101,8 +101,8 @@ describe("refreshXaiSubscription", () => {
     expect(result).toEqual({ status: "not-connected" });
   });
 
-  // The unrecoverable hazard: xAI invalidates the previous refresh token on every use, so the
-  // rotated value must be on disk before the call returns.
+
+
   test("persists the rotated refresh token, and the next refresh sends the new one", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-1");
@@ -149,8 +149,8 @@ describe("refreshXaiSubscription", () => {
     expect(loadXaiSubscription(dir)?.refreshToken).toBe("refresh-1");
   });
 
-  // A subagent fan-out is the real source: several 401s land together and each would otherwise
-  // spend the same single-use refresh token, stranding every caller but one.
+
+
   test("concurrent refreshes share a single token request", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-1");
@@ -224,8 +224,8 @@ describe("xaiAuthedFetch", () => {
     expect(auths).toEqual(["Bearer access-1", "Bearer access-2"]);
   });
 
-  // 403 is terminal. Retrying it would spend a single-use refresh token for a result that cannot
-  // change, so the response comes back untouched and no refresh is attempted.
+
+
   test("a 403 passes through without triggering a refresh", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-1");
@@ -261,8 +261,8 @@ describe("the stored file", () => {
 });
 
 describe("a dead rotated refresh token", () => {
-  // The realistic failure after a lost rotation: xAI killed the previous token, so no retry can
-  // recover it. Reporting it as a generic error invites a caller to loop on it forever.
+
+
   test("invalid_grant is reconnect-required, not a retryable error", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-dead");

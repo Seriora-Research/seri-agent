@@ -82,10 +82,10 @@ describe("pruneTrajectories", () => {
     }
   });
 
-  // SessionDatabase's busy_timeout is 5s, the same as bun's default test timeout. On Windows,
-  // close() does not always release the sqlite file before pruneTrajectories opens a new
-  // handle, so that constructor can wait the full busy timeout. These two tests close then
-  // reopen by path and must outlive that wait.
+
+
+
+
   test(
     "deletes database sessions older than the window and keeps keepSessionId",
     () => {

@@ -1,6 +1,6 @@
-// Consumer probes for consecutive read-only execute overlap: replay the actual
-// runLoop event stream through the TUI reducer (parent and child slots), and
-// pin onToolPhaseEnd seeing every read that ran.
+
+
+
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage, ToolSet } from "ai";
 import { tool } from "ai";
@@ -217,8 +217,8 @@ describe("parallel read-only blast radius", () => {
       }),
     );
     expect(after).toEqual(["read_file", "grep", "glob"]);
-    // Execute overlap starts every read before any PostToolUse. Serial runLoop ran
-    // each PostToolUse before the next execute; that order is not the contract here.
+
+
     expect(readAfterBeforeGrepStart).toBe(false);
   });
 

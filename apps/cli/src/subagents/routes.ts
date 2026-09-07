@@ -9,10 +9,10 @@ export const ROUTABLE_ROLES = ["explore", "plan", "code", "test", "oracle", "arc
 
 export type RoutableRole = (typeof ROUTABLE_ROLES)[number];
 
-// The SERI_ROLE_* surface is a closed, documented set of names, and this is the one place a
-// free-form agent name is admitted to it. A file-defined agent can never satisfy this, because
-// loadAgentRegistry reserves every ROUTABLE_ROLES name against agent files — so "no env pin
-// exists for this agent" is decided here rather than carried on every spec.
+
+
+
+
 export function isRoutableRole(value: string): value is RoutableRole {
   return (ROUTABLE_ROLES as readonly string[]).includes(value);
 }
@@ -53,9 +53,9 @@ function pinFromSource(
   return { model, provider };
 }
 
-// Coupled pair, same rule as resolveDefaultModel: whichever source supplies MODEL also
-// supplies PROVIDER. An env MODEL with no valid env PROVIDER is unset — it does not borrow
-// the config provider (or the parent session provider). Incomplete pins are unrepresentable.
+
+
+
 export function parseRolePins(
   env: Record<string, string | undefined>,
   config: Record<string, string>,
@@ -80,9 +80,9 @@ export function pinFromTask(request: TaskRouteRequest | undefined): RolePin | un
   return { model: request.model, provider: request.provider };
 }
 
-// `role` is `undefined` for an agent with no env-pin surface at all — a file-defined one. It means
-// "no pin exists", which falls through to the task request and then to inherit, not "look one up
-// and find nothing".
+
+
+
 export function resolveChildRoute(
   role: RoutableRole | undefined,
   parent: ResolvedRoute,
@@ -91,10 +91,10 @@ export function resolveChildRoute(
   catalog: ModelCatalog,
   configured: ReadonlySet<ModelProvider>,
   plan: Plan | null,
-  // Threaded for the same reason resolveSessionRoute reads it: without it a role pinned to a
-  // provider the user reaches by subscription resolves to credential "key", dispatchModel throws
-  // missingKeyError, and the child is silently downgraded to the parent's model even though a
-  // usable credential exists. Defaulted so callers that never had it keep compiling.
+
+
+
+
   subscribed: ReadonlySet<ModelProvider> = EMPTY_SUBSCRIPTIONS,
   hostedActive = false,
 ): RoleRoute {
@@ -161,8 +161,8 @@ export function effortForChild(
   return effortForRole(parent, child);
 }
 
-// Construction lives at the compose site. When it fails, the child runs the parent pair and
-// reports inherited: true — the pair that actually ran, not the pin that could not.
+
+
 export function realizedRoute(
   intended: RoleRoute,
   parent: ResolvedRoute,
@@ -178,8 +178,8 @@ export function realizedRoute(
   };
 }
 
-// Takes the agent's own name, not its pin key: a file-defined agent has no pin key, and naming it
-// "undefined" in a warning the user has to act on would hide which agent file to go and fix.
+
+
 export function roleConstructionWarning(
   role: string,
   intended: { provider: ModelProvider; model: string },

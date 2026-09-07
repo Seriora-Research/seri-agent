@@ -13,7 +13,7 @@ export type ScreenResult = { outcome: "pass" } | { outcome: "block"; reason: Blo
 
 const SCAN_LIMIT = 65536;
 
-// configBoolean is on-unless-"false". An opt-in safety exception must not turn on from a typo.
+
 export function parseExpectedEnvironment(raw: string | undefined): boolean {
   return raw === "true";
 }
@@ -135,8 +135,8 @@ const ESCAPE_TABLE: readonly { kind: EscapeKind; pattern: RegExp; label: string 
   { kind: "egress-evasion", pattern: /\bproxychains/i, label: "proxychains" },
   { kind: "egress-evasion", pattern: /\b(?:nc|ncat)\b[\s\S]*\s-e(?:\s|$)/i, label: "nc -e" },
   { kind: "egress-evasion", pattern: /\bncat\b[\s\S]*--(?:exec|sh-exec)\b/i, label: "ncat --exec" },
-  { kind: "egress-evasion", pattern: /\/dev\/tcp\//i, label: "/dev/tcp/" },
-  { kind: "egress-evasion", pattern: /\/dev\/udp\//i, label: "/dev/udp/" },
+  { kind: "egress-evasion", pattern: /\/dev\/tcp\
+  { kind: "egress-evasion", pattern: /\/dev\/udp\
   {
     kind: "egress-evasion",
     pattern: /\bcurl\b[\s\S]*\s-x(?:\s|$|=|\S)/,
@@ -252,8 +252,9 @@ export function screenCall(subject: string, input: unknown, expected: boolean): 
   if (extracted.status === "empty") return { outcome: "pass" };
   if (expected) return { outcome: "pass" };
 
-  // MCP arguments are JSON, so they have no curl/wget neighbor. Prefix http:// so
-  // the same IMDS address rows still fire; bash `echo 169.254.169.254` stays a pass.
+
+
+  // MCP arguments are JSON, so prefix http:// — they have no curl/wget neighbor for the classifier.
   const raw =
     subject === "mcp" || isMcpToolName(subject) ? `http:// ${extracted.text}` : extracted.text;
   const decoded = decodeAll(raw);

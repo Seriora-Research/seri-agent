@@ -14,8 +14,9 @@ export function capToolResult(text: string): string {
 
   let start = text.slice(0, HALF);
   let end = text.slice(-HALF);
-  // A JS string is UTF-16, so a cut between the halves of a pair strands a replacement
-  // character that no longer survives a UTF-8 round trip. Only these two edges can split one.
+
+
+  // A JS string is UTF-16; a cut between surrogate halves strands a replacement character.
   if (isHighSurrogate(start.charCodeAt(start.length - 1))) start = start.slice(0, -1);
   if (isLowSurrogate(end.charCodeAt(0))) end = end.slice(1);
   const omitted = text.length - start.length - end.length;

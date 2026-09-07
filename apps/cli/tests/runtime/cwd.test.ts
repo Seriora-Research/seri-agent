@@ -23,10 +23,10 @@ function makeDir(): string {
   return dir;
 }
 
-// `pwd` / Get-Location / process.cwd() can print a different string for the same directory:
-// Darwin tmpdir is often a /var → /private/var symlink, Windows 8.3 vs long names, Git Bash
-// prints a POSIX form of the Windows TEMP folder. String equality of those reports is not
-// "the child ran somewhere else."
+
+
+
+
 function sameResolvedPath(a: string, b: string): boolean {
   return realpathSync(a).toLowerCase() === realpathSync(b).toLowerCase();
 }

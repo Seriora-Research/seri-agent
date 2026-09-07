@@ -10,8 +10,8 @@ export type RunUsageOpts = {
 };
 
 function presentLines(presenter: UsageCommandPresenter, text: string): void {
-  // One message per logical line: tuiPresenter.message is one transcript-append, and
-  // memoryCommand already splits the same way so a multi-line report is not one transcript entry.
+
+
   for (const line of text.split("\n")) presenter.message(line);
 }
 

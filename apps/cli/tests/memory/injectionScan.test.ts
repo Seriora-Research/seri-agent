@@ -25,10 +25,10 @@ describe("scanForInjection", () => {
     expect(scanForInjection("this looks clean and has no hidden character").ok).toBe(true);
   });
 
-  // The gap this rule's range used to have (U+2065-U+2069) included all four bidi-isolate
-  // control characters — a "trojan-source" text-direction-spoofing vector. ⁦ is LRI
-  // (LEFT-TO-RIGHT ISOLATE), written as an explicit escape so this test file, like the rule
-  // itself, carries no literal invisible glyph.
+
+
+
+
   test("invisible-unicode: rejects a bidi-isolate control character (LRI, U+2066)", () => {
     const result = scanForInjection("this looks⁦clean but has a hidden bidi-isolate");
     expect(result.ok).toBe(false);

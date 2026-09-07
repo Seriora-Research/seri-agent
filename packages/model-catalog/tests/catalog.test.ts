@@ -71,8 +71,8 @@ function rawApiResponse() {
         },
       },
     },
-    // Ignored: seri only catalogs groq, openrouter, anthropic, openai and google, and
-    // mapRawCatalog must not surface this.
+
+
     "other-provider": {
       models: {
         "ignored-model": {
@@ -178,12 +178,12 @@ describe("loadCatalog", () => {
     expect(calls).toBe(1);
   });
 
-  // Code-review finding, PR #91: the test above only proves a SECOND call made AFTER the first one
-  // already resolved is a cache hit — it says nothing about two callers racing before either has
-  // settled, which is the actual bug (a caller like byok-guided-setup-default-model's own decline
-  // path can call loadCatalog again before run()'s own earlier, unawaited call has finished).
-  // Neither `await` here: both calls fire in the same synchronous tick, before `fetchFn`'s own
-  // pending promise resolves.
+
+
+
+
+
+
   test("two concurrent calls before either resolves share the same in-flight fetch, not two", async () => {
     let calls = 0;
     let resolveFetch!: (value: unknown) => void;
@@ -204,11 +204,11 @@ describe("loadCatalog", () => {
     expect(firstResult).toEqual(secondResult);
   });
 
-  // A fallback result IS cached for the process lifetime too, same as a genuine fetch — a
-  // caller with a usable, permanent fallback (apps/cli's bundled FALLBACK_MANIFEST) relies on
-  // this to avoid re-attempting a live fetch (10s timeout) on every later call while offline. A
-  // caller whose fallback is deliberately unusable (apps/server's EMPTY_MANIFEST) is responsible
-  // for its own retry policy — see apps/server/lib/catalog.ts's resetCatalogCache() call.
+
+
+
+
+
   test("fetch failure: the fallback IS cached for the process — a later call does not re-fetch", async () => {
     let calls = 0;
     const failingFetch: typeof fetch = (async () => {
@@ -335,10 +335,10 @@ function entryWithPricing(pricing: ModelCatalogEntry["pricing"]): ModelCatalogEn
   return { ...(fallbackManifest.entries[0] as ModelCatalogEntry), pricing };
 }
 
-// Coverage for the fail-closed contract isZeroPriceEntry's own header comment states: a missing
-// entry, or an entry whose pricing is undefined (meaning "unknown", not "free"), must never be
-// treated as zero-price — apps/server's Free-tier gate (quota.ts's decidePreflight) trusts this to
-// keep unlisted or mixed-priced models off the free tier.
+
+
+
+
 describe("isZeroPriceEntry", () => {
   test("false for an absent entry", () => {
     expect(isZeroPriceEntry(undefined)).toBe(false);

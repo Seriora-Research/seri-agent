@@ -39,7 +39,7 @@ afterEach(async () => {
     try {
       database.close();
     } catch {
-      // already closed
+
     }
   }
   openDatabases = [];

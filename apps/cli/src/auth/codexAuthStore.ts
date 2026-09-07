@@ -137,8 +137,8 @@ function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-// Read-only. `codex` owns this file and rotates it. A torn or malformed file is "not connected",
-// the same total degrade loadAuthSession uses. seri never writes this path.
+
+
 export function loadCodexAuth(env: NodeJS.ProcessEnv = process.env): CodexAuth | undefined {
   const path = codexAuthPath(env);
   if (!existsSync(path)) return undefined;

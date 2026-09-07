@@ -1,8 +1,8 @@
-// runLoop's callSubject hook: the seam a composite tool (mcp/tool.ts's `mcp`, for one) uses to
-// carry its real subject to the gate, the approval prompt, and the events a consumer renders,
-// while the ToolSet lookup and the wire-format rows stay keyed on the literal tool name. The
-// existing tests in loop.tools.test.ts already assert every gate/event path with no callSubject
-// supplied, and none of them changed to get this feature in — they are the omitted-case coverage.
+
+
+
+
+
 import { describe, expect, test } from "bun:test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
@@ -63,7 +63,7 @@ describe("callSubject", () => {
   test("a remapped name, not the ToolSet key, is what reaches the gate", async () => {
     const tools = makeTools(async () => "ok");
 
-    // allowedTools seeded with the ToolSet key must NOT allow the call...
+
     const stillAsked = await collect(
       runLoop({
         model: twoTurnModel(),
@@ -77,7 +77,7 @@ describe("callSubject", () => {
     );
     expect(stillAsked.find((e) => e.type === "permission-denied")).toBeTruthy();
 
-    // ...while allowedTools seeded with the remapped name allows it with no prompt at all.
+
     const events = await collect(
       runLoop({
         model: twoTurnModel(),
@@ -134,8 +134,8 @@ describe("callSubject", () => {
     });
   });
 
-  // This one matters most: getting it wrong corrupts the provider wire format, because the
-  // provider matches a tool-result row against the tool-call it emitted by the literal name.
+
+
   test("the ModelMessage tool-result row still carries the ToolSet key, not the subject", async () => {
     const events = await collect(
       runLoop({
@@ -193,7 +193,7 @@ describe("callSubject", () => {
       signal: controller.signal,
     })) {
       events.push(event);
-      // Neither call has started when this fires, so both fall into the unanswered path.
+
       if (event.type === "messages-updated") controller.abort();
     }
 
@@ -211,9 +211,9 @@ describe("callSubject", () => {
   });
 });
 
-// mcpCallSubject is the real-world callSubject passed to runLoop (runtime/drive.ts). This is the
-// boundary the helper's own unit tests cannot see: whether the gate actually reasons about the
-// resolved subject rather than about whatever string the model put in the mcp call's input.
+
+
+
 describe("mcpCallSubject as runLoop's callSubject", () => {
   function mcpOnlyTools(): ToolSet {
     return {
@@ -229,9 +229,9 @@ describe("mcpCallSubject as runLoop's callSubject", () => {
   }
 
   test("read-only blocks an mcp call whose input names a built-in read tool", async () => {
-    // A model choosing input.tool: "read_file" is exactly the shape the fix in mcp/tool.ts closes
-    // off: read_file is in the gate's read class, so an unfixed mcpCallSubject resolving to it
-    // would let this call sail through read-only, which the design says must block every mcp call.
+
+
+
     const model = new MockLanguageModelV4({
       doStream: [streamResult(toolCallChunks("call-1", MCP_TOOL_NAME, { tool: "read_file" }))],
     });

@@ -48,14 +48,14 @@ export async function fetchUsageReport(
       },
     );
   } catch {
-    // Fall through to the snapshot. A timeout or network error is not a crash.
+
   }
 
   if (report !== null) {
     try {
       writeUsageSnapshot(configDir, { fetchedAt: now.toISOString(), report });
     } catch {
-      // Snapshot is best-effort. A live report still prints.
+
     }
     return { status: "ok", report };
   }

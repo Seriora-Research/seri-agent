@@ -8,9 +8,9 @@ import { truncate } from "../truncate";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
 
-// Character budgets for the WHOLE file (date tags included, §1b) — small enough that a session
-// start never pays for more than a few hundred tokens of memory, deliberately per-scope rather
-// than one shared pool so a chatty global note can't crowd out the user's own preferences.
+
+
+
 export const MEMORY_CAPS: Record<MemoryScope, number> = {
   user: 1_375,
   "memory-global": 2_200,
@@ -19,10 +19,10 @@ export const MEMORY_CAPS: Record<MemoryScope, number> = {
 
 export type MemoryContext = { configDir: string; worktree: string };
 
-// sha256 of projectKey(worktree), first 16 hex chars (64 bits). NOT a new project-identity
-// function: projectKey (permissions/store.ts) already owns the resolve()+case-fold decision; this
-// only makes its output usable as a directory name, the same way checkpoint.ts's
-// checkpointStoreDir already digests it for the same reason.
+
+
+
+
 export function projectDirToken(worktree: string): string {
   return createHash("sha256").update(projectKey(worktree)).digest("hex").slice(0, 16);
 }
@@ -34,9 +34,9 @@ export function memoryFilePath(scope: MemoryScope, ctx: MemoryContext): string {
   return join(dir, projectDirToken(ctx.worktree), "MEMORY.md");
 }
 
-// A line that doesn't match ENTRY_RE (a hand-written line, or the file's very first line before
-// any entry was ever added) is preserved verbatim on write but reported with date "" — the file is
-// hand-editable, and a line typed by hand must never be silently dropped by a later memory_write.
+
+
+
 export type MemoryEntry = { date: string; text: string; line: string };
 export type MemoryFile = {
   scope: MemoryScope;
@@ -45,10 +45,10 @@ export type MemoryFile = {
   chars: number;
   cap: number;
   entries: MemoryEntry[];
-  // basename(worktree) for a project file, the fixed filename otherwise — never the hash token or
-  // the full path (renderMemoryTier's own guarantee). Computed at load time, here, because
-  // renderMemoryTier only ever receives a LoadedMemory and has no ctx.worktree of its own to derive
-  // it from.
+
+
+
+
   label: string;
 };
 export type LoadedMemory = { user: MemoryFile; global: MemoryFile; project: MemoryFile };
@@ -72,14 +72,15 @@ function labelFor(scope: MemoryScope, ctx: MemoryContext): string {
 export function loadMemoryFile(scope: MemoryScope, ctx: MemoryContext): MemoryFile {
   const path = memoryFilePath(scope, ctx);
   const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
-  // Normalized on load, not left to parseEntries: a CRLF file (any Windows editor's default save)
-  // would blow the char cap differently on Windows than on Linux, and a trailing "\n" (any editor
-  // that adds one on save) would otherwise split into a phantom `{date:"",text:"",line:""}` entry
-  // via text.split("\n") in parseEntries below — inflating `entries.length` in cap-refusal
-  // messages, making section()'s own `entries.length === 0` check miss an otherwise-empty file,
-  // and worst of all getting re-derived by computeWrite's own `text.split("\n")` on the very next
-  // write, permanently baking a blank line into the middle of the file instead of it staying a
-  // harmless trailing artifact.
+
+
+
+
+
+
+
+
+  // CRLF (Notepad's default) would blow the char cap differently on Windows vs Linux.
   const text = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
   return {
     scope,
@@ -105,13 +106,13 @@ export type MemoryWriteRequest = {
   action: "add" | "replace" | "remove";
   target?: string;
   content?: string;
-  reason: string; // provenance tag: which turn/fact triggered this write — never written to the file itself (§1f)
-  durable: boolean; // provenance tag: lasting fact/preference (true) vs session-scoped noise (false)
+  reason: string;
+  durable: boolean;
 };
 
-// The un-truncated "Current entries" block every refusal below carries, so the model (or a human
-// at /memory diff) can see everything it might consolidate rather than guessing at what else is in
-// the file.
+
+
+
 function currentEntriesBlock(file: MemoryFile): string {
   const lines = [`Current entries (${file.entries.length}, ${file.chars} chars):`];
   for (const entry of file.entries) lines.push(`  ${entry.line}`);
@@ -119,12 +120,12 @@ function currentEntriesBlock(file: MemoryFile): string {
 }
 
 function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
-  // "".includes() is always true, so an unguarded empty target would match every entry — in a
-  // file with exactly one entry, matches.length === 1 would pass silently below and
-  // remove/overwrite it despite no genuine match. The schema (memory/tool.ts) already rejects an
-  // empty target from a model call, but computeWrite is also reached from pending.ts's
-  // approvePending/diffPending re-validation path against a `.pending` file read straight off
-  // disk, which the schema never touches — this is the check that actually covers that path.
+
+
+
+
+
+
   if (target.length === 0) {
     throw new Error(`memory_write refused: "target" must not be empty.`);
   }
@@ -142,8 +143,8 @@ function findUniqueMatch(file: MemoryFile, target: string): MemoryEntry {
   return matches[0];
 }
 
-// Shared by the "add" and "replace" branches below — the one place that decides what counts as a
-// disallowed newline and the one error message string, rather than two copy-pasted checks.
+
+
 function assertSingleLine(content: string): void {
   if (content.includes("\n")) {
     throw new Error(
@@ -152,10 +153,10 @@ function assertSingleLine(content: string): void {
   }
 }
 
-// Pure. Returns the file's next full text, or throws — the caller does not branch on a result
-// union, matching tools/edit.ts's own throw-on-ambiguity precedent (edit.ts:109-127). loop.ts
-// already turns a thrown tool error into an `error-text` tool result the model reads in the same
-// turn, so a throw here is how "the model consolidates in the same turn" (§1c) actually happens.
+
+
+
+
 export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: string): string {
   const lines = file.text.length === 0 ? [] : file.text.split("\n");
 
@@ -172,8 +173,8 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
     assertSingleLine(req.content);
     const match = findUniqueMatch(file, req.target);
     const index = lines.indexOf(match.line);
-    // The date is refreshed, not carried over: a replace is a modification, and staleness should
-    // be legible from the date the same way a fresh "add" is.
+
+
     lines[index] = `- [${today}] ${req.content}`;
   } else {
     if (req.target === undefined) {
@@ -184,8 +185,8 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
     lines.splice(index, 1);
   }
 
-  // "\n" only, never CRLF, on every platform — a CRLF file would blow the char cap differently on
-  // Windows than on Linux, making this test pass on two of three CI runners and not the third.
+
+
   const nextText = lines.join("\n");
   if (nextText.length > file.cap) {
     const over = nextText.length - file.cap;
@@ -198,17 +199,17 @@ export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: s
   return nextText;
 }
 
-// mkdir 0o700 + write-then-rename + chmod 0o600 on non-win32, via atomicWriteFile.ts's shared
-// helper (that module's own comment covers why the tmp filename is non-colliding) — this file
-// holds the user's own stated preferences, and anything that can append to it steers future
-// sessions.
+
+
+
+
 export function applyWrite(
   req: MemoryWriteRequest,
   ctx: MemoryContext,
   today: string,
 ): { path: string; before: string; after: string } {
   const file = loadMemoryFile(req.scope, ctx);
-  const after = computeWrite(file, req, today); // throws before anything below runs
+  const after = computeWrite(file, req, today);
   atomicWriteFile(file.path, after);
   return { path: file.path, before: file.text, after };
 }
@@ -245,17 +246,17 @@ function memorySections(memory: LoadedMemory): string {
   ].join("\n");
 }
 
-// "" when all three files are empty/whitespace-only — this IS the B2 guarantee: buildVolatileTier
-// (agents/systemPrompt.ts) composes this through joinTiers, whose filter(Boolean) drops an empty
-// string, so a session with no memory yet renders byte-identically to today's prompt.
+
+
+
 export function renderMemoryTier(memory: LoadedMemory): string {
   if (memoryFilesEmpty(memory)) return "";
   return ["# Memory", MEMORY_TIER_INTRO, "", memorySections(memory)].join("\n");
 }
 
-// Same three sections and budgets as renderMemoryTier, without that function's coding-agent intro
-// ("frozen for this session", "You cannot edit these directly"). The archivist reloads these files
-// live and writes them; that intro is a direct contradiction of its job.
+
+
+
 export function renderArchivistMemory(memory: LoadedMemory): string {
   if (memoryFilesEmpty(memory)) return "";
   return memorySections(memory);

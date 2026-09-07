@@ -274,8 +274,8 @@ describe("driveLoop options", () => {
 });
 
 describe("driveLoop directDispatch", () => {
-  // Built-in explore/plan and a file-defined agent are registry entries alike, so `/explore …`
-  // reaches this path with no source change; a file-defined agent reaches it identically.
+
+
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
     return {
@@ -327,15 +327,15 @@ describe("driveLoop directDispatch", () => {
     );
     await run;
 
-    // The three rows this dispatch appended, past whatever the session already held.
+
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[0]).toEqual({ role: "user", content: "grade the diff" });
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
   });
 
-  // Providers want a user-first, alternating history, and the user row carries the plain task —
-  // never the `/reviewer …` line, which is syntax the model cannot itself issue.
+
+
   test("the user row is the plain task text, and the tool-call names the agent and the goal", async () => {
     const persisted: SessionState<ModelMessage>[] = [];
     const { run } = runDirect(
@@ -493,8 +493,8 @@ describe("driveLoop directDispatch", () => {
     );
 
     expect(result.doneReason).toBe("aborted");
-    // An assistant tool-call with no matching tool-result is AI_MissingToolResultsError on the
-    // next resume, which is the one thing a cancel must never leave behind.
+
+
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
@@ -532,22 +532,22 @@ describe("driveLoop directDispatch", () => {
         runArchivist: false,
       },
     );
-    // preparedStub's session starts with one message, so the user row this dispatch appends lands
-    // at index 1 — a rewind to it undoes the whole submission, the request included.
+
+
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
   });
 
-  // A child's tool calls never reach the parent's runLoop, so a PreToolUse hook is only a rail for
-  // a child if the SubagentRuntime carries the runner down — which is why this asserts on the opts
-  // the CHILD loop was handed rather than on anything the parent did. A dispatch is the vehicle
-  // because it is the shortest one: `/name` runs exactly one child and no parent model call, so
-  // the single captured opts object is the child's.
-  //
-  // The matcher is written to match nothing, so the runner is exercised without spawning anything:
-  // a real HookRunner short-circuits on hookMatches and resolves `{ errors: [] }`, where any other
-  // function of that shape would not. The empty-registry half is the negative control — without it
-  // this test would pass identically against a wiring that always passed some callback down.
+
+
+
+
+
+
+
+
+
+
   test("a session with a PreToolUse hook hands the runner down to the child loop", async () => {
     const spec: HookSpec = {
       event: "PreToolUse",
@@ -763,8 +763,8 @@ describe("driveLoop mcp composition", () => {
     inputSchema: {},
   };
 
-  // Seen red first: with `withMcp(...)` deleted from the tools composition in runtime/drive.ts,
-  // MCP_TOOL_NAME never appears in what runLoop is handed, regardless of what prepared.mcp holds.
+
+
   test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);
@@ -785,10 +785,10 @@ describe("driveLoop mcp composition", () => {
     expect(capture()?.callSubject).toBe(mcpCallSubject);
   });
 
-  // Seen red first: with the trailing `grantFingerprint(prepared.mcp, event.name)` argument
-  // removed from the rememberGrant call in runtime/drive.ts, the MCP entry below is refused
-  // (rememberGrant requires a fingerprint for an mcp_ name) and this test's own `mcpEntry` search
-  // finds nothing.
+
+
+
+
   test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);

@@ -23,10 +23,10 @@ function denyDefaultPlusLoopback(): string {
   ].join("\n");
 }
 
-// POSIX connect(2), compiled outside the sandbox. /usr/bin/python3 on
-// macos-latest exits 72 under (deny default) before the script runs. bun
-// and node:net remap ::ffff:127.0.0.1 onto AF_INET, so the mapped-form
-// deny looks like a successful localhost connect (CI: deniedBySandbox false).
+
+
+
+
 const CONNECT_C = `
 #include <arpa/inet.h>
 #include <errno.h>

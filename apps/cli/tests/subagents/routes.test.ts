@@ -249,8 +249,8 @@ describe("effortForRole", () => {
   });
 
   test("a different pair omits effort even when the parent string is high", () => {
-    // Negative control: copying parent high onto a cheap/different child is the bug this
-    // function exists to prevent. If this assertion is deleted, inherit-always looks green.
+
+
     expect(
       effortForRole(parentEffort, { provider: "anthropic", modelId: "claude-sonnet-5" }),
     ).toBeUndefined();
@@ -393,8 +393,8 @@ describe("realizedRoute", () => {
       inherited: false,
     };
     const warning = roleConstructionWarning("plan", intended, "boom");
-    // Negative control: a message that only names the pair would still contain
-    // anthropic/claude-sonnet-5; the role quote is what makes fail-open attributable.
+
+
     expect(warning).toContain('role "plan" could not use');
     expect(warning).not.toContain('role "oracle"');
   });
@@ -429,7 +429,7 @@ describe("parseRolePins reads env then config from a real config dir", () => {
     try {
       setConfigValue("SERI_ROLE_ORACLE_MODEL", "claude-sonnet-5", dir);
       setConfigValue("SERI_ROLE_ORACLE_PROVIDER", "anthropic", dir);
-      // parseRolePins is the pure seam; the file is the same Record loadConfig returns.
+
       const pins = parseRolePins(process.env, loadConfig(dir));
       expect(pins.oracle).toEqual({ model: "claude-sonnet-5", provider: "anthropic" });
     } finally {
@@ -439,10 +439,10 @@ describe("parseRolePins reads env then config from a real config dir", () => {
 });
 
 describe("a subagent pinned to a subscribed provider", () => {
-  // Found by Claude review on PR #222. resolveSessionRoute threads subscribedProviders, but the
-  // subagent path did not, so a role pinned to xai with a connected subscription and no
-  // XAI_API_KEY resolved to credential "key", hit missingKeyError in dispatchModel, and got
-  // silently downgraded to the parent's model even though a usable credential existed.
+
+
+
+
   const grokCatalog: ModelCatalog = {
     fetchedAt: "2026-08-28T00:00:00.000Z",
     entries: [entry({ id: "grok-4.5", provider: "xai" }), ...catalog.entries],

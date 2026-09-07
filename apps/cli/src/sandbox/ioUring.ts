@@ -11,8 +11,8 @@ export type IoUringProbe =
   | { status: "unsupported" }
   | { status: "error"; message: string };
 
-// asm-generic numbers, shared by x86_64 and aarch64. A new arch with different
-// numbers cannot reuse this table.
+
+
 const SYSCALL_NR: Record<IoUringSyscall, number> = {
   io_uring_setup: 425,
   io_uring_enter: 426,
@@ -61,9 +61,10 @@ export function ioUringDenyFilter(arch: LinuxArch): Uint8Array {
     ...insn(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS),
     ...insn(BPF_LD | BPF_W | BPF_ABS, 0, 0, 0),
   ];
-  // x32 syscalls share AUDIT_ARCH_X86_64; bit 0x40000000 is set on nr. Without
-  // this JGE they miss nr==425/426/427 and fall through to ALLOW.
+
+
   if (arch === "x64") {
+    // x32 syscalls share AUDIT_ARCH_X86_64 with bit 0x40000000 set on nr; without this JGE they miss 425/426/427.
     bytes.push(
       ...insn(BPF_JMP | BPF_JGE | BPF_K, 0, 1, X32_SYSCALL_BIT),
       ...insn(BPF_RET | BPF_K, 0, 0, SECCOMP_RET_KILL_PROCESS),

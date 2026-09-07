@@ -5,27 +5,23 @@ import {
   worktreeRelativePath,
 } from "./registry";
 
-/**
- * Which glob-scoped rules have already fired this session. Session-scoped, rebuilt on `/clear` the
- * same way the archivist's own state is, and passed in rather than kept module-level so two
- * sessions in one process (every `bun test` run, and a future daemon) cannot bleed into each other.
- */
+
 export type RulesState = { readonly fired: Set<string> };
 
 export function createRulesState(): RulesState {
   return { fired: new Set() };
 }
 
-// The marker the injected message is wrapped in. Plain text, no model-specific grammar, and stated
-// as coming from the harness rather than the user — without that line the model reads a rule as
-// something the person just typed, and may answer it instead of following it.
+
+
+
 export const RULE_MARKER_OPEN = "<project-rules";
 
-// Only these two tools carry an unambiguous single file path. `edit` takes content and no path at
-// all, `grep`/`glob` take a directory to search, and `bash`/`powershell` take free text that may
-// name any number of files or none. Matching on `read_file` is what puts a rule in context BEFORE
-// the model composes an edit, which is the order the system prompt's own read/edit/write sequence
-// teaches.
+
+
+
+
+
 const PATH_TOOLS = new Set(["read_file", "write_file"]);
 
 function pathOf(input: unknown): string | undefined {
@@ -34,15 +30,7 @@ function pathOf(input: unknown): string | undefined {
   return typeof path === "string" && path.length > 0 ? path : undefined;
 }
 
-/**
- * Builds the `onToolPhaseEnd` callback runLoop takes, or undefined when this session has no
- * glob-scoped rule at all — so a project without one pays nothing per tool round, not even a
- * function call.
- *
- * Returns the text to append, or undefined when nothing new matched. A rule fires at most once per
- * session: its text is already in the conversation history afterwards, which is append-only, so
- * re-injecting on turn 40 would restate what the model can still read from turn 1.
- */
+
 export function createRuleInjector(opts: {
   rules: RuleRegistry;
   state: RulesState;
@@ -70,8 +58,8 @@ export function createRuleInjector(opts: {
       if (opts.state.fired.has(rule.filePath)) continue;
       const hit = paths.find((path) => ruleMatchesPath(rule, path));
       if (hit === undefined) continue;
-      // Marked at the moment it is selected, not after the message is built, so two rules matching
-      // in one round cannot both claim to be the first and neither can fire twice.
+
+
       opts.state.fired.add(rule.filePath);
       newlyFired.push({ rule, path: hit });
     }

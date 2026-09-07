@@ -22,9 +22,9 @@ afterEach(() => {
   roots = [];
 });
 
-// The worktree sits several directories below the tree root so the upward walk has something to
-// walk, and the profile root is a sibling of the project rather than an ancestor of it — the same
-// fixture shape skills/registry.test.ts uses.
+
+
+
 function makeTree(files: Record<string, string>): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-mcp-"));
   roots.push(root);
@@ -87,8 +87,8 @@ describe("loadMcpRegistry", () => {
     expect(registry.get("exa")?.spec.source).toBe("project");
   });
 
-  // Negative control: a broken file must not take session start down with it, and the warning has
-  // to name the file or the user cannot find what to fix. The other scope must still load.
+
+
   test("a malformed YAML file is skipped with a warning naming it, and the other scope still loads", () => {
     const { registry, warnings } = load({
       "profile/mcp/servers.yaml": "servers:\n  exa: [unclosed\n",
@@ -114,12 +114,12 @@ describe("loadMcpRegistry", () => {
     expect(warnings.some((w) => w.includes("Bad-Name") && w.includes("name"))).toBe(true);
   });
 
-  // Underscore specifically, because rejecting it is what keeps mcpToolName injective and this is
-  // the only thing standing between the fold and a silent collision. `mcpToolName` turns "-" into
-  // "_", so a server named `my_server` and one named `my-server` would compose the identical
-  // `mcp_my_server_x`, and the second would shadow the first in findMcpTool's scan with nothing
-  // reported. The accepted name shape is what makes that pair unrepresentable rather than handled,
-  // so widening it is not the cosmetic change it looks like.
+
+
+
+
+
+
   test("an underscore in a server name is rejected, which is what keeps the tool-name fold injective", () => {
     const { registry, warnings } = load({
       "project/.seri/mcp/servers.yaml": `servers:
@@ -164,10 +164,10 @@ describe("loadMcpRegistry", () => {
     ).toBe(true);
   });
 
-  // Negative control: session start must never fail over a config file, so this is asserted at
-  // the module boundary a fetch or an async signature would break. Point loadMcpRegistry at a
-  // configured but unreachable URL and assert it returns synchronously with the server present
-  // and catalog undefined.
+
+
+
+
   test("performs no network I/O: an unreachable server loads synchronously with no catalog", () => {
     const { worktree, configDir } = makeTree({
       "project/.seri/mcp/servers.yaml": "servers:\n  ghost:\n    url: https://127.0.0.1:1/mcp\n",

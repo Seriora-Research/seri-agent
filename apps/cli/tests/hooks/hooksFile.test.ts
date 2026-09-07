@@ -139,9 +139,9 @@ describe("parseHooksFile", () => {
     }
   });
 
-  // The last is the one that does not look like a path: `dir\a:b.ps1` is an NTFS alternate data
-  // stream on `dir\a`, which readdirSync does not list — so the trust digest cannot pin it while
-  // spawn would still run it.
+
+
+
   test.each(["../../evil", "sub/evil", "sub\\\\evil", "..", "guard:stream"])(
     'a script of "%s" is rejected',
     (script) => {

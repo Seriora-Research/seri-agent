@@ -32,7 +32,7 @@ function runBinary(
 }
 
 function rmFixture(dir: string): void {
-  // Windows still maps the compiled exe after spawnSync returns. force:true does not retry EBUSY.
+
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 

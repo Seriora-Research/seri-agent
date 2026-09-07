@@ -88,9 +88,9 @@ describe("stagePendingWrite / listPending", () => {
     expect(warnings.length).toBe(1);
   });
 
-  // ctxForPending falls back to `worktree: p.projectPath ?? ""`, and an empty worktree resolves
-  // to process.cwd() at approval time — a memory-project record missing projectPath must be
-  // skipped, not silently resolved to whatever directory seri happens to be invoked from.
+
+
+
   test("a memory-project .pending file missing projectPath is skipped with a warning, not resolved to cwd", () => {
     const ctx = makeCtx();
     const dir = join(getPendingDir(ctx.configDir), "memory-project");
@@ -106,7 +106,7 @@ describe("stagePendingWrite / listPending", () => {
         reason: "r",
         durable: true,
         entryDate: "2026-08-11",
-        // projectPath deliberately omitted
+
       }),
     );
     const warnings: string[] = [];
@@ -138,8 +138,8 @@ describe("resolvePendingRef", () => {
 
   test("throws on an ambiguous prefix", () => {
     const ctx = makeCtx();
-    // Written directly at their target paths (not via stagePendingWrite, whose id is random) so
-    // the shared "aaaa" prefix is deterministic rather than left to chance.
+
+
     const base = {
       stagedAt: new Date().toISOString(),
       scope: "user" as const,

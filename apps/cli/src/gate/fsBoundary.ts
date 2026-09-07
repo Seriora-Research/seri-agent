@@ -19,9 +19,9 @@ export type FsPolicyVerdict = "name-gate" | "block" | "ask";
 
 type UnaskedOutsideKey = `${ToolClass}:${PermissionMode}:${"prompt" | "noprompt"}`;
 
-// Write + auto asks with a prompt and blocks without one, because checkPermission would allow the write.
-// Write + approve-each also asks, so a persisted write_file grant cannot skip the folder question.
-// Write + read-only defers. Asking would let a yes bypass read-only.
+
+
+
 export const UNASKED_OUTSIDE: { readonly [K in UnaskedOutsideKey]: FsPolicyVerdict } = {
   "read:auto:prompt": "ask",
   "read:auto:noprompt": "block",
@@ -49,8 +49,8 @@ export function decideFsPolicy(fact: PolicyFact): FsPolicyVerdict {
   return UNASKED_OUTSIDE[unaskedOutsideKey(fact)];
 }
 
-// One-shot latch. Terminal states ignore further events so a retried prompt cannot flip a no
-// into a yes, or the other way around.
+
+
 export function reduceConsent(current: Consent, event: ConsentEvent): Consent {
   if (current !== "unasked") return current;
   return event.type === "granted" ? "allowed-this-run" : "denied-this-run";

@@ -61,7 +61,7 @@ describe("SessionDatabase", () => {
     raw.close();
 
     expect(() => new SessionDatabase(configDir)).toThrow("newer than this seri binary");
-    // Windows CI: first SessionDatabase open + pragma round-trip was 3373ms on the same job.
+
   }, 20_000);
 
   test("a second connection opening the same file waits rather than failing busy on WAL", () => {
