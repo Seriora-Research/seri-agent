@@ -16,8 +16,7 @@ let tmpRoot: string;
 
 beforeEach(() => {
   delete process.env.OPENAI_API_KEY;
-  // Point the config dir at an empty temp dir so a real config.json on this
-  // machine can never supply OPENAI_API_KEY and mask the "unset" case.
+
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-openai-test-"));
   process.env.HOME = tmpRoot;
 });

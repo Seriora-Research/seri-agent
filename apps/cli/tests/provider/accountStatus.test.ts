@@ -159,13 +159,6 @@ describe("fetchAccountPlan — failure paths fail closed to null", () => {
     expect(plan).toBeNull();
   });
 
-  // A gateway that accepts the TCP connection but never answers used to hang this call (and
-  // therefore prepareSession/CLI startup) forever — the fail-closed catch only fired once the
-  // fetch REJECTED, never while merely pending. This fake never resolves on
-  // its own, only on the injected AbortSignal firing — the same shape a real fetch takes under
-  // AbortSignal.timeout — proving the deadline is what actually unblocks it, not a coincidence of
-  // the fake settling quickly. `timeoutMs` is overridden short so this test doesn't wait out the
-  // real 10s default.
   test("a request that never responds still returns null, bounded by the deadline", async () => {
     seedAuthJson(tmpRoot);
     const fetchFn = ((_input: RequestInfo | URL, init?: RequestInit) =>

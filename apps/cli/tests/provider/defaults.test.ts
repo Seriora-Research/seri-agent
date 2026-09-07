@@ -25,8 +25,7 @@ let tmpRoot: string;
 beforeEach(() => {
   delete process.env.SERI_MODEL;
   delete process.env.SERI_PROVIDER;
-  // Point the config dir at an empty temp dir so a real config.json on this machine can never
-  // supply SERI_MODEL/SERI_PROVIDER and mask the "nothing set" case.
+
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-defaults-test-"));
   process.env.HOME = tmpRoot;
 });
@@ -39,10 +38,6 @@ afterEach(() => {
 });
 
 describe("isModelProvider", () => {
-  // Derived from CATALOG_PROVIDERS itself (not a second, hand-written parallel list): the
-  // regression this guards is isModelProvider silently drifting out of sync with its own stated
-  // source of truth, which a hardcoded expected-list here couldn't catch — both sides would drift
-  // together.
   test("accepts every provider CATALOG_PROVIDERS lists", () => {
     expect(CATALOG_PROVIDERS.length).toBeGreaterThan(0);
     for (const p of CATALOG_PROVIDERS) {
@@ -82,13 +77,6 @@ describe("resolveDefaultModel", () => {
     });
   });
 
-  // code-review finding on PR #71 (round 2): model and provider used to resolve independently,
-  // each with its own env-then-config lookup. A one-off env override of ONLY SERI_MODEL — the
-  // exact `SERI_MODEL=<id> seri "task"` workflow README.md documents — picked up a STALE
-  // persisted SERI_PROVIDER from an earlier /model pick, mixing a model id from one source with a
-  // provider from another. Whichever source supplies the model must also supply the provider:
-  // overriding only SERI_MODEL via env must resolve to no requested provider, not reach into
-  // config.json's persisted (and here, wrong) provider.
   test("env overriding only SERI_MODEL ignores a stale persisted provider, not mixes it in", () => {
     persistDefaultModel({ model: "claude-sonnet-4-5", provider: "anthropic" });
     process.env.SERI_MODEL = "llama-3.3-70b-versatile";
@@ -133,21 +121,9 @@ describe("persistDefaultModel", () => {
     });
   });
 
-  // code-review finding on PR #71: persistDefaultModel used to call setConfigValue twice — an
-  // interruption between the two (a process kill, or the second call throwing) could leave
-  // config.json with the new SERI_MODEL but the old SERI_PROVIDER, or vice versa. Now backed by
-  // setConfigValues's own single write (config.test.ts's own atomicity test covers that function
-  // directly) — this is the same proof at persistDefaultModel's own call site: sabotaging the one
-  // write leaves the PREVIOUSLY persisted pair completely unchanged, never a mismatched hybrid of
-  // the old and new picks.
   test("a sabotaged persist leaves the previously persisted pair unchanged, not a mismatch", () => {
     persistDefaultModel({ model: "first-model", provider: "openrouter" });
 
-    // atomicWriteFile.ts's own tmp filename is pid+random, not a fixed name a second write could
-    // pre-create and collide with (that module's own comment explains why) — so sabotage targets
-    // the destination's own writability instead, the same check atomicWriteFile.ts now performs
-    // before its write-tmp-then-rename (config.test.ts's own sabotage test does the same for
-    // setConfigValues directly).
     const configPath = join(tmpRoot, ".seri", CONFIG_FILENAME);
     chmodSync(configPath, 0o444);
 
@@ -158,24 +134,15 @@ describe("persistDefaultModel", () => {
         provider: "openrouter",
       });
     } finally {
-      // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
       chmodSync(configPath, 0o644);
     }
   });
 });
 
-// Code-review finding (PR #73, round 3, item #4): both functions never accepted a configDir at
-// all, unlike everything else round 2 threaded through (configuredProviders, getModel,
-// providerKeyState) — a `run(argv, {authConfigDir: someDir})` caller got session.model/
-// session.provider backfilled from the wrong (ambient) config.json, and a successful turn's
-// persist silently wrote back into the real user's config.json even though the run was meant to
-// stay sandboxed inside authConfigDir.
 describe("configDir isolation", () => {
   test("both functions read/write the given configDir, not the ambient default", () => {
-    // The ambient default (HOME-based, this file's own beforeEach) has one pair persisted.
     persistDefaultModel({ model: "ambient-model", provider: "openrouter" });
 
-    // A caller-supplied configDir has a DIFFERENT pair.
     const callerDir = mkdtempSync(join(tmpdir(), "seri-defaults-test-caller-"));
     try {
       persistDefaultModel({ model: "caller-model", provider: "anthropic" }, callerDir);
@@ -184,10 +151,7 @@ describe("configDir isolation", () => {
         model: "caller-model",
         provider: "anthropic",
       });
-      // The negative control this test's own point rests on: the ambient default's own pair is
-      // untouched by the caller-scoped write above, and still resolves independently — proving
-      // the two directories are genuinely isolated, not that resolveDefaultModel(callerDir)
-      // happened to return the right answer by coincidence.
+
       expect(resolveDefaultModel()).toEqual({
         model: "ambient-model",
         provider: "openrouter",

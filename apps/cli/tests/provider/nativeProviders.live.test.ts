@@ -5,9 +5,6 @@ import { getGoogleModel } from "../../src/provider/google";
 import { getOpenAIModel } from "../../src/provider/openai";
 import { validateProviderKey } from "../../src/provider/validate";
 
-// Opt-in, skip-by-default (mirrors openrouterCaching.live.test.ts's exact shape): a documented,
-// reproducible manual check that BYOK actually authenticates against each native provider,
-// direct CLI-to-provider — not run in CI or by a plain `bun test`, since it needs a real key.
 async function assertRoundTrip(model: ReturnType<typeof getAnthropicModel>): Promise<void> {
   const result = streamText({
     model,
@@ -15,8 +12,6 @@ async function assertRoundTrip(model: ReturnType<typeof getAnthropicModel>): Pro
     maxOutputTokens: 16,
   });
   for await (const _part of result.fullStream) {
-    // drain — text/usage resolve only once the stream is fully consumed, same pattern as
-    // promptCaching.live.test.ts's own runTurn.
   }
   const text = await result.text;
   const usage = await result.usage;
@@ -50,11 +45,6 @@ test.skipIf(
   30000,
 );
 
-// D5's own probe (apps/cli/src/provider/validate.ts), extended to all five providers per
-// feature-plan.md's Test plan — the only place validateProviderKey is ever exercised against a
-// real endpoint. Same opt-in shape as the round-trips above: skipped unless
-// SERI_LIVE_PROVIDER_CHECK=1 AND the provider's own real key are both present, so a plain
-// `bun test` never touches the network.
 test.skipIf(!process.env.GROQ_API_KEY || process.env.SERI_LIVE_PROVIDER_CHECK !== "1")(
   "validateProviderKey round-trips a real probe against the Groq API",
   async () => {

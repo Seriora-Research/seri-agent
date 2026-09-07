@@ -31,9 +31,6 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogE
   };
 }
 
-// Scoped to `configured`, not whole-catalog: an unconfigured provider's backfilled rows would
-// never be shown (the guided picker filters to the same `configured` set) but would still
-// inflate other providers' route-group alternatives counts for no reason.
 describe("catalogWithFallback", () => {
   test("backfills a configured provider missing from live", () => {
     const live: ModelCatalog = {
@@ -47,8 +44,6 @@ describe("catalogWithFallback", () => {
     expect(result.entries.some((entry) => entry.provider === "openrouter")).toBe(true);
   });
 
-  // The scoping regression test: a provider missing from live but not in `configured` must NOT be
-  // backfilled — its rows would offer a route the guided picker can't actually honor later.
   test("does not backfill a provider missing from live but not in configured", () => {
     const live: ModelCatalog = {
       fetchedAt: "2026-08-09T00:00:00.000Z",
@@ -72,15 +67,6 @@ describe("catalogWithFallback", () => {
   });
 });
 
-// In-process, not a spawned child (M-2/M-3 fix): a spawned child inherits this package's own test
-// script env (apps/cli/package.json's `"test": "SERI_DISABLE_MODELS_FETCH=1 bun test"`), which made
-// loadCatalog skip the fetch before the injected failing fetch could ever run — so the previous
-// version of this test genuinely never exercised the fetch-fails-and-falls-back path it claimed to,
-// despite its own comment saying it did. Two things make an in-process test safe here instead:
-// `resetCatalogCache()` (packages/model-catalog/src/catalog.ts, now re-exported from index.ts)
-// clears the process-lifetime cache another test in this same `bun test` process may have already
-// populated, and deleting SERI_DISABLE_MODELS_FETCH for the duration of this test — restored in
-// afterEach — makes the outcome independent of whatever the package script sets by default.
 describe("getModelCatalog", () => {
   const originalDisableFlag = process.env.SERI_DISABLE_MODELS_FETCH;
   const originalCodexHome = process.env.CODEX_HOME;
@@ -103,10 +89,6 @@ describe("getModelCatalog", () => {
   });
 
   test("prints a warning exactly once when the live fetch fails, and returns the bundled fallback", async () => {
-    // `called` is what actually distinguishes this from the SERI_DISABLE_MODELS_FETCH path: both
-    // produce the same externally visible result (one warning, a non-empty fallback catalog) — see
-    // this file's own top comment — so the assertion below on `called` is what the previous version
-    // of this test was missing and is the reason it did not catch its own vacuousness.
     let called = false;
     const failingFetch: typeof fetch = (async () => {
       called = true;
@@ -129,11 +111,6 @@ describe("getModelCatalog", () => {
     expect(catalog.entries.length).toBeGreaterThan(0);
   });
 
-  // Code-review finding, PR #91 round 3: cli.ts's own `run()` and `prepareSession` both call
-  // `getModelCatalog()` independently on a guided-setup run. `loadCatalog`'s promise cache dedupes
-  // the underlying FETCH across both calls, but each caller used to still do its own
-  // `catalog === FALLBACK_MANIFEST` check and print its own warning — one failed fetch, two
-  // identical lines. Negative control: pre-fix, `errors` here has length 2.
   test("two independent callers sharing one failed fetch see the warning only once", async () => {
     const failingFetch: typeof fetch = (async () => {
       throw new Error("network down");
@@ -152,9 +129,6 @@ describe("getModelCatalog", () => {
     expect(errors).toHaveLength(1);
   });
 
-  // Both paths return the bundled manifest, so a single warning worded for a failed fetch told a
-  // user running with the flag that something was unreachable when nothing had been tried. `fetch` is not stubbed here on purpose: reaching it at all would fail
-  // the `called` assertion this test makes.
   test("the SERI_DISABLE_MODELS_FETCH path says the fetch was disabled, not that models.dev was unreachable", async () => {
     process.env.SERI_DISABLE_MODELS_FETCH = "1";
     let called = false;

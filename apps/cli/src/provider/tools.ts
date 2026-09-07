@@ -15,11 +15,7 @@ import { readFile } from "../tools/readFile";
 import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
 import { writeFile } from "../tools/writeFile";
 
-// Relative paths resolve against the session cwd, not process.cwd(). A daemon hosts concurrent
-// sessions and never calls chdir, so each toolset has to carry its own directory. Always
-// `resolve`, including for an absolute input: `isAbsolute ? path : resolve(cwd, path)` would
-// leave `/abs/other/../secret` un-normalized, and the permission matcher has to judge the
-// same string the tool will probe.
+// Always resolve, including absolute input: otherwise /abs/other/../secret stays un-normalized.
 export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
     description: `Read a file's contents as text. The result is capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file.`,
@@ -77,9 +73,7 @@ export function createToolDefinitions(cwd: string) {
       glob: z.string().optional(),
       mode: z.enum(["files_with_matches", "content", "count"]).optional(),
     }),
-    // The second argument is the AI SDK's execution options, and this is the only place in the
-    // program that holds both the signal and the call into the search — discard it here and a
-    // cancel reaches the tool boundary and stops there.
+
     execute: ({ pattern, path, glob: globFilter, mode }, { abortSignal }) =>
       grep(pattern, { path: resolveAgainstCwd(cwd, path), glob: globFilter, mode }, abortSignal),
   });
@@ -98,11 +92,7 @@ export function createToolDefinitions(cwd: string) {
     description:
       "Run a shell command via bash. Each stream is capped at 30000 characters; `stdoutTruncated` and `stderrTruncated` say which one was cut, and a cut drops the middle and keeps both ends, so redirect that stream to a file and read the part you need rather than assuming it is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
     inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
-    // Same reason as grep/glob above, and one more: spawnCollect only rejects a killed child when it
-    // was handed the signal, so without this argument a command the user cancelled runs to completion
-    // and comes back as an ordinary successful ProcessResult. Measured before this line existed —
-    // `sleep 4; echo FINISHED-ANYWAY` with an already-aborted signal took 4072 ms and returned
-    // exitCode 0.
+
     execute: async ({ command, timeoutMs }, { abortSignal }) =>
       runBash(command, timeoutMs, abortSignal, isBashAvailable, cwd),
   });
@@ -128,11 +118,6 @@ export function createToolDefinitions(cwd: string) {
 
 export const toolDefinitions = createToolDefinitions(process.cwd());
 
-// Tools that write to disk or execute commands, as opposed to merely reading/searching.
-// Still the only place a built-in's permission class is declared: classifyBuiltin (below) is what
-// gate.ts asks, and its read class is READ_ONLY_TOOL_NAMES — this list's complement over
-// toolDefinitions — so there is no second list to keep in step and a write-capable tool can't
-// silently drift out of sync with what read-only mode blocks.
 export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "write_file",
   "edit",
@@ -140,15 +125,6 @@ export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "powershell",
 ];
 
-// Tools that can change the contents of the filesystem, which is what a checkpoint has to be
-// taken in front of. Deliberately NOT WRITE_TOOL_NAMES: that set is the *permission*
-// classification and contains `edit`, but `edit()` (tools/edit.ts:102) is
-// `(content: string, oldString, newString) => string` — a pure string transform whose schema
-// takes the content itself, not a path. It never touches disk; the model has to follow up with
-// `write_file`. Snapshotting on it would only ever produce a checkpoint identical to its
-// predecessor. Kept as a separate list rather than derived from the other so the two can each be
-// wrong independently: a tool that needs approval but writes nothing, or (worse) one that writes
-// without needing approval, must not be forced to be the same mistake twice.
 export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "write_file",
   "bash",
@@ -157,9 +133,6 @@ export const FS_MUTATING_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
 
 export type ToolName = keyof typeof toolDefinitions;
 
-// Derived from toolDefinitions minus WRITE_TOOL_NAMES, not hand-listed: a new write-capable tool
-// is excluded by construction instead of by remembering to update a second list — the same
-// rationale WRITE_TOOL_NAMES' own comment gives for gate.ts.
 export const READ_ONLY_TOOL_NAMES: readonly ToolName[] = (
   Object.keys(toolDefinitions) as ToolName[]
 ).filter((name) => !WRITE_TOOL_NAMES.includes(name));
@@ -173,36 +146,11 @@ export function createScheduledToolDefinitions(cwd: string) {
   };
 }
 
-// Not a key of toolDefinitions, and that absence IS the one-level subagent recursion guard
-// (subagents/registry.ts): every subagent's ToolSet is built by picking names out of
-// toolDefinitions, so `ToolName` can never name this tool and no child ToolSet can contain it.
 export const DISPATCH_TOOL_NAME = "dispatch_subagents";
 
 export type ToolClass = "read" | "write";
 
-// The read class is enumerated and everything else is `write`, including every name this file has
-// never heard of. That direction is the whole point: MCP opens the tool set to third parties, so
-// "absent from the write list" stops being evidence of safety — absence of knowledge never was —
-// and an unseen name costs an approval instead of being waved through in all three modes.
-//
-// Names here that are not keys of `toolDefinitions` would otherwise be unknown, which would
-// break read-only sessions that use them. None of them write the worktree: `dispatch_subagents`
-// hands the child the parent's own permission mode (subagents/dispatch.ts), so a subagent's
-// `bash` re-enters this same gate at the same mode rather than escaping it, and `skill` reads one
-// file the user themselves put under `.seri/skills/`.
-//
-// `ask_plan_questions`, `submit_plan`, `todo`, and `ask_user` are the same class for the same
-// reason they are not in `READ_ONLY_TOOL_NAMES`: they do not write the worktree, so the gate must
-// not block them under a read-only getter, but they must run sequentially rather than in the
-// concurrent-read batch. Putting `ask_user` on READ_ONLY_TOOL_NAMES would let it share a batch
-// with another sequential UI park.
-//
-// `skill`, `todo`, `ask_plan_questions`, `submit_plan` and `ask_user` are literals rather than
-// imports of their own modules' constants because `provider/` sits below those modules in the
-// graph, and the foundational modules here do not import the extension modules layered on top of
-// them. The drift a literal invites is guarded in tests/provider/tools.test.ts, which imports
-// each constant and asserts the two still agree — a cross-module import that costs nothing in a
-// test.
+// MCP can introduce unknown names; an unseen name is write, not read.
 const READ_CLASS_TOOL_NAMES = new Set<string>([
   ...READ_ONLY_TOOL_NAMES,
   DISPATCH_TOOL_NAME,
