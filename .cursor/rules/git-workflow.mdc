@@ -1,13 +1,16 @@
 ---
-description: Feature branches and PRs, not direct pushes to main.
+description: Feature branches and PRs against dev, never a direct push to main or dev.
 alwaysApply: true
 ---
 
 # Git workflow
 
-New work lands via a feature branch and a pull request, not a direct push to `main`.
-When the work is verified, push the branch and open a PR. Do not fast-forward local
-`main` and push it.
+Trunk is `dev`. New work lands via a feature branch and a pull request against `dev`.
+Do not push to `main` or `dev`. Do not open a PR that targets `main`. `main` is the
+release line.
+
+When the work is verified, push the branch and open a PR with `--base dev`. Do not
+fast-forward local `dev` or `main` and push it.
 
 Feature and bugfix work is pstack (`/poteto-mode`), including Opening a PR. Gates
 still run. Default review is `/interrogate` + `/no-comments`, plus `/blast-radius`

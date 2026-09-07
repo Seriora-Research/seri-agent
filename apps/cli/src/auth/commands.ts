@@ -3,6 +3,11 @@ import { clearUsageSnapshot } from "../usage/snapshot";
 import { clearAuthSession, expiresAtFrom, loadAuthSession, saveAuthSession } from "./authStore";
 import { openBrowser } from "./browser";
 import { pollForToken, requestDeviceCode } from "./deviceFlow";
+import {
+  type HostedAccountAccess,
+  HostedAccountsUnavailable,
+  hostedAccountAccess,
+} from "./hostedAccountAccess";
 import { clearSeriIgnore } from "./seriIgnore";
 
 export async function login(
@@ -18,8 +23,14 @@ export async function login(
     onMessage?: (message: string) => void;
 
     signal?: AbortSignal;
+    hostedAccountAccess?: () => HostedAccountAccess;
   } = {},
 ): Promise<void> {
+  const accessFn = deps.hostedAccountAccess ?? hostedAccountAccess;
+  if (accessFn() === "unavailable") {
+    throw new HostedAccountsUnavailable();
+  }
+
   const requestDeviceCodeFn = deps.requestDeviceCode ?? requestDeviceCode;
   const openBrowserFn = deps.openBrowser ?? openBrowser;
   const pollForTokenFn = deps.pollForToken ?? pollForToken;

@@ -1,5 +1,5 @@
 import { fetchWithTimeout } from "@seri/model-catalog";
-import { loadAuthSession } from "../auth/authStore";
+import { liveHostedSession } from "../auth/hostedAccountAccess";
 import { refreshSession as refreshSessionReal } from "../auth/refresh";
 import { authedFetch } from "../provider/authedFetch";
 import { gatewayBaseUrl } from "../provider/gateway";
@@ -30,7 +30,7 @@ export async function fetchUsageReport(
   configDir: string,
   deps: FetchUsageDeps = {},
 ): Promise<FetchUsageResult> {
-  if (!loadAuthSession(configDir)) return { status: "logged-out" };
+  if (!liveHostedSession(configDir)) return { status: "logged-out" };
 
   const fetchFn = deps.fetchFn ?? fetch;
   const refreshSession = deps.refreshSession ?? refreshSessionReal;

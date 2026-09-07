@@ -3,6 +3,11 @@
 
 import { useKeyboard } from "@opentui/react";
 import { useState } from "react";
+import {
+  type HostedAccountAccess,
+  hostedAccountAccess,
+  splashAuthItems,
+} from "../../../auth/hostedAccountAccess";
 import { FRAME } from "../../theme/spacing";
 import { theme } from "../../theme/theme";
 import { ListRow } from "../../ui/ListRow";
@@ -10,24 +15,24 @@ import { SplashBanner, type SplashBannerInfo } from "./SplashBanner";
 
 export function WelcomeSplashPanel({
   authenticated,
+  hostedAccounts = hostedAccountAccess(),
   banner,
   onLogin,
   onSignup,
   onContinue,
 }: {
   authenticated: boolean;
+  hostedAccounts?: HostedAccountAccess;
   banner?: SplashBannerInfo;
   onLogin?: () => void;
   onSignup?: () => void;
   onContinue?: () => void;
 }) {
-  const items = authenticated
-    ? [{ label: "Continue", onSelect: onContinue }]
-    : [
-        { label: "Log in", onSelect: onLogin },
-        { label: "Sign up", onSelect: onSignup },
-        { label: "Continue without logging in", onSelect: onContinue },
-      ];
+  const handlers = { login: onLogin, signup: onSignup, continue: onContinue };
+  const items = splashAuthItems(hostedAccounts, !authenticated).map((item) => ({
+    label: item.label,
+    onSelect: handlers[item.action],
+  }));
   const [selected, setSelected] = useState(0);
 
   useKeyboard((key) => {

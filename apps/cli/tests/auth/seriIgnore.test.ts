@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveAuthSession } from "../../src/auth/authStore";
 import {
-  SERI_IGNORE_FILENAME,
   clearSeriIgnore,
   disconnectSeri,
   effectiveHostedPlan,
@@ -12,6 +11,7 @@ import {
   ignoreSeriPlan,
   isSeriIgnored,
   reconnectSeri,
+  SERI_IGNORE_FILENAME,
 } from "../../src/auth/seriIgnore";
 
 describe("seriIgnore", () => {
@@ -61,6 +61,20 @@ describe("seriIgnore", () => {
     expect(hostedPlanUsable(configDir)).toBe(true);
     ignoreSeriPlan(configDir);
     expect(hostedPlanUsable(configDir)).toBe(false);
+  });
+
+  test("hostedPlanUsable is false when hosted accounts are unavailable even with a leftover session", () => {
+    saveAuthSession(
+      {
+        accessToken: "at-1",
+        refreshToken: "rt-1",
+        userId: "user_1",
+        email: "a@example.com",
+        obtainedAt: "2026-01-01T00:00:00.000Z",
+      },
+      configDir,
+    );
+    expect(hostedPlanUsable(configDir, "unavailable")).toBe(false);
   });
 
   test("effectiveHostedPlan drops a fetched plan when ignored", () => {

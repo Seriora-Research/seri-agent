@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { resolveUserHome } from "../../../config/userHome";
 import { createElement } from "react";
 import pkg from "../../../../package.json";
+import { hostedAccountAccess } from "../../../auth/hostedAccountAccess";
+import { hostedPlanUsable } from "../../../auth/seriIgnore";
 import type { CliDeps } from "../../../cli";
 import { loadConfig } from "../../../config/config";
-import { hostedPlanUsable } from "../../../auth/seriIgnore";
+import { resolveUserHome } from "../../../config/userHome";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "../../../provider/defaults";
 import { DEFAULT_MODEL } from "../../../provider/groq";
 import { configuredProviders } from "../../../provider/keys";
@@ -117,6 +118,7 @@ export async function runWelcomeSplash(
       onPreSessionSubmit,
       showSplash: true,
       authOffer: offerAuth,
+      hostedAccounts: hostedAccountAccess(),
       onSplashLogin,
       onSplashSignup,
       onSplashContinue,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { formatUsageReport, LOGGED_OUT_USAGE, loggedOutUsage } from "../../src/usage/format";
 import type { UsageReport } from "../../src/usage/report";
-import { formatUsageReport, LOGGED_OUT_USAGE } from "../../src/usage/format";
 
 const paid: UsageReport = {
   generatedAt: "2026-08-16T12:00:00.000Z",
@@ -99,9 +99,17 @@ describe("formatUsageReport", () => {
     expect(text).not.toContain("est. $");
   });
 
-  test("logged-out copy names login and BYOK", () => {
+  test("logged-out copy names login and BYOK when offered", () => {
     expect(LOGGED_OUT_USAGE).toContain("/login");
     expect(LOGGED_OUT_USAGE).toContain("BYOK");
+    expect(loggedOutUsage("offered")).toBe(LOGGED_OUT_USAGE);
+  });
+
+  test("logged-out copy does not name /login when unavailable", () => {
+    const text = loggedOutUsage("unavailable");
+    expect(text).not.toContain("/login");
+    expect(text).toContain("BYOK");
+    expect(text).not.toMatch(/coming soon|waitlist|roadmap/i);
   });
 
   test("free view shows request percent, not a spend meter", () => {

@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isCtrlOPlanToggle, isShiftTabModeCycle } from "../cli/commandCatalog";
 import { ALLOW_UNSANDBOXED_COMMANDS_KEY, configBoolean, configValue } from "../config/config";
 import type { HumanReply } from "../ask-user/types";
+import { type HostedAccountAccess, hostedAccountAccess } from "../auth/hostedAccountAccess";
 import type { PermissionMode } from "../gate/gate";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
@@ -121,6 +122,7 @@ export type AppProps = {
   getCompletionSources?: () => readonly CompletionSource[];
   showSplash?: boolean;
   authOffer?: boolean;
+  hostedAccounts?: HostedAccountAccess;
   onSplashLogin?: () => void;
   onSplashSignup?: () => void;
   onSplashContinue?: () => void;
@@ -217,6 +219,7 @@ export function App({
   confinementAvailable = false,
   showSplash,
   authOffer,
+  hostedAccounts = hostedAccountAccess(),
 }: AppProps) {
   const [state, setState] = useState(() =>
     initialTuiState(session, { route, config, showSplash, authOffer }),
@@ -369,6 +372,7 @@ export function App({
       <box flexDirection="column" height={rows}>
         <WelcomeSplashPanel
           authenticated={!state.authOffer}
+          hostedAccounts={hostedAccounts}
           banner={splashBanner}
           onLogin={onSplashLogin}
           onSignup={onSplashSignup}
@@ -573,6 +577,7 @@ export function App({
       ) : state.pendingSplash ? (
         <WelcomeSplashPanel
           authenticated={!state.authOffer}
+          hostedAccounts={hostedAccounts}
           banner={splashBanner}
           onLogin={onSplashLogin}
           onSignup={onSplashSignup}
