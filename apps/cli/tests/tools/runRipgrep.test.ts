@@ -35,16 +35,10 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// getBaseConfigDir() reads HOME on every platform, checking the environment before falling back
-// to homedir(), so setting one variable redirects the whole cache. It has to be set at spawn time
-// on a child rather than mutated in process: resolveRg() memoizes, so any one process can only
-// ever observe a single cache.
 function cacheEnv(root: string): NodeJS.ProcessEnv {
   return { ...process.env, HOME: root };
 }
 
-// Asks the module rather than restating it, so a change to getBaseConfigDir()'s own layout cannot
-// silently desync this file's expectations from it.
 function configDirIn(root: string): string {
   const original = process.env.HOME;
   process.env.HOME = root;
@@ -56,10 +50,7 @@ function configDirIn(root: string): string {
   }
 }
 
-// The search directory, not the rg binary: `pgrep -f <rgPath>` matches ANY rg on the box, so a
-// concurrently running test file's own search reads as this one's — either as a live search that
-// never started or as a survivor that was never killed. A fresh mkdtemp name appears on exactly one
-// command line, and the cases below keep it off their own by passing it through the environment.
+// pgrep -f <rgPath> matches any rg on the box; the search dir is unique to this process.
 function rgPidFor(dir: string): number | undefined {
   const line =
     spawnSync("pgrep", ["-f", dir], { encoding: "utf8" }).stdout.trim().split("\n")[0] ?? "";
@@ -86,13 +77,7 @@ function isAlive(pid: number): boolean {
   }
 }
 
-// A 2 GiB sparse file, not a large tree, and not a timing margin. Both obvious fixtures were
-// measured and rejected on this box: rg scans 200 MB across 180 files in 152 ms, so no tree a test
-// can afford to write makes a search long enough to time; and a FIFO does not block rg at all — it
-// opens it, searches 0 bytes and returns, so "the search is still running" was true in one probe
-// and false in the next. ftruncate costs 0 ms and allocates 0 blocks, and -a stops rg skipping it as
-// binary, which buys a search measured at ~7.7 s per GiB — long enough that rg is observably alive
-// below rather than already finished.
+// rg finishes a 200 MB tree in ~150 ms and does not block on a FIFO; a 2 GiB sparse file with -a stays alive long enough to observe.
 function slowSearchDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   const big = join(dir, "big.bin");
@@ -105,21 +90,13 @@ const SLOW_SEARCH_ARGS = ["-a", "--files-with-matches", "--", "needle"];
 
 function runChild(script: string[], env: NodeJS.ProcessEnv): string[] {
   const child = spawnSync(process.execPath, ["-e", script.join("\n")], { encoding: "utf8", env });
-  // spawnSync leaves stdout null when the spawn itself fails, and the child's import throws
-  // outright on a fresh clone that has not run postinstall. Surface either as itself rather
-  // than as a TypeError or an empty-string mismatch that names neither.
   if (child.status !== 0)
     throw new Error(`probe child exited ${child.status}: ${child.error ?? child.stderr}`);
   return child.stdout.trim().split(/\r?\n/);
 }
 
-// Everything about where rg comes from runs in a child against a throwaway cache root. The cache
-// is shared, persistent, machine-wide state — resolving it in this process would touch the
-// developer's real one, and a test that renamed that binary would break any concurrent seri.
 describe("rg resolution", () => {
   test("writes nothing until something actually searches", () => {
-    // The whole point of the change: --version, login, logout and config never search, and used
-    // to pay 5 429 760 bytes of extraction anyway.
     const [before, command] = runChild(
       [
         `const { existsSync } = await import("node:fs");`,
@@ -135,9 +112,6 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("serves later runs from the cache instead of writing it again", () => {
-    // The cache-hit contract, and the assertion that fails the moment resolution stops being
-    // memoized or starts re-populating: a second process must reuse the very same file,
-    // untouched. Two stats cost 0.033 ms where a rewrite costs 2.80 ms and 5.4 MB.
     const script = [
       `const { statSync } = await import("node:fs");`,
       IMPORT,
@@ -154,9 +128,6 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("survives four processes populating one empty cache at once", async () => {
-    // No lockfile, by design: every racer writes byte-identical bytes to its own pid-suffixed
-    // temp name and renames, so last-writer-wins is indistinguishable from first. What this
-    // checks is that nobody ever sees a half-written binary and nobody leaves a .tmp behind.
     const script = [IMPORT, `m.resolveRg();`].join("\n");
     const codes = await Promise.all(
       [0, 1, 2, 3].map(
@@ -182,9 +153,6 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("replaces a cached binary that is the wrong size instead of running it", () => {
-    // A truncated rg is worse than an absent one: it either fails unreadably or, worse, half
-    // works. The atomic rename makes that impossible from an interrupted populate, so this forces
-    // the case a full disk or a bad restore would produce and checks the size guard catches it.
     const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
     writeFileSync(String(command), "not really rg");
 
@@ -197,10 +165,7 @@ describe("rg resolution", () => {
   test.skipIf(process.platform === "win32")(
     "repopulates a cached rg that lost its exec bit",
     () => {
-      // Right size, wrong mode — what a home restored from a backup, an rsync without -p or a round
-      // trip through exFAT leaves behind. Size alone would accept it, spawnSync would fail EACCES,
-      // and since resolution never re-resolves that machine would be bricked for good. Windows has
-      // no exec bit, so the branch this guards does not exist there.
+      // exFAT/rsync-without-p strips the exec bit; Windows has none, so this branch does not exist there.
       const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
       chmodSync(String(command), 0o644);
 
@@ -213,9 +178,6 @@ describe("rg resolution", () => {
   );
 
   test("keys the cache so a different seri or a different rg cannot reuse it", () => {
-    // Every release ships exactly one vendored rg, so the version bump alone would do — the asset
-    // size is there for the developer who re-vendors a different rg without bumping. An entry
-    // under another key is left strictly alone: nothing here sweeps, by design.
     const [command] = runChild(RESOLVE, cacheEnv(cacheRoot));
     const cacheDir = join(configDirIn(cacheRoot), "rg");
     expect(readdirSync(cacheDir)).toEqual([
@@ -233,9 +195,6 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("SERI_PROFILE does not change where the shared rg cache lives", () => {
-    // The executable form of the audit's decision that rg/ stays shared: a profiled run resolves
-    // the exact same cache path as an unprofiled one, and never creates a per-profile subdirectory
-    // for a binary cache.
     const [withoutProfile] = runChild(RESOLVE, cacheEnv(cacheRoot));
     const [withProfile] = runChild(RESOLVE, { ...cacheEnv(cacheRoot), SERI_PROFILE: "work" });
 
@@ -244,9 +203,6 @@ describe("rg resolution", () => {
   }, 30_000);
 
   test("falls back to a temp copy of its own rg when the cache cannot be written", () => {
-    // Every container and CI with a read-only or absent home takes this path. Pointed at a
-    // regular file so the config dir is genuinely unusable rather than merely missing. seri keeps
-    // searching, and keeps searching with the rg it vendored rather than an untested one off PATH.
     const root = join(tmpDir, "unwritable-file");
     writeFileSync(root, "not a directory");
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
@@ -266,16 +222,10 @@ describe("rg resolution", () => {
 
     expect(command).toContain("seri-rg-");
     expect(found).toBe("true");
-    // Printed from a later 'exit' listener than the one that removes the directory: listeners run
-    // in registration order, so this observes the state after cleanup rather than racing it.
     expect(removed).toBe("false");
   }, 30_000);
 
   test("names the cause when rg goes missing mid-session", () => {
-    // The resolved rg can vanish while seri is running — an installer, a disk cleaner, an AV
-    // quarantine. spawnSync then reports no status and no stderr, which the exit-code path
-    // rendered as "rg exited with code undefined: null". Parking it after resolution is what
-    // makes this a real test: resolution is memoized, so nothing silently re-populates it.
     const [message] = runChild(
       [
         `const { renameSync } = await import("node:fs");`,
@@ -303,10 +253,6 @@ describe("runRipgrep", () => {
   });
 
   test("reports truncation instead of throwing when rg outruns the stdout buffer", async () => {
-    // --json emits one event per match at a few hundred bytes each, so this overshoots the
-    // buffer several times over rather than sitting on the limit. Before the fix spawnSync
-    // killed rg here and the caller saw `rg exited with code null:` with an empty stderr —
-    // an rg crash that never happened, and every match found so far thrown away.
     writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
 
     const { stdout, truncated } = await runRipgrep(["--json", "needle", tmpDir]);
@@ -323,8 +269,7 @@ describe("runRipgrep", () => {
 
   test("caps stderr instead of throwing the whole stream on a failed search", async () => {
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
-    // Via -f so argv stays short: Windows CreateProcess rejects a 50k argument. rg still
-    // reprints the whole pattern on stderr for an unclosed class.
+    // Windows CreateProcess rejects a 50k argument.
     const patternFile = join(tmpDir, "pattern.txt");
     writeFileSync(patternFile, `[${"x".repeat(50_000)}`);
     try {
@@ -338,8 +283,6 @@ describe("runRipgrep", () => {
     }
   });
 
-  // rg prints one permission line per unreadable directory and still fills stdout. Killing on
-  // the stderr cap forfeits that page; the slice alone bounds the string. chmod 000 is POSIX.
   test.skipIf(process.platform === "win32")(
     "a stderr flood does not forfeit a truncated page of matches",
     async () => {
@@ -365,9 +308,6 @@ describe("runRipgrep", () => {
   );
 
   test("ignores the user's own ripgrep config", async () => {
-    // rg picks up RIPGREP_CONFIG_PATH from the environment, so without --no-config a
-    // developer's ~/.ripgreprc silently changes what seri finds on their machine and
-    // nowhere else. This config would hide the only matching file.
     writeFileSync(join(tmpDir, "a.txt"), "needle\n");
     const configPath = join(tmpDir, "ripgreprc");
     writeFileSync(configPath, "--glob=!*.txt\n");
@@ -378,7 +318,7 @@ describe("runRipgrep", () => {
       const { stdout } = await runRipgrep(["--json", "needle", tmpDir]);
       expect(stdout).toContain("needle");
     } finally {
-      // Assigning a captured `undefined` back would set the literal string "undefined".
+      // Assigning undefined to process.env sets the string "undefined".
       if (original === undefined) delete process.env.RIPGREP_CONFIG_PATH;
       else process.env.RIPGREP_CONFIG_PATH = original;
     }
@@ -391,8 +331,7 @@ describe("runRipgrep", () => {
 
       const controller = new AbortController();
       const search = runRipgrep([...SLOW_SEARCH_ARGS, dir], controller.signal);
-      // Attached now, not after the abort: a rejection observed by nothing in between would surface
-      // as an unhandled rejection rather than as this test's own result.
+      // A rejection with no listener is an unhandled rejection, not this test's result.
       const outcome = search.then(
         () => "resolved",
         (err: Error) => `rejected: ${err.message}`,
@@ -404,28 +343,14 @@ describe("runRipgrep", () => {
         ]);
 
       try {
-        // Interrupting a live search, not tidying up a finished one — asserted on the promise and on
-        // the process, since clause (c) is explicitly not satisfied by the call merely returning.
-        //
-        // Waited on the process table rather than on a fixed slice of wall clock. This used to assert
-        // "still searching" after a flat 500 ms, which reads the filesystem's throughput as though it
-        // were a constant of the code. Measured on WSL Ubuntu-24.04 with the same 2 GiB of holes:
-        // 5641 ms on ext4, 3196 ms on tmpfs (/dev/shm) — so a RAM-backed /tmp is only ~1.8x, not the
-        // order of magnitude that would have made 500 ms a live flake, and the old form did pass
-        // there. But 6x of margin is the machine's property, not the assertion's, and it is spent for
-        // nothing: waiting until rg is observed alive and only then checking the promise has not
-        // settled leaves a window of one pgrep instead of a window of one filesystem, and the case
-        // drops from 548 ms to 54 ms.
         const rgPid = await waitForRgPid(dir, 20_000);
         expect(await settledWithin(0)).toBe("still searching");
 
         controller.abort();
 
-        // Raced rather than plainly awaited so that dropping the abort listener fails here in 5 s
-        // with "still searching" instead of hanging for the rest of the 2 GiB.
         expect(await settledWithin(5_000)).toBe("rejected: cancelled");
 
-        // Polled: a just-killed process is briefly a zombie and still answers kill(pid, 0).
+        // kill(pid, 0) succeeds on a zombie until init reaps it.
         const deadline = Date.now() + 5_000;
         while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
         expect(isAlive(rgPid) ? `rg ${rgPid} survived the cancel` : "killed").toBe("killed");
@@ -439,12 +364,8 @@ describe("runRipgrep", () => {
   test.skipIf(process.platform === "win32")(
     "kills an in-flight search when a signal ends the run",
     async () => {
-      // The gap spawnSync could not have: it blocks until rg is done, so there was never an in-flight
-      // rg for a fatal signal to strand. Now there is, and the timer that would eventually kill it
-      // dies with this process — so rg has to be on the same cleanup list spawnCollect's children are.
       const dir = slowSearchDir("seri-rg-signal-");
-      // Through the environment, not argv, so the directory names rg's command line and nothing else
-      // — the seri-side process would otherwise carry it too and rgPidFor could return either.
+      // Directory goes in env so pgrep -f dir cannot match this parent process's argv.
       const script =
         `const m = await import(${JSON.stringify(MODULE)});` +
         `m.runRipgrep([${SLOW_SEARCH_ARGS.map((a) => JSON.stringify(a)).join(", ")}, process.env.SERI_TEST_DIR]).catch(() => {});`;
@@ -454,23 +375,18 @@ describe("runRipgrep", () => {
       });
 
       try {
-        // rg being observed alive is the readiness handshake: it cannot be listed until the module was
-        // imported (which is what installs the signal handler) AND the spawn actually happened.
         const rgPid = await waitForRgPid(dir, 20_000);
 
         child.kill("SIGTERM");
         await new Promise((resolve) => child.once("exit", resolve));
 
-        // Polled: rg is briefly a zombie of the process just killed, and kill(pid, 0) succeeds on a
-        // zombie until init reaps it.
+        // kill(pid, 0) succeeds on a zombie until init reaps it.
         const deadline = Date.now() + 5_000;
         while (isAlive(rgPid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
         expect(isAlive(rgPid) ? `rg ${rgPid} survived SIGTERM` : "killed").toBe("killed");
       } finally {
         child.kill("SIGKILL");
-        // A failing run must not leave 2 GiB of searching to burn through the rest of the suite.
-        // Racy by nature — the survivor can be reaped between the two calls — so a throw here is the
-        // process already being gone, not a second failure worth reporting over the real one.
+        // process.kill throws ESRCH if the survivor was already reaped.
         const survivor = rgPidFor(dir);
         if (survivor !== undefined) {
           try {

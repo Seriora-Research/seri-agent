@@ -1,9 +1,5 @@
 import { describeNearMiss } from "./nearMiss";
 
-// Ratio is a judgment call: the source docs (docs/ARCHITECTURE.md) describe the
-// disproportionate-match guard but don't specify an exact threshold. 5x trades off
-// rejecting legitimate large replacements against accepting a match that grew far
-// beyond oldString due to fuzzy (line-trim/whitespace-normalize) matching.
 export const DISPROPORTIONATE_MATCH_RATIO = 5;
 
 type Span = { start: number; end: number };
@@ -113,9 +109,6 @@ function whitespaceRuns(content: string): WsRun[] {
 }
 
 function tryWhitespaceNormalizedMatch(content: string, oldString: string): Span | null {
-  // Native replace builds the haystack (same /\s/ class as oldString). A compact
-  // list of whitespace runs maps a normalized match back to the original span
-  // without a column per code unit.
   const normalizedContent = content.replace(/\s+/g, " ");
   const normalizedOld = oldString.replace(/\s+/g, " ");
 
@@ -144,9 +137,6 @@ export function edit(content: string, oldString: string, newString: string): str
     tryWhitespaceNormalizedMatch(content, oldString);
 
   if (match === null) {
-    // The near-miss report is appended, never substituted: when no line is close enough
-    // describeNearMiss returns null and the message is byte-identical to what it always was, so a
-    // caller matching on the old wording (tests/tools/edit.test.ts) keeps matching.
     const nearMiss = describeNearMiss(content, oldString);
     const base =
       "Could not find the specified text to replace (tried exact, line-trimmed, and whitespace-normalized matching)";

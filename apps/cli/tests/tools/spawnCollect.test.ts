@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 
-// Drives the current runtime as a child process so the fixtures behave the same on every OS.
 function emit(
   script: string,
 ): Promise<ReturnType<typeof spawnCollect> extends Promise<infer R> ? R : never> {
@@ -63,10 +62,7 @@ describe("spawnCollect", () => {
   });
 
   test("keeps output that lands exactly on the cap when a surrogate pair straddles the seam", async () => {
-    // 30000 units, with the leading 'x' placing every pair on an odd index so one sits exactly
-    // across the head/tail boundary. Repairing the seam unconditionally cost a whole pair here
-    // and reported a truncation that never happened — on output the same length as the ASCII
-    // case above, which passes through whole.
+    // Leading 'x' puts a UTF-16 surrogate pair across the 15000-unit seam.
     const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(14999) + 'y')");
 
     expect(result.stdout).toHaveLength(30000);
@@ -76,17 +72,13 @@ describe("spawnCollect", () => {
   }, 30_000);
 
   test("bounds a runaway command instead of growing without limit", async () => {
-    // 4 MB of stdout: unbounded accumulation kept every byte of this and handed it to the model.
     const result = await emit(
       "process.stdout.write('A'.repeat(2_000_000) + 'B'.repeat(2_000_000))",
     );
 
     expect(result.stdoutTruncated).toBe(true);
-    // The stream that was not touched must not be tarred with the same flag.
     expect(result.stderrTruncated).toBe(false);
-    // The elision marker adds a little, so this is a bound rather than an exact length.
     expect(result.stdout.length).toBeLessThan(30_200);
-    // Both ends survive: the start of the run and the part that would carry an error.
     expect(result.stdout.startsWith("A".repeat(100))).toBe(true);
     expect(result.stdout.endsWith("B".repeat(100))).toBe(true);
     expect(result.stdout).toContain("characters omitted");
@@ -99,7 +91,6 @@ describe("spawnCollect", () => {
 
     expect(result.stderrTruncated).toBe(true);
     expect(result.stderr.length).toBeLessThan(30_200);
-    // A flood on stderr must not make a complete stdout look incomplete.
     expect(result.stdoutTruncated).toBe(false);
     expect(result.stdout).toBe("kept whole");
   });
@@ -111,7 +102,6 @@ describe("spawnCollect", () => {
   });
 
   test("kills a command that outruns its timeout and keeps what it printed first", async () => {
-    // Prints immediately, then hangs for well past the timeout it is given.
     const started = Date.now();
     const result = await spawnCollect(
       process.execPath,
@@ -120,9 +110,7 @@ describe("spawnCollect", () => {
     );
 
     expect(result.timedOut).toBe(true);
-    // Returning a bare timeout would leave the agent nothing to diagnose from.
     expect(result.stdout).toBe("started work");
-    // It really was killed rather than waited out.
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 30_000);
 
@@ -134,24 +122,16 @@ describe("spawnCollect", () => {
   });
 
   test("does not strand half a surrogate pair when the cut lands inside one", async () => {
-    // An emoji is two UTF-16 units. The leading 'x' makes every pair start on an odd index, so
-    // the 15000-character head boundary falls between the halves of one and used to leave a
-    // lone high surrogate at the end of head. This covers the head cut only: at 2000001 units
-    // the last-15000 window opens on a high surrogate, so nothing is stranded at the front of
-    // the tail. The test below carries the parity that exercises that side.
+    // Leading 'x' puts a UTF-16 surrogate pair across the 15000-unit head cut.
     const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(1_000_000))");
 
     expect(result.stdoutTruncated).toBe(true);
-    // A lone surrogate cannot be encoded, so it comes back as U+FFFD and the round trip differs.
     expect(Buffer.from(result.stdout, "utf8").toString("utf8")).toBe(result.stdout);
     expect(result.stdout).not.toContain("�");
   }, 30_000);
 
   test("does not strand half a pair at the front of the tail either", async () => {
-    // The head-side and tail-side cuts fail on opposite parities, so one fixture cannot cover
-    // both: the payload above lands the tail on a high surrogate and exercises only the head.
-    // The extra trailing character shifts the last-15000 window by one, which is what puts a
-    // lone low surrogate first in the tail.
+    // Extra trailing char shifts the tail window onto a lone low surrogate.
     const result = await emit("process.stdout.write('x' + '\\u{1F600}'.repeat(200_000) + 'y')");
 
     expect(result.stdoutTruncated).toBe(true);
@@ -160,9 +140,6 @@ describe("spawnCollect", () => {
   }, 30_000);
 
   test("does not corrupt multi-byte characters split across stream chunks", async () => {
-    // A guard, not a reproduction: concatenating raw Buffers held up under this runtime's
-    // chunking too (measured: zero U+FFFD). setEncoding makes it a guarantee rather than a
-    // property of how bun happens to size chunks, and this test is what holds that line.
     const result = await emit("process.stdout.write('é'.repeat(200_000))");
 
     expect(result.stdout).not.toContain("�");
@@ -177,9 +154,6 @@ describe("spawnCollect", () => {
         join(import.meta.dir, "../../src/tools/spawnCollect.ts"),
       ).href;
 
-      // The grandchild reports its own pid, because spawnCollect deliberately does not expose the
-      // child it spawned. The 60s self-destruct keeps a failing run from stranding it; it is twice
-      // the test's own timeout, so it can never turn a red into a green.
       const grandchild =
         `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));` +
         `setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 60000);`;
@@ -191,16 +165,13 @@ describe("spawnCollect", () => {
         stdio: ["ignore", "pipe", "pipe"],
       });
       try {
-        // The pid file is the readiness handshake, not a sleep: it cannot exist until the module was
-        // imported (which is what installs the handler) AND spawnCollect actually spawned.
         const pid = await waitForPid(pidFile);
         expect(isAlive(pid)).toBe(true);
 
         child.kill("SIGTERM");
         await new Promise((resolve) => child.once("exit", resolve));
 
-        // Polled, not asserted once: the grandchild is briefly a zombie child of the process we just
-        // killed, and kill(pid, 0) succeeds on a zombie until init reaps it.
+        // kill(pid, 0) succeeds on a zombie until init reaps it.
         const dead = await waitFor(() => !isAlive(pid), 5_000);
         expect(dead ? "killed" : `grandchild ${pid} survived SIGTERM`).toBe("killed");
       } finally {
@@ -214,9 +185,6 @@ describe("spawnCollect", () => {
   test.skipIf(process.platform === "win32")(
     "rejects a cancelled command instead of resolving with a result",
     async () => {
-      // Same pid-file handshake as the test above, for the same reason: spawnCollect does not expose
-      // the child it spawned, so the child reports its own pid. The 60s self-destruct is twice this
-      // test's timeout, so it can never turn a red into a green.
       const dir = mkdtempSync(join(tmpdir(), "seri-cancel-test-"));
       const pidFile = join(dir, "child.pid");
       const script =
@@ -231,11 +199,9 @@ describe("spawnCollect", () => {
 
         controller.abort();
 
-        // The latent bug this guards: `close` fires after the kill with timedOut still false, so
-        // before the reject the promise settled with a normal ProcessResult for a cancelled command.
         await expect(running).rejects.toThrow(/cancelled/);
 
-        // Polled: a just-killed child is briefly a zombie, and kill(pid, 0) succeeds on a zombie.
+        // kill(pid, 0) succeeds on a zombie until init reaps it.
         const dead = await waitFor(() => !isAlive(pid), 5_000);
         expect(dead ? "killed" : `child ${pid} survived the cancel`).toBe("killed");
       } finally {

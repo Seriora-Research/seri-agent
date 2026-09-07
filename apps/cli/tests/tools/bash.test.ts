@@ -10,9 +10,6 @@ import {
   runBash,
 } from "../../src/tools/bash";
 
-// Resolves as soon as `condition` holds, or gives up after `timeoutMs` and lets the caller's own
-// expect() report the failure - returning rather than throwing keeps the assertion, and its
-// message, in the test where a reader expects it.
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -43,20 +40,12 @@ describe("runBash", () => {
     expect(runBash("echo hi", undefined, undefined, () => false)).rejects.toThrow();
   });
 
-  // Regression guard for the PATH-resolution memoization fix: a run before this fix scanned PATH
-  // fresh on every call (once via isBashAvailable, once via resolveBashCommand), so a PATH change
-  // made mid-session could change which bash a later call actually spawns. Warms the cache with a
-  // real command first, then prepends a directory holding a broken `bash.exe` stub — if resolution
-  // were re-scanned, that stub (matched by name before any real bash further down PATH) would now
-  // win and the second command would fail instead of echoing "hi".
   test("a PATH change after the first resolution is not observed by a later call", async () => {
     const warm = await runBash("echo hi");
     expect(warm.stdout.trim()).toBe("hi");
 
     const stubDir = mkdtempSync(join(tmpdir(), "seri-bash-stub-"));
-    // findOnPath only looks for "bash.exe" on win32 — on POSIX it looks for "bash", so a stub
-    // literally named "bash.exe" is never a candidate there and this test's negative control never
-    // fires on those platforms.
+    // findOnPath looks for bash.exe on win32 and bash elsewhere.
     const stubName = process.platform === "win32" ? "bash.exe" : "bash";
     const stubPath = join(stubDir, stubName);
     writeFileSync(stubPath, "not a real executable");
@@ -72,14 +61,6 @@ describe("runBash", () => {
     }
   }, 15000);
 
-  // Regression guard for the negative-caching bug: caching the FOUND case (above) is safe because
-  // it cannot un-become true, but caching "not found" would make a mid-session PATH fix (installing
-  // Git Bash, or correcting a broken PATH, without restarting seri) invisible for the rest of the
-  // process — pre-fix, isBashAvailable()/resolveBashCommand() each re-scanned PATH on every call, so
-  // this recovered automatically; the memoization fix had to preserve it for the failure direction
-  // even while caching the success direction. Uses _detectBashForTests' injectable finder rather
-  // than clearing process.env.PATH: this machine has real Git Bash at a WIN32_GIT_BASH_PATHS
-  // fallback location, so an empty PATH alone does not reproduce "not found anywhere" here.
   test("a call after a failed resolution re-runs find instead of trusting the cached failure", () => {
     _resetBashResolutionForTests();
     try {
@@ -91,11 +72,10 @@ describe("runBash", () => {
 
       expect(_detectBashForTests(notFound).available).toBe(false);
       expect(_detectBashForTests(notFound).available).toBe(false);
-      expect(calls).toBe(2); // not cached: find() ran again on the second call
+      expect(calls).toBe(2);
 
       const found = () => "/usr/bin/bash";
       expect(_detectBashForTests(found)).toEqual({ command: "/usr/bin/bash", available: true });
-      // Now cached: a THIRD finder is never consulted once a real one has succeeded.
       const neverCalled = () => {
         throw new Error("must not be called once a positive result is cached");
       };
@@ -104,15 +84,12 @@ describe("runBash", () => {
         available: true,
       });
     } finally {
-      // The fake "/usr/bin/bash" above must not leak into every other test's real bash calls.
       _resetBashResolutionForTests();
     }
   });
 });
 
-// Windows-only because the leak this guards against is a Windows behavior, and the probe reads
-// the process list through PowerShell. Verified before the fix: child.kill() reported success
-// and left `sleep` running, so every timeout would have orphaned a process.
+// Windows child.kill() reports success and leaves the shell's process tree running.
 describe.skipIf(process.platform !== "win32" || !isBashAvailable())(
   "runBash (timeout kills the tree)",
   () => {
@@ -122,12 +99,7 @@ describe.skipIf(process.platform !== "win32" || !isBashAvailable())(
       const result = await runBash("sleep 45", 1500);
       expect(result.timedOut).toBe(true);
 
-      // Polled rather than slept on. taskkill returns before Windows has finished reaping the
-      // tree, and how long that reaping takes scales with machine load - a fixed wait passes on an
-      // idle box and fails on a busy one, which made this the flakiest test in the suite (observed
-      // failing twice on CI and once in three consecutive local runs of this file alone, on
-      // commits that touch nothing it covers). Waiting for the condition instead of guessing a
-      // duration both removes the flake and makes the test finish sooner when the box is idle.
+      // taskkill returns before Windows has finished reaping the tree.
       await waitFor(() => countSleepProcesses() <= before, 15_000);
       expect(countSleepProcesses()).toBeLessThanOrEqual(before);
     }, 30_000);
