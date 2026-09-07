@@ -3,10 +3,6 @@ import type { Readable, Writable } from "node:stream";
 import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
 
-// Truncation is reported per stream rather than as one flag. A single OR'd boolean cannot say
-// which stream was cut, so a command that floods stderr while returning a complete stdout
-// reads identically to one whose stdout was chopped — and the model re-runs work it already
-// had, or trusts output it should not have.
 export type ProcessResult = {
   stdout: string;
   stderr: string;
@@ -16,25 +12,13 @@ export type ProcessResult = {
   timedOut: boolean;
 };
 
-// Both streams were accumulated into unbounded strings, so a runaway command (`yes`, a `cat`
-// of a large file, a build log) grew the process until it died and, short of that, handed the
-// model an output no context window could hold. Claude Code caps command output at the same
-// 30k characters for the same two reasons.
 const MAX_OUTPUT_CHARS = 30_000;
 const HALF = MAX_OUTPUT_CHARS / 2;
 
-// A command with no ceiling on its runtime blocks the agent forever - a wedged install, a
-// server that never exits, a network call with no timeout of its own. Claude Code's shell
-// defaults to 2 minutes and allows up to 10, and those numbers hold up here: this repo's
-// heaviest commands are `build:all` at 1.3s and the full test suite at 3.9s.
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 
-// A JS string is UTF-16, so a character outside the BMP — every emoji, and plenty of CJK —
-// occupies two units, and a cut between them strands half a pair: a replacement character that
-// no longer survives a UTF-8 round trip. Chunk boundaries are safe on their own, since
-// setEncoding buffers partial sequences and delivers a pair whole; only our own cut can split
-// one, and only ever in two places (see `result`).
+// A JS string is UTF-16; a cut between surrogates leaves a lone half that cannot round-trip UTF-8.
 function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
@@ -43,9 +27,6 @@ function isLowSurrogate(code: number): boolean {
   return code >= 0xdc00 && code <= 0xdfff;
 }
 
-// Keeps the first and last HALF characters rather than a plain head cut: the useful parts of a
-// long run sit at both ends — what it started doing, and the error it died on — and keeping
-// only the head throws away the half that explains the failure.
 function createBoundedSink() {
   let head = "";
   let tail = "";
@@ -61,20 +42,12 @@ function createBoundedSink() {
         chunk = chunk.slice(room);
       }
 
-      // Rolling window, so a process that never stops writing still cannot grow this past
-      // MAX_OUTPUT_CHARS in memory.
       if (chunk) tail = (tail + chunk).slice(-HALF);
     },
 
     result(): { text: string; truncated: boolean } {
-      // Anything at or under the cap survives whole: the two halves rejoin exactly, including
-      // a surrogate pair sitting across the seam. Nothing to repair, so do not try.
       if (total <= head.length + tail.length) return { text: head + tail, truncated: false };
 
-      // Only a real gap can strand a surrogate, and only in two places: the pair that straddled
-      // the cut has its high half last in head and its low half first in tail, and they no
-      // longer meet. A lone one can never end up anywhere else — head only ever grows at its
-      // end, and the rolling window drops index 0 of tail the moment it slides again.
       const start = isHighSurrogate(head.charCodeAt(head.length - 1)) ? head.slice(0, -1) : head;
       const end = isLowSurrogate(tail.charCodeAt(0)) ? tail.slice(1) : tail;
       const omitted = total - start.length - end.length;
@@ -83,8 +56,7 @@ function createBoundedSink() {
   };
 }
 
-// Killing the child alone is not enough: verified on Windows that child.kill() reports success
-// and leaves everything the shell started still running, so every timeout would leak a process.
+// Windows child.kill() reports success and leaves the shell's process tree running.
 function killTree(pid: number): void {
   if (process.platform === "win32") {
     spawnSync("taskkill", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore" });
@@ -92,35 +64,14 @@ function killTree(pid: number): void {
   }
 
   try {
-    // The child was spawned into its own process group, so a negative pid signals the whole
-    // group rather than just the shell that fronts it.
+    // POSIX: a negative pid signals the process group spawned with detached: true.
     process.kill(-pid, "SIGKILL");
   } catch {
-    // The group is already gone. Reached from every killer this file has — the timeout timer, a
-    // cancel, and the fatal-signal cleanup below — because none of them can know the child did not
-    // exit in the window between deciding to kill it and getting here. Nothing left to kill in any
-    // of the three.
   }
 }
 
-// The timeout timer was the only thing that could reach a spawned child, so a Ctrl-C part way
-// through a turn left every one of them running: detached puts them in a process group the
-// terminal's signal never reaches, and a sleeper that writes nothing takes no EPIPE either.
-//
-// Kill callbacks rather than the children themselves, because the two registrants do not die the
-// same way. The child below fronts a shell and needs its whole process group, while runRipgrep's is
-// a bare rg left in this process's own group — killTree's negative pid would there name a group
-// that does not exist, raise ESRCH and be swallowed by the catch above, so it registers the plain
-// child.kill it already uses on timeout. Each registrant naming its own kill keeps that difference
-// where it was decided instead of re-deriving it here.
-//
-// Fatal presses only, which is the whole scope of this list: signals.ts's cancel branch returns
-// before the cleanup loop, so on press 1 an in-flight child is killed by its own abort
-// registration below rather than from here.
 const inFlightKills = new Set<() => void>();
 
-// Deregistration is returned rather than assumed, and every caller runs it when its child settles:
-// a set that only ever grew would signal pids the OS has since handed to somebody else.
 export function killOnFatalSignal(kill: () => void): () => void {
   inFlightKills.add(kill);
   return () => inFlightKills.delete(kill);
@@ -133,15 +84,6 @@ function killInFlightChildren(): void {
 
 onSignalCleanup(killInFlightChildren);
 
-// timeout, signal, cwd, and stdin stay positionals rather than an options bag: bash.ts and
-// powershell.ts are two of the production callers, hooks/run.ts is the third — and the first to
-// need stdin — plus one test file. auth/browser.ts is not one of them — it spawns its own child
-// and says at the top of that file why it deliberately does not come through here.
-//
-// What decides it is the shape rather than the count. Each caller takes a prefix of these
-// parameters in the same order and passes them straight through, so a bag at this one frame would
-// leave every one of them translating into it, and a bag across all of them would rename the same
-// values repeatedly for no behavioural gain.
 export function spawnCollect(
   executable: string,
   args: string[],
@@ -151,24 +93,16 @@ export function spawnCollect(
   stdin?: string,
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
-    // Own process group on POSIX so a timeout can reach the whole tree. Not on Windows, where
-    // detached means a new console window instead.
+    // Windows detached: true opens a new console window.
     const spawnOptions = {
       detached: process.platform !== "win32",
       ...(cwd !== undefined ? { cwd } : {}),
     };
-    // Split rather than a ternary on just the stdio field: the stdio tuple has to be a literal at
-    // the spawn call itself for its overload (and therefore whether child.stdin is typed
-    // possibly-null) to resolve per branch instead of widening to the general, all-nullable one.
     let child:
       | ChildProcessByStdio<Writable, Readable, Readable>
       | ChildProcessByStdio<null, Readable, Readable>;
     if (stdin !== undefined) {
       child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], ...spawnOptions });
-      // A hook script that never reads stdin (a session logger, say) can exit while this process
-      // is still writing the payload, which raises EPIPE on the write. With no listener that is an
-      // unhandled stream error and takes the whole process down over a script that did nothing
-      // wrong — it simply had no use for what it was sent.
       child.stdin.on("error", () => {});
       child.stdin.end(stdin);
     } else {
@@ -181,8 +115,6 @@ export function spawnCollect(
     const out = createBoundedSink();
     const err = createBoundedSink();
 
-    // Decoding per chunk would split multi-byte characters across stream boundaries and
-    // corrupt any non-ASCII output; setEncoding buffers the partial sequence instead.
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => out.write(chunk));
@@ -197,11 +129,6 @@ export function spawnCollect(
       Math.min(timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS),
     );
 
-    // Killing the tree is only half of a cancel. `close` still fires afterwards with a code and
-    // timedOut false, so without remembering that a cancel happened the promise would resolve with
-    // an ordinary-looking ProcessResult and the caller would hand a model a real tool result for a
-    // command the user stopped. Nothing observed that before, because a Ctrl-C used to kill this
-    // process outright and the promise never settled at all.
     const abort = onAbort(signal, () => {
       if (child.pid !== undefined) killTree(child.pid);
     });
@@ -219,16 +146,12 @@ export function spawnCollect(
 
     child.on("close", (code) => {
       settled();
-      // Rejects rather than returning an `aborted` boolean: a flag is a thing every call site can
-      // forget to read, where a rejection propagates by default all the way out to the loop.
       if (abort.aborted()) {
         reject(new Error("cancelled"));
         return;
       }
       const stdout = out.result();
       const stderr = err.result();
-      // Whatever the command managed to say before being killed still goes back. An agent can
-      // diagnose a wedged build from its last output; it can do nothing with a bare timeout.
       resolve({
         stdout: stdout.text,
         stderr: stderr.text,

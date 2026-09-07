@@ -10,7 +10,7 @@ describe("edit", () => {
 
   test("tier 1 (line-trimmed) succeeds when tier 0 fails due to indentation differences", () => {
     const content = "function foo() {\n    return 1;\n}\n";
-    const oldString = "  return 1;\n  }"; // different indentation than content
+    const oldString = "  return 1;\n  }";
     const newString = "return 42;\n}";
     const result = edit(content, oldString, newString);
     expect(result).toBe("function foo() {\nreturn 42;\n}\n");
@@ -18,7 +18,7 @@ describe("edit", () => {
 
   test("tier 2 (whitespace-normalized) succeeds when tier 0 and tier 1 both fail", () => {
     const content = "start\nconst  x  =  5;\nend\n";
-    const oldString = "const x = 5;"; // single spaces vs content's double spaces, same line
+    const oldString = "const x = 5;";
     const newString = "const x = 10;";
     const result = edit(content, oldString, newString);
     expect(result).toBe("start\nconst x = 10;\nend\n");
@@ -53,8 +53,6 @@ describe("edit", () => {
   });
 
   test("whitespace-normalized fallback on a large unique file stays well below the per-code-unit baseline", () => {
-    // One long line so exact and line-trim misses stay cheap; the bound is the
-    // whitespace-normalized scan. Many short lines would spend the budget in tier 1.
     let body = "";
     let i = 0;
     while (body.length < 150_000) {
@@ -76,9 +74,6 @@ describe("edit", () => {
 
     expect(result.endsWith("REPLACED;")).toBe(true);
     expect(result).not.toContain("UNIQUE_MARKER");
-    // Negative control (this fixture, Bun 1.4.0, Linux): per-code-unit `/\s/.test`
-    // plus three growable arrays timed 4.2 ms median. Bound is 3 ms so that path
-    // fails and the compact-run scan's warmed median (~0.1 ms here) passes.
     expect(samples[2]).toBeLessThan(3);
   });
 });
