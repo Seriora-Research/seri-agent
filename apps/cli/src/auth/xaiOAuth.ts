@@ -6,18 +6,18 @@ import {
   pollDeviceGrant,
 } from "./deviceGrant";
 
-// xAI's OAuth issuer. Overridable through the same env-then-config lookup getWorkosClientId uses,
-// so an enterprise OIDC deployment can point at its own IdP without a rebuild.
+
+
 export const XAI_ISSUER_DEFAULT = "https://auth.x.ai";
 
-// Everything the official client asks for, minus nothing: `offline_access` is what makes a refresh
-// token available at all, and `grok-cli:access` is what the inference surface checks.
+
+
 export const XAI_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 
-// Grok Build's own client id. xAI allowlists OAuth clients and has not issued seri one, so this
-// is borrowed. Traffic from a connected SuperGrok account is attributed to an id seri does not
-// own; if xAI rate-limits, revokes, or rotates it, the user's subscription is what stops working.
-// SERI_GROK_CLIENT_ID still overrides it. /setup must say this before the browser opens.
+
+
+
+
 export const XAI_CLIENT_ID_DEFAULT = "b1a00492-073a-47ea-816f-4c329264a828";
 
 export function xaiClientId(configDir?: string): string {
@@ -38,7 +38,7 @@ export function xaiUserinfoUrl(issuer: string): string {
   return `${issuer.replace(/\/$/, "")}/oauth2/userinfo`;
 }
 
-// Printable ASCII, 1–1024 chars: the same bound fx applies before putting `sub` in an HTTP header.
+
 export function validXaiAccountId(accountId: string): boolean {
   if (accountId.length === 0 || accountId.length > 1024) return false;
   for (let i = 0; i < accountId.length; i++) {
@@ -67,13 +67,13 @@ export async function fetchXaiAccountId(
   return sub;
 }
 
-// Discovery is re-fetched rather than persisted: a cached endpoint that goes stale is a hard
-// failure with no recovery path, while a re-discovered one self-heals.
-//
-// Origin-pinned on purpose. A poisoned or hijacked discovery document could otherwise redirect
-// refresh traffic — which carries a long-lived, rotating refresh token — to an attacker's host,
-// or downgrade it to http on the right one. Every endpoint must share the issuer's own origin or
-// discovery fails closed.
+
+
+
+
+
+
+
 export async function discoverXaiEndpoints(
   issuer: string,
   fetchFn: typeof fetch = fetch,
@@ -89,8 +89,9 @@ export async function discoverXaiEndpoints(
     if (typeof value !== "string" || value.length === 0) {
       throw new Error(`OIDC discovery for ${issuer} returned no ${name}`);
     }
-    // Origin, not host: a host-only check would accept http://auth.x.ai for an https issuer,
-    // which downgrades the channel carrying a rotating refresh token.
+
+
+    // Origin, not host: a host-only check would accept http://auth.x.ai for an https issuer.
     if (new URL(value).origin !== issuerUrl.origin) {
       throw new Error(
         `OIDC discovery for ${issuer} returned a ${name} on a different origin (${value}) — refusing it`,
@@ -142,8 +143,8 @@ export type XaiTokens = {
   scope?: string;
 };
 
-// Both token fields are required before a result counts as success. A 200 carrying a partial pair
-// would otherwise be persisted and leave the connection unable to ever refresh itself.
+
+
 export function readXaiTokens(payload: Record<string, unknown>): XaiTokens {
   const accessToken = payload.access_token;
   const refreshToken = payload.refresh_token;

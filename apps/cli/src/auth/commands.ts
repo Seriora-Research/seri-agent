@@ -13,18 +13,18 @@ export async function login(
     requestDeviceCode?: typeof requestDeviceCode;
     openBrowser?: typeof openBrowser;
     pollForToken?: typeof pollForToken;
-    // The TUI's own presentation seam (Stage C, cli-commands-to-tui feature-plan.md): the two
-    // callbacks below let the TUI dispatch into its reducer instead of this function printing
-    // straight into Ink's own frame with a bare console.log, which the non-interactive CLI path
-    // still gets by default (`?? console.log`) — the same decision/presentation split every
-    // tui/commands.ts `decide*` function already has, just inlined here since login/logout are
-    // the only two auth entry points, and the console.log defaults ARE the console presentation.
+
+
+
+
+
+
     onDeviceCode?: (device: { verificationUri: string; userCode: string }) => void;
     onMessage?: (message: string) => void;
-    // Bug fix (thermo-nuclear, round 5): threaded straight through to pollForTokenFn — the TUI's
-    // own createAuthHandlers (tui/handlers.ts) passes one per attempt so abandoning
-    // "starting"/"device" (Escape) actually stops the poll, instead of merely muting its eventual
-    // dispatches while it keeps running in the background and could still call saveAuthSession later.
+
+
+
+
     signal?: AbortSignal;
   } = {},
 ): Promise<void> {
@@ -41,12 +41,12 @@ export async function login(
 
   const device = await requestDeviceCodeFn(clientId);
 
-  // Bug fix (code-review, round 6): an abort landing during the "starting" step — before the
-  // device code even arrives — used to fall through both checks below unnoticed (pollForTokenFn's
-  // own `{status:"aborted"}` only fires once IT starts, which is after this point) and still pop
-  // the browser open for a login the user already cancelled. Same early-return shape as the
-  // `"aborted"` branch after pollForTokenFn, just reached before ever opening the browser or
-  // starting the poll.
+
+
+
+
+
+
   if (deps.signal?.aborted === true) {
     return;
   }
@@ -56,8 +56,8 @@ export async function login(
 
   const result = await pollForTokenFn(clientId, device, { signal: deps.signal });
 
-  // An abort is an intentional cancellation, not a failure — no error message, no session write,
-  // just a plain return (the caller already knows it abandoned this attempt).
+
+
   if (result.status === "aborted") {
     return;
   }
@@ -82,7 +82,7 @@ export async function login(
     },
     configDir,
   );
-  // A leftover ignore from a previous session would otherwise keep the new login unused.
+
   clearSeriIgnore(configDir);
 
   onMessage(

@@ -1,5 +1,5 @@
-// Every listener and every auth() here is a fake: no socket is opened, no browser is launched and
-// nothing contacts a network, the same rule tests/mcp/client.test.ts states for its own dials.
+
+
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -56,7 +56,7 @@ function fakeListen(result: McpCallbackWait): {
   return { listen: async () => server, closes, waits };
 }
 
-// Returns the given AuthResult for each successive call, recording the options it was handed.
+
 function fakeAuth(results: readonly ("AUTHORIZED" | "REDIRECT")[]): {
   authFn: typeof auth;
   calls: AuthOptions[];
@@ -93,7 +93,7 @@ describe("the two-phase path", () => {
       state: "the-state",
       iss: "https://api.exa.ai",
     });
-    // Mirrors auth()'s own order: it mints the state, then redirects, then returns REDIRECT.
+
     const calls: AuthOptions[] = [];
     let mintedState: string | undefined;
     const authFn: typeof auth = async (provider, options) => {
@@ -116,7 +116,7 @@ describe("the two-phase path", () => {
     expect(result).toEqual({ status: "success" });
     expect(opened).toEqual([authorizeUrl.href]);
     expect(lines.some((line) => line.includes(authorizeUrl.href))).toBe(true);
-    // The state the callback is checked against is the one auth() minted, not a fresh value.
+
     expect(waits[0]?.expectedState).toBe(mintedState as string);
     expect(calls[1]).toMatchObject({
       authorizationCode: "the-code",

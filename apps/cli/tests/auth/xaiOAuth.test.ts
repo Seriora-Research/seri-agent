@@ -19,8 +19,8 @@ function jsonResponse(ok: boolean, status: number, body: unknown): Response {
   return { ok, status, text: async () => JSON.stringify(body) } as Response;
 }
 
-// bun-types augments the global fetch with a static `preconnect` member, so a bare async arrow is
-// not assignable to `typeof fetch` — the same cast gateway.ts documents for its injected fetch.
+
+
 function asFetch(fn: (url: any, init?: any) => Promise<Response>): typeof fetch {
   return fn as unknown as typeof fetch;
 }
@@ -56,8 +56,8 @@ function withTempConfig<T>(fn: (dir: string) => T): T {
 }
 
 describe("client id configuration", () => {
-  // Deleting the old "there is no default client id" test is the record of the decision in
-  // issue #275: the default is Grok Build's id, borrowed, and named as such.
+
+
   test("the default is Grok Build's borrowed client id", () => {
     withTempConfig((dir) => {
       expect(xaiClientId(dir)).toBe(XAI_CLIENT_ID_DEFAULT);
@@ -92,8 +92,8 @@ describe("discoverXaiEndpoints", () => {
     expect(endpoints).toEqual(ENDPOINTS);
   });
 
-  // Host pinning is the control that stops a poisoned discovery document from redirecting refresh
-  // traffic — which carries a long-lived, rotating refresh token — to an attacker's host.
+
+
   test("refuses a token endpoint on a different origin than the issuer", async () => {
     await expect(
       discoverXaiEndpoints(
@@ -183,8 +183,8 @@ describe("requestXaiDeviceCode", () => {
 });
 
 describe("readXaiTokens", () => {
-  // A 200 carrying only half the pair would otherwise be persisted, leaving a connection that can
-  // never refresh itself once the access token expires.
+
+
   test("rejects a payload with no refresh token", () => {
     expect(() => readXaiTokens({ access_token: "a" })).toThrow(/refresh_token/);
   });
@@ -240,8 +240,8 @@ describe("pollForXaiToken", () => {
     expect(waits).toEqual([5000, 10000]);
   });
 
-  // The terminal case that must never be retried: the account signed in fine, its plan tier is
-  // simply not allowed. Folding this into "error" would invite a retry loop that cannot succeed.
+
+
   test("a 403 is tier-denied, is distinct from error, and stops polling", async () => {
     let call = 0;
     const result = await pollForXaiToken("client-1", DEVICE, ENDPOINTS, {
@@ -287,8 +287,8 @@ describe("pollForXaiToken", () => {
     expect(called).toBe(false);
   });
 
-  // The thermo-nuclear round-5 race, now covered on this flow too: an abort landing WHILE the
-  // request is in flight must discard even a genuine success rather than persist it one tick late.
+
+
   test("discards a success when the abort lands during the in-flight request", async () => {
     const controller = new AbortController();
     const result = await pollForXaiToken("client-1", DEVICE, ENDPOINTS, {
@@ -339,8 +339,8 @@ describe("fetchXaiAccountId", () => {
 });
 
 describe("discovery scheme pinning", () => {
-  // Host equality alone would accept this: an http endpoint on the right host downgrades the
-  // channel that carries a rotating refresh token.
+
+
   test("refuses an http endpoint for an https issuer", async () => {
     await expect(
       discoverXaiEndpoints(

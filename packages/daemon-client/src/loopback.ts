@@ -27,7 +27,7 @@ function ipv4FromHextets(hiHex: string, loHex: string): string {
 }
 
 function ipv4FromMapped(host: string): string | undefined {
-  // URL parsers rewrite ::ffff:127.0.0.1 to ::ffff:7f00:1. Both name the same IPv4 loopback.
+  // URL parsers rewrite ::ffff:127.0.0.1 to ::ffff:7f00:1; both name the same IPv4 loopback.
   const dotted = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
   if (dotted !== null) return dotted[1];
   const expandedDotted = host.match(/^(?:0:){5}ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);

@@ -28,8 +28,8 @@ describe("awaitsReply", () => {
     expect(awaitsReply(messages)).toBe(false);
   });
 
-  // loop.ts's "aborted" (mid-tool-batch cancel), "max-iterations", and "repeated-denials" done
-  // reasons all end here — a fully-resolved-but-unconcluded turn, not a finished one.
+
+
   test("returns true when the last message is a tool-result row (interrupted mid agentic-loop)", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "do a task" },
@@ -52,8 +52,8 @@ describe("awaitsReply", () => {
     expect(awaitsReply(messages)).toBe(true);
   });
 
-  // Only reachable if the process died between loop.ts pushing the assistant row and running the
-  // calls it named — treated the same as "owes a reply".
+
+
   test("returns true when the last message is an assistant message with unresolved tool calls", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "do a task" },

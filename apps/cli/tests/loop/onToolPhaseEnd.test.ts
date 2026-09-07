@@ -1,6 +1,6 @@
-// runLoop's onToolPhaseEnd hook: the seam a consumer uses to append something to the turn after a
-// tool round. The loop stays ignorant of what the text is for, so everything here is about WHEN it
-// is called and WHERE the result lands, never about rules.
+
+
+
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -47,8 +47,8 @@ describe("onToolPhaseEnd", () => {
         message.role === "user" && JSON.stringify(message.content).includes("INJECTED-NOTICE"),
     );
     expect(injected).toHaveLength(1);
-    // After the tool row, never before it: a user message between the assistant's tool call and its
-    // tool result is an ordering providers reject.
+
+
     const toolIndex = messages.findIndex((message) => message.role === "tool");
     const injectedIndex = messages.findIndex((message) =>
       JSON.stringify(message.content).includes("INJECTED-NOTICE"),
@@ -100,13 +100,13 @@ describe("onToolPhaseEnd", () => {
       }),
     );
     const users = lastMessagesUpdate(events).filter((message) => message.role === "user");
-    // Only the original user turn from baseMessages.
+
     expect(users).toHaveLength(1);
   });
 
-  // The control that guards the ordered-tier decision. The whole point of injecting into the turn
-  // rather than the system prompt is that `system` never moves; if it ever did, the provider's
-  // prefix cache would diverge in front of the entire conversation.
+
+
+
   test("never touches the system string", async () => {
     const systems: (string | undefined)[] = [];
     const tools = makeTools(async () => "ok");
@@ -127,7 +127,7 @@ describe("onToolPhaseEnd", () => {
         onToolPhaseEnd: () => "INJECTED-NOTICE",
       }),
     );
-    // Both model calls in the turn were issued with the identical system string.
+
     const calls = model.doStreamCalls;
     expect(calls.length).toBeGreaterThan(1);
     for (const call of calls) {
@@ -152,7 +152,7 @@ describe("onToolPhaseEnd", () => {
         model,
         tools,
         messages: baseMessages,
-        // read-only blocks write_file at the gate, so nothing reaches execute.
+
         permissionMode: "read-only",
         onToolPhaseEnd: () => {
           calls++;
@@ -186,7 +186,7 @@ describe("onToolPhaseEnd", () => {
         },
       }),
     );
-    // The hook is skipped entirely for a round in which nothing executed.
+
     expect(seen).toEqual([]);
   });
 });

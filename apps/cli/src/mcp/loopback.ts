@@ -1,8 +1,8 @@
 import { canonicalizeLoopbackHost } from "@seri/daemon-client";
 import { MCP_CALLBACK_PATH, MCP_CALLBACK_PORTS, mcpCallbackUri } from "./authProvider";
 
-// Every way one login can end. `denied` carries the authorization server's own error_description,
-// which is the only text that can explain a refusal seri had no part in.
+
+
 export type McpCallbackWait =
   | { readonly kind: "code"; readonly code: string; readonly state?: string; readonly iss?: string }
   | { readonly kind: "denied"; readonly message: string }
@@ -26,14 +26,14 @@ export type StartCallbackServer = (opts?: {
   fallbackEphemeral?: boolean;
 }) => Promise<CallbackServer>;
 
-// Ink on canvas with no accent hue, the palette docs/design/tokens.md defines for seri's web
-// surfaces, inverted under prefers-color-scheme: dark. Every value is inline and no font is
-// fetched: this page is served by a loopback listener that closes moments later, so a request to
-// a CDN would be a blocked or slow one on the last screen of a login, and a webfont on a page
-// this short would swap after the user has already read it.
-//
-// Both strings are constants and neither names the server, which leaves no text on the page that
-// seri did not write and so nothing here to escape.
+
+
+
+
+
+
+
+
 function callbackPage(title: string, detail: string): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -73,43 +73,44 @@ type ActiveWait = {
   readonly settle: (result: McpCallbackWait) => void;
 };
 
-// The loopback half of RFC 8252's native-app flow: a listener this process holds open for the one
-// redirect, on 127.0.0.1 only — never 0.0.0.0, which would put someone else's authorization code
-// within reach of anything else on the network.
+
+
+
+// RFC 8252 native-app loopback: bind 127.0.0.1 only, never 0.0.0.0.
 export const startCallbackServer: StartCallbackServer = async (opts) => {
   const ports = opts?.ports ?? MCP_CALLBACK_PORTS;
   const callbackPath = opts?.path ?? MCP_CALLBACK_PATH;
   const redirectHost = canonicalizeLoopbackHost(opts?.redirectHost ?? "127.0.0.1");
   let active: ActiveWait | undefined;
   let stopped = false;
-  // Carries the port alongside the server because Server.port is `number | undefined` (a
-  // unix-socket server has none) while the redirect URI needs a number.
+
+
   let listener: { server: ReturnType<typeof Bun.serve>; port: number } | undefined;
 
   function close(): void {
     if (stopped) return;
     stopped = true;
-    // Graceful: cancelling a login can race the callback that is already being served, and
-    // dropping that connection mid-response would leave the browser on an error page for a login
-    // that actually succeeded.
+
+
+
     listener?.server.stop();
   }
 
   function handle(req: Request): Response {
     const url = new URL(req.url);
-    // Exactly one path is the redirect. A browser fetches /favicon.ico off its own bat, and
-    // treating whatever arrives on this port as the callback would settle the login on it.
+
+
     if (req.method !== "GET" || url.pathname !== callbackPath) {
       return new Response("Not found", { status: 404 });
     }
-    // No wait is active before waitForCallback is called and after it has settled, and there is no
-    // expected state to check a request against in either window.
+
+
     const wait = active;
     if (wait === undefined) return new Response("Not found", { status: 404 });
 
-    // A stray request from something else on this machine must not burn the one redirect this
-    // listener exists for, so a mismatched state is refused on the spot and the wait stays open
-    // for the real callback rather than resolving on the impostor.
+
+
+
     if (wait.expectedState !== undefined && url.searchParams.get("state") !== wait.expectedState) {
       return new Response("Unexpected OAuth state.", { status: 400 });
     }
@@ -141,8 +142,8 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
       listener = { server: Bun.serve({ hostname: "127.0.0.1", port, fetch: handle }), port };
       break;
     } catch {
-      // Port taken. MCP candidates are registered redirect URIs. Codex then tries 1457 and an
-      // ephemeral port (fallbackEphemeral) that is not pre-registered.
+
+
     }
   }
   if (listener === undefined && opts?.fallbackEphemeral === true) {
@@ -158,8 +159,8 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
       `could not open an OAuth callback listener on any of ports ${ports.join(", ")}`,
     );
   }
-  // A listener leaked by a path that never reached close() must not be what keeps seri running.
-  // close() is still the real cleanup; this only removes the failure mode where it is missed.
+
+
   listener.server.unref();
   const redirectUri =
     opts?.path !== undefined || opts?.redirectHost !== undefined
@@ -171,9 +172,9 @@ export const startCallbackServer: StartCallbackServer = async (opts) => {
     timeoutMs: number;
     signal?: AbortSignal;
   }): Promise<McpCallbackWait> {
-    // Total: the request, the signal and the timer all RESOLVE. A rejection here would reach
-    // loginMcpServer (mcp/login.ts) as a thrown error and lose which of the three actually
-    // happened, which is the whole distinction the caller reports to the user.
+
+
+
     return new Promise<McpCallbackWait>((resolve) => {
       let settled = false;
       function settle(result: McpCallbackWait): void {

@@ -3,29 +3,16 @@ import { parse } from "yaml";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
 
-/**
- * When a rule's body reaches the model. The three are mutually exclusive and resolved once, at
- * parse time, so nothing downstream re-derives the answer from the raw frontmatter and risks
- * disagreeing with this.
- *
- * - `always`  — `alwaysApply: true`. Loads into the frozen context tier, next to `AGENTS.md`.
- * - `globs`   — loads when the session touches a file the patterns match.
- * - `inert`   — a `description` and nothing else. Cursor calls this "agent requested" and lets the
- *               model pull the body. That is the same load semantic skills already ship, so it is
- *               deferred rather than given a second implementation here; such a rule loads nothing
- *               and says so once, naming the file.
- */
+
 export type RuleTrigger = "always" | "globs" | "inert";
 
 export type RuleSpec = {
   readonly name: string;
   readonly description: string;
   readonly trigger: RuleTrigger;
-  /** Empty unless `trigger` is "globs". Already split; brace groups kept intact. */
+
   readonly globs: readonly string[];
-  /** The text below the frontmatter. Held in memory, unlike a skill's: a rule has no on-demand
-   *  load — an `always` rule is in the prompt from session start, and a `globs` rule has to be
-   *  ready to inject the instant a matching path is touched, mid-turn, with no room for a read. */
+
   readonly body: string;
   readonly filePath: string;
   readonly source: ExtensionSource;
@@ -48,16 +35,7 @@ function readString(value: unknown): string | undefined {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-/**
- * Splits a `globs:` scalar on commas WITHOUT breaking a brace group. Both shapes are live in the
- * wild, one directory over in this repo's own `.cursor/rules/`:
- *
- *     globs: "**\/*.{ts,tsx,js,jsx,py,go,rs,java}"   one pattern, commas inside braces
- *     globs: .cursor/skills/**,.cursor/loop-models.json   two patterns, commas between them
- *
- * A naive `split(",")` turns the first into four broken patterns that match nothing, which fails
- * silently — the rule simply never fires. Depth-tracking is what tells the two apart.
- */
+
 function splitPatterns(value: string): string[] {
   const out: string[] = [];
   let depth = 0;
@@ -76,9 +54,9 @@ function splitPatterns(value: string): string[] {
   return out.map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0);
 }
 
-// A YAML list, or a comma-separated scalar. `null` (a bare `globs:` line) reads as "present and
-// says nothing", which is the same as absent for this field: there is no grant being given up, so
-// unlike an agent file's `tools:` there is nothing to fail closed about.
+
+
+
 function readGlobs(value: unknown): string[] {
   if (typeof value === "string") return splitPatterns(value);
   if (Array.isArray(value)) {
@@ -115,16 +93,16 @@ export function parseRuleFile(opts: {
   if (body.length === 0) return skip(filePath, "it has no body below its frontmatter");
 
   const globs = readGlobs(fields.globs);
-  // `alwaysApply` wins over `globs` when a file sets both, which `code-quality.mdc` in this repo
-  // does. That is Cursor's own precedence and it is the only coherent reading: a rule that is
-  // always in the prompt has nothing left for a per-touch trigger to add, and injecting it again on
-  // a match would put the same text in the session twice.
+
+
+
+
   const trigger: RuleTrigger =
     fields.alwaysApply === true ? "always" : globs.length > 0 ? "globs" : "inert";
 
   if (trigger === "inert") {
-    // Loaded, not skipped, and reported: the file is well-formed and its author expects it to do
-    // something. Saying nothing would leave them reading a rule that is silently inert.
+
+
     warnings.push(
       `rule file ${filePath}: no "alwaysApply" and no "globs", so nothing loads it — seri does not ` +
         `yet support a rule the model pulls in by description`,

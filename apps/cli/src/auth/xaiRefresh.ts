@@ -11,20 +11,20 @@ import { discoverXaiEndpoints, readXaiTokens, xaiClientId, xaiIssuer } from "./x
 export type XaiRefreshResult =
   | { status: "ok"; subscription: XaiSubscription }
   | { status: "not-connected" }
-  // Terminal. A 403 means the account's plan tier is not allowed, which no retry and no
-  // re-consent fixes. Kept distinct from "error" so a caller cannot fold it into a retry loop.
+
+
   | { status: "tier-denied"; message: string }
-  // The stored refresh token is dead — the usual cause is a rotation that was lost, since xAI
-  // invalidates the previous token on every use. Terminal and distinct from "error": no retry
-  // recovers it, the only fix is connecting again, so a caller must say that rather than loop.
+
+
+
   | { status: "reconnect-required"; message: string }
   | { status: "error"; message: string };
 
-// Same hazard, same shape as auth/refresh.ts's own map, for the same reason: two concurrent 401s
-// (a subagent fan-out against one model is the real source) can each read the same on-disk refresh
-// token before either submits it. xAI accepts a rotating refresh token exactly once, so the loser
-// would strand its caller even though a valid rotated pair now exists on disk. One in-flight
-// promise per configDir makes every concurrent caller share one refresh.
+
+
+
+
+
 const inFlightRefreshes = new Map<string, Promise<XaiRefreshResult>>();
 
 export function refreshXaiSubscription(
@@ -36,9 +36,9 @@ export function refreshXaiSubscription(
 
   const promise = refreshXaiSubscriptionOnce(configDir, fetchFn);
   inFlightRefreshes.set(configDir, promise);
-  // .finally() returns a NEW promise that also rejects when `promise` does; discarding it uncaught
-  // would be a second unhandled rejection on top of the one the caller already handles. The
-  // .catch here is only for this derived promise.
+
+
+
   promise.finally(() => inFlightRefreshes.delete(configDir)).catch(() => {});
   return promise;
 }
@@ -83,8 +83,8 @@ async function refreshXaiSubscriptionOnce(
       };
     }
 
-    // readXaiTokens throws unless BOTH tokens came back. Persisting a partial pair here is the one
-    // failure that cannot be recovered from: the old refresh token is already dead server-side.
+
+
     const updated = subscriptionFromTokens({
       ...readXaiTokens(payload),
       accountId: current.accountId,
@@ -96,9 +96,9 @@ async function refreshXaiSubscriptionOnce(
   }
 }
 
-// The xAI counterpart to provider/authedFetch.ts: attach the bearer, refresh once on 401, retry.
-// A 403 is returned untouched and never refreshed — it is the terminal tier-denied case, and
-// retrying it would burn a refresh token to no effect.
+
+
+
 export function xaiAuthedFetch(configDir: string, fetchFn: typeof fetch = fetch): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const attempt = async (token: string): Promise<Response> =>

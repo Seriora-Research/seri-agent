@@ -12,15 +12,15 @@ export type { McpEntry, McpRegistry } from "./types";
 
 export const SERVERS_FILENAME = "servers.yaml";
 
-// Exported so mcp/commands.ts's `/mcp add` validates against the identical pattern rather than a
-// second copy that could drift from it — a name `/mcp add` accepted but parseOneServer rejected on
-// the next session start would be a confusing way to lose a server silently.
+
+
+
 export const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
-// Only this exact pattern expands. `$(...)` and any other shell-looking syntax is left exactly as
-// written — the CONSTITUTION's standing anti-pattern is "config never executes shell at load",
-// naming Crush's `$(…)` as the rejected precedent. Reading an environment variable is not shell
-// execution; nothing here spawns anything.
+
+
+
+
 const ENV_REF = /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
 function expandEnvRefs(
@@ -87,8 +87,8 @@ function parseOneServer(opts: {
         return skip(`header "${key}" is not a string`);
       }
       const { text, missingVar } = expandEnvRefs(value, opts.env);
-      // Skip the whole server rather than loading it with a blank header — a half-authenticated
-      // server is worse than one that did not load at all.
+
+
       if (missingVar !== undefined) {
         return skip(`header "${key}" references unset environment variable "${missingVar}"`);
       }
@@ -102,8 +102,8 @@ function parseOneServer(opts: {
   };
 }
 
-// Pure. `env` is a PARAMETER, not process.env, so expansion is testable without touching the
-// environment — parseRolePins (subagents/routes.ts) uses the same idiom.
+
+
 export function parseServersFile(opts: {
   text: string;
   filePath: string;
@@ -165,22 +165,22 @@ function isMcpCatalog(value: unknown): value is McpCatalog {
   });
 }
 
-// Disk. Catalog cache at <configDir>/mcp/catalog/<server>.json, via atomicWriteFile (which itself
-// calls ensureOwnerOnlyDir on the directory it writes into).
+
+
 export function writeCatalogCache(configDir: string, catalog: McpCatalog): void {
   atomicWriteFile(catalogCachePath(configDir, catalog.server), JSON.stringify(catalog, null, 2));
 }
 
-// Disk. Idempotent: a server with no cache to begin with is left exactly as it was. This is what
-// `/mcp remove` calls so a removed server's stale catalog cannot resurface if the same name is
-// added back later without ever being reconnected.
+
+
+
 export function deleteCatalogCache(configDir: string, server: string): void {
   const path = catalogCachePath(configDir, server);
   if (existsSync(path)) unlinkSync(path);
 }
 
-// Disk. undefined for a missing, unreadable, unparseable, or wrongly-shaped cache — a hand-edited
-// or truncated cache file must not crash session start, only lose the cache.
+
+
 export function readCatalogCache(
   configDir: string,
   server: string,
@@ -209,14 +209,14 @@ export function readCatalogCache(
   return parsed;
 }
 
-// Disk. Profile root then project, via extensionScopes — the same walk skills and rules use.
-// Project beats global by the later Map.set, same insertion-order rule they use too. Fuses each
-// spec with its cached catalog. NEVER dials anything: session start must not fail, or wait, over
-// an MCP config file, the same total-warn-and-skip contract loadSkillRegistry states for skills.
-// Returns the mutable Map rather than the ReadonlyMap view every consumer takes, because
-// `PreparedRun.mcp` is where `/mcp add` and `/mcp remove` apply their McpRegistryChange
-// (mcp/commands.ts). One owner holds the writable handle; everything downstream keeps taking
-// McpRegistry and stays unable to write through it.
+
+
+
+
+
+
+
+
 export function loadMcpRegistry(opts: {
   worktree: string;
   configDir: string;
@@ -256,8 +256,8 @@ export function loadMcpRegistry(opts: {
   return registry;
 }
 
-// Pure. The one derivation from a composed name to (entry, tool). A scan over the frozen catalog,
-// never a parse of the name itself — see McpToolInfo.toolName's own comment for why.
+
+
 export function findMcpTool(
   registry: McpRegistry,
   toolName: string,
@@ -269,7 +269,7 @@ export function findMcpTool(
   return undefined;
 }
 
-// Recursively sorts object keys so key order on the wire cannot change the digest below.
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (typeof value === "object" && value !== null) {
@@ -282,9 +282,9 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-// Pure. sha256 hex over canonical JSON of the tool's contract — name, description, inputSchema.
-// Computed on demand, never stored: a hand-edited cache carrying a stale digest must not be
-// honoured on read.
+
+
+
 export function toolFingerprint(tool: McpToolInfo): string {
   const canonical = canonicalize({
     name: tool.name,
@@ -294,8 +294,8 @@ export function toolFingerprint(tool: McpToolInfo): string {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
-// Pure. toolFingerprint for whatever this registry resolves the name to; undefined for any name
-// that is not a cataloged MCP tool, which is what lets a caller invoke it unconditionally.
+
+
 export function grantFingerprint(registry: McpRegistry, toolName: string): string | undefined {
   const found = findMcpTool(registry, toolName);
   return found === undefined ? undefined : toolFingerprint(found.tool);
@@ -310,9 +310,9 @@ function readServersDoc(filePath: string): Document {
   return doc;
 }
 
-// Disk. Document-preserving edit, the parseDocument-mutate-atomicWrite shape permissions/store.ts
-// uses, so comments and unrelated entries survive. Throws on a malformed file rather than
-// overwriting content it could not make sense of.
+
+
+
 export function addServerToFile(
   filePath: string,
   server: { name: string; url: string; headers: Readonly<Record<string, string>> },
@@ -333,8 +333,8 @@ export function addServerToFile(
   atomicWriteFile(filePath, String(doc));
 }
 
-// Disk. Same document-preserving shape as addServerToFile. Returns false, touching nothing, when
-// the file or the entry does not exist.
+
+
 export function removeServerFromFile(filePath: string, name: string): boolean {
   if (!existsSync(filePath)) return false;
   const doc = readServersDoc(filePath);

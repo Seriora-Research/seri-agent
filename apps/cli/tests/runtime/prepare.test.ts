@@ -87,10 +87,10 @@ describe("explicit session cwd", () => {
   });
 });
 
-// getConfigDir()'s own resolution (config/paths.ts): join(process.env.HOME, ".seri") under the
-// default profile, which is what every test below actually reads/writes MCP config through — none
-// of these override CliDeps.authConfigDir, so this must match prepareSession's own internal
-// resolution exactly or every fixture below would be writing beside the file it is meant to seed.
+
+
+
+
 function mcpConfigDirFor(tmpConfigRoot: string): string {
   return join(tmpConfigRoot, ".seri");
 }
@@ -137,10 +137,10 @@ describe("prepareSession + mcp", () => {
     loadExtensions: () => ({ skills: new Map(), rules: new Map(), hooks: { registry: new Map() } }),
   };
 
-  // Same fixture-isolation shape cli.test.ts's own "run" describes use: a fresh HOME per test so a
-  // real ~/.seri on the machine running this suite can never supply a server this test did not
-  // configure, and SERI_DISABLE_MODELS_FETCH plus a cache reset so the model catalog fetch every
-  // prepareSession call makes stays the deterministic bundled fallback.
+
+
+
+
   beforeEach(() => {
     process.env.GROQ_API_KEY = "fake-test-key";
     tmpConfigRoot = makeDir();
@@ -158,9 +158,9 @@ describe("prepareSession + mcp", () => {
     resetCatalogCache();
   });
 
-  // The spec's own verify line for this unit: session start performs no network I/O even with a
-  // server configured. mcp/registry.test.ts already asserts this at loadMcpRegistry's own module
-  // boundary; this asserts it through the actual call site session start makes, end to end.
+
+
+
   test("session start performs no network I/O with an MCP server configured", async () => {
     writeGlobalServer("ghost", "https://127.0.0.1:1/mcp");
     const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
@@ -196,14 +196,14 @@ describe("prepareSession + mcp", () => {
     const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
     const prepared = result as PreparedRun;
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
-    // The bare name only — the stored entry's own "@<digest>" suffix must not leak into the set
-    // the gate actually compares call subjects against.
+
+
     expect(prepared.allowedTools.some((entry) => entry.includes("@"))).toBe(false);
   });
 
-  // Seen red first: with filterMcpGrants' own fingerprint check deleted (kept unconditionally
-  // instead), this assertion fails — allowedTools contains "mcp_exa_web_search" even though the
-  // catalog on disk no longer matches what the grant was approved against.
+
+
+
   test("a stored MCP grant whose digest no longer matches is dropped and warns", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
     const approvedTool: McpToolInfo = {
@@ -214,7 +214,7 @@ describe("prepareSession + mcp", () => {
     };
     writeGlobalGrant(mcpGrantKey(approvedTool.toolName, toolFingerprint(approvedTool)));
 
-    // The catalog now on disk is not what the grant was approved against — the rug-pull case.
+
     const changedTool: McpToolInfo = {
       ...approvedTool,
       description: "Search the web, differently.",
@@ -411,9 +411,9 @@ describe("bindSession + mcp", () => {
     return result as PreparedRun;
   }
 
-  // Seen red first: with the closeMcpClients call deleted from bindSession, closeCalls stays 0 —
-  // the dialled handle is dropped on the floor instead of closed, which is the one-leaked-socket-
-  // per-/clear failure this test exists to catch.
+
+
+
   test("bindSession closes the previous mcp clients before installing a fresh pool", async () => {
     const prepared = await freshPrepared();
     let closeCalls = 0;
@@ -449,9 +449,9 @@ describe("bindSession + mcp", () => {
       permissionsDir,
       () => {},
     );
-    // closeMcpClients' own close call is fire-and-forget, chained through two .then/.catch hops on
-    // an already-resolved promise (mcp/client.ts's own comment) — a macrotask tick is what
-    // reliably lets it settle before this asserts.
+
+
+
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(closeCalls).toBe(1);
@@ -461,16 +461,16 @@ describe("bindSession + mcp", () => {
 
   test("bindSession reloads the registry and re-derives allowedTools from the persisted grants on disk", async () => {
     const prepared = await freshPrepared();
-    // Named, not counted. `process.env.HOME` above points at a temp root, but the worktree this
-    // session starts in is a mkdtemp directory, and on Windows that sits UNDER the real profile —
-    // so findProjectExtensionDir's upward walk still reaches the developer's own `~/.seri/mcp` and
-    // claims it as project scope, which the guard there cannot recognise once HOME has moved off
-    // it. A size assertion turns "this machine has an MCP server configured" into a failure of a
-    // test about bindSession; the name this test seeds is what it actually cares about.
+
+
+
+
+
+
     expect(prepared.mcp.has("exa")).toBe(false);
 
-    // Everything below is written AFTER the session already started — the exact `/mcp reconnect`
-    // window bindSession's own re-derivation exists to close.
+
+
     const configDir = mcpConfigDirFor(tmpConfigRoot);
     mkdirSync(join(configDir, "mcp"), { recursive: true });
     writeFileSync(
@@ -536,10 +536,10 @@ describe("bindSession + mcp", () => {
     expect(prepared.autoModeOnBlock).toBe("ask");
   });
 
-  // Asserted through preMountMessages rather than a captured console.error, because that queue IS
-  // the delivery: prepareSession runs after the shared renderer exists but before the TUI's first
-  // frame, so a line written straight to the console in that window is painted over and gone.
-  // `isTTY: true` is what selects that path.
+
+
+
+
   async function hookNoticesFor(hooks: HooksLoad): Promise<string[]> {
     const ctx: RunContext = {
       resuming: false,
@@ -575,8 +575,8 @@ describe("bindSession + mcp", () => {
       "⚠ project hooks in /p/.seri/hooks (4 files) have not been reviewed, so none of them ran — /hooks to read them and turn them on",
     ]);
 
-    // The negative control for both of the above: with no `untrusted` field there is no line at
-    // all, so neither assertion can be passing on a notice that fires unconditionally.
+
+
     expect(await hookNoticesFor({ registry: new Map() })).toEqual([]);
   });
 
@@ -591,8 +591,8 @@ describe("bindSession + mcp", () => {
       "⚠ project hooks in /p/.seri/hooks changed since you trusted them (guard.sh, guard.ps1, hooks.yaml and 2 more), so none of them ran — /hooks to review what moved",
     ]);
 
-    // A directory small enough to name whole gets no trailing count — the cap is a guard against
-    // an unreadable line, not a format every message pays for.
+
+
     expect(
       await hookNoticesFor({
         registry: new Map(),

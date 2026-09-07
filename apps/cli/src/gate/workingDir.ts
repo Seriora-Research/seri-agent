@@ -1,8 +1,8 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 
-// A daemon hosts concurrent sessions and never calls chdir, so each toolset has to carry its own
-// directory.
+
+
 export function resolveAgainstCwd(cwd: string, path: string): string {
   return resolve(cwd, path);
 }
@@ -12,8 +12,8 @@ function normalize(path: string): string {
   return foldsCase() ? resolved.toLowerCase() : resolved;
 }
 
-// String classification only: exists/stat/realpath would probe the disk before the gate. A
-// symlink inside cwd that points outside is therefore still "inside" here.
+
+
 export function isInsideWorkingDir(cwd: string, path: string): boolean {
   const root = normalize(cwd);
   const target = normalize(resolveAgainstCwd(cwd, path));
@@ -46,8 +46,8 @@ function pathFromInput(input: unknown): string | undefined {
   return typeof path === "string" ? path : undefined;
 }
 
-// String classification only: a missing or non-string path on a path-bearing tool is outside
-// (fail closed). An empty cwd is the same hole as a forgotten one.
+
+
 export function locationForCall(cwd: string, toolName: string, input: unknown): CallLocation {
   if (!PATH_BEARING_FS_TOOLS.has(toolName)) return "nopath";
   const path = pathFromInput(input);

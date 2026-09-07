@@ -63,9 +63,9 @@ describe("digestHooksDir", () => {
     expect(digestHooksDir(join(root, "nope")).size).toBe(0);
   });
 
-  // The whole claim the grant makes is that the bytes reviewed are the bytes that run, and a
-  // trusted script can `source ./lib/common.sh`. A shallow walk would leave that helper editable
-  // with the digest never moving.
+
+
+
   test("a helper in a subdirectory is inside the digest, keyed by its relative path", () => {
     const { hooksDir } = makeHooks({ "project/.seri/hooks/lib/common.sh": SH });
     expect([...digestHooksDir(hooksDir).keys()]).toEqual([
@@ -106,9 +106,9 @@ describe("checkTrust", () => {
     expect(checkTrust({ configDir, dir: hooksDir })).toEqual({ kind: "trusted" });
   });
 
-  // Emptying a reviewed directory drops it back to untrusted rather than reporting every file as
-  // changed: with nothing left there is no longer anything for the grant to have been about, and
-  // "re-review these three files" would name files that no longer exist.
+
+
+
   test("a trusted directory emptied of every file is untrusted, not changed", () => {
     const { configDir, hooksDir } = makeHooks();
     trustHooksDir(configDir, hooksDir);
@@ -128,8 +128,8 @@ describe("checkTrust", () => {
     });
   });
 
-  // The attack the manifest is in the digest for: every script byte is untouched, and rewiring a
-  // lenient PostToolUse script onto PreToolUse with a catch-all matcher changes what runs.
+
+
   test("editing hooks.yaml alone is changed, with no script edited", () => {
     const { configDir, hooksDir } = makeHooks();
     trustHooksDir(configDir, hooksDir);
@@ -211,8 +211,8 @@ describe("the store file", () => {
 
     trustHooksDir(configDir, hooksDir, (m) => warnings.push(m));
     expect(readFileSync(path, "utf8")).toBe(before);
-    // Refused, and said so: a caller that printed "trusted" over a write that never landed would
-    // leave the user believing a grant exists.
+
+
     expect(warnings).toHaveLength(2);
     expect(warnings[1]).toContain(path);
     expect(checkTrust({ configDir, dir: hooksDir })).toEqual({ kind: "untrusted" });

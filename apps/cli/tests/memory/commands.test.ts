@@ -39,8 +39,8 @@ describe("memoryCommandAccepts", () => {
     expect(memoryCommandAccepts(["archivist", "off"])).toBe(true);
   });
 
-  // The exact hijack class SLASH_COMMANDS' own comment documents: a task that happens to start
-  // with "/memory" must fall through to the model, not be swallowed by this command.
+
+
   test("does not accept a task that merely starts with /memory", () => {
     expect(memoryCommandAccepts(["is", "broken,", "fix", "it"])).toBe(false);
   });
@@ -71,11 +71,11 @@ describe("decideMemoryCommand", () => {
     );
 
     const pending = decideMemoryCommand(["pending"], ctx);
-    // A 7-char prefix of the id, not all 12: enough to type back into approve/reject, and short
-    // enough that the write itself is the widest thing on the row.
+
+
     expect(pending.lines[0]?.text).toContain(staged.id.slice(0, 7));
     expect(pending.lines[0]?.text).toContain("USER.md");
-    // The scope bracket is gone on purpose — "USER.md" already says which file this targets.
+
     expect(pending.lines[0]?.text).not.toContain("[user]");
 
     const diff = decideMemoryCommand(["diff", staged.id], ctx);
@@ -85,12 +85,12 @@ describe("decideMemoryCommand", () => {
     expect(decideMemoryCommand(["pending"], ctx).lines[0]?.text).toContain("No staged");
   });
 
-  // Round-4 review finding: a memory-project entry's target project was invisible in both
-  // /memory pending's summary line and /memory diff's header — diffPending used to print
-  // basename(file.path), which for a project file is always literally "MEMORY.md" (the project
-  // only appears as a hash-token directory in between, per memoryFilePath). A human reviewing
-  // staged writes from two different repos could not tell a memory-project entry staged in one
-  // apart from one targeting the other before approving it.
+
+
+
+
+
+
   test("pending/diff show which project a memory-project entry targets, not just MEMORY.md", () => {
     const ctx = makeCtx("/home/x/other-repo");
     const staged = stagePendingWrite(
@@ -173,9 +173,9 @@ describe("decideMemoryCommand", () => {
     expect(decideMemoryCommand(["archivist", "maybe"], ctx).lines[0]?.text).toContain("Usage:");
   });
 
-  // diffPending re-runs computeWrite against the CURRENT live file (correct — approve-time
-  // re-check), which can throw for one entry without that throw discarding every diff already
-  // collected for entries processed before/after it.
+
+
+
   test("diff all still shows a good entry's diff plus an inline error for a bad one", () => {
     const ctx = makeCtx();
     stagePendingWrite(
@@ -184,8 +184,8 @@ describe("decideMemoryCommand", () => {
       new Date(),
     );
     stagePendingWrite(
-      // Never matches anything in the (empty) live file — diffPending's own computeWrite call
-      // throws "no entry contains" for this one.
+
+
       { scope: "user", action: "remove", target: "does not exist", reason: "r", durable: true },
       ctx,
       new Date(),
@@ -196,13 +196,13 @@ describe("decideMemoryCommand", () => {
     expect(result.lines.some((l) => l.text.startsWith("Could not diff"))).toBe(true);
   });
 
-  // rejectPending is a raw unlinkSync with no existence check -- an entry whose underlying file no
-  // longer matches what listPending resolved (a concurrent process rejecting/removing it between
-  // resolution and this call) must not abort the rest of "reject all" with zero output. Simulated
-  // deterministically, cross-platform: a .pending file is written whose OWN "id" field names a
-  // path that does not exist on disk (pendingPath is derived from the record's id, not from the
-  // filename it was read from) -- rejectPending's unlinkSync then throws ENOENT for exactly this
-  // record, the same failure shape a real race produces, without depending on timing.
+
+
+
+
+
+
+
   test("reject all still rejects a good entry and reports an inline error for one whose own id resolves to a missing file", () => {
     const ctx = makeCtx();
     const good = stagePendingWrite(
@@ -228,8 +228,8 @@ describe("decideMemoryCommand", () => {
     );
 
     const result = decideMemoryCommand(["reject", "all"], ctx);
-    // One count for everything that worked, the ids only on the failure — the whole point of the
-    // collapse. `good` is the only success here, so the count is 1.
+
+
     expect(result.lines[0]).toEqual({ text: "1 memory rejected." });
     expect(result.lines.some((l) => l.text.startsWith(`Could not reject ${staleId}`))).toBe(true);
     expect(good.id).not.toBe(staleId);
@@ -258,9 +258,9 @@ describe("decideMemoryCommand", () => {
     expect(decideMemoryCommand(["pending"], ctx).lines[0]?.text).toContain("No staged");
   });
 
-  // The message the collapse exists for: a full queue used to print one "Rejected <hex>." line per
-  // entry, twenty of which pushed everything else off the viewport and told the reader nothing the
-  // count does not.
+
+
+
   test("reject all reports one count, not one line per entry", () => {
     const ctx = makeCtx();
     for (const content of ["a", "b", "c", "d"]) {
@@ -323,8 +323,8 @@ describe("memoryPanelRows", () => {
       reason: "said so",
       durable: true,
     });
-    // A replace shows both halves, which is the one action whose "what does this write say" answer
-    // is not a single string.
+
+
     expect(rows[1]?.detail).toBe("old → new");
     expect(rows[1]?.durable).toBe(false);
     expect(rows[1]?.file).toBe("harness/MEMORY.md");

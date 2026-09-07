@@ -12,10 +12,10 @@ export type HooksCommandDeps = {
   readonly configDir: string;
 };
 
-// The argv gate cli.ts runs before dispatch, kept here so it is testable against the exact strings
-// a user types — the same split skillsCommandAccepts and mcpCommandAccepts use. show/trust/untrust
-// take no argument: there is exactly one project hooks directory per worktree, so there is nothing
-// for an argument to select.
+
+
+
+
 export function hooksCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
   if (sub === undefined || sub === "list" || sub === "show" || sub === "trust" || sub === "untrust")
@@ -26,8 +26,8 @@ export function hooksCommandAccepts(args: string[]): boolean {
 const UNTRUSTED_LINE =
   "Not reviewed. Nothing in it runs. /hooks show to read the scripts, /hooks trust to turn them on.";
 
-// A few names read naturally in a sentence; past that the line becomes the list of files it was
-// trying to avoid being. Matches toolActivity.ts's own "…and N more" cap for the identical reason.
+
+
 const CHANGED_FILES_CAP = 5;
 
 function changedFilesLine(files: readonly string[]): string {
@@ -39,9 +39,9 @@ function changedFilesLine(files: readonly string[]): string {
   );
 }
 
-// hooksFile.ts always compiles a matcher as `^(?:<what the author wrote>)$` (anchored so "edit"
-// matches the tool and not the tail of "credit_check"). Undoing that wrapper for display is what
-// lets this line show the author their own text back rather than a regex they didn't write.
+
+
+
 function matcherLabel(spec: HookSpec): string {
   if (spec.matcher === undefined) return "(every tool)";
   const wrapped = spec.matcher.source.match(/^\^\(\?:([\s\S]*)\)\$$/);
@@ -58,13 +58,13 @@ function wiringRows(registry: HookRegistry, source: ExtensionSource): string[] {
   return rows;
 }
 
-// The trust verdict is recomputed here rather than read off `HooksLoad`, even though
-// loadHookRegistry already ran checkTrust once and its `untrusted` field carries the answer. The
-// duplicated digest walk buys the only thing the cheaper reading loses: checkTrust reports a
-// hooks-trust.yaml it could not parse through `onWarning`, and loadHookRegistry's own callback also
-// carries its informational per-scope summary, so the two cannot be told apart at that seam. A
-// store seri refuses to read is precisely what the user typing /hooks needs to be told, and paying
-// one walk on an explicit command to say so is the right trade.
+
+
+
+
+
+
+
 function listLines(deps: HooksCommandDeps): string[] {
   const storeWarnings: string[] = [];
   const hooksLoad = loadHookRegistry({
@@ -97,11 +97,11 @@ function listLines(deps: HooksCommandDeps): string[] {
   });
   lines.push(...storeWarnings);
   if (verdict.kind === "trusted") {
-    // "Trusted", and deliberately not "live". This reads the grant off disk, where the session's
-    // own registry was frozen at start (runtime/prepare.ts), so a grant made by `/hooks trust` a
-    // moment ago is true here and not yet in effect — and `trust`'s own reply is what says so.
-    // Claiming liveness this function cannot check is how a user ends up believing a rail is
-    // guarding something it is not.
+
+
+
+
+
     lines.push("Trusted.");
     const rows = wiringRows(hooksLoad.registry, "project");
     lines.push(...(rows.length > 0 ? rows : ["No hooks configured."]));
@@ -114,9 +114,9 @@ function listLines(deps: HooksCommandDeps): string[] {
   return lines;
 }
 
-// Every file digestHooksDir would hash, read and printed in full — that key set is the grant
-// itself, so iterating anything else (a fresh directory walk, or hooks.yaml's own script list)
-// could show the user a different file list than the one /hooks trust is about to sign off on.
+
+
+
 function showLines(deps: HooksCommandDeps): string[] {
   const projectDir = findProjectExtensionDir(deps.worktree, HOOKS_DIRNAME);
   if (projectDir === undefined) return ["No project hooks directory."];
@@ -133,8 +133,8 @@ function showLines(deps: HooksCommandDeps): string[] {
       continue;
     }
     try {
-      // `fatal: true` is the point: a silent replace-invalid-bytes decode would show corrupted
-      // text as though it were the script's real content instead of admitting it isn't text.
+
+
       lines.push(...new TextDecoder("utf-8", { fatal: true }).decode(bytes).split(/\r?\n/));
     } catch {
       lines.push(`${key} is not decodable as text.`);
@@ -150,8 +150,8 @@ function trustResult(deps: HooksCommandDeps): string[] {
 
   const warnings: string[] = [];
   trustHooksDir(deps.configDir, projectDir, (message) => warnings.push(message));
-  // A warning means the write never landed — reporting "trusted" over it would tell the user a
-  // grant exists when the store still says otherwise.
+
+
   if (warnings.length > 0) return warnings;
 
   const count = digestHooksDir(projectDir).size;

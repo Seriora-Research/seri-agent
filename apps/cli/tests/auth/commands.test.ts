@@ -34,8 +34,8 @@ describe("login", () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-  // The real-world WorkOS response shape: no expires_in field at all (confirmed live). A
-  // session must still save successfully, with expiresAt simply absent — not a crash.
+
+
   test("saves a session with expiresAt absent when pollForToken resolves success without expiresIn", async () => {
     await login("login", "client_123", configDir, {
       ...deps({
@@ -71,10 +71,10 @@ describe("login", () => {
     ).rejects.toThrow(message);
   });
 
-  // Bug fix (thermo-nuclear, round 5): distinct from denied/expired/error above — an abort is a
-  // deliberate cancellation (Escape on "starting"/"device", cli.ts's own AuthPanel), not a
-  // failure, so it must resolve cleanly with no error message and no onMessage call (which would
-  // otherwise read as a successful sign-in that never happened).
+
+
+
+
   test("resolves cleanly, without throwing or calling onMessage, when pollForToken resolves aborted", async () => {
     const messages: string[] = [];
 
@@ -87,11 +87,11 @@ describe("login", () => {
     expect(messages).toEqual([]);
   });
 
-  // Bug fix (code-review, round 6): the abort window this closes sits BEFORE pollForTokenFn ever
-  // starts — requestDeviceCodeFn is still in flight when the signal flips, so by the time it
-  // resolves the abort has already landed, before onDeviceCode or openBrowserFn ever fire. Without
-  // this check, the browser still popped open for a login the user already cancelled during the
-  // "starting" step.
+
+
+
+
+
   test("skips onDeviceCode, opening the browser, and polling when the signal is already aborted once requestDeviceCode resolves", async () => {
     const controller = new AbortController();
     const opened: string[] = [];
@@ -101,8 +101,8 @@ describe("login", () => {
     await expect(
       login("login", "client_123", "fake-config-dir", {
         requestDeviceCode: async () => {
-          // The abort lands WHILE this "network call" is in flight — the exact race the fix
-          // targets.
+
+
           controller.abort();
           return device;
         },

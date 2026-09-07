@@ -21,9 +21,9 @@ afterEach(() => {
   roots = [];
 });
 
-// Same fixture shape as tests/mcp/registry.test.ts: the worktree sits below the tree root and the
-// profile root is a sibling of the project, so the upward walk has something to walk and the two
-// scopes stay on genuinely different files.
+
+
+
 function makeTree(files: Record<string, string> = {}): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-mcp-commands-"));
   roots.push(root);
@@ -83,8 +83,8 @@ describe("mcpCommandAccepts", () => {
     expect(mcpCommandAccepts(["auth", "exa"])).toBe(true);
   });
 
-  // The exact hijack class SLASH_COMMANDS' own comment documents elsewhere: a task that merely
-  // starts with "/mcp" must fall through to the model, not be swallowed by this command.
+
+
   test("does not accept a task that merely starts with /mcp", () => {
     expect(mcpCommandAccepts(["is", "broken,", "fix", "it"])).toBe(false);
   });
@@ -138,12 +138,12 @@ describe("mcpPanelRows", () => {
     ]);
   });
 
-  // The precedent this mirrors: skillsPanelRows' own `where` field (src/skills/commands.ts:89) —
-  // a project file is inside the tree the person is standing in, so its short relative form is
-  // more useful than the full path; a profile-root file lives genuinely elsewhere and only its
-  // absolute path helps. `makeTree`'s own fixture (this file's header comment) puts the worktree
-  // and the profile root under two SIBLING directories, so the two forms are visibly different —
-  // not, say, both collapsing to the same string by coincidence.
+
+
+
+
+
+
   test("a project-scope header renders worktree-relative, a user-scope header renders absolute", () => {
     const { registry, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -195,10 +195,10 @@ describe("mcpPanelRows", () => {
     });
   });
 
-  // Negative control (must be seen red before this passes): mcpPanelRows must reflect the SESSION's
-  // frozen registry, never a fresh disk read. Proven by mutating servers.yaml on disk after the
-  // registry is built and asserting the rows do not change. If mcpPanelRows read from disk instead
-  // of the passed registry, this assertion would fail because the second server would appear.
+
+
+
+
   test("reflects the session's registry, not disk — a later edit to servers.yaml does not change the rows", () => {
     const { registry, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -241,8 +241,8 @@ describe("decideMcpCommand: list", () => {
       clients: createMcpClients(),
     });
     expect(lines).toEqual([expect.stringContaining("exa"), expect.stringContaining("notion")]);
-    // Neither server was dialled this session, so both read idle — but exa's cache from an earlier
-    // session still names a tool count, and notion (never added) has none to show.
+
+
     expect(lines.find((l) => l.includes("exa"))).toContain(
       "idle, connects on first use, 1 tool cached",
     );
@@ -251,10 +251,10 @@ describe("decideMcpCommand: list", () => {
     );
   });
 
-  // Seen red first by reverting listLines to derive status from `entry.catalog` alone (the shape
-  // this line used before it took `clients`): a server this session dialled and found unreachable
-  // read as though nothing had happened, "idle, connects on first use", identically to a server
-  // never touched at all.
+
+
+
+
   test("a server whose pool status is failed reports unreachable, not idle", () => {
     const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
     const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
@@ -285,9 +285,9 @@ describe("decideMcpCommand: list", () => {
     expect(lines[0]).toContain("needs authentication");
   });
 
-  // The property worth pinning is agreement itself, not any one state's wording — so this walks
-  // all four McpServerStatus states and checks both surfaces against the same expectation each
-  // time, rather than duplicating one assertion per state.
+
+
+
   test("list and mcpPanelRows report the same status word for the same server, across all four states", () => {
     const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
     const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
@@ -336,13 +336,13 @@ describe("decideMcpCommand: add", () => {
     const projectFile = join(worktree, "..", "..", ".seri", "mcp", "servers.yaml");
     expect(existsSync(profileFile)).toBe(true);
     expect(readFileSync(profileFile, "utf8")).toContain("exa:");
-    // The project file that existed before the add is untouched.
+
     expect(readFileSync(projectFile, "utf8")).not.toContain("exa:");
   });
 
-  // Negative control (must be seen red before this passes): if `/mcp add` wrote the project scope
-  // instead of the profile root, this is the assertion that catches it — the entry would land in
-  // the project file and the profile file would either not exist or lack the entry.
+
+
+
   test("negative control target: the profile file, specifically, is what add targets", () => {
     const { configDir } = makeTree({});
     const registry: McpRegistry = new Map();
@@ -395,9 +395,9 @@ describe("decideMcpCommand: add", () => {
     expect(lines[0]).toContain("not changed");
   });
 
-  // The reported bug, at the seam that caused it: add wrote the file and returned nothing for the
-  // session, so the very next /mcp read an unchanged registry and said no servers were configured.
-  // Seen red by dropping `change` from addResult's success return.
+
+
+
   test("the session that ran add can see the server without restarting", () => {
     const { configDir, worktree } = makeTree({});
     const registry = new Map<string, McpEntry>();
@@ -414,9 +414,9 @@ describe("decideMcpCommand: add", () => {
     expect(rows.filter((row) => row.kind === "server").map((row) => row.name)).toEqual(["exa"]);
   });
 
-  // Pins the claim addResult's own comment makes. If the two ever drift, a server would read one
-  // way in the session that added it and another way after a restart, which is the class of bug
-  // that made the panel worth trusting in the first place.
+
+
+
   test("the entry add hands back is the entry a restart would load from the file it wrote", () => {
     const { configDir, worktree } = makeTree({});
     const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
@@ -433,8 +433,8 @@ describe("decideMcpCommand: add", () => {
     );
   });
 
-  // An added server contributes no tools until someone previews and trusts it, which is what lets
-  // the entry join a running session at all — see McpRegistryChange's own comment.
+
+
   test("the added entry carries no catalog", () => {
     const { configDir, worktree } = makeTree({});
     const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
@@ -463,7 +463,7 @@ describe("decideMcpCommand: remove", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
-    // Re-load through loadMcpRegistry so the registry's entry carries the real filePath.
+
     const registry = loadMcpRegistry({ worktree, configDir, onWarning: () => {} });
     const entryFromRegistry = registry.get("exa");
     expect(entryFromRegistry).toBeDefined();
@@ -509,8 +509,8 @@ describe("decideMcpCommand: remove", () => {
     expect(change).toBeUndefined();
   });
 
-  // The other half of the add fix. Once a session can see a server it added, it has to stop seeing
-  // one it removed, or /mcp keeps offering a row whose file is already gone.
+
+
   test("the session that ran remove stops listing the server", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
@@ -545,9 +545,9 @@ describe("one login outcome, worded once", () => {
     );
   });
 
-  // The shape a real rejected authorization code came back as, measured against the live Supabase
-  // authorization server: a multi-line zod dump of an error body the library could not parse. A
-  // transcript renders one line, so neither the newlines nor the full length may reach it.
+
+
+
   test("an authorization server's own error is flattened to one bounded line", () => {
     const raw = [
       "HTTP 404: Invalid OAuth error response: [",

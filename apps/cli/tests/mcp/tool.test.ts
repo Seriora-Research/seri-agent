@@ -36,9 +36,9 @@ function registryOf(entries: Record<string, McpEntry>): McpRegistry {
   return new Map(Object.entries(entries));
 }
 
-// The AI SDK's `tool()` returns a definition whose `execute` takes (args, options); nothing else
-// in this file needs the wrapping, so tests reach it directly the way tests/skills/tool.test.ts
-// reaches withSkills' tool.
+
+
+
 function run(
   tools: ToolSet,
   args: unknown,
@@ -70,7 +70,7 @@ describe("withMcp", () => {
   });
 
   test("is absent entirely for a registry with no cataloged tools", () => {
-    // Configured but never previewed: a spec with no cached catalog.
+
     const registry = registryOf({ exa: entry("exa", undefined) });
     const tools = withMcp(
       {},
@@ -117,10 +117,10 @@ describe("withMcp", () => {
   });
 
   test("sorts by code unit, not by locale", () => {
-    // localeCompare (ICU collation) and code-unit order disagree on this set, measured on this
-    // machine's default locale: localeCompare puts mcp_a_b ahead of mcp_a1, code-unit does not.
-    // If withMcp ever regresses to localeCompare, this goes red on any machine where the two
-    // orders disagree for these names, which the comment above says is most of them.
+
+
+
+
     const registry = registryOf({
       x: entry("x", [
         toolInfo("x", "n1", { toolName: "mcp_a1" }),
@@ -251,10 +251,10 @@ describe("mcpCallSubject", () => {
     expect(mcpCallSubject(MCP_TOOL_NAME, { tool: 123 })).toBe(MCP_TOOL_NAME);
   });
 
-  // The model chooses this string, so a built-in's own name must never pass through as the
-  // subject: read_file and skill are both in the gate's read class, and either one waved through
-  // here would let an mcp call reason about permission as if it were that read tool, allowed in
-  // read-only mode where an mcp call is supposed to be blocked.
+
+
+
+
   test("a built-in's name in input.tool never passes through as the subject", () => {
     expect(mcpCallSubject(MCP_TOOL_NAME, { tool: "read_file" })).toBe(MCP_TOOL_NAME);
     expect(mcpCallSubject(MCP_TOOL_NAME, { tool: "skill" })).toBe(MCP_TOOL_NAME);

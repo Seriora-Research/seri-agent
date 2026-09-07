@@ -152,9 +152,9 @@ describe("dispatch_subagents", () => {
     expect(calls[1].startedAt).toBeLessThan(calls[0].endedAt as number);
   });
 
-  // Half 2 of the recursion guard (roles.test.ts's "no role's ToolSet contains dispatch_subagents"
-  // is half 1): a model that tries to call it anyway, against the REAL runLoop, gets the same
-  // "Unknown tool" error any made-up tool name would (loop.ts:499-508) — not a nested dispatch.
+
+
+
   test("a child that calls dispatch_subagents anyway gets Unknown tool, never a nested dispatch", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
@@ -190,7 +190,7 @@ describe("dispatch_subagents", () => {
         return { events: [usageEvent(10, 5), { type: "done", reason: "no-tool-call" }] };
       if (index === 1)
         return { events: [usageEvent(3, 2), { type: "done", reason: "no-tool-call" }] };
-      // No usage event at all: this child's fields must stay undefined, not default to 0.
+
       return { events: [{ type: "done", reason: "no-tool-call" }] };
     });
 
@@ -462,16 +462,16 @@ describe("dispatch_subagents", () => {
     expect(result.results[0].summary).toBe("cancelled before it produced a summary");
   });
 
-  // Reader/writer serialization replaces the old per-path claim/conflict/retry mechanism: it
-  // closed only one of two confirmed gaps (a tester-only batch, which mutates via bash/powershell
-  // rather than write_file, got neither the checkpoint nor any serialization at all) and its own
-  // remedy for the case it did catch was discarding a full child run. One filesystem, one writer at
-  // a time is safe by construction, for every mutating tool, not just write_file.
+
+
+
+
+
   test("writer-role tasks (writer + tester) never overlap in wall-clock time", async () => {
     const { fake, calls } = fakeChildLoop((_opts, index) => ({
       events: [{ type: "done", reason: "no-tool-call" }],
-      // Only the first writer sleeps — long enough that a second writer starting concurrently
-      // would necessarily be timestamped before the first one ends.
+
+
       before: index === 0 ? () => sleep(30) : undefined,
     }));
 
@@ -494,9 +494,9 @@ describe("dispatch_subagents", () => {
     const barrier = makeBarrier();
     const { fake, calls } = fakeChildLoop((_opts, index) => {
       if (index === 0) {
-        // The reader (explore): waits for the writer to signal it has started, then a bit longer,
-        // so a genuinely sequential run (writer never starts until the reader ends) is told apart
-        // from real concurrency.
+
+
+
         return {
           events: [{ type: "done", reason: "no-tool-call" }],
           before: async () => {
@@ -505,7 +505,7 @@ describe("dispatch_subagents", () => {
           },
         };
       }
-      // The writer: signals immediately, proving it started while the reader was in flight.
+
       return {
         events: [{ type: "done", reason: "no-tool-call" }],
         before: async () => {
@@ -574,12 +574,12 @@ describe("dispatch_subagents", () => {
     expect(result.totalUsage).toEqual({ inputTokens: 4, outputTokens: 6, totalTokens: 10 });
   });
 
-  // Drives the REAL runLoop (not fakeChildLoop): a `code` child with no tools pre-granted, under
-  // approve-each, whose only move is to retry a write. Every attempt is denied (deny-blocked --
-  // children get no approvalPrompt, loop.ts's decidePermission), never declined, so
-  // consecutiveDenials never trips loop.ts's own "repeated-denials" and the child runs to its
-  // (short, here) iteration cap instead. deniedCount is what tells the resulting summary apart from
-  // the generic "stopped at the iteration cap" message.
+
+
+
+
+
+
   test("a denied child's summary names the mode and the denial count, not the generic cap message", async () => {
     const model = new MockLanguageModelV4({
       doStream: Array.from({ length: 3 }, () =>
@@ -701,8 +701,8 @@ describe("dispatch_subagents", () => {
     expect(result.results).toHaveLength(5);
     expect(result.results[3].summary).toContain("3-task limit");
     expect(result.results[4].summary).toContain("3-task limit");
-    // {} not zeroed: a row that never ran must read as "never reported", not "reported zero" —
-    // addTokens' own "sum what showed up" contract (cli.ts) depends on that distinction.
+
+
     expect(result.results[3].usage).toEqual({});
     expect(result.results[3].doneReason).toBeUndefined();
   });
@@ -814,7 +814,7 @@ describe("dispatch_subagents", () => {
     expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
     expect(calls[0].opts.model).toBe(childModel);
     expect(calls[0].opts.contextWindowSize).toBe(200_000);
-    // Negative control: parent high must not ride onto a different pair.
+
     expect(calls[0].opts.reasoningEffort).toBeUndefined();
     expect(result.results[0].model).toBe("claude-sonnet-5");
     expect(result.results[0].provider).toBe("anthropic");
@@ -1093,9 +1093,9 @@ describe("dispatch_subagents", () => {
     expect(snapshots).toHaveLength(1);
   });
 
-  // The actual regression test for the confirmed gap: tester holds bash, which is in
-  // FS_MUTATING_TOOL_NAMES, so an all-tester batch (no writer task at all) mutates the worktree via
-  // shell and must still get the pre-dispatch snapshot, not zero /undo coverage.
+
+
+
   test("an all-tester batch (no writer) still takes exactly one checkpoint snapshot", async () => {
     const { fake } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],
@@ -1117,10 +1117,10 @@ describe("dispatch_subagents", () => {
   });
 });
 
-// A registry with one file-defined agent in it, standing in for a `.seri/agents/reviewer.md` that
-// loadAgentRegistry already parsed — these assert what the DISPATCH TOOL does with a custom spec,
-// which is a different question from whether the file parsed (agentFile.test.ts) or was found
-// (registry.test.ts).
+
+
+
+
 function withCustomAgent(spec: Partial<AgentSpec> & { name: string }): AgentRegistry {
   const agents = new Map(builtinRegistry());
   const toolNames = spec.toolNames ?? (["read_file", "grep"] as const);
@@ -1180,9 +1180,9 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(text).not.toContain('"quiet"');
   });
 
-  // Both halves of "never told it exists": the description leaves it out of the prose, and the
-  // enum leaves it out of the names the model may pass at all. `/name` is unaffected — it runs
-  // dispatchDirect, which never consults this schema.
+
+
+
   test("an agent with no description is not in the schema's enum either, but /name still runs it", async () => {
     const agents = withCustomAgent({ name: "quiet", description: "" });
     const schema = dispatchSchema(agents);
@@ -1208,8 +1208,8 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(result.results[0].summary).toBe("graded");
   });
 
-  // The enum and this registry are built from the same Map, so a divergence between them is a bug
-  // — and a task that silently vanished would be one the model cannot see to re-dispatch.
+
+
   test("a task whose role the registry does not hold comes back as a not-run row", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],
@@ -1250,9 +1250,9 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(calls[0].opts.system?.startsWith("PARENT SYSTEM")).toBe(true);
   });
 
-  // The structural half of the recursion guard, from the other end: even if a file asks for the
-  // dispatch tool by name, the grant is picked out of toolDefinitions keys, which that name is not
-  // one of — so there is nothing for parseAgentFile to have put on the spec for this to grant.
+
+
+
   test("a custom agent's ToolSet can never contain dispatch_subagents", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],

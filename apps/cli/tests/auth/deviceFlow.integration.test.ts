@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { pollForToken, requestDeviceCode } from "../../src/auth/deviceFlow";
 
-// Live test against the WorkOS Staging sandbox — silently skipped unless
-// SERI_TEST_WORKOS_CLIENT_ID is set (e.g. in a developer's own shell). Never hardcode
-// the sandbox client id here; it's read from the env var only, so this is skipped
-// everywhere that var isn't set (including CI, which has no WorkOS secret configured).
+
+
+
+
 describe.skipIf(!process.env.SERI_TEST_WORKOS_CLIENT_ID)(
   "requestDeviceCode + pollForToken (live WorkOS sandbox)",
   () => {
@@ -21,10 +21,10 @@ describe.skipIf(!process.env.SERI_TEST_WORKOS_CLIENT_ID)(
       expect(device.expiresIn).toBeGreaterThan(0);
       expect(device.interval).toBeGreaterThan(0);
 
-      // A single real poll, immediately, with no human clicking through the browser: the
-      // server must report authorization_pending, not a terminal state. `now()` forces the
-      // client-side expiry backstop to trip right after that one poll, so this test issues
-      // exactly one real request to WorkOS rather than looping until the device code expires.
+
+
+
+
       let sawPending = false;
       const nowValues = [0, 0, device.expiresIn * 1000 + 1];
       const result = await pollForToken(clientId, device, {

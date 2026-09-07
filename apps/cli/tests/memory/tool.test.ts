@@ -20,8 +20,8 @@ afterEach(() => {
   configDir = undefined;
 });
 
-// Mirrors provider/tools.ts's own tools: `execute` is called directly, the way loop.ts's own
-// gate-checked path eventually invokes it, with a minimal options object.
+
+
 function callTool(
   toolDef: ReturnType<typeof makeMemoryWriteTool>,
   args: Record<string, unknown>,
@@ -54,9 +54,9 @@ describe("makeMemoryWriteTool", () => {
     expect(missingDurable.success).toBe(false);
   });
 
-  // An empty target would match every entry in store.ts's findUniqueMatch (`"".includes()` is
-  // always true) — rejected here, at the schema, before a malformed or hallucinated model call
-  // ever reaches that far.
+
+
+
   test("schema rejects an empty-string target", () => {
     const result = memoryWriteInputSchema.safeParse({
       scope: "user",
