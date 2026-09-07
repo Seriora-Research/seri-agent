@@ -63,9 +63,9 @@ describe("findPackedRendererUpload", () => {
     );
   });
 
-  // Both sides of the constant, so raising it past the fixture and lowering it under a short id
-  // each turn a line red. The fixtures above derive from the same import and would follow a
-  // changed value silently.
+
+
+
   test("the payload threshold is MIN_PACKED_PAYLOAD_CHARS, inclusive", () => {
     const atMin = "A".repeat(MIN_PACKED_PAYLOAD_CHARS);
     expect(findPackedRendererUpload(`https://kroki.io/plantuml/png/${atMin}`)).toEqual({
@@ -136,8 +136,8 @@ describe("humanAskedForPackedRender", () => {
     expect(humanAskedForPackedRender("render the README as HTML")).toBe(false);
   });
 
-  // The false-positive direction is the one that uploads, so a verb embedded in another word must
-  // not count.
+
+
   test("is false when render is only a prefix of another word", () => {
     expect(humanAskedForPackedRender("the mermaid renderer crashed")).toBe(false);
   });

@@ -31,9 +31,9 @@ describe("parseDiagnostics", () => {
     expect(parsed[0].message).toBe("error TS1005: ';' expected.");
   });
 
-  // spawnCollect.ts:80 drops the MIDDLE of an oversized stream and rejoins the two halves around a
-  // "[N characters omitted]" marker, so the resumed half starts part-way through a line. That
-  // fragment and the marker must both drop out without taking their intact neighbours with them.
+
+
+
   test("a line severed by spawnCollect's middle-drop is skipped; the lines around it still parse", () => {
     const head = "src/a.ts(1,1): error TS2322: Type 'number' is not assignable to type 'string'.";
     const tail = "src/z.ts(99,4): error TS2304: Cannot find name 'bar'.";

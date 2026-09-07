@@ -113,7 +113,7 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     try {
       unlinkSync(backupPath);
     } catch {
-      // Windows may keep the running image until the next start
+
     }
   } catch (error) {
     unlinkIfExists(tmpPath);

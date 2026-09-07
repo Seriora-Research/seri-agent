@@ -26,8 +26,8 @@ function makeTree(files: Record<string, string>): { worktree: string; configDir:
   return { worktree, configDir };
 }
 
-// Written for both platforms in every fixture, so the registry resolves the same hook on
-// Linux, macOS and Windows CI runners without a per-OS branch in the test itself.
+
+
 function scriptPair(name: string, label: string): Record<string, string> {
   return {
     [`${name}.sh`]: `#!/bin/sh\necho "${label}"\n`,

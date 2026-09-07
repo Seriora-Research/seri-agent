@@ -39,8 +39,8 @@ description: Reviews a diff.
 Review this: $ARGUMENTS
 `;
 
-// The AI SDK's `tool()` returns a definition whose `execute` takes (args, options); nothing in this
-// tool reads the second argument, so the tests call it with a minimal stand-in.
+
+
 function run(tools: ReturnType<typeof withSkills>, args: unknown): Promise<unknown> {
   const definition = tools[SKILL_TOOL_NAME] as {
     execute: (args: unknown, options: unknown) => Promise<unknown>;
@@ -72,15 +72,15 @@ describe("withSkills", () => {
     expect(await run(withSkills({}, skills), { name: "reviewer" })).toBe("Review this: ");
   });
 
-  // Negative control, the second of disable-model-invocation's two guards. The first is that the
-  // skill never reaches the prompt listing; this is that the tool refuses it even if the model
-  // names it anyway.
+
+
+
   test("a disable-model-invocation skill is not in the enum and is refused by name", async () => {
     const { skills } = load({
       "project/.seri/skills/manual/SKILL.md":
         "---\ndescription: Only the user may run this.\ndisable-model-invocation: true\n---\n\nsecret body\n",
     });
-    // No model-visible skill at all, so there is no tool to call in the first place.
+
     expect(withSkills({}, skills)).toEqual({});
 
     const { skills: mixed } = load({
@@ -90,8 +90,8 @@ describe("withSkills", () => {
     });
     const tools = withSkills({}, mixed);
     const definition = tools[SKILL_TOOL_NAME] as { inputSchema: unknown };
-    // The enum carries the invocable skill and not the manual one, so the schema rejects the name
-    // before execute is ever reached.
+
+
     expect(JSON.stringify(definition.inputSchema)).toContain("reviewer");
     expect(JSON.stringify(definition.inputSchema)).not.toContain("manual");
     await expect(run(tools, { name: "manual" })).rejects.toThrow(/no skill named "manual"/);
@@ -104,9 +104,9 @@ describe("withSkills", () => {
     await expect(run(tools, { name: "reviewer" })).rejects.toThrow(/could not load the "reviewer"/);
   });
 
-  // The tool reads one file the user placed under .seri/skills/ and writes nothing, so it must not
-  // be gated. Asserted rather than assumed, because a future WRITE_TOOL_NAMES edit that swept this
-  // name in would silently make read-only sessions unable to load a skill.
+
+
+
   test("the permission gate allows it in every mode, including read-only", () => {
     for (const mode of ["read-only", "approve-each", "auto"] as const) {
       expect(checkPermission(SKILL_TOOL_NAME, mode)).toBe("allow");

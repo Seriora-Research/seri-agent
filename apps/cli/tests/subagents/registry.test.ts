@@ -91,10 +91,10 @@ describe("agentToolSet", () => {
     }
   });
 
-  // Round-trip regression for the write-ledger gap: a `code` subagent's write_file was never
-  // wrapped with anything at all, so its writes were never recorded (writeLedger.ts's recordWrite)
-  // and a later /undo could never prove one of its files safe to delete — see wrapTools.ts's
-  // withMutationRecording for the full mechanism this closes.
+
+
+
+
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
     const tools = agentToolSet(fileAgent("writer", ["write_file", "read_file"]), (context) =>
@@ -138,9 +138,9 @@ describe("composeAddendum", () => {
 });
 
 describe("agentMutatesFilesystem", () => {
-  // The predicate dispatch.ts keys both its pre-dispatch checkpoint and its writer-serialization
-  // on: explore/plan hold no tool in FS_MUTATING_TOOL_NAMES; a file-defined agent that grants
-  // write_file or bash must be treated the same way as a result.
+
+
+
   test("explore and plan do not mutate the filesystem", () => {
     expect(agentMutatesFilesystem(agent("explore"))).toBe(false);
     expect(agentMutatesFilesystem(agent("plan"))).toBe(false);
@@ -267,9 +267,9 @@ describe("loadAgentRegistry", () => {
     expect(agents.get("reviewer")?.description).toBe("grades a diff");
   });
 
-  // ~/.seri/agents is the default profile's GLOBAL scope. Every repository under $HOME would
-  // otherwise find it on the way up and claim it as its own project scope — and a --profile run
-  // would reach the default root's agents through that back door.
+
+
+
   test("the default profile root's own agents/ is never adopted as a project scope", () => {
     const root = mkdtempSync(join(tmpdir(), "seri-agents-home-"));
     roots.push(root);
@@ -293,10 +293,10 @@ describe("loadAgentRegistry", () => {
     }
   });
 
-  // Case-folding is platform-conditional (win32/darwin only), matching paths.test.ts's own reason
-  // for testing it that way: on NTFS and APFS the cwd's casing and $HOME's casing are routinely
-  // different spellings of one directory, so an exact string compare would let the walk adopt the
-  // global scope after all — the back door the test above closes.
+
+
+
+
   (foldsCase() ? test : test.skip)(
     "the global agents dir is refused as a project scope even in a different case",
     () => {
@@ -371,8 +371,8 @@ describe("loadAgentRegistry", () => {
     expect(warnings.join(" ")).toContain("compact.md");
   });
 
-  // SERI_ROLE_ARCHIVIST_MODEL is a real env pin. A file free to claim that name would inherit it
-  // silently, which is why every routing target is reserved and not just the dispatchable ones.
+
+
   test("a file taking a routing target's name is skipped", () => {
     const { agents, warnings } = load({
       "project/.seri/agents/archivist.md": "---\ndescription: impostor\n---\nb\n",
@@ -400,8 +400,8 @@ describe("loadAgentRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-  // Only a failure used to be visible, so an agent that silently stopped loading looked exactly
-  // like one still there.
+
+
   test("a scope that loaded something says so, naming the directory and the agent", () => {
     const { warnings } = load({
       "project/.seri/agents/reviewer.md": "---\ndescription: grades a diff\n---\nreview it\n",
@@ -415,8 +415,8 @@ describe("loadAgentRegistry", () => {
     expect(load({}).warnings).toEqual([]);
   });
 
-  // The catalog decides the provider half of the pin; whether that provider holds a key is
-  // resolveRoute's question at dispatch, not this one's — a hosted-gateway user configures none.
+
+
   test("a model: is resolved against the catalog, whatever providers are configured", () => {
     const catalog: ModelCatalog = {
       fetchedAt: "",

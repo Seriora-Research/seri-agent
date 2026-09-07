@@ -36,9 +36,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // This file's own guard, not borrowed from paths.test.ts/argv.test.ts's cleanup: getConfigDir()
-  // here is profile-aware, so a leaked override would resolve the wrong directory with nothing in
-  // this file catching it.
+
+
+
   setProfileOverride(undefined);
   restoreEnv("HOME", originalHome);
   rmSync(tmpRoot, { recursive: true, force: true });
@@ -54,8 +54,8 @@ describe("loadConfig", () => {
     expect(loadConfig()).toEqual({});
   });
 
-  // Bun's JSON.parse of `\0` prints `Unrecognized token ''` — the quotes look empty
-  // because the token is invisible. That is the Windows `--profile staging` crash.
+
+
   test("returns {} when config.json is a NUL byte", () => {
     writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
     expect(loadConfig()).toEqual({});
@@ -95,10 +95,10 @@ describe("inspectConfig", () => {
 });
 
 describe("setConfigValues", () => {
-  // code-review finding on PR #71: two independent setConfigValue calls for a logically-paired
-  // update (persistDefaultModel's own former shape) can land only one of the two keys if
-  // interrupted between them. setConfigValues exists to make that impossible by construction —
-  // one loadConfig/writeConfig pair for the whole batch.
+
+
+
+
   test("writes multiple keys in a single call", () => {
     setConfigValues({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
     expect(loadConfig()).toEqual({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
@@ -114,21 +114,21 @@ describe("setConfigValues", () => {
     });
   });
 
-  // The atomicity proof itself: writeConfig's own write-then-rename path (atomicWriteFile.ts) now
-  // uses a randomized tmp filename (that module's own comment explains why — a fixed name raced
-  // between two concurrent writers), so it can no longer be pre-created and collided with
-  // directly by name. Sabotages the RENAME step instead, via two platform-specific mechanisms
-  // combined, since neither alone is portable: POSIX's rename(2) checks write permission on the
-  // PARENT DIRECTORY, never the target file's own permissions, so chmod on the directory blocks
-  // it there; Windows instead honors the target FILE's own read-only attribute for a rename-over,
-  // and (matching this repo's own chmod-on-a-directory-is-a-no-op-on-Windows precedent,
-  // config/commands.test.ts) chmod on the directory alone does nothing there — verified
-  // empirically: directory-only chmod let the rename through on this repo's own Windows dev box,
-  // and the combination of both reliably blocks it. There is no "partially written" state to
-  // observe here because there is only ONE write attempt for the whole batch — this is what a
-  // caller updating several keys together actually needs, and what two independent
-  // setConfigValue calls cannot give: neither key changes when the single write fails, not
-  // "whichever call ran first still landed."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   test("a sabotaged write leaves every key unchanged — one atomic write, not several", () => {
     const path = join(configDir, "config.json");
     writeFileSync(path, JSON.stringify({ SERI_MODEL: "old-model" }));
@@ -142,7 +142,7 @@ describe("setConfigValues", () => {
 
       expect(loadConfig()).toEqual({ SERI_MODEL: "old-model" });
     } finally {
-      // Restored so afterEach's rmSync(tmpRoot, ...) can actually delete it.
+
       chmodSync(configDir, 0o755);
       chmodSync(path, 0o644);
     }
@@ -180,7 +180,7 @@ describe("loadVerifyConfig", () => {
     delete process.env.SERI_VERIFY_COMMAND;
   });
 
-  // The default for every user: on, but with nothing to run, so nothing is ever spawned.
+
   test("enabled with no command when nothing is configured", () => {
     expect(loadVerifyConfig()).toEqual({ enabled: true, command: undefined });
   });
@@ -295,9 +295,9 @@ describe("tuiBackgroundColor", () => {
     expect(tuiBackgroundColor("#AABBCC")).toBe("#AABBCC");
   });
 
-  // Every one of these means "leave the terminal's own ground alone" — the documented `terminal`
-  // spelling and a typo behave identically on purpose, because this is read while the renderer is
-  // being built and has no way to report an error.
+
+
+
   test.each([
     ["the documented off switch", "terminal"],
     ["empty", ""],

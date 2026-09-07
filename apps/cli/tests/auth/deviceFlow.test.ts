@@ -24,15 +24,15 @@ describe("getWorkosClientId", () => {
   let configDir: string;
 
   beforeEach(() => {
-    // Read from a temp dir, never the developer's real config: WORKOS-PRODUCTION.md tells
-    // users to put SERI_WORKOS_CLIENT_ID in config.json, so a test that resolves the real
-    // config dir would fail on the machine of anyone who followed those instructions.
+
+
+
     configDir = mkdtempSync(join(tmpdir(), "seri-clientid-test-"));
   });
 
   afterEach(() => {
-    // Restore by deleting when it was unset — reassigning `undefined` stores the literal
-    // string "undefined" in Node/Bun and leaks into later tests in the same process.
+
+
     if (original === undefined) delete process.env.SERI_WORKOS_CLIENT_ID;
     else process.env.SERI_WORKOS_CLIENT_ID = original;
     rmSync(configDir, { recursive: true, force: true });
@@ -156,8 +156,8 @@ describe("pollForToken", () => {
     expect(sleepCalls).toEqual([5000, 5000, 5000]);
   });
 
-  // WorkOS's real device-flow token response carries no expires_in field at all (confirmed
-  // live) — this is the normal shape, not a malformed one, and must succeed the same way.
+
+
   test("succeeds with expiresIn undefined when the response has no expires_in field", async () => {
     const fetchFn = (async () =>
       fakeResponse(true, {
@@ -254,8 +254,8 @@ describe("pollForToken", () => {
       calls += 1;
       return fakeResponse(false, { error: "authorization_pending" });
     }) as unknown as typeof fetch;
-    // now() sequence: 0 (deadline calc), 0 (pre-poll check, not yet expired — one poll
-    // happens), then past the 300s expiry (pre-poll check for the would-be second poll).
+
+
     const nowValues = [0, 0, 301_000];
     const now = () => nowValues.shift() ?? 301_000;
 
@@ -269,10 +269,10 @@ describe("pollForToken", () => {
     expect(calls).toBe(1);
   });
 
-  // Bug fix (thermo-nuclear, round 5): real cancellation — createAuthHandlers' own AbortController
-  // (cli.ts) is what makes an abandoned login actually stop polling, instead of the poll running
-  // to completion unseen (and possibly still calling saveAuthSession, even past an explicit
-  // /logout) with only its own DISPATCHES muted.
+
+
+
+
   test("returns {status: 'aborted'} without polling at all when the signal is already aborted", async () => {
     let calls = 0;
     const fetchFn = (async () => {
@@ -293,14 +293,14 @@ describe("pollForToken", () => {
     expect(calls).toBe(0);
   });
 
-  // The race this round's own bug was in: a poll already in flight (sleep/fetch already started)
-  // when abort() fires must still discard whatever it resolves to — even a genuine success —
-  // rather than acting on it because the abort landed one check too late.
+
+
+
   test("discards an in-flight poll's own success once aborted mid-flight, rather than acting on it a tick late", async () => {
     const controller = new AbortController();
     const fetchFn = (async () => {
-      // The signal flips to aborted WHILE this "network call" is in flight — the exact race a
-      // real WorkOS poll can hit, since a device code stays valid for minutes.
+
+
       controller.abort();
       return fakeResponse(true, {
         access_token: "at-1",
@@ -321,9 +321,9 @@ describe("pollForToken", () => {
 });
 
 describe("WorkOS keeps its pre-shared-loop 403 semantics", () => {
-  // Regression guard for the poll-loop extraction. xAI opts into treating a 403 as a terminal
-  // tier denial; WorkOS has no subscription tier, so a 403 must still fall through to the RFC's
-  // own error codes exactly as it did before the loop was shared.
+
+
+
   test("a 403 carrying access_denied is still denied, not an error", async () => {
     const device: DeviceAuthorization = {
       deviceCode: "dc",

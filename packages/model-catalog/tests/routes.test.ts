@@ -30,8 +30,8 @@ describe("routeKey", () => {
     );
   });
 
-  // Only the SLUG half gets `.`/`_` normalized — the vendor half is lowercased but otherwise left
-  // alone, matching D1's own formula exactly (feature-plan.md).
+
+
   test("maps . and _ separators to - in the slug, but not the vendor", () => {
     expect(routeKey(entry({ id: "anthropic/claude-sonnet-4.5", provider: "openrouter" }))).toBe(
       "anthropic/claude-sonnet-4-5",
@@ -41,8 +41,8 @@ describe("routeKey", () => {
     );
   });
 
-  // A native id has no slash — vendor comes from the entry's own `provider`, not a stripped
-  // prefix, which is what lets a native entry join its OpenRouter counterpart at all.
+
+
   test("a native id with no slash uses the entry's own provider as vendor", () => {
     expect(routeKey(entry({ id: "claude-sonnet-5", provider: "anthropic" }))).toBe(
       "anthropic/claude-sonnet-5",
@@ -51,8 +51,8 @@ describe("routeKey", () => {
 });
 
 describe("groupRoutes", () => {
-  // The design doc's own motivating example (MULTI-PROVIDER-BYOK-ROUTING.md lines 111-119):
-  // claude-sonnet-5 reachable via both Anthropic direct and OpenRouter.
+
+
   test("groups a native entry with its OpenRouter counterpart", () => {
     const entries = [
       entry({ id: "claude-sonnet-5", provider: "anthropic" }),
@@ -63,7 +63,7 @@ describe("groupRoutes", () => {
     expect(groups.get("anthropic/claude-sonnet-5")).toEqual(entries);
   });
 
-  // The `-` vs `.` version-separator case: Anthropic's own id uses `-`, OpenRouter's uses `.`.
+
   test("groups entries whose ids differ only by separator style", () => {
     const entries = [
       entry({ id: "claude-sonnet-4-5", provider: "anthropic" }),
@@ -72,8 +72,8 @@ describe("groupRoutes", () => {
     expect(groupRoutes(entries).size).toBe(1);
   });
 
-  // The groq<->openrouter exact-id collision case (the only kind exact-id matching would have
-  // found at all).
+
+
   test("groups a groq entry with its OpenRouter counterpart", () => {
     const entries = [
       entry({ id: "openai/gpt-oss-120b", provider: "groq" }),
@@ -82,10 +82,10 @@ describe("groupRoutes", () => {
     expect(groupRoutes(entries).size).toBe(1);
   });
 
-  // Negative control: two DIFFERENT models under different vendors must not collapse just
-  // because one happens to be a bare native id and the other a slashed OpenRouter one — stripping
-  // a prefix unconditionally (rather than pairing it with the vendor component) would false-group
-  // these.
+
+
+
+
   test("does not group two genuinely different models", () => {
     const entries = [
       entry({ id: "foo", provider: "openai" }),
@@ -99,8 +99,8 @@ describe("groupRoutes", () => {
     const entries = [
       entry({ id: "b", provider: "groq" }),
       entry({ id: "a", provider: "groq" }),
-      // Vendor-prefixed so this shares "groq/b"'s own route key despite a different provider —
-      // see routeKey's own comment on why a bare id's vendor comes from `provider`.
+
+
       entry({ id: "groq/b", provider: "openrouter" }),
     ];
     const groups = groupRoutes(entries);

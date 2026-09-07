@@ -1,7 +1,7 @@
-// The fixtures loop.test.ts and loop.tools.test.ts both build their mock models out of. Split
-// out when loop.test.ts crossed 1000 lines: the two files exercise different halves of runLoop
-// (the stream and its errors; tool dispatch, permissions and cancellation) but drive it with the
-// same chunk builders, so a second copy of these would be the thing that drifts.
+
+
+
+
 
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, simulateReadableStream, type ToolSet, tool } from "ai";
@@ -79,9 +79,9 @@ export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }
 
-// A model that calls write_file on every one of `turns` turns and never answers with text. What a
-// model stuck retrying a denied call actually looks like, without depending on a real one to be
-// stubborn.
+
+
+
 export function repeatedWriteCalls(turns: number) {
   return Array.from({ length: turns }, (_, i) =>
     streamResult(toolCallChunks(`call-${i}`, "write_file", { path: `a${i}.txt` })),

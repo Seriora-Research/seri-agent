@@ -12,7 +12,7 @@ export const CODEX_CALLBACK_PATH = "/auth/callback";
 export const CODEX_CALLBACK_PORTS: readonly number[] = [1455, 1457];
 export const CODEX_LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
-// Codex CLI public client id. OpenAI has not issued seri one. SERI_CODEX_CLIENT_ID overrides.
+
 export const CODEX_CLIENT_ID_DEFAULT = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 const AUTH_CLAIM = "https://api.openai.com/auth";

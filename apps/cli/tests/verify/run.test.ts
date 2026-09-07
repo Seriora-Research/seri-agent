@@ -18,8 +18,8 @@ type SpawnCall = {
   signal: AbortSignal | undefined;
 };
 
-// A fake runner rather than a real spawn, so nothing in this file needs a platform guard or a
-// 15000 ms margin: only the e2e test in wrapTools.test.ts spawns for real, and it carries both.
+
+
 function fakeSpawn(result: Partial<ProcessResult>, calls: SpawnCall[] = []) {
   return {
     calls,
@@ -31,8 +31,8 @@ function fakeSpawn(result: Partial<ProcessResult>, calls: SpawnCall[] = []) {
 }
 
 describe("runCheck", () => {
-  // The default for every user, and the reason there is no auto-discovery left: with nothing
-  // configured, seri does not go looking for a command to run.
+
+
   test("reports unavailable, and spawns nothing at all, when no command is configured", async () => {
     const runner = fakeSpawn({});
     const outcome = await runCheck(undefined, "src/written.ts", undefined, { spawn: runner.spawn });
@@ -50,9 +50,9 @@ describe("runCheck", () => {
     expect(runner.calls[0].args).toEqual(["run", "typecheck"]);
   });
 
-  // The signal is asserted on the value the RUNNER RECEIVED, not on runCheck accepting a
-  // parameter: a signal that is declared and dropped one frame later type-checks, passes every
-  // gate, and leaves the check unkillable.
+
+
+
   test("threads the caller's AbortSignal through to the process runner", async () => {
     const controller = new AbortController();
     const runner = fakeSpawn({});
@@ -113,9 +113,9 @@ describe("runCheck", () => {
     expect(outcome.total).toBe(57);
   });
 
-  // A project-wide check reports the whole repository's debt. Without this the model cannot tell
-  // the error it just caused from ones that were already there, and starts editing files it never
-  // touched — the failure OpenCode filed as #6310 and #16569.
+
+
+
   test("puts diagnostics in the file just written first, and counts them", async () => {
     const runner = fakeSpawn({
       stdout: [
@@ -166,8 +166,8 @@ describe("runCheck", () => {
     expect(outcome).toMatchObject({ status: "diagnostics", truncated: true });
   });
 
-  // The risk table's "tsc-format parsing is TypeScript-specific" row: a checker whose output this
-  // parser cannot read must not come back as a green build.
+
+
   test("a non-zero exit with nothing parseable is failed, not ok, and carries the raw tail", async () => {
     const runner = fakeSpawn({ stderr: "cargo: no such subcommand `typecheck`", exitCode: 101 });
     const outcome = await runCheck("cargo typecheck", "src/written.ts", undefined, {
@@ -190,8 +190,8 @@ describe("runCheck", () => {
     expect(outcome.reason).toContain("timed out");
   });
 
-  // A cancelled check rejects (spawnCollect.ts:201-202). The write itself already succeeded, so
-  // this must not be re-thrown: that would replace the record of a completed write with a tool error.
+
+
   test("a rejecting runner becomes a failed outcome rather than a thrown write", async () => {
     const outcome = await runCheck("tsc --noEmit", "src/written.ts", undefined, {
       spawn: () => Promise.reject(new Error("cancelled")),

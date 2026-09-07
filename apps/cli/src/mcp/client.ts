@@ -1,12 +1,13 @@
-// One of the feature's two files that touch the network (mcp/login.ts is the other). Consumes
-// exactly two calls from @ai-sdk/mcp: listTools() and callTool(). toolsFromDefinitions() looks like the obvious
-// shortcut — it turns a catalog straight into an AI SDK ToolSet — but its return type does not
-// assign to seri's ToolSet: @ai-sdk/mcp pins @ai-sdk/provider-utils 5.0.33 while ai@7.0.58
-// resolves 5.0.25 (and 5.0.18), and each copy declares its own `unique symbol` schemaSymbol, so
-// the branded Schema types are nominally distinct ("Property '[schemaSymbol]' is missing in type
-// 'Schema<unknown>' but required in type 'Schema<never>'"). listTools and callTool take and
-// return plain JSON, so nothing branded crosses this boundary and no version pin is needed to
-// keep this typechecking clean. Do not "simplify" this back to toolsFromDefinitions().
+
+
+
+
+
+
+
+
+
+// listTools/callTool, not toolsFromDefinitions: @ai-sdk/mcp and ai pin different @ai-sdk/provider-utils copies whose schemaSymbol unique symbols do not unify.
 import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
 import { capToolResult } from "../capToolResult";
 import { messageOf } from "../errors";
@@ -25,7 +26,7 @@ export type McpClientHandle = {
 };
 
 export type McpServerStatus =
-  | { state: "idle" } // configured, never dialled
+  | { state: "idle" }
   | { state: "connected"; toolCount: number }
   | { state: "needs-auth" }
   | { state: "failed"; message: string };
@@ -33,20 +34,20 @@ export type McpServerStatus =
 export type DialFn = (spec: McpServerSpec, signal?: AbortSignal) => Promise<McpClientHandle>;
 
 export type McpClients = {
-  // The pool's own dial function rather than a session-level default kept elsewhere: a pool is
-  // complete on its own terms, and a test pool is constructible with no second mechanism (a
-  // registry, a WeakMap) to wire up alongside it.
+
+
+
   readonly dial: DialFn;
-  // Promise-keyed so two calls racing the first dial share one connection rather than opening
-  // two, and a rejected dial is evicted (see dialOnce) so the next call retries instead of the
-  // server staying broken for the session.
+
+
+
   readonly handles: Map<string, Promise<McpClientHandle>>;
   readonly status: Map<string, McpServerStatus>;
 };
 
-// A non-text part is rendered by type rather than dropped: a caller reading only the joined
-// string would otherwise lose an image or resource result and never learn the tool returned one
-// at all.
+
+
+
 export function flattenContent(result: {
   content?: readonly { type: string; text?: string }[];
   [key: string]: unknown;
@@ -65,9 +66,9 @@ async function dialServer(
   authProvider?: OAuthClientProvider,
 ): Promise<McpClientHandle> {
   const client = await createMCPClient({
-    // spec.headers spreads first and the transport only adds Authorization when the provider has
-    // a token, so a server authenticated by a static header in servers.yaml keeps working exactly
-    // as it did — a provider with nothing stored adds nothing to the request.
+
+
+
     transport: { type: "http", url: spec.url, headers: spec.headers, authProvider },
     clientName: "seri",
     initializationOptions: { signal },
@@ -97,9 +98,9 @@ export function createMcpClients(dial: DialFn = dialServer): McpClients {
   return { dial, handles: new Map(), status: new Map() };
 }
 
-// The dial a real session runs on: the same transport, plus a provider that spends and refreshes
-// stored credentials and refuses to start a login (the refuse persona, mcp/authProvider.ts). A
-// tool call is not consent to open a browser, and a scheduled run has nobody to open one for.
+
+
+
 export function createSessionDial(configDir: string): DialFn {
   return (spec, signal) =>
     dialServer(
@@ -109,9 +110,9 @@ export function createSessionDial(configDir: string): DialFn {
     );
 }
 
-// The two errors that both mean "this server will answer once, and only once, the user has logged
-// in": the transport's own 401 verdict, and the refuse persona declining to start a login. Lives
-// here so cli.ts never imports @ai-sdk/mcp directly.
+
+
+
 export function isAuthRequired(err: unknown): boolean {
   return err instanceof UnauthorizedError || err instanceof McpLoginRequiredError;
 }
@@ -132,9 +133,9 @@ function dialOnce(
       return handle;
     })
     .catch((err: unknown) => {
-      // A rejected promise never becomes a resolved one, so a poisoned entry left in the map
-      // would fail every call for the rest of the session. Evicting it here is what makes the
-      // next call try again instead.
+
+
+
       clients.handles.delete(spec.name);
       clients.status.set(
         spec.name,
@@ -160,8 +161,8 @@ export async function callMcpTool(
   try {
     handle = await dialOnce(clients, spec, signal);
   } catch (err) {
-    // The model reads this string and relays it, so a server that only needs a login has to say
-    // the command that provides one rather than read as broken.
+
+
     if (isAuthRequired(err)) {
       throw new Error(
         `MCP server "${spec.name}" needs authentication. Run /mcp auth ${spec.name}.`,
@@ -176,9 +177,9 @@ export async function callMcpTool(
   }
 }
 
-// Its own connection, dialled and closed here rather than through the session pool: this is the
-// `/mcp add` preview path, and a server nobody has trusted yet has no business entering the pool
-// that every later tool call reuses.
+
+
+
 export async function fetchCatalog(
   spec: McpServerSpec,
   signal?: AbortSignal,
@@ -198,18 +199,18 @@ export async function fetchCatalog(
       })),
     };
   } finally {
-    // Best-effort: whatever the preview connection's close does or doesn't do, it must not mask
-    // whichever of the two awaits above actually failed.
+
+
     try {
       await handle.close();
     } catch {}
   }
 }
 
-// Synchronous and fire-and-forget internally: bindSession (runtime/prepare.ts) is synchronous,
-// and a third-party server that hangs its own close must not stall /clear. Failures are reported
-// through onWarning, never thrown. Idempotent: clearing both maps leaves a second call with
-// nothing to close.
+
+
+
+
 export function closeMcpClients(clients: McpClients, onWarning: (message: string) => void): void {
   for (const [name, handle] of clients.handles) {
     handle

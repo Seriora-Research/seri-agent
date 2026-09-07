@@ -14,14 +14,7 @@ const UNIFIED_MARK: Record<UnifiedDiffKind, string> = {
   del: "- ",
 };
 
-/**
- * Exact-prefix/exact-suffix trim, not a general LCS — enough for every diff this codebase previews,
- * and it needs no dependency. Shared by the two staged-write previews (memory entries and skill
- * files) so a human reviewing either reads the same shape of diff.
- *
- * `lineNumber` is 1-based in the side that line came from: before-image for context-prefix and
- * dels, after-image for adds and context-suffix.
- */
+
 export function diffLineEntries(before: string, after: string): UnifiedDiffLine[] {
   const beforeLines = before.length === 0 ? [] : before.split("\n");
   const afterLines = after.length === 0 ? [] : after.split("\n");
@@ -69,9 +62,7 @@ export function diffLineEntries(before: string, after: string): UnifiedDiffLine[
   return out;
 }
 
-/**
- * Output lines are prefixed `- ` (removed), `+ ` (added) or two spaces (unchanged context).
- */
+
 export function diffLines(before: string, after: string): string[] {
   return diffLineEntries(before, after).map((line) => `${UNIFIED_MARK[line.kind]}${line.body}`);
 }

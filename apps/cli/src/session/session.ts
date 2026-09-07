@@ -42,8 +42,8 @@ export function saveSession(
   withDatabase(
     sessionsDir,
     (db) => {
-      // A held connection already ran import at process open; repeating it on every
-      // messages-updated persist is the cost this optional argument exists to skip.
+
+
       if (database === undefined) db.importLegacySessions(sessionsDir);
       db.saveSession(state);
     },

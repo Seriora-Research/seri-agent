@@ -92,9 +92,9 @@ export async function connectCodexAppServer(
   }
   child.stdin.on("error", () => {});
 
-  // Blocking writes to stderr stall when the OS pipe fills (~64KiB) if nobody
-  // is reading. JSON-RPC is stdout; these bytes are logs. Drain them and keep a
-  // tail so a timeout/exit error can name what the child printed.
+
+
+
   let stderrTail = "";
   child.stderr?.on("data", (chunk: Buffer | string) => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");

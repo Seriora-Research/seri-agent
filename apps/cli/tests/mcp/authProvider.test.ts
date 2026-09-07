@@ -43,9 +43,9 @@ function redirect(onRedirect: (url: URL) => void): McpAuthInteraction {
   return { kind: "redirect", redirectUri: mcpCallbackUri(41999), onRedirect };
 }
 
-// Called through a narrowed local rather than `provider.validateAuthorizationServerURL?.(…)`: the
-// optional call would make every "does not throw" assertion below pass vacuously if the provider
-// ever stopped implementing the hook, which is the one thing the refuse persona depends on.
+
+
+
 function validateAs(p: OAuthClientProvider, authorizationServerUrl: string): void {
   const validate = p.validateAuthorizationServerURL;
   if (validate === undefined) throw new Error("the provider must implement it");
@@ -60,8 +60,8 @@ describe("the refuse persona never starts a login", () => {
     );
   });
 
-  // Both halves, not either: a record with a registered client but no tokens has nothing to spend
-  // and nothing to refresh, so letting it through would reach redirectToAuthorization anyway.
+
+
   test("a registered client with no tokens still refuses", () => {
     const configDir = makeConfigDir();
     saveMcpServerAuth(configDir, "exa", { clientInformation: { client_id: "cid" } }, SERVER_URL);

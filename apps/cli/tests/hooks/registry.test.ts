@@ -34,8 +34,8 @@ function makeTree(files: Record<string, string>): Tree {
   };
 }
 
-// Both halves of the pair, so parseHooksFile resolves the script for whichever platform the suite
-// is running on — this repo's CI requires Linux, macOS and Windows.
+
+
 function scripts(dir: string, ...names: string[]): Record<string, string> {
   const files: Record<string, string> = {};
   for (const name of names) {
@@ -70,9 +70,9 @@ describe("loadHookRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-  // The negative control for the whole design. A cloned repository's hooks execute before the
-  // permission gate, so with no grant recorded NOTHING from that directory may reach the registry
-  // — not a spec, not an event key, not a parse of its manifest.
+
+
+
   test("an untrusted project hooks directory produces an empty registry and one notice", () => {
     const tree = makeTree({
       [`${PROJECT_HOOKS}/hooks.yaml`]: manifest("block-dangerous"),
@@ -85,13 +85,13 @@ describe("loadHookRegistry", () => {
     expect(result.registry.has("PreToolUse")).toBe(false);
     expect(result.untrusted?.dir).toBe(tree.projectHooks);
     expect(result.untrusted?.verdict).toEqual({ kind: "untrusted" });
-    // Both halves of the pair are files in the directory, and the grant covers both.
+
     expect(result.untrusted?.scriptCount).toBe(2);
     expect(warnings).toEqual([]);
   });
 
-  // The other half of that control: the same bytes, one grant, and the specs appear — so the
-  // emptiness above was the trust gate and not a loader that never worked.
+
+
   test("the same directory loads its hooks once trusted", () => {
     const tree = makeTree({
       [`${PROJECT_HOOKS}/hooks.yaml`]: manifest("block-dangerous"),
@@ -107,8 +107,8 @@ describe("loadHookRegistry", () => {
     expect(warnings).toEqual([`hooks from ${tree.projectHooks}: block-dangerous`]);
   });
 
-  // A grant recorded for the worktree's hooks directory is invalidated by a script edit, and the
-  // registry goes empty again rather than running the version nobody reviewed.
+
+
   test("a trusted directory whose script changed stops loading and reports which file moved", () => {
     const tree = makeTree({
       [`${PROJECT_HOOKS}/hooks.yaml`]: manifest("block-dangerous"),
@@ -126,7 +126,7 @@ describe("loadHookRegistry", () => {
     });
   });
 
-  // Nothing reaches the profile root by cloning a repository, so it is trusted by construction.
+
   test("the profile root's hooks load with no trust grant at all", () => {
     const tree = makeTree({
       [`${USER_HOOKS}/hooks.yaml`]: manifest("audit"),
@@ -141,8 +141,8 @@ describe("loadHookRegistry", () => {
     expect(warnings).toEqual([`hooks from ${tree.userHooks}: audit`]);
   });
 
-  // Not a name-keyed override: both hooks were asked for, and dropping either would silently
-  // disarm one the user is relying on.
+
+
   test("global and project hooks for one event both run, global first", () => {
     const tree = makeTree({
       [`${USER_HOOKS}/hooks.yaml`]: manifest("audit"),

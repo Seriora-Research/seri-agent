@@ -1,7 +1,7 @@
-// createHookRunner: which specs a subject selects, the order they run in, and what a block or a
-// failure has become by the time it reaches the loop. Every case drives the injected `run` seam, so
-// nothing here spawns an interpreter — run.test.ts already owns the exit-code mapping and the
-// platform pairing, and re-testing them through this factory would only pin them twice.
+
+
+
+
 import { describe, expect, test } from "bun:test";
 import { createHookRunner, type HookRunner } from "../../src/hooks/gate";
 import type {
@@ -32,9 +32,9 @@ function registryOf(pre: readonly HookSpec[], post: readonly HookSpec[] = []): H
   return registry;
 }
 
-// Queued outcomes plus the call log, because half the claims here are about which hooks did NOT run
-// — "the first block wins" is only proved by the absence of a second call, never by the returned
-// value, which is identical either way.
+
+
+
 function fakeRun(outcomes: readonly HookOutcome[]) {
   const calls: { spec: HookSpec; payload: HookPayload }[] = [];
   let next = 0;
@@ -47,9 +47,9 @@ function fakeRun(outcomes: readonly HookOutcome[]) {
   };
 }
 
-// The factory is nullable by design and every case below hands it a registry that is not empty, so
-// the narrowing lives here instead of in each body. The undefined cases assert on createHookRunner
-// directly rather than going through this.
+
+
+
 function builtRunner(opts: Parameters<typeof createHookRunner>[0]): HookRunner {
   const runner = createHookRunner(opts);
   if (runner === undefined) throw new Error("expected a runner: this registry is not empty");
@@ -69,9 +69,9 @@ describe("createHookRunner", () => {
     expect(createHookRunner({ registry, cwd: "/worktree" })).toBeUndefined();
   });
 
-  // The boundary "no hooks for EITHER event" draws, and the reason it is not "no hooks for this
-  // event": one PostToolUse hook is enough to build the runner, whose onBeforeTool then runs
-  // nothing rather than the factory declining to exist and taking the post hook down with it.
+
+
+
   test("a PostToolUse-only registry builds a runner whose onBeforeTool runs nothing", async () => {
     const fake = fakeRun([]);
     const runner = builtRunner({
@@ -115,8 +115,8 @@ describe("createHookRunner", () => {
       block: "do not touch main",
       errors: [],
     });
-    // The half the returned value cannot show: with both blocks queued, a runner that kept going
-    // would return this same block and still have asked the second script for its opinion.
+
+
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["guard"]);
   });
 
@@ -197,13 +197,13 @@ describe("createHookRunner", () => {
     expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
       "that file is generated",
     ]);
-    // A post block stops nothing, so it must not stop the hooks after it either — the short-circuit
-    // that is right for PreToolUse would here silently disarm every script behind the first one.
+
+
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["too-late", "behind-it"]);
   });
 
-  // The subject, not the ToolSet key the provider emitted: a hook matching on `mcp` would fire for
-  // every server and every tool on it, and one matching a real tool name would never fire at all.
+
+
   test("the payload carries the event, the subject, the cwd and the tool's own input", async () => {
     const fake = fakeRun([]);
     const runner = builtRunner({
@@ -227,8 +227,8 @@ describe("createHookRunner", () => {
         tool_name: "mcp__github__create_issue",
         cwd: "/worktree",
         tool_input: { title: "a bug" },
-        // Present here and absent above, not null above: before the call there is no result, and a
-        // null would tell a script the tool returned one.
+
+
         tool_response: { url: "…/1" },
       },
     ]);

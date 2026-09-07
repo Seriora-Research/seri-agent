@@ -1,6 +1,6 @@
-// Every memory_write call is scanned before it reaches the store OR the pending queue (memory/
-// tool.ts) — a memory file is re-read into every future session's system prompt, so anything that
-// lands there is a standing instruction to the model, not a one-off answer that scrolls away.
+
+
+
 
 import { truncate } from "../truncate";
 
@@ -17,11 +17,11 @@ export type ScanResult =
 
 type Rule = { category: InjectionCategory; name: string; pattern: RegExp };
 
-// Checked in this order, first match wins — credential and invisible-unicode are the two
-// categories with the clearest "this is never legitimate memory" signal, so they are checked
-// first.
+
+
+
 const RULES: Rule[] = [
-  // credential — known key-prefix regexes plus one generic "name = value" assignment rule.
+
   { category: "credential", name: "anthropic-key", pattern: /\bsk-ant-[A-Za-z0-9_-]{16,}/ },
   { category: "credential", name: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{20,}/ },
   { category: "credential", name: "groq-key", pattern: /\bgsk_[A-Za-z0-9]{20,}/ },
@@ -139,8 +139,8 @@ const RULES: Rule[] = [
   { category: "persistence-path", name: "registry-hive", pattern: /HKEY_|HKCU:|HKLM:/ },
   { category: "persistence-path", name: "git-hooks", pattern: /\.git[\\/]hooks\b/ },
   // agent-config — path-shaped references to seri's OWN configuration only, never bare
-  // AGENTS.md/CLAUDE.md: memory legitimately records "this repo's AGENTS.md requires X", and
-  // rejecting that would make the scan reject its own best output.
+
+
   { category: "agent-config", name: "seri-dir", pattern: /\.seri[\\/]/ },
   { category: "agent-config", name: "permissions-yaml", pattern: /\bpermissions\.ya?ml\b/ },
   { category: "agent-config", name: "config-json", pattern: /\bconfig\.json\b/ },
@@ -148,9 +148,9 @@ const RULES: Rule[] = [
   { category: "agent-config", name: "seri-env", pattern: /\bSERI_[A-Z_]+\s*[:=]/ },
 ];
 
-// The matched literal, truncated, so the archivist can see what tripped the scan and rephrase —
-// except for `credential`, whose `reason` names the rule and offset only, never the matched value,
-// because this rejection message goes back into the transcript as a tool error.
+
+
+
 const MAX_MATCH_EXCERPT = 60;
 
 export function scanForInjection(text: string): ScanResult {

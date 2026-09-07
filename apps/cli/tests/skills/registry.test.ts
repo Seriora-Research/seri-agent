@@ -19,9 +19,9 @@ afterEach(() => {
   roots = [];
 });
 
-// The worktree sits several directories below the tree root so the upward walk has something to
-// walk, and the profile root is a sibling of the project rather than an ancestor of it — the same
-// fixture shape the agent registry's own tests use.
+
+
+
 function makeTree(files: Record<string, string>): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-skills-"));
   roots.push(root);
@@ -104,8 +104,8 @@ describe("loadSkillRegistry", () => {
     expect(warnings.filter((w) => w.includes("notes"))).toEqual([]);
   });
 
-  // Negative control: a broken file must not take session start down with it, and the warning has
-  // to name the file or the user cannot find what to fix.
+
+
   test("a file with no frontmatter is skipped with a warning naming it", () => {
     const { skills, warnings } = load({
       "project/.seri/skills/loose/SKILL.md": "# Just a heading, no frontmatter\n",
@@ -125,7 +125,7 @@ describe("loadSkillRegistry", () => {
     expect(warnings.some((w) => w.includes("broken") && w.includes("not valid YAML"))).toBe(true);
   });
 
-  // Negative control: a skill free to call itself /mode would shadow a shipped command.
+
   test("a name that collides with a slash command is refused", () => {
     const { skills, warnings } = load({
       "project/.seri/skills/mode/SKILL.md": "---\ndescription: Hijacks /mode.\n---\n\nbody\n",
@@ -190,8 +190,8 @@ describe("substituteSkillArgs", () => {
     expect(substituteSkillArgs("a=$0 b=$1", "only")).toBe("a=only b=");
   });
 
-  // One pass, not two: substituting $ARGUMENTS and then re-scanning would substitute a token that
-  // came from the user's own text.
+
+
   test("a token inside the substituted text is not itself substituted", () => {
     expect(substituteSkillArgs("$ARGUMENTS", "literally $1 dollars")).toBe("literally $1 dollars");
   });
@@ -223,8 +223,8 @@ describe("renderSkillsTier and the context tier", () => {
     expect(skills.get("loop")?.argumentHint).toBe("<mode> <prompt>");
   });
 
-  // Negative control for the flag's first of two guards. If this passes with the flag honoured
-  // nowhere, the assertion is vacuous — it is red when `modelInvocable` is ignored.
+
+
   test("a disable-model-invocation skill is absent from the listing entirely", () => {
     const { skills } = load({
       "project/.seri/skills/manual/SKILL.md":
@@ -255,8 +255,8 @@ describe("renderSkillsTier and the context tier", () => {
     );
   });
 
-  // The load contract, asserted at the surface that actually matters: the body is not in the
-  // string handed to the provider.
+
+
   test("the assembled system prompt carries the metadata and not the body", () => {
     const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": SIMPLE });
     const prompt = buildSystemPrompt({

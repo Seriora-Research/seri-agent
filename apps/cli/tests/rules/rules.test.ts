@@ -112,7 +112,7 @@ describe("loadRuleRegistry", () => {
     expect(warnings.some((w) => w.includes("loose.mdc"))).toBe(true);
   });
 
-  // Cursor's fourth type. Loaded, inert, and reported — the author expects it to do something.
+
   test("a description-only rule loads nothing and says so", () => {
     const { rules, warnings } = load({
       "project/.seri/rules/asked.mdc": "---\ndescription: Only when asked.\n---\n\nbody\n",
@@ -122,8 +122,8 @@ describe("loadRuleRegistry", () => {
     expect(renderRulesTier([...rules.values()])).toBe("");
   });
 
-  // This repo's own code-quality.mdc sets both. alwaysApply wins, and the rule must not then also
-  // be injected per touch — the same text would land in the session twice.
+
+
   test("alwaysApply wins over globs when a file sets both", () => {
     const { rules, worktree } = load({
       "project/.seri/rules/both.mdc":
@@ -149,7 +149,7 @@ describe("the context tier", () => {
     expect(prompt).toContain("Write the minimum code that solves the problem.");
   });
 
-  // Negative control for the whole design: a glob-scoped rule must never be in the frozen prompt.
+
   test("a globs rule is absent from the prompt entirely", () => {
     const { rules } = load({ "project/.seri/rules/ts.mdc": SCOPED });
     const prompt = buildSystemPrompt({
@@ -193,7 +193,7 @@ describe("glob matching", () => {
     expect(worktreeRelativePath("/repo", "/repo/sub", "a.ts")).toBe("sub/a.ts");
   });
 
-  // A naive split(",") turns "**/*.{ts,tsx}" into four broken patterns that silently match nothing.
+
   test("a brace group survives comma splitting, and a comma list does not", () => {
     const { rules } = load({
       "project/.seri/rules/brace.mdc": '---\nglobs: "**/*.{ts,tsx}"\n---\n\nbody\n',
@@ -227,7 +227,7 @@ describe("turn injection", () => {
     expect(text).toContain("Make illegal states unrepresentable.");
   });
 
-  // The plan's own verify line, from the failing side.
+
   test("touching a non-matching file injects nothing", () => {
     const { injector } = run({ "project/.seri/rules/ts.mdc": SCOPED });
     expect(injector?.([{ toolName: "read_file", input: { path: "README.md" } }])).toBeUndefined();
@@ -250,8 +250,8 @@ describe("turn injection", () => {
     expect(text).toContain("Second rule body.");
   });
 
-  // edit takes no path, grep/glob take a directory, bash takes free text. Matching any of them
-  // would fire a rule on a file the session never actually touched.
+
+
   test("only read_file and write_file carry a path the matcher trusts", () => {
     const { injector } = run({ "project/.seri/rules/ts.mdc": SCOPED });
     expect(injector?.([{ toolName: "edit", input: { content: "src/a.ts" } }])).toBeUndefined();
@@ -266,8 +266,8 @@ describe("turn injection", () => {
     ).toBeUndefined();
   });
 
-  // Windows produces "\" from node:path, and a rule written `src/**` must match the same file on
-  // every OS this ships to.
+
+
   test("a backslash path matches a forward-slash pattern", () => {
     const { injector } = run({
       "project/.seri/rules/src.mdc": '---\nglobs: "src/**"\n---\n\nSource rule.\n',

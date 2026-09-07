@@ -47,7 +47,7 @@ describe("isInsideWorkingDir", () => {
     expect(isInsideWorkingDir(cwd, outside)).toBe(false);
   });
 
-  // `..foo` is a legal filename, not a traversal. `rel.startsWith("..")` would misclassify it.
+
   test("a relative name that starts with dots but is not a parent traversal is inside", () => {
     expect(isInsideWorkingDir(cwd, "..foo")).toBe(true);
     expect(isInsideWorkingDir(cwd, join("src", `..foo${sep}bar`))).toBe(true);

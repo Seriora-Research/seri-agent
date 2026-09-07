@@ -4,9 +4,9 @@ import type { Plan } from "@seri/plans";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { hasHostedAuth } from "./authStore";
 
-// Profile-local opt-out for a WorkOS hosted login that lives in auth.json.
-// Presence means this profile ignores that login for routing and /setup.
-// Disconnecting here only creates this flag — /logout is what revokes the session.
+
+
+
 export const SERI_IGNORE_FILENAME = "seri-ignore";
 
 function ignorePath(configDir: string): string {
@@ -30,9 +30,9 @@ export function hostedPlanUsable(configDir: string): boolean {
   return hasHostedAuth(configDir) && !isSeriIgnored(configDir);
 }
 
-// A fetched plan still sits on PreparedRun after the user ignores it. Callers that
-// feed resolveRoute / the /model coverage predicate must drop it here so the leftover
-// OpenRouter key (if any) is what actually pays.
+
+
+
 export function effectiveHostedPlan(configDir: string, plan: Plan | null): Plan | null {
   if (plan === null || isSeriIgnored(configDir)) return null;
   return plan;

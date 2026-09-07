@@ -109,7 +109,7 @@ describe("connectGrok", () => {
 describe("disconnectGrok", () => {
   test("clears the local file and says xAI access was not revoked", () => {
     const messages: string[] = [];
-    // connectGrok's success path already covered persistence; seed via that store.
+
     saveXaiSubscription(
       { accessToken: "a", refreshToken: "r", obtainedAt: new Date().toISOString() },
       dir,
