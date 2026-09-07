@@ -454,7 +454,7 @@ describe("tuiReducer: transcript role tagging", () => {
     expect(state.toolActivity.length).toBeGreaterThan(0);
   });
 
-  test("edit and write_file commit hunks that survive done instead of shrinking into the summary", () => {
+  test("edit commits a hunk on tool-call and does not duplicate it on result or write_file", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, {
       type: "loop-event",
@@ -464,22 +464,40 @@ describe("tuiReducer: transcript role tagging", () => {
         args: { content: "keep\nold\n", oldString: "old", newString: "new" },
       },
     });
+    expect(state.transcript.filter((entry) => entry.kind === "file-change")).toHaveLength(1);
+    expect(state.transcript[0]?.fileChange?.title).toBe("Edit");
+    expect(state.transcript[0]?.text).toContain("- old");
+    expect(state.transcript[0]?.text).toContain("+ new");
+
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "tool-result", name: "edit", result: "keep\nnew\n" },
     });
-    const hunk = state.transcript.find((entry) => entry.kind === "file-change");
-    expect(hunk?.fileChange?.title).toBe("Edit");
-    expect(hunk?.text).toContain("- old");
-    expect(hunk?.text).toContain("+ new");
+    expect(state.transcript.filter((entry) => entry.kind === "file-change")).toHaveLength(1);
+
+    const persist = buildFileChange("Write test.md", "keep\nold\n", "keep\nnew\n");
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: {
+        type: "tool-call",
+        name: "write_file",
+        args: { path: "test.md", content: "keep\nnew\n" },
+      },
+    });
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: "write_file", result: { written: true, change: persist } },
+    });
+    expect(state.transcript.filter((entry) => entry.kind === "file-change")).toHaveLength(1);
     expect(renderLiveToolActivity(state.toolActivity)).toEqual([]);
 
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "done", reason: "no-tool-call" },
     });
+    expect(state.transcript.some((entry) => entry.text === "Edited 1 edit")).toBe(false);
     expect(state.transcript.some((entry) => entry.kind === "file-change")).toBe(true);
-    expect(state.transcript.some((entry) => entry.text === "Edited 1 edit")).toBe(true);
+    expect(state.transcript.some((entry) => entry.text === "+1 −1")).toBe(false);
     expect(state.toolActivity).toEqual([]);
   });
 

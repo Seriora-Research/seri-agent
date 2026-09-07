@@ -780,7 +780,11 @@ export function App({
                 ((state.reasoning.live?.text ?? "") + pendingReasoning).length > 0 && (
                   <text
                     fg={theme.muted}
-                    marginTop={gapBefore(state.transcript.at(-1)?.role, "system")}
+                    marginTop={gapBefore(
+                      state.transcript.at(-1)?.role,
+                      "system",
+                      state.transcript.at(-1)?.kind,
+                    )}
                   >
                     {indentReasoningBody((state.reasoning.live?.text ?? "") + pendingReasoning)}
                   </text>
@@ -797,7 +801,15 @@ export function App({
                 <text
                   key={index}
                   fg={theme.muted}
-                  marginTop={index === 0 ? gapBefore(state.transcript.at(-1)?.role, "system") : 0}
+                  marginTop={
+                    index === 0
+                      ? gapBefore(
+                          state.transcript.at(-1)?.role,
+                          "system",
+                          state.transcript.at(-1)?.kind,
+                        )
+                      : 0
+                  }
                 >
                   {line}
                 </text>
@@ -839,8 +851,9 @@ export function App({
       </box>
       {state.pendingTool !== undefined &&
         state.pendingTool.name !== "todo" &&
+        state.pendingTool.name !== "edit" &&
         !(state.pendingTool.name === "dispatch_subagents" && state.subagents.length > 0) &&
-        (state.pendingTool.name === "write_file" || state.pendingTool.name === "edit" ? (
+        (state.pendingTool.name === "write_file" ? (
           <WritePreview name={state.pendingTool.name} args={state.pendingTool.args} />
         ) : (
           <text fg={theme.muted}>
