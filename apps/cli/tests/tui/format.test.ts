@@ -50,8 +50,6 @@ describe("formatElapsed", () => {
     expect(formatElapsed(3_700_000)).toBe("1h 1m");
   });
 
-  // A negative delta (the system clock moving backward mid-session) clamps to "0s" rather than
-  // rendering "-1s".
   test("a negative elapsed clamps to 0s instead of going negative", () => {
     expect(formatElapsed(-1000)).toBe("0s");
   });
@@ -75,12 +73,7 @@ describe("reasoning caret", () => {
 });
 
 describe("estimateTokens", () => {
-  // fx's own test strategy: a chunk-boundary-dependent estimate would flicker as a real stream's
-  // SSE framing happens to land differently between two otherwise-identical runs. Splitting a
-  // fixed string at every possible index (including mid-word) and asserting the two halves'
-  // estimates always sum to the whole's estimate is what proves that can't happen — this fails
-  // immediately against a per-chunk-`Math.ceil`ing implementation (see estimateTokens's own
-  // comment on why it defers rounding to display time instead).
+  // Split at every index so a per-chunk Math.ceil cannot flicker with SSE framing.
   const fixed = "The quick brown fox jumps over the lazy dog. Résumé naïve café — emdash, "; // includes multi-byte chars
 
   test("splitting the string at every index sums to the same total as estimating it whole", () => {
@@ -120,9 +113,6 @@ describe("formatTokenProgress", () => {
     );
   });
 
-  // carriedOutputEstimate holds a PAST call's own stranded output estimate (reconcileUsage,
-  // reducer.ts) — it must sum into the output total alongside the reconciled amount and the
-  // currently-streaming call's own live estimate, not replace or be shadowed by either.
   test("adds the carried output estimate on top of the reconciled total, alongside the live estimate", () => {
     expect(
       formatTokenProgress(
@@ -137,8 +127,6 @@ describe("formatTokenProgress", () => {
     );
   });
 
-  // A sticky gap earlier in the turn must keep showing `~` even once the most recent
-  // reconciliation was itself complete (`exact: true`) — see `TokenProgress`'s own comment.
   test("prefixes both with ~ when hasGap is set, even though exact is true", () => {
     expect(formatTokenProgress(progress({ exact: true, hasGap: true }))).toBe("~10 ↑, ~20 ↓");
   });
@@ -253,12 +241,6 @@ describe("PLAN_MODE_LEAVE_HINT", () => {
   });
 });
 
-// The mode-indicator row's own model/route suffix, factored out as a pure function so leftover
-// packing is testable without mounting a renderer (formatModelRow's own extraction already used
-// this reasoning). `width` is the detail budget (space after the indicator; the caller subtracts
-// it). Hint visibility is the caller's problem, not this function's. `route` can be undefined —
-// runGuidedSetup (cli.ts) mounts App before any provider key exists, so there is genuinely no
-// route to show yet.
 describe("formatModeDetail", () => {
   const nonRerouted = route();
   const rerouted = route({ provider: "openrouter", rerouted: true, reason: "ANTHROPIC_API_KEY" });
@@ -278,9 +260,7 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(nonRerouted, withRoute.length - 1, undefined)).toBe(modelOnly);
   });
 
-  // DEFAULT_COLUMNS is the typical terminal width, not the caller's detail budget — passing it
-  // here is a generous leftover. The regression this guards is that a budget of 80 must include
-  // the route suffix (length of `  claude-sonnet-5 · anthropic`), not drop it.
+  // A leftover of 80 must still include the route suffix.
   test("at 80 columns (DEFAULT_COLUMNS): model name and route suffix", () => {
     expect(formatModeDetail(nonRerouted, DEFAULT_COLUMNS, undefined)).toBe(withRoute);
   });
@@ -316,9 +296,6 @@ describe("formatModeDetail", () => {
     expect(formatModeDetail(subscriptionRoute, suffix.length, undefined)).not.toContain("your key");
   });
 
-  // Defensive: resolveRoute's own contract makes rerouted plus a "gateway" credential unreachable, but
-  // formatModeDetail must not rely on that — a rerouted route always reads "→ provider", never
-  // "seri", regardless of what the credential carries.
   test("a rerouted route still reads '→ <provider>' even with a gateway credential", () => {
     const reroutedAndGateway = route({
       provider: "openrouter",
@@ -331,9 +308,7 @@ describe("formatModeDetail", () => {
     );
   });
 
-  // A real catalog id (an OpenRouter id is easily 40+ chars) would otherwise go into the row
-  // unbounded — capped to NAME_WIDTH (22, the same width the picker table already truncates model
-  // names to), whether the leftover only fits the model or also the route.
+  // NAME_WIDTH is 22, the same cap the picker table uses.
   test("long model id is truncated to NAME_WIDTH in both the model-only and full leftovers", () => {
     const longModel = route({ model: "openrouter/deepseek/deepseek-r1-distill-llama-70b" });
     const longModelOnly = "  openrouter/deepseek/d…";
@@ -544,8 +519,7 @@ describe("formatHomePath", () => {
     expect(formatHomePath("/home/lion", "/home/lion")).toBe("~");
   });
 
-  // The separator check earns its place here: "/home/lion-old" starts with the home string but is
-  // a different directory, and rewriting it to "~-old" would name a path that does not exist.
+  // "/home/lion-old" starts with the home string but is a different directory.
   test("a sibling directory sharing the home prefix is left alone", () => {
     expect(formatHomePath("/home/lion-old/code", "/home/lion")).toBe("/home/lion-old/code");
     expect(formatHomePath("/srv/build", "/home/lion")).toBe("/srv/build");

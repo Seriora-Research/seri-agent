@@ -73,8 +73,6 @@ describe("tuiReducer: user-turn-committed", () => {
     expect(next.session.permissionMode).toBe("read-only");
   });
 
-  // The reason this is not a synthetic `messages-updated`: that event is also the transcript's own
-  // signal, and a committed user row must not disturb an answer already streaming into it.
   test("leaves the transcript and the streaming buffer untouched", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "loop-event",
@@ -104,20 +102,6 @@ describe("tuiReducer: transcript-append", () => {
     expect(next.session).toBe(state.session);
   });
 
-  // Regression guard: transcript-append used to be a bare append (`{ ...state, transcript:
-  // [...state.transcript, action.line] }`), unlike every other transcript-writing case, which
-  // all go through pushLine and flush state.streaming first. Harmless while transcript-append had
-  // no real callers mid-stream, but tuiPresenter.message, undoPlanLines/recoveryLines, and quit()'s
-  // own "quitting - cancelling..." line all dispatch it now, and the last of those can fire WHILE
-  // a turn is still streaming text (a /mode or /exit typed mid-answer) — a bare append would leave
-  // the partial answer sitting in `streaming`, appended later, AFTER the transcript-append line,
-  // reordering the transcript against what the model actually said first. The test above alone
-  // does not catch this: initialTuiState's own streaming is already "", so a bare append and
-  // pushLine produce identical results there. Verified: reverting transcript-append's case to the
-  // bare append above and re-running this test fails it — the bare append never touches
-  // `streaming` at all, so `next.streaming` stays "the streamed answer so far" (not "") and
-  // `next.transcript` is only `["/mode: permission mode is now auto"]`, missing the streamed
-  // text entirely rather than having it flushed first.
   test("flushes pending streamed text before the appended line, same as every other transcript-writing case", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, {
@@ -158,13 +142,6 @@ describe("tuiReducer: transcript-append", () => {
     ]);
   });
 
-  // Design-question fix (this PR's own follow-up): echoUserInput (cli.ts) dispatches
-  // transcript-append with `flush: false` for a submission REJECTED by a mid-turn gate (e.g.
-  // MEDIUM-3's /rewind-while-turnInFlight check) — the model's own turn is unaffected, so echoing
-  // the rejected text should not fragment its still-in-progress answer into two transcript
-  // entries. `flush: false` must not touch `streaming` at all: not flush it into transcript (that
-  // would still fragment the answer) and not clear it either (that would silently drop the
-  // model's partial text — a worse bug than the one being fixed).
   test("flush: false appends the line without flushing OR clearing pending streamed text", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, {
@@ -182,8 +159,6 @@ describe("tuiReducer: transcript-append", () => {
     expect(next.streaming).toBe("the model's still-in-progress answer");
   });
 
-  // Regression guard: `transcript` stores LOGICAL lines, never pre-wrapped output — a multi-line
-  // string committed by one `transcript-append` must stay exactly one array entry, not several.
   test("stores one entry per call, even for a multi-line string", () => {
     const state = initialTuiState(session());
     const next = tuiReducer(state, {
@@ -198,8 +173,6 @@ describe("tuiReducer: transcript-append", () => {
 });
 
 describe("tuiReducer: transcript-cleared", () => {
-  // Builds a state where `streaming` is genuinely non-empty before the clear — otherwise the reset
-  // assertion would pass vacuously.
   function stateBeforeClear(): TuiState {
     let state: TuiState = initialTuiState(session());
     for (const line of ["a", "b", "c"]) {
@@ -377,8 +350,6 @@ describe("tuiReducer: plan overlay", () => {
 });
 
 describe("tuiReducer: transcript role tagging", () => {
-  // The blank row above a user message is a margin (gapBefore, theme/spacing.ts), not an entry, so
-  // `state.transcript` holds only what something actually said.
   test('a role: "user" append after existing content lands with no spacer entry before it', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
@@ -392,10 +363,6 @@ describe("tuiReducer: transcript role tagging", () => {
     ]);
   });
 
-  // echoUserInput (cli.ts) is the only call site that ever dispatches `role: "user"`, and it always
-  // passes `flush: false` (deliberately, so a rejected/echoed submission never fragments an
-  // in-progress streamed answer — see pushLine's own comment). Asserted separately from the
-  // `flush: true` case above because that combination is the only one a real user turn produces.
   test('role: "user", flush: false (the actual echoUserInput dispatch shape) appends only the echo', () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "transcript-append",
@@ -698,9 +665,6 @@ describe("tuiReducer: loop-event", () => {
     expect(state.toolActivity).toEqual([]);
   });
 
-  // HIGH 1: loop.ts yields `error` and continues (compaction catch, unknown tool, thrown
-  // execute). Flushing toolActivity on error would split one turn's calls across two muted
-  // groups and drop anything that arrives after the error.
   test("a mid-turn error does not flush toolActivity; later tools still aggregate live, then drop on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
@@ -737,9 +701,6 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.at(-1)?.text.startsWith(ERROR_MARK)).toBe(false);
   });
 
-  // HIGH 2: thrown execute is tool-call then error, no tool-result. Without recordCall the
-  // live line vanishes and no settled line is ever committed. The error itself must not
-  // become a transcript peer of the assistant's prose — it settles the open group.
   test("a tool-call followed by error (no tool-result) still paints live, then drops the tree on done", () => {
     let state = apply(undefined, {
       type: "tool-call",
@@ -788,9 +749,6 @@ describe("tuiReducer: loop-event", () => {
     expect(live[0]).not.toContain("ENOENT");
   });
 
-  // loop.ts mid-stream / streamText catch yields error then return — no done. HIGH 1 is still
-  // correct (error itself must not flush, because some errors continue), but turn-ended is the
-  // actual end of that turn and must commit whatever was already recorded.
   test("error then turn-ended without done drops the live tree", () => {
     let state = apply(undefined, {
       type: "tool-call",
@@ -935,25 +893,12 @@ describe("tuiReducer: loop-event", () => {
     expect(state.streaming).toBe("");
   });
 
-  // C-1 (regression): driveLoop used to compute the messages-updated merge itself, from a
-  // `session` variable it closed over once at the start of a turn — so a mid-run /mode dispatched
-  // its own fresh session-updated action, and the very next messages-updated event silently
-  // reverted it, both in the reducer and (since driveLoop's own saveSession call used the same
-  // stale variable) on disk. Fixed by having the reducer do this merge itself, against its OWN
-  // current `state.session` — this test is the regression guard for that: it dispatches a
-  // session-updated (the same shape a mid-run /mode produces) and THEN a messages-updated, and
-  // would have failed against the pre-fix reducer, which treated messages-updated as a no-op on
-  // `session` entirely (verified: reverting this file's messages-updated case to `return state;`
-  // and re-running this test fails it — the assertion below then sees the ORIGINAL
-  // "approve-each" mode, not "read-only").
   test("messages-updated merges into the CURRENT session, not a stale one dispatched earlier", () => {
     let state = initialTuiState(session({ permissionMode: "approve-each" }));
-    // A mid-run /mode: the same action tuiPresenter.sessionUpdated dispatches.
     state = tuiReducer(state, {
       type: "session-updated",
       session: session({ permissionMode: "read-only" }),
     });
-    // driveLoop's own report of the turn's next messages-updated event.
     state = apply(state, {
       type: "messages-updated",
       messages: [{ role: "user", content: "hi" }],
@@ -964,8 +909,6 @@ describe("tuiReducer: loop-event", () => {
   });
 });
 
-// Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native ApprovalPrompt's own
-// state, set/cleared by runTui's tuiApprovalPrompt/onApprovalAnswer.
 describe("tuiReducer: approval-requested / approval-resolved", () => {
   test("approval-requested sets pendingApproval, approval-resolved clears it", () => {
     let state = initialTuiState(session());
@@ -1108,18 +1051,11 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     expect(state.session).toEqual(session({ model: entry.id, provider: entry.provider }));
   });
 
-  // B4/MEDIUM-4: the bug this closes. `model-picker-resolved` used to carry a whole SessionState
-  // captured when the picker rendered and replace `state.session` wholesale with it — so a
-  // `messages-updated` landing while the picker was still open (the picker can open mid-turn, see
-  // pendingModelPicker's own comment) got silently reverted the moment the pick resolved. Merging
-  // just the pick into whatever `state.session` actually is AT RESOLUTION TIME is what fixes it —
-  // this asserts the merge lands on top of a session newer than the one the picker was opened with.
   test("model-picker-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
       entries: [row],
     });
-    // Simulates a turn's own messages-updated event landing while the picker is still open.
     state = tuiReducer(state, {
       type: "loop-event",
       event: { type: "messages-updated", messages: [{ role: "user", content: "hi" }] },
@@ -1148,10 +1084,7 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     expect(state.session).toBe(before);
   });
 
-  // Code-review finding: a combined pty chunk carrying filter text, a terminator, AND further
-  // characters used to just discard everything after the terminator when the picker closed —
-  // dropped keystrokes with no trace. leftoverInput is how App.tsx's ModelPicker hands that text
-  // back; pendingInputPrefill is where the reducer parks it for InputBox's very next mount.
+  // leftoverInput is the rest of a pty chunk after the picker terminator; pendingInputPrefill parks it for InputBox's next mount.
   test("model-picker-resolved with leftoverInput sets pendingInputPrefill", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "model-picker-requested",
@@ -1197,7 +1130,6 @@ describe("tuiReducer: model-picker-requested / model-picker-resolved", () => {
     state = tuiReducer(state, { type: "input-prefill-consumed" });
 
     expect(state.pendingInputPrefill).toBeUndefined();
-    // Consuming the prefill must not disturb the session the same dispatch already landed.
     expect(state.session.model).toBe(entry.id);
   });
 
@@ -1306,10 +1238,6 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
     expect(state.pendingInputPrefill).toBeUndefined();
   });
 
-  // pendingApproval/pendingModelPicker already coexist deliberately (reducer.ts's own comment on
-  // pendingModelPicker) — pendingSetup joins that same set of independent fields, not a
-  // fourth mutually-exclusive flag the reducer itself enforces (App.tsx's render ternary is what
-  // picks one to actually show).
   test("pendingSetup and pendingModelPicker can both be set without either clobbering the other", () => {
     let state = tuiReducer(initialTuiState(session()), { type: "setup-requested", rows });
     state = tuiReducer(state, { type: "model-picker-requested", entries: [] });
@@ -1335,11 +1263,6 @@ describe("tuiReducer: setup-requested / setup-step / setup-resolved", () => {
   });
 });
 
-// Stage A scaffolding (cli-commands-to-tui feature-plan.md): these ten actions have no dispatcher
-// yet — Stages B-D wire /login, /signup, /config and /permissions to fire them. Each case below
-// asserts the WHOLE resulting state against `{ ...initialTuiState(session()), ...expected }`, not
-// just the touched field, so a future change that leaks into an unrelated field (the same class of
-// bug pendingSetup's own coexistence test above guards against) fails here too.
 describe("tuiReducer: auth-offer / auth-requested / auth-step / auth-resolved", () => {
   test("auth-offer sets authOffer without touching pendingAuth", () => {
     const state = tuiReducer(initialTuiState(session()), { type: "auth-offer", show: true });
@@ -1519,9 +1442,6 @@ describe("tuiReducer: permissions-requested / permissions-step / permissions-res
   });
 });
 
-// EffortPanel's own live picker, mirroring model-picker-requested/
-// model-picker-resolved's own shape above rather than permissions' three-action one — there is
-// only one step here.
 describe("tuiReducer: effort-requested / effort-resolved", () => {
   test("effort-requested opens pendingEffort with the given tiers and selected index", () => {
     const state = tuiReducer(initialTuiState(session()), {
@@ -1551,9 +1471,6 @@ describe("tuiReducer: effort-requested / effort-resolved", () => {
     });
   });
 
-  // Mirrors model-picker-resolved's own "merges into the CURRENT session, not a stale one"
-  // regression guard — the identical race (a messages-updated landing between open and resolve)
-  // applies here too.
   test("effort-resolved merges into the CURRENT session, not a stale one captured when the picker opened", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "effort-requested",
@@ -1714,16 +1631,10 @@ describe("tuiReducer: splash-requested / splash-resolved", () => {
       type: "splash-resolved",
     });
 
-    // `splashDone` is the one field that differs from a fresh state: it is what tells "after the
-    // splash" from "before it", which `pendingSplash: false` alone cannot (app.tsx's own
-    // pre-session input branch).
     expect(state).toEqual({ ...initialTuiState(session()), splashDone: true });
   });
 });
 
-// A LanguageModelUsage fixture with the two fields this reducer actually reads (inputTokens/
-// outputTokens) and every other field the type requires — factored out once the multi-call test
-// below needs it twice.
 function usageOf(inputTokens: number, outputTokens: number) {
   return {
     inputTokens,
@@ -1758,12 +1669,7 @@ describe("tuiReducer: turn-started", () => {
     });
   });
 
-  // A second turn must not inherit the first turn's token count, even for one frame — turn-started
-  // always resets `turn.tokens` from scratch rather than only seeding it when undefined. Also
-  // covers `hasGap`: the previous turn's sticky gap (from a partial usage event) must not survive
-  // into the fresh turn either — only "turn-started" ever resets it. The second turn's own
-  // `inputEstimate` (3, distinct from the first turn's 5) is what proves the reset is a genuine
-  // re-seed from the new turn's own text, not a stale carry-over.
+  // inputEstimate 3 vs the prior turn's 5 proves turn-started re-seeds tokens.
   test("a second turn-started resets turn.tokens (including a sticky hasGap) to its own fresh inputEstimate", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -1874,8 +1780,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(state.turn).toBeUndefined();
   });
 
-  // liveInputEstimate mirrors liveOutputEstimate's own reset rule (its own comment, reducer.ts):
-  // zeroed only when THIS reconciliation's inputTokens is real, kept otherwise.
   test("resets liveInputEstimate to 0 once a real usage.inputTokens reconciles", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -1906,14 +1810,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(state.turn?.tokens.hasGap).toBe(true);
   });
 
-  // loop.ts's own comment on its failed-mid-stream `usage` yield: a stream that fails partway
-  // through resolves `result.usage` with both `inputTokens`/`outputTokens` undefined — that call was
-  // never actually measured. Nothing about it can ever be recovered, so this must set the sticky
-  // `hasGap` (a bug fixed here: an earlier version of reconcileUsage returned early as a total no-op
-  // for this exact case, leaving `hasGap` unset even though a call's real numbers were now
-  // permanently unmeasurable) and move whatever live estimate had accumulated onto
-  // `carriedOutputEstimate` rather than leaving it in `liveOutputEstimate`, where the NEXT call's own
-  // streaming would blend into it indistinguishably.
   test("a usage event with both token fields undefined carries the live estimate forward and sets hasGap", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -1939,10 +1835,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     });
   });
 
-  // Bug B regression: a call that fails with no usable usage data at all must not go unmarked just
-  // because a LATER call in the same turn reconciles completely — the failed call's real numbers are
-  // permanently unmeasurable, and `hasGap` (sticky) plus `formatTokenProgress`'s `~` marker are what
-  // keep the turn's aggregate from claiming a false exactness after that.
   test("a both-undefined usage event followed by a later complete one still shows the ~ marker", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -1964,10 +1856,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(formatTokenProgress(state.turn?.tokens as TokenProgress)).toMatch(/^~/);
   });
 
-  // reconcileUsage folds in whichever field IS defined rather than discarding it, and sets the
-  // sticky `hasGap` since that call's missing field can never be recovered — see reconcileUsage's
-  // own comment (reducer.ts). A second, later call reconciling completely must still ADD its real
-  // numbers onto the total (not replace it) and must NOT clear `hasGap`.
   test("a usage event with only one token field undefined still folds in the defined field and sets hasGap", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -1977,7 +1865,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     state = apply(state, { type: "text-delta", text: "streamed before the partial usage" });
     const liveEstimate = estimateTokens("streamed before the partial usage");
 
-    // Call 1: partial usage (10 real input tokens, output never measured).
     state = apply(state, {
       type: "usage",
       usage: { ...usageOf(0, 0), inputTokens: 10, outputTokens: undefined },
@@ -1993,11 +1880,7 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       hasGap: true,
     });
 
-    // Call 2: a later, fully-known usage event. Its real numbers must be SUMMED onto call 1's
-    // partial total (15 in, not 5 in) — and call 1's own stranded output estimate must survive
-    // (Bug A: an earlier version zeroed it here, discarding the only information ever obtained about
-    // call 1's output) — and the turn must never claim full exactness again, since call 1's output
-    // was permanently lost.
+    // Call 2 must sum to 15 in, not replace call 1's 10 with 5.
     state = apply(state, { type: "usage", usage: usageOf(5, 7) });
 
     expect(state.turn?.tokens).toEqual({
@@ -2014,12 +1897,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     );
   });
 
-  // Bug A regression: call 1's own stranded output estimate must not be silently absorbed into
-  // call 2's own growing live estimate (both live in `liveOutputEstimate` while call 2 streams) and
-  // then discarded the moment call 2's usage reconciles with a real `outputTokens` (an earlier
-  // version zeroed `liveOutputEstimate` unconditionally whenever the new call's own `outputTokens`
-  // was real, wiping out whatever call 1 had left behind). `carriedOutputEstimate` is what keeps the
-  // two calls' estimates separate.
   test("a stranded estimate from an earlier partial call survives a later call's own streaming and reconciliation", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -2027,7 +1904,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       inputEstimate: 0,
     });
 
-    // Call 1 streams, then reconciles with only inputTokens real.
     state = apply(state, { type: "text-delta", text: "call one's streamed text" });
     const call1Estimate = estimateTokens("call one's streamed text");
     state = apply(state, {
@@ -2037,14 +1913,11 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
     expect(state.turn?.tokens.liveOutputEstimate).toBe(0);
 
-    // Call 2 starts streaming its OWN new text — this must accumulate on top of the now-zeroed
-    // liveOutputEstimate, not on top of call 1's carried-over estimate.
     state = apply(state, { type: "text-delta", text: "call two's own streamed text" });
     const call2Estimate = estimateTokens("call two's own streamed text");
     expect(state.turn?.tokens.liveOutputEstimate).toBe(call2Estimate);
     expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
 
-    // Call 2 reconciles completely — call 1's carried estimate must still be present in the total.
     state = apply(state, { type: "usage", usage: usageOf(9, 30) });
 
     expect(state.turn?.tokens.carriedOutputEstimate).toBe(call1Estimate);
@@ -2055,8 +1928,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     );
   });
 
-  // reconcileUsage's own comment (reducer.ts) explains why this adds onto the running totals
-  // rather than replacing them; this is that behavior exercised across a real 2-call turn.
   test("a 2-model-call turn accumulates usage across calls without double-counting or losing the first call's total", () => {
     let state = tuiReducer(initialTuiState(session()), {
       type: "turn-started",
@@ -2064,7 +1935,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       inputEstimate: 0,
     });
 
-    // Call 1 streams, then reconciles.
     state = apply(state, { type: "text-delta", text: "call one's streamed text" });
     state = apply(state, { type: "usage", usage: usageOf(100, 42) });
     expect(state.turn?.tokens).toEqual({
@@ -2077,8 +1947,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
       hasGap: false,
     });
 
-    // Call 2 (the tool loop continuing) starts streaming its own new text — this must NOT include
-    // call 1's already-reconciled amount a second time, and must revert the display to estimated.
     state = apply(state, { type: "text-delta", text: "call two's own streamed text" });
     expect(state.turn?.tokens.liveOutputEstimate).toBe(
       estimateTokens("call two's own streamed text"),
@@ -2086,7 +1954,6 @@ describe("applyLoopEvent: usage reconciles turn.tokens", () => {
     expect(state.turn?.tokens.reconciledOutputTokens).toBe(42);
     expect(state.turn?.tokens.exact).toBe(false);
 
-    // Call 2 reconciles: ADDS onto call 1's total rather than replacing it.
     state = apply(state, { type: "usage", usage: usageOf(80, 30) });
     expect(state.turn?.tokens).toEqual({
       reconciledInputTokens: 180,
@@ -2141,9 +2008,6 @@ describe("applyLoopEvent: compacted folds its own usage into turn.tokens", () =>
   });
 });
 
-// The reducer's own "done" case no longer clears turn state directly — turn-ended (dispatched by
-// cli.ts once driveLoop's own call has genuinely settled) is the sole owner of that clearing, so a
-// bare "done" LoopEvent must leave `state.turn` as it was.
 describe("tuiReducer: done does not clear turn state — only turn-ended does", () => {
   function apply(state: TuiState, event: LoopEvent) {
     return tuiReducer(state, { type: "loop-event", event });
@@ -2162,8 +2026,6 @@ describe("tuiReducer: done does not clear turn state — only turn-ended does", 
   });
 });
 
-// "turn-ended"'s own comment (TuiAction, reducer.ts) explains why a bare "error" LoopEvent must
-// not end a turn.
 describe("tuiReducer: error does not end a turn — only turn-ended does", () => {
   function apply(state: TuiState, event: LoopEvent) {
     return tuiReducer(state, { type: "loop-event", event });
@@ -2706,10 +2568,6 @@ describe("tuiReducer: subagent-child-event", () => {
   });
 });
 
-// The TUI half of a `/name <task>` turn. driveLoop emits the same LoopEvents a model-issued
-// dispatch does, so these assert that the reducer needs no branch for one: a file-defined agent's
-// name paints the roster like a built-in's, the synthetic tool-result clears it, and the three
-// appended rows land on the session the same way any other messages-updated does.
 describe("tuiReducer: a /name turn's synthetic dispatch events", () => {
   test("a file-defined agent's name paints the roster with no built-in role list to belong to", () => {
     let state = initialTuiState(session());
@@ -2781,9 +2639,6 @@ describe("tuiReducer: a /name turn's synthetic dispatch events", () => {
 });
 
 describe("message queue", () => {
-  // Ids are cli.ts's to mint (state/reducer.ts's own note on the field), so the helper stands in
-  // for it. Assertions below read `texts()` rather than `items` directly: what the queue holds is
-  // the messages, and threading a synthetic id through every expectation would bury that.
   function queued(...items: string[]): TuiState {
     return items.reduce(
       (state, text, index) => tuiReducer(state, { type: "queue-appended", id: `q${index}`, text }),
@@ -2795,8 +2650,6 @@ describe("message queue", () => {
     return state.queue.items.map((item) => item.text);
   }
 
-  // The invariant MessageQueue's own comment states, asserted as one function so every case below
-  // can end with it instead of restating three expectations each.
   function expectInvariant(state: TuiState): void {
     const { items, selected, editing } = state.queue;
     if (items.length === 0) {
@@ -2863,8 +2716,6 @@ describe("message queue", () => {
     expect(state.queue).toEqual({ items: [], selected: 0, editing: false });
   });
 
-  // The retargeting bug the three no-ops exist for: without this, the band moves off the row the
-  // editor is mounted on and the commit writes the edited text into a different message.
   test("selection does not move while a row is being edited", () => {
     const editing = tuiReducer(queued("a", "b"), { type: "queue-edit-started" });
     const after = tuiReducer(editing, { type: "queue-selection-moved", delta: 1 });
@@ -2937,8 +2788,7 @@ describe("message queue", () => {
     expect(after.queue).toEqual({ items: [], selected: 0, editing: false });
   });
 
-  // `selected - 1` rather than `selected`: every remaining row shifted up by one, so the band has
-  // to follow the message it was on rather than slide onto the next one down.
+  // selected - 1 follows the message after remaining rows shift up by one.
   test("taking the head keeps the band on the same message", () => {
     const onSecond = tuiReducer(queued("a", "b", "c"), {
       type: "queue-selection-moved",

@@ -10,18 +10,12 @@ import { theme } from "../../src/tui/theme/theme";
 import type { TranscriptEntry } from "../../src/tui/util/format";
 import { flush, flushMarkdown, waitForSettledFrame } from "./helpers";
 
-// Characterization of what @opentui/core 0.5.6 lets a reader select and copy out of seri's real
-// transcript, and the rerunnable evidence behind docs/specs/044-tui-selection-copy/research.md
-// (issue #254). Three of these tests pin defects rather than desired behavior; each says so in its
-// own name and names the correct behavior above it, so a fix upstream or in seri fails this file
-// and sends someone back to the spec.
+// Characterization of @opentui/core 0.5.6 selection/copy, rerunnable evidence for docs/specs/044-tui-selection-copy/research.md (issue #254).
 
 const TERMINAL_WIDTH = 60;
 const TERMINAL_HEIGHT = 20;
 
-// See App.test.tsx's own copy of this: every `createTestRenderer` builds a real `CliRenderer`,
-// which registers a listener on the process-wide `TerminalConsoleCache` singleton, and this repo hit
-// a real listener leak without a teardown that destroys them.
+// createTestRenderer registers on the process-wide TerminalConsoleCache singleton; an undestroyed CliRenderer flakes later files in the same bun process.
 const mountedRenderers: TestRendererSetup[] = [];
 
 afterEach(() => {
@@ -30,16 +24,7 @@ afterEach(() => {
   }
 });
 
-// The scrollbox props mirror the real one the transcript sits in (app.tsx) — `stickyScroll` and
-// `stickyStart="bottom"` are what park a long transcript at its tail, which is the geometry the
-// scrolled-selection tests below depend on. Mounted without the surrounding <App> deliberately: the
-// scrollbox plus the real TranscriptList is the whole surface selection reaches.
-// `flush()` alone returns before sticky scroll has parked the transcript and painted it, which on a
-// loaded runner leaves the first capture reading a frame the drag then disagrees with. The last
-// entry is the settle signal for both geometries: it is the bottom row unscrolled, and it is what
-// `stickyStart="bottom"` scrolls to when there are more rows than fit. `waitForSettledFrame` waits
-// until that entry is visible and the capture stops changing, so the probe's later capture and
-// drag share one geometry.
+// flush() returns before stickyScroll has parked the tail; waitForSettledFrame waits until last.text is in the height-10 viewport and the capture stops changing.
 async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRendererSetup> {
   const setup = await createTestRenderer({ width: TERMINAL_WIDTH, height: TERMINAL_HEIGHT });
   mountedRenderers.push(setup);
@@ -51,9 +36,7 @@ async function mountTranscript(transcript: TranscriptEntry[]): Promise<TestRende
   await flush(setup);
   const last = transcript.at(-1);
   if (last !== undefined) {
-    // The scrollbox is height 10. captureCharFrame can include last.text from an
-    // off-viewport paint while sticky-scroll is still moving, which is the macOS
-    // failure: shown already at the tail, drag still mapped through an older scrollTop.
+    // captureCharFrame can include last.text from an off-viewport paint while sticky-scroll is still moving, the macOS failure where the drag still used an older scrollTop.
     await waitForSettledFrame(setup, (frame) =>
       frame
         .split("\n")
@@ -70,8 +53,7 @@ function copiedText(setup: TestRendererSetup): string {
   return selection.getSelectedText();
 }
 
-// The scrollbox paints its scrollbar thumb in the frame's last column, so a captured row's
-// transcript text is everything left of it.
+// The scrollbox paints its scrollbar thumb in the last column, so transcript text is everything left of it.
 function screenRow(frame: string, y: number): string {
   return (frame.split("\n")[y] ?? "").slice(0, TERMINAL_WIDTH - 1).trimEnd();
 }
@@ -94,11 +76,7 @@ const MIXED_TRANSCRIPT: TranscriptEntry[] = [
   { role: "system", text: "tool ran read(src/parse.ts)" },
 ];
 
-// `role: "system"`, so the rows are dense: `gapBefore` (theme/spacing.ts) puts a blank row on
-// either side of a user turn, and a run of user rows would interleave one between every pair. The
-// tests below measure how a screen row resolves to an entry, which is a different question from
-// how many rows an entry occupies — a fixture carrying the rhythm would fold both into one number.
-// transcriptRhythm.test.tsx covers the gaps themselves.
+// role "system" so gapBefore does not insert blank rows; these tests measure screen-row-to-entry, not how many rows an entry occupies.
 function denseRows(count: number): TranscriptEntry[] {
   return Array.from({ length: count }, (_, index) => ({
     role: "system" as const,
@@ -106,9 +84,7 @@ function denseRows(count: number): TranscriptEntry[] {
   }));
 }
 
-// A renderer that has already resolved one drag reports a different result for the next one, so
-// every probed screen row gets its own mount, and each is destroyed as soon as it has been read
-// rather than piling ten live renderers up behind `afterEach`.
+// A renderer that has already resolved one drag reports a different result for the next, so each probed row gets its own mount.
 async function probeScreenRow(
   transcript: TranscriptEntry[],
   y: number,
@@ -127,17 +103,7 @@ async function probeScreenRow(
 }
 
 describe("transcript selection", () => {
-  // The one line the rest of this file is the counterfactual for, and the only assertion in the
-  // suite that holds it. seri ships the TERMINAL's selection, bought by not reporting the mouse:
-  // OpenTUI's own default enables `?1000`/`?1002`/`?1003`/`?1006`, and a terminal reporting the
-  // mouse to an application stops selecting text for the person using it. Everything below drives
-  // OpenTUI's in-app selection instead — the strategy issue #254 calls B, rejected in
-  // docs/specs/044-tui-selection-copy/research.md over an upstream defect — through renderers of
-  // its own, so none of it fails if this flag is dropped. Neither does anything built on top of it:
-  // app.tsx's Up/Down routing, its approval-paging gate, its hidden
-  // scrollbar, or hooks/useClipboardPaste.ts's Ctrl-V would all stay green as accommodations for a
-  // trade no longer being made. An opentui upgrade that conflicts on that file is the way this goes
-  // quietly, which is what this is here to make loud.
+  // OpenTUI's default enables ?1000/?1002/?1003/?1006, and a terminal reporting the mouse stops selecting text for the user (issue #254 strategy B, rejected).
   test("mouse reporting is off, which is what leaves the selection to the terminal", () => {
     expect(MAIN_TUI_RENDERER_CONFIG.useMouse).toBe(false);
   });
@@ -159,9 +125,7 @@ describe("transcript selection", () => {
     ]);
   });
 
-  // opentui derives the highlight from the row's own colours rather than from a configured pair:
-  // seri passes no `selectionBg`/`selectionFg` anywhere, and `theme.selectedBg`/`selectedFg` are
-  // ListRow's and CompletionPopup's list-highlight tokens, which reach no selection code.
+  // OpenTUI derives the highlight from the row's own colours; seri passes no selectionBg/selectionFg.
   test("the highlight is reverse video of the row's own foreground", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await setup.mockMouse.pressDown(0, 0);
@@ -197,8 +161,7 @@ describe("transcript selection", () => {
     await user.mockMouse.drag(0, 0, 45, 0);
     expect(copiedText(user)).toBe("user asked about the parser");
 
-    // Column 2, not 0: columns 0-1 are the assistant row's bullet gutter, which the test below
-    // pins as unselectable.
+    // Column 2, not 0: columns 0–1 are the assistant bullet gutter, unselectable in the test below.
     const assistant = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(assistant, (frame) => frame.includes("entry point"));
     await assistant.mockMouse.drag(2, 2, 45, 2);
@@ -209,9 +172,6 @@ describe("transcript selection", () => {
     expect(copiedText(tool)).toBe("tool ran read(src/parse.ts)");
   });
 
-  // Correct behavior: the copy is the assistant's own words. `●` is TranscriptRow's absolutely-
-  // positioned marker (components/TranscriptList.tsx) — chrome, not content — and it lands in the
-  // copy glued to the first word with no separating space.
   test("defect: the ● marker leaks into the copied assistant text", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
@@ -220,10 +180,6 @@ describe("transcript selection", () => {
     expect(copiedText(setup)).toContain("●the parse() entry point handles it");
   });
 
-  // Correct behavior: a drag anywhere along the assistant row selects that row. The bullet is an
-  // overlay outside the flex flow, so the hit target across the gutter it paints into is the
-  // MarkdownRenderable that reserves those columns as padding — and that is not selectable, so a
-  // drag begun there starts nothing at all rather than selecting the row it was aimed at.
   test("defect: a drag started on the assistant row's bullet gutter starts no selection", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
@@ -233,9 +189,6 @@ describe("transcript selection", () => {
     expect(setup.renderer.getSelection()).toBeNull();
   });
 
-  // Correct behavior: copying a model answer hands back the markdown the model wrote, backticks and
-  // all, so it can be pasted somewhere that renders it. The copy is what MarkdownRenderable painted
-  // instead, so the inline code span's own markers are gone and `parse()` comes back as bare prose.
   test("defect: copied markdown is the rendered text, not the source", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
@@ -264,13 +217,7 @@ describe("transcript selection", () => {
     }
   });
 
-  // Correct behavior: these three screen rows resolve to the entry printed on them, the way rows 3
-  // to 9 above already do. Once `stickyStart="bottom"` has parked the transcript at its tail
-  // (scrollTop 14, entries 14-23 filling rows 0-9), the top of the viewport resolves against
-  // geometry that no longer matches what is painted. The copy is never the painted row. It is
-  // sometimes the entry above, sometimes a run of entries that includes that one, and on row 2
-  // it is empty. Pinning one exact wrong string made the suite fail when only the shape of the
-  // miss changed.
+  // After stickyStart=bottom parks at scrollTop 14, rows 0–2 resolve against geometry that no longer matches the paint.
   test("defect: a scrolled transcript resolves its top three screen rows to the wrong entry", async () => {
     const first = await probeScreenRow(denseRows(24), 0);
     expect(first.scrollTop).toBe(14);

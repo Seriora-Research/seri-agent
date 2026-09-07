@@ -4,8 +4,6 @@ import type { TranscriptRole } from "../../src/tui/util/format";
 
 const ROLES: TranscriptRole[] = ["user", "assistant", "system"];
 
-// Transcribed by hand rather than read off GAP_TABLE, so a change to the lookup has to be made
-// deliberately in both places instead of silently agreeing with itself.
 const TABLE: [TranscriptRole | undefined, Record<TranscriptRole, 0 | 1>][] = [
   [undefined, { user: 0, assistant: 0, system: 0 }],
   ["user", { user: 1, assistant: 1, system: 1 }],

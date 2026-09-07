@@ -30,17 +30,12 @@ function requireSessionId(sessionsDir: string): string {
 const exclusiveLocks = new Map<string, Database>();
 
 function lockSessionStore(sessionsDir: string): void {
-  // chmod of seri.db does not fail a write on a connection that already has the file
-  // open — the kernel checks access at open, not at write. The child holds one
-  // SessionDatabase for the process, so the parent takes an exclusive lock instead:
-  // the child's next save hits SQLITE_BUSY and surfaces as "could not save the session".
+  // chmod does not fail writes on an already-open SQLite fd; an exclusive lock makes the child's next save SQLITE_BUSY.
   restoreSessionStore(sessionsDir);
   const path = join(configDirForStore(sessionsDir, "sessions"), DATABASE_FILENAME);
   const lock = new Database(path);
   lock.exec("PRAGMA busy_timeout = 0");
-  // RUNLOOP_READY can fire while the child's first save is still in a write
-  // transaction. busy_timeout=0 then fails this BEGIN, not the child's later /mode
-  // save. Retry until the first save commits, then hold the lock.
+  // RUNLOOP_READY can race the child's first save; retry the lock until that commit finishes.
   const deadline = Date.now() + 5_000;
   for (;;) {
     try {
@@ -75,12 +70,7 @@ function restoreSessionStore(sessionsDir: string): void {
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
 
-// The real cli.ts, same reason as tests/cli/approvalPromptPty.test.ts: `isTTY` has to come from a
-// REAL process.stdout.isTTY on a real pty (the fix this session made to cli.ts requires it be
-// passed explicitly — see CliDeps.isTTY's own comment — and a fake `true` would prove nothing about
-// whether Ink's raw-mode input actually works). The fake runLoop waits on the AbortSignal rather
-// than resolving on its own, so the turn is still "in flight" — and the TUI still mounted — when
-// the Ctrl-C arrives.
+// isTTY must come from a real pty; a fake true does not prove raw-mode input.
 function childScriptCancel(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -104,13 +94,7 @@ function childScriptCancel(dir: string): string {
   ].join("\n");
 }
 
-// App.tsx's own viewport: a transcript longer than any real terminal's row count, built
-// fast (no real I/O per iteration) rather than 300 separate turns — one turn yielding 300
-// error events, each a distinct, greppable transcript line (`line-N.txt` embedded in the
-// error text). error, not tool-call: tool-call/result no longer land in the transcript until
-// turn-end (and pendingTool is set for every tool, including read_file), so a 300-call loop
-// would not overflow the viewport. error still pushLine's immediately, which is what these
-// viewport tests need.
+// 300 error events in one turn: tool-call no longer overflows the viewport until turn-end.
 function childScriptManyLines(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -135,14 +119,7 @@ function childScriptManyLines(dir: string): string {
   ].join("\n");
 }
 
-// Pins the `interactive: true` fix (cli.ts's own comment on its render() call): without it, Ink's
-// own CI auto-detection (`is-in-ci`, keyed on the `CI`/`CONTINUOUS_INTEGRATION` env vars) treats a
-// real pty as non-interactive whenever `CI` is set — exactly GitHub Actions' own default for every
-// job — and stops live-rendering, regardless of `stdout.isTTY`. `CI=true` is set on the CHILD
-// process only (this script's own first line), not on the test runner itself, so this reproduces
-// the failure GitHub Actions' ubuntu-latest/macos-latest runners hit (confirmed by reverting
-// `interactive: true` and re-running this exact test locally with `CI=true`: it hung on the
-// `/mode` wait below until sawLine's own timeout, every time) without needing real CI to check it.
+// Ink's is-in-ci treats a pty as non-interactive when CI=true, GitHub Actions' default.
 function childScriptCiEnv(dir: string): string {
   return [
     `process.env.CI = "true";`,
@@ -164,13 +141,6 @@ function childScriptCiEnv(dir: string): string {
   ].join("\n");
 }
 
-// H-1/M-3: a session with no checkpoints at all, so `/undo 5` throws inside decideUndo — proving a
-// command decision function's own exception is caught, not left to escape Ink's input handler.
-// `/mode` sent afterward is what proves the process is still alive and responsive, not merely
-// that it failed to crash outright. The turn resolves immediately (unlike the sibling scripts
-// above, which hang on purpose) so `turnInFlight` clears before any command is sent — MEDIUM-3
-// gates `/undo` while a turn is in flight, and this script tests `/undo`'s OWN throw, not that gate
-// (which the dedicated MEDIUM-3 test below covers).
 function childScriptCommandError(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -192,9 +162,6 @@ function childScriptCommandError(dir: string): string {
   ].join("\n");
 }
 
-// H-2: a runLoop that throws on its very first iteration, once Ink has already mounted — proving
-// runTui's driveLoop().catch() path unmounts and rejects rather than leaving run() awaiting a
-// promise that was never going to settle.
 function childScriptRejects(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -215,11 +182,6 @@ function childScriptRejects(dir: string): string {
   ].join("\n");
 }
 
-// A rejection whose reason is itself `undefined` (a bare `throw undefined`/`Promise.reject()`) —
-// distinct from childScriptRejects above, which rejects with a real Error. runTurn's own bare
-// `unknown` sentinel used to compare this case against `undefined` to decide whether driveLoop had
-// failed at all, so this reason was indistinguishable from "no error happened" and the
-// destroy/reject path never ran.
 function childScriptRejectsUndefined(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -240,11 +202,6 @@ function childScriptRejectsUndefined(dir: string): string {
   ].join("\n");
 }
 
-// Mirrors loop.ts's own "yield error, then return" exits (loop.ts:343/381/420): a turn can end
-// with no following `done` LoopEvent at all. The reducer's own "error" case deliberately leaves
-// `state.turn` untouched (a single mid-turn error is often recoverable), so runTurn's own `finally`
-// block dispatching `{ type: "turn-ended" }` is the only thing that clears TurnStatus's elapsed
-// clock on this path.
 function childScriptErrorWithoutDone(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -265,11 +222,7 @@ function childScriptErrorWithoutDone(dir: string): string {
   ].join("\n");
 }
 
-// Publishes its own pid: the harness's `child` is the python3 pty allocator, not this bun
-// grandchild, so a test that needs to send SIGTERM to the process actually running the TUI has to
-// read the pid from here rather than signalling `child` itself. Otherwise identical to
-// childScriptInput — a runLoop that never settles, so the TUI is still mounted (and the alt screen
-// still entered) when the signal arrives.
+// child.pid is the python3 pty allocator; the bun TUI pid is printed from the grandchild.
 function childScriptSigterm(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -291,16 +244,9 @@ function childScriptSigterm(dir: string): string {
   ].join("\n");
 }
 
-// H-3: a runLoop that resolves per call, reporting how many times it has been invoked and how
-// many messages it was handed — the two facts that prove a second, free-form task submission
-// actually re-invoked driveLoop against the LIVE (accumulated) session, rather than the TUI
-// exiting after the first turn or a second turn starting from a fresh/stale message list.
 function childScriptMultiTurn(dir: string): string {
   return [
-    // HOME redirection (D9's own reasoning): this script never touches /model, so nothing here
-    // should EVER write config.json — but the sibling test below needs to check the real
-    // location that write would land at, and a bare, unredirected check would either be
-    // meaningless or, if the guard were ever broken, land on the developer's real ~/.seri.
+    // Redirect HOME so a persist cannot write the developer's ~/.seri.
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
@@ -309,11 +255,7 @@ function childScriptMultiTurn(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE, not a count of the rendered done line: console.log is exact
-    // (Ink's own patchConsole routes it through `log()`, written once, never re-emitted by a later
-    // repaint), and it fires here, before the "done" yield, only once the prior messages-updated
-    // event above has already been fully handled by the consuming for-await loop (generators only
-    // resume a later statement once the consumer has finished processing the value just yielded).
+    // RUNLOOP_DONE is a one-shot console.log; a rendered done line is re-emitted on later OpenTUI/Ink repaints.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -330,10 +272,6 @@ function childScriptMultiTurn(dir: string): string {
   ].join("\n");
 }
 
-// childScriptMultiTurn's own shape with one turn cancelled. Role initials rather than a bare
-// length, so a count that happens to match cannot pass for the right shape. The cancelled turn
-// yields no `messages-updated`, matching loop.ts's own stream catch — a fake that answered where
-// the real loop stays silent would prove nothing.
 function childScriptCancelledTurnContext(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -369,14 +307,6 @@ function childScriptCancelledTurnContext(dir: string): string {
   ].join("\n");
 }
 
-// A logged-in session's account-status fetch (prepareSession's own fetchAccountPlan call, feeding
-// resolveRoute/decideModelPickerOpen's plan-coverage predicate) must happen once at session start,
-// not once per turn — the same "reused across turns" guarantee childScriptMultiTurn's own sibling
-// test already holds `RUNLOOP_CALL` count to, applied to the account-status fetch instead of the
-// model call. `authStore.saveAuthSession` seeds a session BEFORE `cli.run` — mirrors
-// childScriptAuth's own live login, minus the device-flow round trip this script has no need to
-// exercise — and `globalThis.fetch` is patched (childScriptGuidedSetupSlowFetch's own precedent)
-// to answer only the account-status URL and count how many times it's asked.
 function childScriptAccountStatusOnce(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -411,8 +341,6 @@ function childScriptAccountStatusOnce(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " messages=" + opts.messages.length);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -429,21 +357,11 @@ function childScriptAccountStatusOnce(dir: string): string {
   ].join("\n");
 }
 
-// Regression: prepared.plan was fetched once at session start and never refreshed — a successful
-// /logout left the previous (possibly paid) plan in place, so
-// resolveRoute/decideModelPickerOpen kept reflecting a plan the user no longer has. Starts already
-// logged in with plan "pro" (so ~openai/gpt-latest, a real OpenRouter catalog entry with no local
-// key, shows "seri"), then logs out and re-opens /model to prove that same entry's row drops
-// back to "no key" — cli.ts's own /logout handler now clears prepared.plan directly rather than
-// leaving it stale.
 function childScriptPlanClearedOnLogout(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
     `process.env.SERI_GATEWAY_URL = "http://localhost:9999/api/gateway";`,
-    // A configured groq key only to skip the blank-first-run guided-setup gate (decideAuthOffer's
-    // own sibling gate, guidedSetup.ts) — this test never dispatches a real groq call, and the
-    // target row (~openai/gpt-latest, openrouter) has no groq sibling to reroute to instead.
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const authStore = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, "../../src/auth/authStore.ts")).href)});`,
@@ -534,21 +452,8 @@ function childScriptGatewayNoticeTui(dir: string): string {
   ].join("\n");
 }
 
-// Stage 7a Slice 4: the actual /model bug fix, proven with a real second turn the same way
-// childScriptMultiTurn proves H-3 above — a fake runLoop that reports which model id and how many
-// messages EACH call actually received, so a live /model switch (a real picker, driven by real
-// keystrokes) taking effect on the very next turn is observable from outside the process, not just
-// asserted against the reducer in isolation. `getGroqModel` returns the id itself rather than an
-// opaque `{}` (every OTHER script in this file's own convention) specifically so the fake runLoop
-// can report which one it was actually handed. `SERI_DISABLE_MODELS_FETCH` keeps the catalog load
-// prepareSession now always does (this same Slice) on the CLI's own bundled fallback manifest —
-// deterministic, and no network dependency for a filter query this script needs to stay unique
-// against.
 function childScriptModelSwitch(dir: string): string {
   return [
-    // D9: without this, a successful /model pick (this script's own point) calls
-    // setConfigValue, whose default configDir is process.env.HOME || homedir() — unredirected,
-    // that would rewrite the developer's REAL ~/.seri/config.json on every test run.
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
@@ -559,8 +464,6 @@ function childScriptModelSwitch(dir: string): string {
     `  const named = (opts.system.match(/You are powered by the model named ([^\\n]+)\\./) || [])[1];`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " messages=" + opts.messages.length + " identity=" + named + " hasExactId=" + /exact model ID/i.test(opts.system));`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -577,19 +480,7 @@ function childScriptModelSwitch(dir: string): string {
   ].join("\n");
 }
 
-// Regression coverage for /effort's own persist-on-success gate
-// (runTui's runTurn, cli.ts) — the reasoning-effort counterpart to childScriptModelSwitch's own
-// "the switch that just worked is now the global default" proof, above. `SERI_DISABLE_MODELS_FETCH`
-// is deliberately NOT set here (unlike most of this file's other scripts): the bundled fallback
-// manifest predates reasoning_options entirely (cli.test.ts's own REASONING_CATALOG comment has the
-// full account), so this mocks a live-shaped catalog fetch instead, the same way cli.test.ts's own
-// "run (/effort)" describe block does. Explicitly DELETED, not just "not set": this
-// suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test` process
-// (apps/cli/package.json), inherited by this spawned child (startChild's own `env: {...process.env,
-// ...}`) unless deleted here, matching childScriptGuidedSetupSlowFetch's own identical fix a few
-// hundred lines up. Left un-deleted, `getModelCatalog()` resolves synchronously from the bundled
-// fallback manifest — no reasoning_options at all — and `/effort medium` reported "This model has
-// no reasoning-effort tiers available" instead of ever reaching this script's own fetch mock.
+// Delete SERI_DISABLE_MODELS_FETCH; the suite npm script sets it to 1 for the whole bun test process.
 function childScriptEffortPersist(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -613,8 +504,6 @@ function childScriptEffortPersist(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " reasoningEffort=" + opts.reasoningEffort);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -631,12 +520,6 @@ function childScriptEffortPersist(dir: string): string {
   ].join("\n");
 }
 
-// The mount-time counterpart of childScriptEffortPersist, above: `cli.run([])` (no positional
-// task), so the TUI mounts idle and no turn ever starts — the config default's own tier must
-// already be in App's very first rendered frame, not just from turn 1's own
-// `config-updated` dispatch (runTurn, cli.ts). Same live-shaped catalog fetch
-// mock as childScriptEffortPersist, and the same reason: the bundled fallback manifest has no
-// reasoning_options at all.
 function childScriptEffortDefaultAtMount(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -644,8 +527,7 @@ function childScriptEffortDefaultAtMount(dir: string): string {
     `process.env.SERI_MODEL = "reasoning-model";`,
     `process.env.SERI_PROVIDER = "groq";`,
     `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
-    // resolveConfigValue (config/config.ts) is env-first — a developer's own shell exporting this
-    // would make the header show ITS tier regardless of what this test seeds in config.json.
+    // resolveConfigValue is env-first; a shell-exported SERI_REASONING_EFFORT would override config.json.
     `delete process.env.SERI_REASONING_EFFORT;`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const realFetch = globalThis.fetch;`,
@@ -676,13 +558,6 @@ function childScriptEffortDefaultAtMount(dir: string): string {
   ].join("\n");
 }
 
-// D1/D2 (feature-plan.md, multi-provider-byok-phase-2): plan Test-plan item 8, "/model
-// multi-route" — the end-to-end proof that decideModelPickerOpen's grouping (unit-tested already)
-// and a real picker selection actually round-trip through a live pick to a persisted provider.
-// Both `getGroqModel` and `getAnthropicModel` are injected so the picked route dispatches without
-// needing a real key for either — resolveRoute (D2) leaves an explicit pick unchanged whenever
-// NEITHER sibling in its route group has a configured key, which is the case here (only
-// GROQ_API_KEY is set, and claude-sonnet-5's route group is anthropic/openrouter, not groq).
 function childScriptModelMultiRoute(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -694,8 +569,6 @@ function childScriptModelMultiRoute(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -713,14 +586,6 @@ function childScriptModelMultiRoute(dir: string): string {
   ].join("\n");
 }
 
-// D4's own real surviving code path (feature-plan.md): D3's fix makes it structurally impossible
-// for a session that starts already-rerouted to ever persist on turn 1 (see childScriptReroute's
-// own test, above) — so the only place D4 ("persist the RESOLVED pair, not the one requested") can
-// still fire is a LIVE, mid-session /model pick whose own target then gets rerouted on the very
-// next turn. Turn 1 runs on the session's own starting pair (GROQ_API_KEY configured, no reroute).
-// Mid-session, the picker explicitly selects (claude-sonnet-5, openrouter) — OPENROUTER_API_KEY is
-// deliberately never set, and ANTHROPIC_API_KEY is, so resolveRoute reroutes turn 2 to the native
-// sibling instead.
 function childScriptModelPickRerouted(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -734,8 +599,6 @@ function childScriptModelPickRerouted(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls + " model=" + opts.model.id + " provider=" + opts.provider);`,
     `  yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "ok " + calls }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -753,15 +616,8 @@ function childScriptModelPickRerouted(dir: string): string {
   ].join("\n");
 }
 
-// MEDIUM finding (code-review re-review on PR #71): loop.ts yields `messages-updated` once per
-// tool call within a SINGLE turn (its own multiple yield sites), not once per turn — so this
-// script's turn 2 yields it three times before `done`, simulating a turn with several tool calls,
-// which the paired test below uses to prove a persistently-failing persist attempt is retried at
-// most ONCE per turn, not once per `messages-updated` event within it.
 function childScriptModelSwitchMultiToolCall(dir: string): string {
   return [
-    // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
-    // anything else runs.
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
     `process.env.SERI_DISABLE_MODELS_FETCH = "1";`,
@@ -774,8 +630,6 @@ function childScriptModelSwitchMultiToolCall(dir: string): string {
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-1" }] };`,
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-2" }] };`,
     `    yield { type: "messages-updated", messages: [...opts.messages, { role: "assistant", content: "tool-call-3" }] };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `    console.log("\\nRUNLOOP_DONE " + calls);`,
     `    yield { type: "done", reason: "no-tool-call" };`,
     `    return opts.messages;`,
@@ -797,20 +651,9 @@ function childScriptModelSwitchMultiToolCall(dir: string): string {
   ].join("\n");
 }
 
-// B2/MEDIUM-5: the "pin only what worked" invariant applied to a live /model switch, proven the
-// same real-keystroke way childScriptModelSwitch's own test proves the switch takes effect at all.
-// Turn 1 succeeds normally on the starting model; turn 2 — on the model the real picker just
-// switched to — fails with no `messages-updated` at all (the shape a bad key or an unreachable
-// provider actually takes: loop.ts's own first catch yields `error` and returns, no `done`, no
-// persist call for the TUI path — driveLoop's own comment on why persist is messages-updated-only).
-// The script reads the on-disk session file itself, from inside this same process, once the failed
-// call has yielded its `error` — proving what actually reached disk, not what the live reducer
-// state (already switched, or the second RUNLOOP_CALL line would report the OLD model) merely says.
 function childScriptModelSwitchFailure(dir: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
-    // D9: same HOME redirection as childScriptModelSwitch's own comment — mandatory before
-    // anything else runs, so a stray persist here could never reach the developer's real config.
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `const cli = await import(${JSON.stringify(CLI)});`,
     `const { loadSession, listSessionIds } = await import(${JSON.stringify(SESSION_MODULE)});`,
@@ -843,10 +686,6 @@ function childScriptModelSwitchFailure(dir: string): string {
   ].join("\n");
 }
 
-// Regression for a corrupted persisted pair: unlike childScriptModelMultiRoute, this deliberately
-// does NOT inject getAnthropicModel — getModel's own real (uninjected) branch is what checks for
-// an API key and throws, so picking the anthropic route with no ANTHROPIC_API_KEY set fails the
-// turn before driveLoop is ever called (no messages-updated, so confirmedModel never advances).
 function childScriptModelPickKeyless(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -875,14 +714,6 @@ function childScriptModelPickKeyless(dir: string): string {
   ].join("\n");
 }
 
-// D2/D3 (feature-plan.md, multi-provider-byok-phase-2): a session explicitly pinned to
-// (claude-sonnet-5, openrouter) — the design doc's own motivating pair (routes.test.ts's own
-// comment has the full story) — with only ANTHROPIC_API_KEY present and OPENROUTER_API_KEY
-// deleted, so routing-priority resolution must reroute to the native Anthropic sibling on turn 1.
-// The fake runLoop reports `opts.model.via` (which of the two injected constructors was actually
-// called) and `opts.provider` (driveLoop's own resolved-pair argument, D3's fix to what used to
-// read the REQUESTED pair) — two independent signals that the reroute actually took effect, not
-// just that SOME model answered.
 function childScriptReroute(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -914,10 +745,6 @@ function childScriptReroute(dir: string): string {
   ].join("\n");
 }
 
-// The negative-control sibling of childScriptReroute, just above: identical pinned pair, but
-// OPENROUTER_API_KEY is present too (alongside ANTHROPIC_API_KEY) — D2 rule 1 says an explicit
-// pick with its own key wins even when a native sibling also has one, so this must stay on
-// OpenRouter and never print a reroute notice at all.
 function childScriptNoReroute(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -949,9 +776,6 @@ function childScriptNoReroute(dir: string): string {
   ].join("\n");
 }
 
-// HIGH-1: a turn that finishes and reports usage, then the TUI is left awaiting input — proving
-// `run()` actually reaches `printUsage`/the exit-code logic on the TUI path once /exit or Ctrl-D
-// resolves runTui's promise, which nothing did before this fix.
 function childScriptQuit(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -975,9 +799,6 @@ function childScriptQuit(dir: string): string {
   ].join("\n");
 }
 
-// HIGH-B: parks mid-turn, after reporting real usage, waiting on the SAME abort signal
-// childScriptCancel's fake runLoop waits on — proving /exit cancels an in-flight turn (via the
-// same deliverSignal("SIGINT") path a single Ctrl-C already uses) rather than abandoning it.
 function childScriptQuitMidTurn(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1003,8 +824,6 @@ function childScriptQuitMidTurn(dir: string): string {
   ].join("\n");
 }
 
-// MEDIUM-C: two clean turns, each reporting its own usage, proving the final summary (printed
-// after /exit) sums every turn rather than just the last one.
 function childScriptMultiTurnUsage(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1014,8 +833,6 @@ function childScriptMultiTurnUsage(dir: string): string {
     `  calls++;`,
     `  console.log("\\nRUNLOOP_CALL " + calls);`,
     `  yield { type: "usage", usage: { inputTokens: 10 * calls, outputTokens: 20 * calls } };`,
-    // RUNLOOP_DONE — see childScriptMultiTurn's own comment for why this, not a count of the
-    // rendered done line, is the reliable per-turn completion signal.
     `  console.log("\\nRUNLOOP_DONE " + calls);`,
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
@@ -1033,25 +850,6 @@ function childScriptMultiTurnUsage(dir: string): string {
   ].join("\n");
 }
 
-// LOW-4/MEDIUM-1: a still-in-flight turn that yields a SECOND messages-updated after a mid-turn
-// /mode change — the exact shape of the regression MEDIUM-1 fixed. Pre-fix, driveLoop's own
-// direct saveSession call on that second event used the turn-start (pre-/mode) session and
-// clobbered the on-disk file back to the old mode; post-fix, driveLoop's persist callback is a
-// no-op on the TUI path, so nothing but the reducer's own effect ever writes here. `flagPath`
-// gates the second yield so the test can release it only once the FIRST write (the /mode
-// command's own) is confirmed on disk.
-//
-// HIGH-A: round 3's version of this script waited for the transcript's own "(done: ...)" line
-// before its one disk read — by which point the reducer's own onSessionChange effect for the
-// SECOND messages-updated had already had its own chance to run and correct any stale write,
-// regardless of whether one happened. Mutation-tested (the exact pre-fix stale saveSession call
-// restored into driveLoop): that version stayed green. This version instead reads the session
-// file SYNCHRONOUSLY, from inside this same process, as the very first statement once the
-// generator resumes past the second yield — which is only after driveLoop's own synchronous
-// persist()+dispatch() call for that event has already run, and (mutation-tested the same way,
-// this time confirmed red before green below) before React's own effect scheduler has had a
-// chance to flush the reducer's correction. `MODE_AT_RESUME` reports exactly what driveLoop's own
-// synchronous work left on disk at that instant, not what it eventually settles to.
 function childScriptModePersistence(dir: string, flagPath: string): string {
   const sessionsDir = join(dir, "sessions");
   return [
@@ -1086,11 +884,6 @@ function childScriptModePersistence(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
-// Design-question fix (this PR's own follow-up): a runLoop that streams text in two parts with a
-// gap in between, released by the same flag-file pattern childScriptModePersistence uses, so a
-// /rewind sent during that gap (rejected by MEDIUM-3's turnInFlight check) lands while the model's
-// answer is genuinely still in progress — not resolved yet, same as the mode-persistence script's
-// own reasoning for using a flag file instead of a fixed delay.
 function childScriptRewindDuringStream(dir: string, flagPath: string): string {
   return [
     `import { existsSync } from "node:fs";`,
@@ -1120,18 +913,6 @@ function childScriptRewindDuringStream(dir: string, flagPath: string): string {
   ].join("\n");
 }
 
-// D5-D8 (feature-plan.md): /setup's own real-pty harness — a never-resolving runLoop (mirrors
-// childScriptInput's own shape) so the TUI stays interactive for as long as a test needs. Every
-// /setup script sets HOME (D9's own reasoning, so a write never touches the developer's real
-// ~/.seri), SERI_DISABLE_MODELS_FETCH (deterministic catalog), and SERI_SKIP_KEY_VALIDATION=1 (D5's
-// own escape hatch — no /setup test ever touches the network). GROQ_API_KEY is set as a real env
-// var, same as every other script in this file — the groq ROW reads `source: "env"` because of it,
-// which some of the tests below rely on precisely because it is NOT the row under test.
-// `extraEnv` covers env-shadow scenarios: a caller passing e.g. `{ OPENAI_API_KEY:
-// "sk-openai-env-value" }` or `{ SERI_VERIFY_ENABLED: "false" }` gets a real env var exported
-// before the dynamic import, so the row/key under test reads `source: "env"` — the point being
-// that a truthy env value wins the SOURCE regardless of whether a config.json entry also exists
-// underneath (seeded separately, host-side, before spawn).
 function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1158,11 +939,6 @@ function childScriptSetup(dir: string, extraEnv: Record<string, string> = {}): s
   ].join("\n");
 }
 
-// /login, /signup and /logout's own script.
-// `login`/`logout` are faked via CliDeps so the child never hits the real WorkOS device flow.
-// The fake still calls saveAuthSession/loadAuthSession/clearAuthSession (dynamically imported
-// below) so auth.json on disk is genuinely written/read/cleared, not merely asserted on captured
-// stdout.
 function childScriptAuth(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1174,9 +950,6 @@ function childScriptAuth(dir: string): string {
     `  console.log("\\nRUNLOOP_READY");`,
     `  await new Promise(() => {});`,
     `}`,
-    // The negative control's own subject (below, host-side): must never reach stdout, masked or
-    // otherwise — the same "the raw value never appears in the pty stdout" guarantee /setup's own
-    // "add" pty test already holds itself to, applied to an access token instead of a provider key.
     `const FAKE_ACCESS_TOKEN = "fake-access-token-must-never-print";`,
     `async function loginFake(mode, clientId, configDir, handlerDeps) {`,
     `  handlerDeps?.onDeviceCode?.({`,
@@ -1215,10 +988,6 @@ function childScriptAuth(dir: string): string {
   ].join("\n");
 }
 
-// Bug fix (coordinator follow-up on Stage C): the failure round-trip childScriptAuth's own
-// describe block never exercised — `loginFake` here rejects the way the real device flow does on
-// a denied/expired code, driving createAuthHandlers' own catch branch (tui/handlers.ts) in a real
-// process, not just at the reducer level (App.test.tsx already covers that half).
 function childScriptAuthLoginFails(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1250,12 +1019,6 @@ function childScriptAuthLoginFails(dir: string): string {
   ].join("\n");
 }
 
-// Bug fix (thermo-nuclear + code-review, round 4): the real soft-lock this round closes — before
-// it, nothing dismissed the "starting"/"device" steps at all, and Ctrl-C fell through to a hard
-// process kill (no turn in flight to arm the cancel slot). `loginFake` here hangs indefinitely
-// past the device-code callback (the same "never resolves" idiom `runLoopFake` itself already
-// uses throughout this file), standing in for a real device code that stays valid for minutes
-// with the user never completing it in a browser.
 function childScriptAuthLoginHangs(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1286,13 +1049,6 @@ function childScriptAuthLoginHangs(dir: string): string {
   ].join("\n");
 }
 
-// Bug fix (thermo-nuclear, round 5): unlike childScriptAuthLoginHangs (whose fake never resolves
-// at all, so it can only prove Escape returns the UI — it can't distinguish "the poll was really
-// cancelled" from "cancellation doesn't exist and we just stopped listening"), this fake's own
-// poll resolves ~1s AFTER Escape, checking `handlerDeps.signal?.aborted` itself — the exact same
-// AbortSignal `createAuthHandlers.onLogin` (tui/handlers.ts) threads through the real `loginFn`'s 4th
-// argument. This is what proves the real plumbing: onAbandon's own `.abort()` call actually
-// reaches this fake in time, not just that createAuthHandlers stopped honoring its dispatches.
 function childScriptAuthLoginRace(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1336,17 +1092,6 @@ function childScriptAuthLoginRace(dir: string): string {
   ].join("\n");
 }
 
-// byok-guided-setup, feature-plan.md: the "genuinely blank first run" scenario — a real TTY, no
-// config.json (childScriptSetup's own dir is always fresh, but every OTHER script in this file
-// still exports GROQ_API_KEY as a real env var; this one explicitly deletes every provider's own
-// key, matching code-quality.md's "the platform matrix does not cover the unset case" guard, since
-// the dev/CI box's own ambient env could otherwise mask run()'s new isTTY-and-zero-keys gate). No
-// `getGroqModel` override, unlike every other script in this file: injecting one would bypass the
-// REAL groq.ts's own `if (!apiKey) throw missingKeyError("groq")` — the exact throw prepareSession
-// relies on today, pre-fix, to hard-exit before Ink ever mounts. The real getGroqModel only ever
-// constructs an SDK client (`createGroq({ apiKey })(modelId)`, no network I/O at creation), so
-// once /setup writes a fake GROQ_API_KEY, it resolves fine — the injected `runLoopFake` below never
-// touches the model object either way.
 function childScriptGuidedSetup(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1375,10 +1120,6 @@ function childScriptGuidedSetup(dir: string): string {
   ].join("\n");
 }
 
-// The hosted-login counterpart of childScriptGuidedSetup: still zero local keys (every
-// provider env var deleted), but prepareSession can resolve via the gateway because this
-// script mocks /account-status and injects getGatewayModel. Used with a host-side auth.json
-// (seedAuth) so the first-run gate sees a real session and must skip /setup.
 function childScriptLoggedInZeroKeys(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1416,17 +1157,6 @@ function childScriptLoggedInZeroKeys(dir: string): string {
   ].join("\n");
 }
 
-// Code-review finding, PR #91: unlike childScriptGuidedSetup, deliberately does NOT set
-// SERI_DISABLE_MODELS_FETCH — that env var makes loadCatalog resolve synchronously (a cache hit
-// against the bundled manifest), which would make this script incapable of ever observing the bug
-// it exists to catch. `globalThis.fetch` is patched, BEFORE cli.ts is imported (so
-// `getModelCatalog()`'s own `fetchFn: typeof fetch = fetch` default parameter — evaluated at call
-// time, not at catalog.ts's own module-load time — picks up the patched version), to hang forever
-// on the models.dev request specifically and pass every other URL through to the real fetch. NOT a
-// blanket override (measured live): Ink's own yoga-layout dependency loads its WASM binary via a
-// `fetch()` of a `data:` URI at import time, so a blanket-hung fetch made `await import("ink")`
-// itself hang forever too — a false failure with nothing to do with the catalog fetch this script
-// exists to simulate as offline.
 function childScriptGuidedSetupSlowFetch(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1436,10 +1166,6 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
     `delete process.env.ANTHROPIC_API_KEY;`,
     `delete process.env.OPENAI_API_KEY;`,
     `delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;`,
-    // This suite's own npm script sets SERI_DISABLE_MODELS_FETCH=1 for the WHOLE `bun test`
-    // process (apps/cli/package.json) — inherited by this spawned child unless deleted here, which
-    // would make loadCatalog resolve synchronously and this test vacuous whenever it runs as part
-    // of the full suite rather than in isolation (measured live: passed for the wrong reason).
     `delete process.env.SERI_DISABLE_MODELS_FETCH;`,
     `const realFetch = globalThis.fetch;`,
     `globalThis.fetch = (url, opts) =>`,
@@ -1463,13 +1189,6 @@ function childScriptGuidedSetupSlowFetch(dir: string): string {
   ].join("\n");
 }
 
-// Code-review finding, PR #91 round 2: unlike childScriptGuidedSetupSlowFetch's own
-// never-resolving fetch (which can only ever exercise the dead-input/re-entrancy half of the
-// blocking bug, since a promise that never settles never reaches onSetupClose's own `.then`),
-// this one resolves the models.dev request after a short, bounded delay — long enough to still be
-// pending when a second key-add is started, short enough to keep the test itself fast. The 500
-// status makes loadCatalog's own `!response.ok` branch throw and fall back to the bundled
-// manifest, so no real models.dev response shape needs to be faked here.
 function childScriptGuidedSetupDelayedFetch(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1505,12 +1224,6 @@ function childScriptGuidedSetupDelayedFetch(dir: string): string {
   ].join("\n");
 }
 
-// Unlike childScriptGuidedSetupDelayedFetch's own 500 status (which makes loadCatalog fall back to
-// the bundled manifest), this answers models.dev with a 200-OK payload that curates to zero rows
-// for every provider except groq, and groq's own "models" object is empty too — the live-fetch
-// path a real, mostly-empty upstream payload takes, not a network failure. Also deliberately does
-// NOT set SERI_DISABLE_MODELS_FETCH (same reasoning as childScriptGuidedSetupSlowFetch's own
-// comment), and deletes it since this suite's own npm script sets it process-wide.
 function childScriptGuidedSetupCatalogMissingProvider(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1544,11 +1257,6 @@ function childScriptGuidedSetupCatalogMissingProvider(dir: string): string {
   ].join("\n");
 }
 
-// cli-tui-stage-b-bare-seri, feature-plan.md Stage B: a real TTY, no positionals, no --continue/
-// --resume — the exact case that used to hard-exit with USAGE before this stage and now mounts the
-// TUI idle instead. GROQ_API_KEY is set (unlike childScriptGuidedSetup) so the zero-keys gate never
-// fires and the only thing under test is bare seri's own idle-mount/no-auto-start behavior, not the
-// gate composition (already covered by the guided-setup describe block above).
 function childScriptBare(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1574,12 +1282,6 @@ function childScriptBare(dir: string): string {
   ].join("\n");
 }
 
-// Stage E (cli-commands-to-tui feature-plan.md): --max-turns 5 as the startup default, bare-mount
-// idle (like childScriptBare, above) so a command can be typed BEFORE any task is submitted. The
-// fake runLoop reports opts.maxIterations, the same "have the fake loop print the field under
-// test" convention childScriptModelSwitch's own runLoopFake uses for opts.model/opts.provider —
-// so a live /max-turns override (typed before the task) can be proven to reach the very next
-// driveLoop call, with no restart.
 function childScriptMaxTurns(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1605,13 +1307,7 @@ function childScriptMaxTurns(dir: string): string {
   ].join("\n");
 }
 
-// Stage E's own /profile new end-to-end proof reuses childScriptBare directly (code-review round
-// 2: the two were byte-for-byte identical function bodies under a different name — a bare-mount
-// idle TUI is exactly what /profile new's own test needs too, since HOME redirection is already
-// childScriptBare's job, and decideProfileCreate's getBaseConfigDir() reads that same HOME).
 
-// Same shape as childScriptBare, minus the bare-mount case: `--continue` resumes whatever session
-// the test pre-seeds into sessionsDir via saveSession, rather than mounting idle with none.
 function childScriptContinue(dir: string): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
@@ -1637,14 +1333,6 @@ function childScriptContinue(dir: string): string {
   ].join("\n");
 }
 
-// Findings 1+5 (thermo-nuclear structural review, round 6): the TUI-native approval prompt — the
-// research spec's own ORIGINAL design for this ("a TUI supplies a different function of the
-// identical signature... with zero change to loop.ts/gate.ts") that every earlier round of this
-// branch left unbuilt, leaving the TUI path calling makeApprovalPrompt's readline-based prompt
-// instead (a SECOND stdin consumer racing Ink's own raw-mode ownership). Same shape as
-// tests/cli/approvalPromptPty.test.ts's own childScript, calling `opts.approvalPrompt` directly —
-// the fake runLoop stands in for the model round-trip, and the ONLY thing under test is the
-// approval wiring: does it reach the screen, and does a keypress actually unblock the turn.
 function childScriptApproval(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1668,13 +1356,6 @@ function childScriptApproval(dir: string): string {
   ].join("\n");
 }
 
-// /clear's own rebind (cli.ts's onSubmit): calls the REAL, checkpoint-wrapped `opts.tools.write_file`
-// directly — not a synthetic "tool-call"/"tool-result" pair — so an actual checkpoint lands through
-// the actual checkpointer for each turn, under WHATEVER session id `opts.tools` is currently bound
-// to. Reading `opts.tools` fresh on every call (rather than a captured outer reference) is what
-// makes turn 2's write land under the checkpointer /clear rebinds, if the rebind runs at all —
-// driveLoop (cli.ts) destructures `prepared.tools` anew on every call, so this only proves the
-// rebind if `prepared.tools` was actually swapped in between.
 function childScriptClear(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1705,35 +1386,6 @@ function childScriptClear(dir: string): string {
   ].join("\n");
 }
 
-// The archivist-counter half of /clear's own rebind: proves `archivistState` was rebuilt
-// (`createArchivistState`), not merely truncated in place the way `resetArchivistForRewind` does
-// (memory/archivist.ts's own comment on why the two are not interchangeable), through the ONLY
-// externally-observable effect a private, in-process counter has — whether it crosses
-// ARCHIVIST_TOOL_CALL_INTERVAL (10) and actually triggers a run. Turn 1 emits 9 "tool-call" events
-// (observeArchivistEvent's own per-event increment, archivist.ts) — one short of the interval, so
-// the archivist stays silent — turn 2 emits exactly 1 more, and turn 3 emits 9 more again. A
-// correctly-reset counter reads 1 after turn 2 (well under 10, still silent) and 10 after turn 3
-// (triggers); a counter that survived /clear unreset would already read 10 after turn 2 (triggers
-// early, then resets itself — archivist.ts's own comment on `toolCallsSinceRun = 0` after a run —
-// leaving turn 3's 9 back under the interval, silent). The test below checks both halves: silence
-// after turn 2, then a trigger after turn 3 — either alone would pass on a counter reset to the
-// wrong value, only the pair together pins down that it actually restarted at 0. `getGroqModel: ()
-// => ({})` (the same placeholder every other script in this file already uses as a model
-// runLoopFake itself never calls) does NOT make the dispatch throw: loop.ts's own runLoop catches
-// the provider call's failure and yields a `{ type: "error" }` event instead of throwing (loop.ts's
-// own comment on that catch), so runSubagent returns normally and runArchivist returns a real
-// ArchivistReport rather than hitting its own catch/onWarning path. cli.ts then dispatches that
-// report via `archivistLine` (cli/output.ts), which is what actually puts `"(archivist: ..."` in
-// the transcript — the observable difference this test waits on. `read_file`, not `write_file`:
-// this test is about the counter alone, so no checkpointer/real mutation is needed here at all.
-//
-// `authConfigDir` (not left to its own `getConfigDir()` default) is what the archivist's own
-// enabled/disabled toggle reads (`loadMemoryConfig(ctx.configDir)`, memory/archivist.ts, fed from
-// `RunContext.configDir` which `run()` sets to `deps.authConfigDir ?? getConfigDir()`) — without
-// it, this test would read the DEVELOPER'S real `~/.seri/config.json`, and a machine with
-// `SERI_ARCHIVIST_ENABLED=false` (or a persisted `/memory archivist off`) would make the "no
-// archivist line" assertion pass for having never checked the trigger at all, not for the counter
-// having actually reset.
 function childScriptClearArchivist(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -1766,36 +1418,7 @@ function childScriptClearArchivist(dir: string): string {
 
 type Exit = { code: number | null; signal: NodeJS.Signals | null; stdout: string };
 
-// Reconstructs the CURRENT content of every terminal row OpenTUI has ever absolute-positioned a
-// cell in, resilient to its incremental cell-diff redraw: a cell that's already correct on screen
-// is skipped rather than re-emitted on a later repaint, so two adjacent on-screen characters of
-// what looks like one logical string (e.g. a throttled InputBox flush: `/` lands in one write,
-// `model` in a later one once the leading-edge character's own flush has already drawn it) can
-// arrive as two separate, non-contiguous runs in the raw stream, with ANSI cursor-repositioning
-// bytes in between — breaking a plain `.includes()` over the raw bytes even though the two runs
-// are contiguous on the actual screen. Same reason `lastFrame()` (below) needs this too, not just
-// `sawLine`: it used to read only the LAST synchronized-update block, which misses content that
-// hasn't needed re-emitting since an earlier block — confirmed live, `frameOccurrences("┌")` came
-// back 0 for a border that was genuinely still on screen, drawn in an earlier block untouched by
-// the redraw `lastFrame()` happened to land on.
-//
-// Only text immediately addressed by a CUP escape sequence (`ESC [ row ; col H`, what every
-// OpenTUI redraw uses) is written into the grid — a bare `\r`/`\n` (what un-patched `console.log`
-// output, `OTUI_USE_CONSOLE=false` below, uses instead, having no cursor-addressing of its own)
-// switches OFF grid-writing until the next CUP re-arms it, rather than continuing to place text at
-// wherever the cursor happens to be. This is deliberate, not an oversight: a real, un-intercepted
-// `console.error` call CAN legitimately land mid-row, wherever OpenTUI's own last CUP left the
-// cursor, with no CUP of its own — confirmed live (`printWarning`'s own EACCES message, cli.ts) —
-// and including that in the grid at all means it can leave stale trailing characters behind once a
-// LATER, real CUP-addressed redraw reuses that same row with shorter content (OpenTUI's own diff
-// has no idea a cell was mutated out-of-band, so it never re-clears it). Excluding non-CUP text
-// entirely avoids that corruption for both consumers below; `sawLine`'s cheap raw-substring check
-// (its own comment) already handles console-style one-shot output correctly on its own, so nothing
-// is lost by not also tracking it here.
-//
-// Deliberately does NOT model real terminal scroll (a grid cell, once written, stays exactly
-// where its CUP put it) — this only needs to answer "what does OpenTUI's own last write to this
-// cell say," which is stable across repaints since OpenTUI always re-addresses a row absolutely.
+// reconstructRows: OpenTUI cell-diff skips already-correct cells and only CUP-addressed text is on-grid; a raw .includes() misses a string split across writes.
 function reconstructRows(raw: string): string[] {
   const rows: string[][] = [];
   function ensureCell(r: number, c: number): void {
@@ -1851,19 +1474,7 @@ function reconstructRows(raw: string): string[] {
   return rows.map((r) => r.join(""));
 }
 
-// A raw-substring count (`rawOccurrences`, `startChild`'s own comment on it) undercounts for the
-// same reason `sawLine` needed `reconstructRows`: one of N logically-distinct renders of `line` can
-// itself be split across writes, so it never exists as one contiguous run in the raw bytes at all —
-// confirmed live, a throttled InputBox echo split `/mode` into a `/` write and a `mode` write with
-// no overlap, undercounting `rawOccurrences("/mode")` even though the row genuinely read "/mode" by
-// the time the second write landed. `reconstructRows` alone can't fix this either: it only reflects
-// the CURRENT value of a cell, not how many times a row held a matching value over the test's
-// lifetime — reused for a different render later, only the latest value survives. This instead
-// snapshots the reconstructed rows at each OpenTUI synchronized-update boundary (`ESC[?2026l`, its
-// own natural "one redraw settled" marker) and counts each row's own false→true transition into
-// "now contains `line`" — a row holding a match across several consecutive frames (unchanged,
-// nothing to redraw) counts once, and a row that later stops matching and later matches again
-// (reused for a different render) counts again.
+// Count false→true row matches at each ESC[?2026l boundary; reconstructRows only holds the current cell, so a raw substring undercounts a split InputBox echo.
 function countLogicalOccurrences(raw: string, line: string): number {
   const esu = "\x1b[?2026l";
   const frameEnds: number[] = [];
@@ -1887,91 +1498,31 @@ function countLogicalOccurrences(raw: string, line: string): number {
   return count;
 }
 
-// Identical shape to tests/cli/approvalPromptPty.test.ts's own startChild — duplicated rather than
-// imported, matching this repo's convention of self-contained pty test files. See that file's own
-// comment for why a pty (not a pipe) is load-bearing here: raw mode's interpretation of input —
-// both 0x03 as a keypress rather than a signal, and each typed character reflecting live — is the
-// entire mechanism under test, and a pipe cannot exercise either.
-//
-// A `sh -c` body, not a Python script: `startChild`'s own `target` construction below prefixes
-// `['sh', '-c', PTY_RESIZE_SPAWN, 'sh', rows, cols, execPath, scriptPath]` onto the SAME
-// `pty.spawn(sys.argv[1:])` bootstrap every other call uses, so within this script `$1`/`$2` are
-// the requested rows/cols and `$3`/`$4` (the rest of `"$@"` after the `shift`) are the real command
-// to run. `stty` runs on the slave `pty.spawn` already allocated and attached the forked child to,
-// as the first thing that child does — before `exec` replaces it with the real target — so the
-// target's very first terminal-size read already sees it, with none of `pty.fork`'s own session/fd
-// plumbing to reproduce by hand.
+// python3 pty, not a pipe: raw mode needs 0x03 as a keypress and live character echo.
 const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 
-// `startChild`'s own default `target` (`[process.execPath, scriptPath]`, below) never sets a
-// window size on the pty `pty.spawn` allocates — confirmed live (an `@opentui/core`
-// `createCliRenderer` probe run over the identical harness): a fresh pty with no winsize ioctl ever
-// applied reports `terminalWidth`/`terminalHeight` as `80`/`24`, OpenTUI's own hardcoded fallback
-// for "no real size available," not a real terminal's dimensions. `formatModeDetail` leftover-packs
-// the mode row's model/route/effort suffix into whatever columns remain after the indicator, so a
-// typical model name's ` · groq` suffix IS visible at that 80-column default. `terminalSize`,
-// below, still widens the pty when a test needs a guaranteed-wide row (a NAME_WIDTH model plus
-// reroute plus effort, or an assertion that must not depend on leftover packing): it prefixes an
-// `sh -c` wrapper (`PTY_RESIZE_SPAWN`, above) onto `target` that sets the winsize before exec'ing
-// the real one. Every other call site omits it and keeps the exact behavior it always had.
+// A pty with no winsize ioctl reports 80×24, OpenTUI's hardcoded fallback; PTY_RESIZE_SPAWN stty's before exec when a test needs a real size.
 async function startChild(
   scriptPath: string,
   cwd: string,
-  // `dismissSplash` defaults to true: the welcome splash now blocks every one of this file's
-  // scripts ahead of RUNLOOP_READY/the zero-key /setup gate, so every existing call site needs it
-  // dismissed before its own assertions can ever be reached. Only the "welcome splash" describe
-  // block below (whose whole job is exercising the splash itself) passes `false`.
+  // dismissSplash defaults true: the welcome splash blocks RUNLOOP_READY on every interactive launch.
   opts: { dismissSplash?: boolean; terminalSize?: { cols: number; rows: number } } = {},
 ): Promise<{
   child: ReturnType<typeof spawn>;
   exited: Promise<Exit>;
   sawLine: (line: string) => Promise<void>;
-  // For a still-live child (an InputBox's own typed-text echo, a panel's live row content, console
-  // output), `sawLine`/`sawLineTimes` below don't overcount: neither `<Static>` nor its viewport
-  // replacement (App.tsx) ever owned that content, so a repaint cannot re-emit it a second time
-  // beyond what actually changed. `sawLine` also falls back to `reconstructRows` (above) for the
-  // opposite failure mode — undercounting a run that OpenTUI's own cell-diff split across two
-  // writes, a plain substring check over the raw bytes alone is not exact for. `sawLineTimes` is
-  // for the one case that still needs a COUNT rather
-  // than a bare substring check: the transcript prints an identical done line for
-  // every turn in a multi-turn session, so `sawLine` is already true for turn 2's own occurrence the
-  // instant turn 1's happens — this counts occurrences instead, so a caller can wait for the SECOND
-  // (or Nth) one specifically rather than racing turn 2's own completion against an assertion that
-  // turn 1 alone already satisfies.
+  // sawLineTimes counts occurrences; sawLine is already true for turn 2's identical done line the instant turn 1 prints it.
   sawLineTimes: (line: string, count: number) => Promise<void>;
-  // The raw, cumulative count — every byte the child ever wrote, exact for console output/escape
-  // sequences (Ink's own patchConsole writes those through `log()` once per call, never re-emitted
-  // by a later repaint) and for an absence check (`.toBe(0)`) regardless of source, since a repaint
-  // can only ever repeat something that already rendered, never fabricate an occurrence from
-  // nothing. NOT reliable for counting how many times TRANSCRIPT content (previously `<Static>`,
-  // now the measured viewport, App.tsx) has rendered: every repaint re-emits the WHOLE frame's text
-  // (Ink's own `log-update.js` erases and rewrites on any change, `incrementalRendering` unset) — a
-  // transcript line committed once still recurs in the raw capture on every later, unrelated
-  // repaint. `frameOccurrences`/`sawInFrameTimes`, below, are for that case.
+  // rawOccurrences is exact for one-shot console/escape bytes; transcript repaints re-emit the whole frame.
   rawOccurrences: (line: string) => number;
-  // The accumulated capture so far, live — mirrors tuiPtyWindows.test.ts's own `decodedSoFar()`.
-  // Needed by the SIGTERM lifecycle test below, which has to read a value (the child's own pid)
-  // out of the pty capture WHILE the process is still running, not just assert against it once
-  // `exited` resolves.
+  // stdoutSoFar reads the live pty capture so SIGTERM can target the bun pid before exited.
   stdoutSoFar: () => string;
-  // The plain text of the most recently completed frame, stripped of ANSI. Unlike `rawOccurrences`
-  // (which sees EVERY byte the child ever wrote, cumulative, and so overcounts repainted transcript
-  // content), this reads only what is actually on screen right now — a transcript line that
-  // rendered once and has not changed since is counted exactly once here, regardless of how many
-  // unrelated repaints happened after it first appeared.
+  // lastFrame is the current screen, not the cumulative byte stream.
   lastFrame: () => string;
-  // Count within `lastFrame()` — the transcript counterpart of `rawOccurrences`, for content that
-  // used to depend on `<Static>`'s write-once guarantee (a transcript line, not a live region like
-  // InputBox or a panel's own rows, which `rawOccurrences`/`sawLineTimes` already handle correctly).
   frameOccurrences: (line: string) => number;
-  // The `lastFrame()` counterpart of `sawLineTimes` — bounded poll (same 20ms/20s idiom as
-  // `sawLine`) until `frameOccurrences(line) >= count`.
+  // Bounded poll, 20ms / 20s, same idiom as sawLine.
   sawInFrameTimes: (line: string, count: number) => Promise<void>;
 }> {
-  // One Python bootstrap either way — `pty.spawn(sys.argv[1:])` — with `terminalSize` only
-  // changing what that argv IS: the real target directly, or an `sh -c` wrapper (`PTY_RESIZE_SPAWN`,
-  // above) prefixed in front of it. Two argv conventions for one bootstrap to reconcile would cost
-  // a reader more than the branch it replaces.
   const target = opts.terminalSize
     ? [
         "sh",
@@ -1985,12 +1536,7 @@ async function startChild(
       ]
     : [process.execPath, scriptPath];
   const args = ["-c", "import pty, sys; pty.spawn(sys.argv[1:])", ...target];
-  // `OTUI_USE_CONSOLE=false`: OpenTUI's `TerminalConsoleCache` intercepts `console.log`/`console.error`
-  // into a hidden debug overlay by default (`@opentui/core`'s own `registerEnvVar` for this — a
-  // documented escape hatch, not an internal hack) — every `childScript*` fixture below relies on a
-  // `console.log(...)` sync marker reaching THIS pty's real stdout, which the overlay swallows
-  // instead. Disabling it restores the un-patched `console`, matching how these markers behaved
-  // under the old Ink-based renderer (which never intercepted `console.log` at all).
+  // OTUI_USE_CONSOLE=false: TerminalConsoleCache otherwise swallows childScript console.log markers into a hidden overlay.
   const child = spawn("python3", args, {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
@@ -2018,26 +1564,11 @@ async function startChild(
 
   const rawOccurrences = (line: string): number => stdout.split(line).length - 1;
 
-  // `reconstructRows` (above), not "just the last synchronized-update block": that used to be a
-  // complete frame under Ink (which always re-wrote the whole screen on any change), but under
-  // OpenTUI's cell-diff redraw the last block can be a partial one — content unchanged since an
-  // EARLIER block (a border, e.g.) is still genuinely on screen without needing to appear in it.
   const lastFrame = (): string => reconstructRows(stdout).join("\n");
 
   const frameOccurrences = (line: string): number => lastFrame().split(line).length - 1;
 
-  // The cheap raw-substring check first (true for the common case: console output, and any TUI
-  // content OpenTUI happened to write as one contiguous run) — `reconstructRows` only runs once
-  // that fails, since it re-walks the full capture from scratch on every call.
-  //
-  // The adjacent-row-pair check (not just single rows) exists because a long transcript line
-  // word-wraps at the column width, and where it wraps depends on how long the content BEFORE
-  // the checked fragment is (a profile/tmp-dir path, e.g.) — not something a test can pin down
-  // in advance. Measured live on macOS CI: a fragment picked to sit safely inside one wrapped
-  // half still landed exactly on a longer path's wrap point. Trimming each row's trailing padding
-  // and rejoining pairs, both with a space and without, reconstructs a wrap on a word boundary
-  // and a CUP split that landed mid-token, so a fragment straddling any one wrap point still
-  // matches regardless of where that point falls.
+  // Cheap raw substring first; reconstructRows if OpenTUI cell-diff split the run.
   const gridContains = (line: string): boolean => {
     const rows = reconstructRows(stdout);
     if (rows.some((row) => row.includes(line))) return true;
@@ -2061,12 +1592,6 @@ async function startChild(
       throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
 
-  // `Math.max`, not a replacement: `rawOccurrences` stays correct for content that was never split
-  // (the common case), and `countLogicalOccurrences` alone can undercount too, for the inverse
-  // reason — it only credits a row once per frame-boundary transition, so content re-flushed
-  // mid-frame (no synchronized-update boundary between two occurrences) still relies on the raw
-  // count. Taking the larger of the two is safe either way: neither method can OVERcount a real
-  // absence (`.toBe(0)` calls), since both require the exact text to actually appear somewhere.
   const occurrences = (line: string): number =>
     Math.max(rawOccurrences(line), countLogicalOccurrences(stdout, line));
 
@@ -2094,30 +1619,13 @@ async function startChild(
       );
   };
 
-  // SPLASH_MARK is the earliest text the splash's first frame prints —
-  // waiting for it before writing Escape is the same "raw mode is set by the time the readiness
-  // marker prints" reasoning childScriptCancel's own comment (below) already relies on for
-  // RUNLOOP_READY. Awaited here, before this function returns, rather than fired in the background:
-  // several callers below wait on the mode indicator line as their own first sync point, and
-  // writing their own input before Escape has actually been queued would deliver it to the splash
-  // instead of the panel they meant to reach. Not swallowed: a wait on text the splash no longer
-  // prints leaves it undismissed for every later assertion, which reads as every test in this file
-  // timing out rather than as one wrong handle here.
+  // SPLASH_MARK is the earliest text the splash's first frame prints.
   if (opts.dismissSplash ?? true) {
     await sawLine(SPLASH_MARK);
-    // The banner can paint before the menu that owns Escape. Waiting for the hint means the
-    // splash's keyboard handler is mounted, so the write below is the dismiss and not a no-op.
+    // The banner can paint before the menu that owns Escape.
     await sawLine("Esc continue");
     child.stdin?.write("\x1b");
-    // `sawLine` is cumulative. Waiting on the mode line is not a dismiss signal: that text can
-    // appear in a later frame while leftover splash input is still being dropped. A flat 100ms
-    // sleep after Escape is the same race under load: the next write lands on the splash and is
-    // dropped. `lastFrame()` without the splash mark is still too early — OpenTUI can clear the
-    // overlay (a blank grid) before the next surface is interactive. Two consecutive non-blank
-    // polls with the splash hint gone are the signal that whatever replaced it (idle input,
-    // /setup, an approval prompt) will see the next stdin write. Frames are not compared for
-    // equality: a live elapsed-time row changes every second. A child that already exited has
-    // nothing left to type into.
+    // sawLine is cumulative; the mode line can appear before splash dismiss.
     const dismissed = Date.now() + 20_000;
     let sawHint = false;
     let hintGone = false;
@@ -2157,11 +1665,7 @@ async function startChild(
 
 type PtyChild = Awaited<ReturnType<typeof startChild>>;
 
-// The picker's header can paint (and `sawLine("Route")` resolve) before the filter
-// input's useKeyboard subscription is live. A write in that window is dropped, the
-// placeholder stays, and waiting for the typed id times out. Wait for the empty-filter
-// chrome in lastFrame, then type; re-type only while that placeholder is still on
-// screen so a landed first write is not doubled into the query.
+// The picker header can paint, and sawLine("Route") resolve, before the filter input exists.
 async function typePickerFilter(pty: PtyChild, text: string): Promise<void> {
   await pty.sawInFrameTimes("Type to filter", 1);
   pty.child.stdin?.write(text);
@@ -2181,25 +1685,6 @@ async function typePickerFilter(pty: PtyChild, text: string): Promise<void> {
   );
 }
 
-// The message queue's own fake, and it differs from childScriptCancel above in the two ways that
-// matter for what the queue has to prove.
-//
-// It COUNTS its calls (RUNLOOP_CALL n), because every assertion here is about whether a SECOND turn
-// started — and "the fake said READY again" is the only signal that distinguishes a drained queue
-// from a queue that sat still.
-//
-// It yields a messages-updated whose last entry is a `role: "user"` message BEFORE awaiting the
-// abort, mirroring what runLoop itself does with the matched glob-scoped rules at the end of a tool
-// phase (loop.ts's own onToolPhaseEnd push). Without it, an aborted turn persists nothing at all
-// (drive.ts writes only on that event), and the adjacent-user-message assertion below would pass
-// over a session with one message in it no matter what cli.ts did — a green light wired to nothing.
-//
-// The assistant row in front of it is not padding. loop.ts pushes the rules message only after the
-// assistant message and the tool-result row for that phase are already in the array, so `user`
-// directly after `user` is a shape runLoop cannot produce. Appending the rules row straight onto
-// `opts.messages` — which always ends with the turn's own user message — manufactured that pair
-// inside the loop's own array, where cli.ts never gets a say, and left the adjacent-user assertion
-// below unsatisfiable no matter what the queue did.
 function childScriptQueue(dir: string): string {
   return [
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -2233,8 +1718,7 @@ function childScriptQueue(dir: string): string {
   ].join("\n");
 }
 
-// Windows has no pty to allocate — same constraint as approvalPromptPty.test.ts. Real execution is
-// the WSL box and CI's ubuntu/macos legs; a green Windows run means this case SKIPPED.
+// Windows has no pty to allocate.
 describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", () => {
   let dir: string;
 
@@ -2246,25 +1730,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     rmSync(dir, { recursive: true, force: true });
   });
 
-  // Polls for config.json to satisfy a predicate on its own PARSED content, rather than a flat
-  // sleep or a bare existence check — measured live (a session-start reroute test, WSL; then
-  // three more sites, macOS CI round 3): a fixed "(done"/"Saved …"/"Removed …" line
-  // landing in the captured pty stdout is not a reliable proxy for "the write already happened"
-  // (the file write itself is synchronous once persistDefaultModel/setConfigValue actually runs,
-  // but nothing guarantees a captured stdout line and a DIFFERENT process's own filesystem read
-  // observe that same moment in the same order on every runner — measured to differ on WSL and
-  // again on macOS CI, never on Windows or ubuntu-latest, which is exactly what made this look
-  // fixed after the first occurrence). A bare existence check is NOT enough on its own either:
-  // several call sites here read a config.json that already EXISTS with OLD content (seedConfig's
-  // own pre-write, or an earlier turn's own persist) before the assertion's own write is expected
-  // to land — existence alone would return instantly against the stale content and never actually
-  // wait for the NEW value, silently defeating the whole poll. `predicate` is what closes that
-  // gap: every call site asserts on the SPECIFIC value it's about to check, so the poll can't
-  // return before that value is genuinely present. Mirrors `sawLine`'s own bounded-poll idiom
-  // (20ms interval, a deadline, not a flat sleep) for a file instead of a stdout string. Declared
-  // here, before the first test, rather than lower in the file where it was first added (`function`
-  // hoisting made a later declaration technically reachable from an earlier test too, but every
-  // other helper in this file is declared before its own first use — this one now is too).
+  // waitForConfig polls parsed content: WSL/macOS CI can show a stdout line before another process sees the new config.json, and existence alone matches stale seedConfig.
   async function waitForConfig(
     path: string,
     predicate: (config: Record<string, string>) => boolean,
@@ -2282,65 +1748,23 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     return config;
   }
 
-  // The TUI counterpart of approvalPromptPty.test.ts's "a real Ctrl-C at the prompt cancels the
-  // turn" test — same fact (a single press cancels the in-flight turn rather than being silently
-  // dropped), different route to signals.ts: there is no readline Interface in the TUI path, so
-  // this exercises `runtime/renderer.ts`'s own Ctrl-C registration and `renderOptions.ts`'s
-  // exitOnCtrlC: false instead (OpenTUI's own default exitOnCtrlC would otherwise destroy the
-  // renderer on the same press, competing with the cancel this asserts on).
-  //
-  // Asserted on stdout, not on the process exiting: H-3's multi-turn wiring means a cancelled turn
-  // returns the TUI to "awaiting input" rather than ending the process (only a fatal Ctrl-C does
-  // that — see the "second Ctrl-C" test below). Confirmed for real on a pty (WSL2) that the
-  // process does NOT exit here: driveLoop resolves, runTurn's `finally` clears turnInFlight, and
-  // the process sits waiting for more input until the harness kills it in `finally` — an earlier
-  // version of this test raced `exited` instead and hung for the full timeout every time, which is
-  // what this comment now documents rather than an assertion that stopped matching H-3's own
-  // behavior.
   test("a single Ctrl-C during an Ink-driven run cancels the turn instead of killing the process outright", async () => {
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
 
     const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
-      // Waiting for the fake runLoop's own readiness line is also what keeps the byte out of the
-      // window before Ink sets raw mode (useInput's mount effect calls setRawMode(true)) — driveLoop
-      // only reaches runLoopFake after runTui's connectDispatch effect has already fired, which is
-      // after every mount effect from that same commit, useInput's included, has already run. While
-      // the pty is still canonical, 0x03 would raise a real SIGINT and the test would pass for the
-      // wrong reason — same reasoning as approvalPromptPty.test.ts's own "[a]lways" wait.
       await sawLine("RUNLOOP_READY");
-      // connectDispatch's own echo of the initial argv task ("do a task", this file's own
-      // cli.run(["do", "a", "task"], ...) argv) — covered here, not a dedicated test, since every
-      // child script in this file already launches with the same argv and this is the first test
-      // to reach RUNLOOP_READY. `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver the
-      // bytes for this line before the synchronized-output CLOSE marker for the frame that contains
-      // them, so `sawLine` (a raw substring check) can resolve one chunk ahead of `lastFrame()`
-      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
-      // empty/stale `lastFrame()` and report 0 (macOS CI, this exact race, `> /mode` below).
-      // `frameOccurrences`, not the raw cumulative count, for the assertion itself: once rendered,
-      // this line recurs in the raw pty capture on every LATER, unrelated repaint (Ink's own
-      // log-update.js erases and rewrites the whole frame on any change) — `lastFrame()` is what's
-      // actually on screen right now, immune to that.
       await sawInFrameTimes("> do a task", 1);
       expect(frameOccurrences("> do a task")).toBe(1);
       child.stdin?.write("\x03");
-      // stdin is deliberately left open, same reason as the sibling file: an EOF would end the run
-      // its own way, before the press is ever interpreted.
+      // Leave stdin open; EOF would end the run.
       await sawLine("RUNLOOP_ABORTED aborted=true");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // Raw-mode multiline input, smoke-level: a slash command typed character-by-character into
-  // Phase 4's input box is reflected live (proving raw mode, not readline's line-buffered cooked
-  // mode, is what is driving this), and Enter submits it through Phase 5's decision/presentation
-  // wiring — the same tuiPresenter path /mode, /undo, /restore and /rewind all share. Enter is "\r"
-  // (carriage return), not "\n": Ink's own parse-keypress.js maps "\r" to key.name "return" (what
-  // InputBox's `key.return` check reads) and "\n" to a different name, "enter", which InputBox does
-  // not recognise — the raw-mode counterpart of readline's own "\n"-terminated convention used
-  // elsewhere in this repo's pty tests, not a typo.
   test("typing a slash command into the input box, then Enter, dispatches it through the Phase 5 wiring", async () => {
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -2350,24 +1774,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
 
       child.stdin?.write("/mode");
-      // Reflected live in the input box's own rendered frame — proof raw mode is actually driving
-      // this, not just that the command eventually took effect.
       await sawLine("/mode");
 
       child.stdin?.write("\r");
-      // decideModeCycle (tui/commands.ts, Phase 2) cycling a fresh session's default
-      // permissionMode ("approve-each") one step, dispatched into the transcript by tuiPresenter
-      // (Phase 5) rather than console.log'd — this line only appears if that whole chain ran.
       await sawLine("permission mode is now auto");
-      // The submitted command itself, echoed into the persistent transcript exactly once — not
-      // just its result. onSubmit's own transcript-append dispatch, before the command dispatch.
-      // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
-      // synchronized-output CLOSE marker for the frame that contains them, so a raw substring check
-      // can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with this line
-      // in it — `frameOccurrences` would then read an empty/stale `lastFrame()` and report 0 (the
-      // CI failure this line's own history traces to). `frameOccurrences`, not the raw cumulative
-      // count, for the assertion itself: this line recurs in the raw pty capture on every LATER,
-      // unrelated repaint once it has rendered once.
       await sawInFrameTimes("> /mode", 1);
       expect(frameOccurrences("> /mode")).toBe(1);
     } finally {
@@ -2375,11 +1785,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Doubles as the liveState-desync guard: `/mode` reads its starting point off `liveState.session`
-  // (cli.ts's own dispatch funnel), the same state Shift+Tab's own `onCycleMode` just advanced —
-  // this can only pass if the keypress actually reached `liveState`, not just this component's own
-  // render. cycleMode's own order (gate/gate.ts): a fresh session starts at approve-each, one
-  // Shift+Tab press lands on auto, and the following /mode advances FROM auto to read-only.
   test("shift+tab and /mode share one source of truth, keeping liveState in step with the indicator", async () => {
     const scriptPath = join(dir, "child-input.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -2401,17 +1806,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Regression: onCycleMode's own sessionUpdated call used to be a bare `void`, unlike
-  // /mode's cycleModeCommand, which is `await`ed inside the try/catch around `command.run` — so a
-  // save failure there surfaces as a caught rejection (this file's own "could not save the
-  // session" tests, elsewhere) while the identical failure from Shift+Tab became an unhandled
-  // rejection instead. `runtime/renderer.ts`'s own `process.on("unhandledRejection", ...)` handler
-  // calls `process.exit(1)` — the whole TUI would crash from a keypress that, via /mode, degrades
-  // gracefully. Takes an exclusive SQLite lock so Shift+Tab's save hits SQLITE_BUSY (chmod does
-  // not fail a write on a connection the child already holds), and confirms both the error
-  // surfaces AND the process is still alive afterward (answers a second, unrelated keypress) — a
-  // crash would fail the second half silently, not loudly, since `sawLine` would just hang until
-  // the test's own timeout.
   test("shift+tab shows an error instead of crashing the TUI when its own persist fails", async () => {
     const scriptPath = join(dir, "child-input-cycle-persist-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -2422,7 +1816,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("approve-each mode on");
 
-      // Exclusive lock: the child's held connection would still write after chmod.
       lockSessionStore(sessionsDir);
 
       child.stdin?.write("\x1b[Z");
@@ -2430,8 +1823,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       restoreSessionStore(sessionsDir);
 
-      // Proof the process is still alive, not just that the error line appeared: a real second
-      // command still gets a real response.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -2442,11 +1833,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // H-1 + M-3: a command decision function throwing (no checkpoints to /undo to) used to escape
-  // straight out of Ink's own input handler. Confirmed here two ways — the error is shown, not
-  // silently dropped, AND the process is still alive and answers a second, unrelated command
-  // afterward, which a crash would not. M-3's other case — input shaped like a slash command that
-  // matches nothing at all (a typo) — is checked in the same run, since it needs the same fixture.
   test("a slash command that throws, or one that matches nothing, shows an error line instead of crashing the TUI", async () => {
     const scriptPath = join(dir, "child-command-error.mjs");
     writeFileSync(scriptPath, childScriptCommandError(dir));
@@ -2454,26 +1840,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      // Turn resolves right away (this script's own comment explains why) — waited for here so
-      // `/undo 5` below exercises decideUndo's own throw, not MEDIUM-3's turn-in-flight gate.
       await sawLine("done ·");
 
-      // M-3: a typo'd command name matches nothing in SLASH_COMMANDS at all.
       child.stdin?.write("/mdoe");
       await sawLine("/mdoe");
       child.stdin?.write("\r");
       await sawLine("Unrecognized command: /mdoe");
 
-      // H-1: a name that DOES match, but throws inside its own decision function.
       child.stdin?.write("/undo 5");
       await sawLine("/undo 5");
       child.stdin?.write("\r");
       await sawLine("checkpoint(s) to undo to; asked for 5");
 
-      // Still alive: an ordinary command sent right after both of the above still works.
-      // cycleMode (gate/gate.ts) cycles approve-each -> auto -> read-only -> approve-each, and a
-      // fresh session starts at approve-each (the "approve-each mode on" indicator shown on
-      // mount), so this first /mode press lands on auto, not read-only.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -2483,10 +1861,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // MEDIUM-D: "/exit the debugger and retry" is a task whose first word happens to be /exit, not
-  // a request to quit — used to be hijacked into one regardless of the trailing words. Confirmed
-  // two ways: the error is shown (not a silent quit), and the process is still alive and answers
-  // an unrelated command afterward, which quitting would not.
   test("/exit with trailing arguments is rejected rather than quitting the TUI", async () => {
     const scriptPath = join(dir, "child-exit-hijack.mjs");
     writeFileSync(scriptPath, childScriptCommandError(dir));
@@ -2501,7 +1875,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("/exit: invalid arguments.");
 
-      // Still alive — quitting would leave nothing to answer this.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -2511,13 +1884,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // H-2: driveLoop rejecting (a real throw, not just an aborted/errored `done` event) is a
-  // distinct failure mode from every other exit this file tests — runTui's own catch has to
-  // unmount and reject rather than leave run()'s own `await runTui(...)` parked forever. Asserted
-  // by the child process actually exiting within the deadline rather than hanging; run() has no
-  // try/catch of its own around that await (matching the non-interactive path's own documented
-  // behavior for a throw escaping driveLoop's for-await), so this surfaces as the child process
-  // itself ending, one way or another, not as a value run() returns.
   test("driveLoop rejecting settles run() instead of hanging forever", async () => {
     const scriptPath = join(dir, "child-rejects.mjs");
     writeFileSync(scriptPath, childScriptRejects(dir));
@@ -2535,15 +1901,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       expect(settled).not.toBe("the run never settled");
     } finally {
-      // Already exited in the success case; harmless if the process is already gone.
     }
   }, 60_000);
 
-  // The boxed-sentinel fix: runTurn used to record a caught rejection in a bare `let turnError:
-  // unknown`, then check `turnError !== undefined` to decide whether to destroy the renderer and
-  // reject run()'s own promise — indistinguishable from "no error happened" when the rejection's
-  // own reason is `undefined`, reopening exactly the hang the sibling test above already covers for
-  // a real Error.
   test("driveLoop rejecting with a bare `undefined` reason also settles run() instead of hanging", async () => {
     const scriptPath = join(dir, "child-rejects-undefined.mjs");
     writeFileSync(scriptPath, childScriptRejectsUndefined(dir));
@@ -2561,23 +1921,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       expect(settled).not.toBe("the run never settled");
     } finally {
-      // Kills the child if the run genuinely hung (the bug this test exists to catch) rather than
-      // leaving a live pty process behind on a failed run — a no-op signal on the already-exited
-      // success path, and `exited` itself already resolved in that case so awaiting it again is
-      // instant.
       child.kill("SIGKILL");
       await exited;
     }
   }, 60_000);
 
-  // Regression guard: without runTurn's own `dispatch({ type: "turn-ended" })` in its `finally`
-  // block, this exact scenario — a turn that ends via loop.ts's "yield error, then return" exits,
-  // never followed by a `done` event — would leave TurnStatus's elapsed clock ticking on screen
-  // for the rest of the session, since the reducer's "error" case deliberately does not clear it.
-  // Confirmed by temporarily removing that dispatch line and re-running this test: the captured
-  // frame showed a ticking "Ns" past the wait window below on every run, where it shows nothing
-  // with the dispatch in place. The TUI still accepting `/mode` afterward also rules out the
-  // process having simply died, unlike the sibling "driveLoop rejecting" test above.
   test("a turn that ends via error-without-done clears the elapsed-time indicator", async () => {
     const scriptPath = join(dir, "child-error-no-done.mjs");
     writeFileSync(scriptPath, childScriptErrorWithoutDone(dir));
@@ -2587,8 +1935,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       await sawLine("boom");
 
-      // `state.turn` is set before driveLoop is even invoked, so a clock stuck by a missing
-      // turn-ended dispatch would already read a nonzero value well within this window.
       await new Promise((resolve) => setTimeout(resolve, 1500));
       expect(lastFrame()).not.toMatch(/\b\d+s\b/);
 
@@ -2601,67 +1947,23 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // H-3: submitting free-form text (not a recognised slash command) after the first turn
-  // completes starts a SECOND driveLoop call against the live, accumulated session, and the TUI
-  // does not exit between the two turns — feature-plan.md's own acceptance criterion ("the next
-  // model turn reads" a live-updated session), demonstrated with a real second turn rather than
-  // just the reducer merge C-1 already covers.
   test("a second, free-form task submission starts another turn against the accumulated session", async () => {
     const scriptPath = join(dir, "child-multi-turn.mjs");
     writeFileSync(scriptPath, childScriptMultiTurn(dir));
 
     const { child, sawLine, frameOccurrences, sawInFrameTimes } = await startChild(scriptPath, dir);
     try {
-      // prepareSession appended the initial task as the session's only message.
       await sawLine("RUNLOOP_CALL 1 messages=1");
-      // Turn 1's own "done" — not "ok 1" (the fake runLoop's assistant reply content): that lives
-      // only in session.messages via the reducer's messages-updated merge, never rendered to the
-      // transcript, the same as a real model reply's own content is never echoed back by
-      // messages-updated (tui/reducer.ts's own case, and printEvent's identical no-op for the
-      // non-interactive path). Waiting for "done" here is what actually matters: it is only
-      // dispatched after driveLoop's own for-await loop has fully returned, so by the time it
-      // appears, turnInFlight has cleared (the input box will accept a new submission) and
-      // onSessionChange has already run for turn 1's own messages-updated (its dispatch strictly
-      // precedes "done"'s in the same driveLoop call), so liveSession already carries the turn-1
-      // assistant reply before task 2 is submitted.
       await sawLine("done ·");
 
       child.stdin?.write("a second task");
-      // Reflected live in the input box's own rendered frame first, same as the raw-mode-input
-      // test above — sending "\r" immediately after, with no wait for the text to actually land,
-      // measured (on a real pty) to lose the Enter press entirely: the box was left showing "a
-      // second task" unsubmitted and no second driveLoop call ever happened, this test hanging to
-      // its own timeout every time. Root cause not further isolated beyond that reproduction; the
-      // fix is the same one every other input-driven test in this file already applies.
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // 1 initial + 1 turn-1 assistant reply + 1 new user message = 3, and the app is still
-      // running to report it at all — proof it did not exit after the first turn.
       await sawLine("RUNLOOP_CALL 2 messages=3");
-      // The second task's own text, echoed into the persistent transcript exactly once — the
-      // input box's live reflection (waited on above) is not the same thing as the submitted
-      // line actually landing in the transcript. `sawInFrameTimes`, not `sawLine`: the raw pty
-      // stream can deliver these bytes before the synchronized-output CLOSE marker for the frame
-      // that contains them, so a raw substring check can resolve one chunk ahead of `lastFrame()`
-      // actually seeing a closed frame with this line in it — `frameOccurrences` would then read an
-      // empty/stale `lastFrame()` and report 0. `frameOccurrences`, not the raw cumulative count,
-      // for the assertion itself: once rendered, this line recurs in the raw pty capture on every
-      // LATER, unrelated repaint (Ink's own log-update.js erases and rewrites the whole frame on
-      // any change) — `lastFrame()` is what's actually on screen right now, immune to that.
       await sawInFrameTimes("> a second task", 1);
       expect(frameOccurrences("> a second task")).toBe(1);
 
-      // Scenario c at the TUI level (feature-plan.md): a session that never invokes /model must
-      // never persist anything to config.json, even after multiple successful turns — the guard
-      // against write-amplification/accidentally-always-persisting. Waiting for turn 2's own
-      // completion first is what makes this meaningful: RUNLOOP_DONE is a console.log fired
-      // immediately before the fake runLoop yields its "done" event, once the prior
-      // messages-updated event (and any persist attempt it triggers) has already been fully
-      // processed by the consuming for-await loop — a marker, not a count of the rendered
-      // done line itself, which (unlike under the old `<Static>` transcript)
-      // now recurs on every later repaint and would satisfy a count-based wait long before turn 2
-      // actually finishes.
       await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
@@ -2669,43 +1971,28 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // A cancelled turn used to take its own prompt down with it, so a follow-up like "the last two"
-  // reached the model with nothing to resolve against — runTurn's own commit-before-the-call
-  // dispatch (cli.ts) carries the mechanism.
-  //
-  // Turn 3's own line is the assertion, not the transcript: what broke was what the model is
-  // handed, and the transcript kept showing the typed line throughout.
   test("a cancelled turn leaves its own prompt in the session the next turn is built from", async () => {
     const scriptPath = join(dir, "child-cancelled-turn-context.mjs");
     writeFileSync(scriptPath, childScriptCancelledTurnContext(dir));
 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
-      // The argv task, prepareSession's own single starting message.
       await sawLine("RUNLOOP_CALL 1 roles=u kept=false");
       await sawLine("RUNLOOP_DONE 1");
 
-      // Waited on before the Enter for the reason the sibling multi-turn test documents.
       child.stdin?.write("task two");
       await sawLine("task two");
       child.stdin?.write("\r");
-      // The argv task, turn 1's assistant reply, and this turn's own prompt.
       await sawLine("RUNLOOP_CALL 2 roles=uau kept=true");
       await sawLine("RUNLOOP_PARKED");
 
       child.stdin?.write("\x03");
-      // The rendered line, not just the child's own RUNLOOP_ABORTED marker: that marker fires
-      // before the `done` yield, and the sibling multi-turn test's own comment records why the
-      // rendered line is what actually proves turnInFlight has cleared — without it the next
-      // submission below can land inside the still-in-flight window and be rejected by the gate.
       await sawLine("RUNLOOP_ABORTED");
       await sawLine("done: aborted");
 
       child.stdin?.write("task three");
       await sawLine("task three");
       child.stdin?.write("\r");
-      // The regression: `roles=uau kept=false` before the fix, because "task two" died with its
-      // turn. The extra `a` is the `[interrupted]` row withUserTurn inserts.
       await sawLine("RUNLOOP_CALL 3 roles=uauau kept=true");
     } finally {
       child.kill("SIGKILL");
@@ -2728,8 +2015,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       await sawLine("RUNLOOP_CALL 2 messages=3");
       await sawLine("RUNLOOP_DONE 2");
-      // Still exactly 1: the second turn's own resolveRoute call reused `prepared.plan` rather
-      // than fetching account-status again.
       expect(rawOccurrences("ACCOUNT_STATUS_CALL")).toBe(1);
     } finally {
       child.kill("SIGKILL");
@@ -2748,14 +2033,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // Sync point: the bundled fallback manifest's own default groq entry is always inside the
-      // picker's default (unfiltered) top-10 window, proving the picker actually mounted.
       await sawLine("GPT OSS 120B");
 
-      // Narrows to exactly one entry across the whole catalog — verified directly against the
-      // bundled catalog-manifest.json before writing this string. sawInFrameTimes, not sawLine:
-      // this same filter text is typed a second time later in this test, and sawLine's cumulative
-      // check would resolve instantly on that second occurrence's own OLD (pre-keystroke) content.
       child.stdin?.write("gpt-latest");
       await sawInFrameTimes("gpt-latest", 1);
       expect(lastFrame()).toContain("seri");
@@ -2794,12 +2073,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Stage 7a Slice 4: the concrete mechanical proof of "context preserved" — a real /model switch,
-  // driven by real keystrokes through the actual picker (not a synthetic reducer dispatch), takes
-  // effect on the very next turn (a different model id is what the SECOND RUNLOOP_CALL reports),
-  // while the message array driveLoop is handed keeps growing exactly as childScriptMultiTurn's own
-  // sibling test above already proves it does without a switch — 3, not reset or corrupted by the
-  // model change in between.
   test("switching the model via /model re-resolves the model on the very next turn without touching accumulated messages", async () => {
     const scriptPath = join(dir, "child-model-switch.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
@@ -2807,8 +2080,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const pty = await startChild(scriptPath, dir);
     const { child, sawLine } = pty;
     try {
-      // The default model (groq.ts's own DEFAULT_MODEL) — proves the FIRST turn used it, before
-      // any switch.
       await sawLine(
         "RUNLOOP_CALL 1 model=openai/gpt-oss-120b messages=1 identity=GPT OSS 120B hasExactId=false",
       );
@@ -2817,39 +2088,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("/model");
       await sawLine("/model");
       child.stdin?.write("\r");
-      // Narrows to exactly one entry across the WHOLE catalog (groq and openrouter both) —
-      // verified directly against the bundled catalog-manifest.json before writing this string;
-      // "3.3-70b" alone also matches an OpenRouter entry, "70b-versatile" does not.
       await typePickerFilter(pty, "70b-versatile");
       child.stdin?.write("\r");
-      // The Enter keypress resolves synchronously (App.tsx's own dispatch wrapper updates
-      // `liveState` in the same tick), but the actual React unmount of ModelPicker and mount of
-      // InputBox — which is what moves the NEXT keystroke's own useInput listener from one
-      // component to the other — commits on a later tick. Measured on a real pty without this
-      // wait: "a second task" arrived before that commit and landed in ModelPicker's still-
-      // mounted filter query instead, rendered as "70b-versatile\ra second task" inside the
-      // picker's own box, with no second RUNLOOP_CALL at all.
+      // 100ms after a keypress that unmounts a panel; the next InputBox is not yet the focused tty.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       child.stdin?.write("a second task");
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // A different model id, and 3 messages (1 initial + 1 turn-1 assistant reply + 1 new user
-      // message) — the switch changed WHICH model answers, not what it was handed.
       await sawLine(
         "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
 
-      // Scenarios a + e (feature-plan.md): the switch that just worked is now the global default
-      // for every future brand-new session, not just this one — proven here on the write side.
-      // Waiting for turn 2's own completion first (RUNLOOP_DONE, childScriptModelSwitch's own
-      // comment): it fires only after turn 2's messages-updated has already been processed by
-      // cli.ts's onEvent, which is where the persist (if any) happens — the write itself is
-      // synchronous by that point, but a captured pty stdout line and a DIFFERENT process's own
-      // filesystem read are not guaranteed to observe that moment in the same order on every
-      // runner (macOS CI, round 3: this exact ENOENT). waitForConfig polls for the actual expected
-      // value instead of assuming.
       await sawLine("RUNLOOP_DONE 2");
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
@@ -2857,19 +2108,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       );
       expect(config.SERI_MODEL).toBe("llama-3.3-70b-versatile");
       expect(config.SERI_PROVIDER).toBe("groq");
-      // Negative control built in: the pre-switch model must not be the one that landed.
       expect(config.SERI_MODEL).not.toBe("openai/gpt-oss-120b");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // /effort's own counterpart to the model-switch persist-on-success test
-  // just above — a live `/effort <level>` mid-session becomes the global config default once (and
-  // only once) a turn that actually used it succeeds. `/effort medium` here is typed while the
-  // FIRST turn is no longer in flight (it already completed), driven entirely through the TUI's
-  // own onSubmit interception (runTui, cli.ts) rather than through the non-interactive
-  // SLASH_COMMANDS dispatch.
   test("/effort <level> mid-session persists as the config default once the turn that used it succeeds", async () => {
     const scriptPath = join(dir, "child-effort-persist.mjs");
     writeFileSync(scriptPath, childScriptEffortPersist(dir));
@@ -2877,19 +2121,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=undefined");
-      // RUNLOOP_DONE, not "(done" — see childScriptMultiTurn's own comment for why
-      // this is the reliable per-turn completion signal.
       await sawLine("RUNLOOP_DONE 1");
-      // Not yet persisted — turn 1 ran with no override at all.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
 
       child.stdin?.write("/effort medium");
       await sawLine("/effort medium");
       child.stdin?.write("\r");
       await sawLine("Reasoning effort: medium");
-      // Confirms the session update, not just the echoed command — matching childScriptModelSwitch's
-      // own 100ms wait after any keypress that resolves synchronously but whose React unmount/mount
-      // commits on a later tick (that test's own comment has the full measured account).
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       child.stdin?.write("a second task");
@@ -2909,15 +2147,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // /effort's persist-on-success check must compare against config.json's own CURRENT value, not
-  // a cached one seeded once at session start — /config writes SERI_REASONING_EFFORT directly,
-  // through a path the /effort persist gate never sees, so a cached comparison value has no way
-  // to notice that write happened. Reproduces the exact bug: session starts on config default
-  // "medium" (so a cached seed would also read "medium"), /config changes config.json to "low"
-  // mid-session, then /effort medium — matching the ORIGINAL "medium", not the current "low" —
-  // sets the identical session override a stale cache would think is already persisted. A cached
-  // comparison silently skips the write here, leaving config.json on "low" forever even though the
-  // session is actually running on "medium"; a fresh read at comparison time does not.
   test("/config changing SERI_REASONING_EFFORT mid-session does not block a later /effort persist", async () => {
     seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
 
@@ -2926,8 +2155,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
-      // Turn 1 runs on the config default ("medium") — no session override yet, so the
-      // persist-on-success gate does not touch config.json for it either way.
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=medium");
       await sawLine("RUNLOOP_DONE 1");
 
@@ -2936,8 +2163,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await wait100ms();
       await sawLine("/config — settings");
-      // KNOWN_CONFIG_KEYS order (tui/state/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND,
-      // SERI_REASONING_EFFORT — two Down presses reach the third.
       child.stdin?.write("\x1b[B");
       await wait100ms();
       child.stdin?.write("\x1b[B");
@@ -2957,10 +2182,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       );
       expect(bypassed.SERI_REASONING_EFFORT).toBe("low");
 
-      // The /config panel stays open on the list after a save (onConfigValueEntered's own
-      // comment: NOT dispatchConfigList, so a refresh failure doesn't lose the edit step) — Escape
-      // it closed first, or the next line's own "r" (in "effort") lands on the list's "r/Delete
-      // unset" shortcut instead of the main input box.
       child.stdin?.write("\x1b");
       await new Promise((resolve) => setTimeout(resolve, 30));
       await wait100ms();
@@ -2988,12 +2209,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // The persist-on-success gate (cli.ts, right after `persistDefaultReasoningEffort`) is a THIRD
-  // writer of config.json, alongside runTurn's own per-turn dispatch and /config's handlers — it
-  // must dispatch too, or the header keeps showing whatever config.json held at mount even after
-  // a turn just rewrote it. Reproduces the exact sequence: /effort override -> turn persists it as
-  // the new default -> /effort auto clears the override, falling through to `state.config` -> the
-  // header must show the JUST-persisted tier, not the stale one still in `state.config` from mount.
   test("a value the persist-on-success gate just wrote reaches the header on /effort auto, with no turn in between", async () => {
     seedConfig(dir, { SERI_REASONING_EFFORT: "low" });
 
@@ -3029,13 +2244,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("Reasoning effort: auto (falls back to the config default).");
 
-      // `sawLine`/cumulative capture, not used here: "· high" already occurred once during the
-      // override phase above, so a plain substring check on history would pass whether or not the
-      // header still shows it NOW — the exact ambiguity `lastFrame()`'s own comment (startChild)
-      // warns about. `sawInFrameTimes` on the transcript's own confirmation line, then reading
-      // `lastFrame()` fresh, catches the case that matters: without the persist-on-success gate's
-      // own dispatch, the header falls back to `state.config`'s STALE mount-time value ("low"),
-      // not what config.json now actually holds ("high").
       await sawInFrameTimes("Reasoning effort: auto (falls back to the config default).", 1);
       expect(lastFrame()).toContain("reasoning-model · groq · high");
       expect(lastFrame()).not.toContain("· low");
@@ -3044,9 +2252,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // D1/D2 (feature-plan.md): plan Test-plan item 8, "/model multi-route" — filtering to a model
-  // reachable through more than one provider shows every route, and picking one specific route
-  // (not just "a model") is what actually dispatches AND persists.
   test("/model shows every route to a multi-route model, and picking one persists that specific provider", async () => {
     const scriptPath = join(dir, "child-model-multiroute.mjs");
     writeFileSync(scriptPath, childScriptModelMultiRoute(dir));
@@ -3065,15 +2270,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await pty.sawInFrameTimes("Claude Sonnet 5", 2);
       await pty.sawInFrameTimes("no key", 2);
 
-      // byRoutePriority (D2) sorts native before aggregator WITHIN a route group, so the
-      // Anthropic row is already the top/default-selected one for this filtered query — no Down
-      // press is needed to reach it. (The plan's own Test-plan item 8 says "Down to the anthropic
-      // row," written before the picker's final ordering rule existed; selecting the
-      // already-highlighted row via Enter directly is the accurate description of this picker's
-      // real behavior, not a weaker test.)
       child.stdin?.write("\r");
-      // The mandatory wait after any keypress that swaps the mounted component (picker -> input
-      // box) — childScriptModelSwitch's own test has the full measured story for this.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       child.stdin?.write("a second task");
@@ -3081,27 +2278,20 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
-      // RUNLOOP_DONE, not a count of the rendered done line — see
-      // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 2");
 
-      // waitForConfig, not a bare readFileSync right after — the same race macOS CI caught
-      // elsewhere in this file (waitForConfig's own comment).
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
         (c) => c.SERI_MODEL === "claude-sonnet-5",
       );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
       expect(config.SERI_PROVIDER).toBe("anthropic");
-      // Negative control: the OTHER route to the same model must not be what persisted.
       expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // D4's own real, still-reachable path — see childScriptModelPickRerouted's own comment for why
-  // this is the ONLY scenario left alive after D3's fix.
   test("a live /model pick to a route that itself reroutes persists the RESOLVED provider, not the one literally picked (D4)", async () => {
     const scriptPath = join(dir, "child-model-pick-rerouted.mjs");
     writeFileSync(scriptPath, childScriptModelPickRerouted(dir));
@@ -3111,8 +2301,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b provider=groq");
       await sawLine("done ·");
 
-      // Turn 1 ran on the session's own starting pair (GROQ_API_KEY configured, no reroute) — the
-      // pre-condition this test needs: nothing persisted yet, so a later write is provably new.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
 
       child.stdin?.write("/model");
@@ -3120,46 +2308,26 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("Route");
 
-      // Multi-term filtering (App.tsx's own matchesFilter, D1/D2 commit) narrows to EXACTLY the
-      // openrouter row: "claude-sonnet-5" matches both routes' own id, "openrouter" matches only
-      // this row's own provider field — sidesteps needing an arrow-key press to reach a specific
-      // row within a group, and picks the route that deliberately has NO key, which is the whole
-      // point of this test (proving the LATER reroute, not the literal pick, is what persists).
       child.stdin?.write("claude-sonnet-5 openrouter");
       await sawLine("claude-sonnet-5 openrouter");
       child.stdin?.write("\r");
-      // The mandatory wait after a keypress that swaps the mounted component (picker -> input
-      // box) — childScriptModelSwitch's own test has the full measured story for this.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       child.stdin?.write("a second task");
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // Rerouted: the picked provider (openrouter) has no key, but anthropic — claude-sonnet-5's
-      // native sibling — does, so resolveRoute reroutes turn 2 there (D2).
       await sawLine("RUNLOOP_CALL 2 model=claude-sonnet-5 provider=anthropic");
-      // The transcript notice must name the PICKED provider (openrouter, the one actually
-      // missing a key), not stay silent about it — proof that `session.provider`, set by the
-      // live picker pick (reducer.ts's own "model-picker-resolved" case), actually reached this
-      // turn's reroute notice rather than a re-derived undefined. Split across two checks, not
-      // one long toContain: Ink wraps this line across the terminal's own column width (measured
-      // the same way on the "a routing-priority reroute active from session start" test, below).
+      // Split across two checks: on a real pty (WSL) one long toContain/sawLine was not stable.
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
-      // RUNLOOP_DONE, not a count of the rendered done line — see
-      // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 2");
-      // Not a reliable proxy for "config.json has already been written" even so — measured live,
-      // waiting on driveLoop's own completion alone flaked here. Poll for the actual content
-      // instead (waitForConfig's own comment).
       const config = await waitForConfig(
         join(dir, ".seri", "config.json"),
         (c) => c.SERI_MODEL === "claude-sonnet-5",
       );
       expect(config.SERI_MODEL).toBe("claude-sonnet-5");
-      // The RESOLVED pair persists, not the one literally selected in the picker.
       expect(config.SERI_PROVIDER).toBe("anthropic");
       expect(config.SERI_PROVIDER).not.toBe("openrouter");
     } finally {
@@ -3167,14 +2335,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // MEDIUM finding (code-review on PR #71): `confirmedModel` used to move to the new pair BEFORE
-  // `persistDefaultModel` was even attempted, so a transient write failure (EACCES/ENOSPC/a
-  // read-only config dir) left the inequality guard already satisfied and the write was never
-  // retried, even though every later turn kept succeeding on the exact same model. Reuses
-  // childScriptModelSwitch as-is (its fake runLoop already handles an arbitrary number of turns
-  // generically) — the difference is entirely on the host side: the SECOND turn's persist attempt
-  // is sabotaged, then cleared, and a THIRD turn on the same (already-switched) model proves the
-  // retry.
   test("a failed default-model persist is retried by a later turn on the same model", async () => {
     const scriptPath = join(dir, "child-model-switch-persist-retry.mjs");
     writeFileSync(scriptPath, childScriptModelSwitch(dir));
@@ -3187,15 +2347,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       );
       await sawLine("done ·");
 
-      // Sabotage the NEXT persist attempt before it happens: atomicWriteFile.ts (the shared
-      // write-tmp-then-rename helper writeConfig now goes through) checks the destination
-      // DIRECTORY is writable before doing anything else — chmod 0o500 (no write bit) makes that
-      // check throw EACCES, the same class of failure a read-only config dir or a full disk would
-      // produce. Not a pre-created `config.json.tmp` colliding by name (the old mechanism): the
-      // tmp filename is pid+random now (atomicWriteFile.ts's own comment on why), so a fixed name
-      // can no longer collide with anything, and config.json does not exist yet at this point for
-      // a destination-FILE-permission sabotage (atomicWriteFile.ts's own comment on why that check
-      // only applies to an existing destination) to have anything to act on either.
       const configDir = join(dir, ".seri");
       mkdirSync(configDir, { recursive: true });
       chmodSync(configDir, 0o500);
@@ -3211,16 +2362,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // The switch DID take effect live, and the turn itself succeeded — this failure is
-      // entirely in the persist attempt behind it, not in the model call.
       await sawLine(
         "RUNLOOP_CALL 2 model=llama-3.3-70b-versatile messages=3 identity=Llama 3.3 70B hasExactId=false",
       );
       await sawLine("could not save the default model:");
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
 
-      // Clear the sabotage and let the SAME model answer one more turn — the retry this test
-      // exists to prove, not a fresh switch.
       chmodSync(configDir, 0o700);
 
       child.stdin?.write("a third task");
@@ -3230,11 +2377,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine(
         "RUNLOOP_CALL 3 model=llama-3.3-70b-versatile messages=5 identity=Llama 3.3 70B hasExactId=false",
       );
-      // RUNLOOP_DONE, not a count of the rendered done line — see
-      // childScriptMultiTurn's own comment for why.
       await sawLine("RUNLOOP_DONE 3");
-      // waitForConfig, not a bare readFileSync right after — the same race macOS CI caught
-      // elsewhere in this file (waitForConfig's own comment).
       const config = await waitForConfig(
         join(configDir, "config.json"),
         (c) => c.SERI_MODEL === "llama-3.3-70b-versatile",
@@ -3246,13 +2389,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // MEDIUM finding (code-review re-review on PR #71, on the retry test above): a PERSISTENTLY
-  // failing persist — as opposed to the one-off transient blip the retry test above proves gets
-  // retried on a LATER turn — must not re-attempt on every `messages-updated` WITHIN one turn.
-  // childScriptModelSwitchMultiToolCall's own turn 2 yields it three times before `done`,
-  // simulating three tool calls in one turn; the sabotage here is never cleared, so every one of
-  // those three attempts would fail if this test's whole point weren't that only the FIRST one is
-  // even attempted.
   test("a persistently failing persist is attempted once per turn, not once per tool call", async () => {
     const scriptPath = join(dir, "child-model-switch-multi-tool-call.mjs");
     writeFileSync(scriptPath, childScriptModelSwitchMultiToolCall(dir));
@@ -3262,10 +2398,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 1 model=openai/gpt-oss-120b");
       await sawLine("done ·");
 
-      // Sabotaged for the rest of this run — never cleared, unlike the retry test above, since
-      // this test is about how many times ONE turn attempts against a failure that never clears.
-      // Same mechanism as that test — see its own comment for why this is a directory-writability
-      // chmod rather than a pre-created `config.json.tmp` colliding by name.
       const configDir = join(dir, ".seri");
       mkdirSync(configDir, { recursive: true });
       chmodSync(configDir, 0o500);
@@ -3285,31 +2417,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
 
       await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile");
-      // RUNLOOP_DONE (childScriptMultiTurn's own comment): it fires only once all three of turn
-      // 2's messages-updated events — and therefore every persist attempt they could have
-      // triggered — have already been processed, since a generator only resumes a later statement
-      // once the consumer has finished handling the value just yielded.
       await sawLine("RUNLOOP_DONE 2");
 
-      // Bug fixed here (macOS CI, round 3): this went straight to `rawOccurrences()` with no
-      // preceding `sawLine` for the SAME text — unlike every other rawOccurrences() check in this
-      // file (the argv-task/second-task echo checks, above), which all wait for the line to
-      // actually land before counting it. `rawOccurrences()` is a synchronous snapshot of whatever
-      // is CURRENTLY captured; RUNLOOP_DONE appearing is not proof the warning (printed via a
-      // different stream — printWarning is console.error, same mechanism, but a separate call) has
-      // also reached the captured buffer yet. Waiting for it explicitly first is what makes the
-      // count below actually mean something.
       await sawLine("could not save the default model:");
-      // The actual assertion: one warning for the whole turn, not three. Console output (`rawOccurrences`,
-      // not `frameOccurrences`): printWarning is console.error, routed through Ink's own patchConsole
-      // — written once, never re-emitted by a later repaint the way a transcript line now is.
       expect(rawOccurrences("could not save the default model:")).toBe(1);
       expect(existsSync(join(configDir, "config.json"))).toBe(false);
     } finally {
-      // rmSync of this describe's tmpdir needs write permission on .seri to unlink files that
-      // landed there before the sabotage (session start writes under the profile root). The
-      // sibling retry test restores 0o700 in the test body; this one leaves the dir unwritable
-      // for the rest of the run, so restore here.
       try {
         chmodSync(join(dir, ".seri"), 0o700);
       } catch {}
@@ -3317,9 +2430,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // B2/MEDIUM-5: the other half of "context preserved" — a switch whose first turn FAILS must not
-  // be the one that reaches disk. Same real picker interaction as the test above; the difference is
-  // entirely in the fake runLoop (childScriptModelSwitchFailure's own comment).
   test("a /model switch whose first turn fails is not persisted — the on-disk session keeps the model that last worked", async () => {
     const scriptPath = join(dir, "child-model-switch-failure.mjs");
     writeFileSync(scriptPath, childScriptModelSwitchFailure(dir));
@@ -3343,30 +2453,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // The switch DID take effect live — the second call was actually attempted against the new
-      // model, same as the successful-switch test above — and it failed.
       await sawLine("RUNLOOP_CALL 2 model=llama-3.3-70b-versatile");
-      // But the file on disk still names the model turn 1 actually completed with, not the one
-      // turn 2 merely attempted and failed on.
       await sawLine("MODEL_ON_DISK_AFTER_FAILURE openai/gpt-oss-120b");
 
-      // Scenario d (feature-plan.md): the failed pick must not become the global default either.
-      // Turn 2 never emitted messages-updated at all (it failed straight to `error`), so cli.ts's
-      // persist call — gated on messages-updated — never ran for this switch; turn 1 didn't
-      // trigger it either, since it ran on the model the session already started on (no switch
-      // yet, so the inequality guard never fires). config.json is never written by this run at all.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // Regression: onSessionChange fires on every state.session change, including a /model pick
-  // itself — before any turn confirms it. Picking a keyless provider and letting the turn fail
-  // (no messages-updated, so confirmedModel never advances) is what proves a persist landing in
-  // that window writes the still-confirmed starting provider, not the newer, unconfirmed pick's
-  // own live session field — the live picker's value never overwrites `confirmedModel` until a
-  // turn actually succeeds on it.
   test("a /model pick to a keyless provider that fails never persists that provider as confirmed", async () => {
     const scriptPath = join(dir, "child-model-pick-keyless.mjs");
     writeFileSync(scriptPath, childScriptModelPickKeyless(dir));
@@ -3386,23 +2481,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await typePickerFilter(pty, "claude-sonnet-5");
       await pty.sawInFrameTimes("no key", 1);
       child.stdin?.write("\r");
-      // The mandatory wait after any keypress that swaps the mounted component (picker -> input
-      // box) — childScriptModelSwitch's own test has the full measured story for this.
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       child.stdin?.write("a second task");
       await sawLine("a second task");
       child.stdin?.write("\r");
 
-      // getModel's own real (uninjected) branch throwing missingKeyError — proof the turn actually
-      // failed on the missing key rather than succeeding some other way.
       await sawLine("No Anthropic key configured. Run /setup to add one.");
 
       const sessionId = requireSessionId(sessionsDir);
 
-      // Polled, not asserted immediately: the pick's own persist happens in App.tsx's own
-      // onSessionChange effect, which fires after the dispatch above, not synchronously with the
-      // keypress — same reasoning as the /mode disk-poll test above.
       const deadline = Date.now() + 5_000;
       let onDisk: { provider?: string };
       do {
@@ -3410,26 +2498,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       } while (onDisk.provider === undefined && Date.now() < deadline);
       if (onDisk.provider === undefined) throw new Error("no provider persisted yet");
 
-      // The actual invariant: the persisted provider is still "groq" — turn 1's confirmed pair —
-      // never "anthropic", the picked-but-never-confirmed provider whose turn failed.
       expect(onDisk.provider).toBe("groq");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // H-4 (the fatal path M-2's terminal-state fix guards): a second Ctrl-C, once the first has
-  // already spent signals.ts's one cancel slot, is fatal rather than a second cancel — the same
-  // "one slot, second press finds it empty" mechanism as everywhere else in this repo (see
-  // signals.ts's own deliverSignal comment), reached here via `runtime/renderer.ts`'s own Ctrl-C
-  // registration instead of a readline Interface. Asserted the same way tests/signals.test.ts's own
-  // "a second press skips the unwind and still exits by signal" test is: the process actually
-  // terminates rather than hanging, which is what M-2's onSignalCleanup(() => instance.unmount())
-  // exists to make happen cleanly (restoring raw mode) rather than leaving the terminal in whatever
-  // state a bare process.kill mid-render left it in — not independently checkable from outside the
-  // dying
-  // process on this pty harness, so this is the process-terminates half of that fix; the
-  // terminal's own visual state is Phase 7's to confirm on a real terminal.
   test("a second Ctrl-C after the first is spent terminates the process instead of hanging", async () => {
     const scriptPath = join(dir, "child-cancel.mjs");
     writeFileSync(scriptPath, childScriptCancel(dir));
@@ -3439,9 +2513,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_READY");
       child.stdin?.write("\x03");
       await sawLine("RUNLOOP_ABORTED aborted=true");
-      // The first press's cancel slot is now spent, and nothing re-registers one between turns
-      // (runTui does not call driveLoop again until another task is submitted) — so this second
-      // press finds the slot empty and falls straight through to signals.ts's fatal path.
       child.stdin?.write("\x03");
 
       const settled = await Promise.race([
@@ -3457,12 +2528,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // HIGH-1: before this fix, runTui's own promise only ever rejected — a turn finishing normally
-  // left `run()`'s `await runTui(...)` parked forever, so printUsage/the exit-code logic were dead
-  // code on the TUI path. /exit is the new graceful-quit affordance: submitted once the turn is
-  // done (turnInFlight has cleared), it should unmount Ink, resolve run() with a real exit code
-  // (0, since doneReason is "no-tool-call" and nothing was refused), and print the same
-  // token/cost summary line the non-interactive path prints via printUsage.
   test("submitting /exit after a turn completes resolves run() with a normal exit code and a final usage summary", async () => {
     const scriptPath = join(dir, "child-quit.mjs");
     writeFileSync(scriptPath, childScriptQuit(dir));
@@ -3484,22 +2549,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(result).not.toBe("the run never settled");
-      // Asserted on stdout's own EXIT_CODE line, not `result.code` — same reason
-      // tests/cli/approvalPromptPty.test.ts's own comment gives: the pty allocator (python3)
-      // reports its own exit status, not the grandchild bun process's, so `result.code` is
-      // always 0 regardless of what run() actually returned.
       const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 0");
-      // printUsage's own line shape (cli/output.ts) — proof it actually ran, not just that the
-      // process happened to exit 0 some other way.
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // MEDIUM-C: Ctrl-D's own trigger for the same quit path /exit uses — a clone of the test above
-  // with \x04 (Ctrl-D) in place of typing "/exit" and pressing Enter.
   test("Ctrl-D at the input box quits the same way /exit does", async () => {
     const scriptPath = join(dir, "child-quit-ctrld.mjs");
     writeFileSync(scriptPath, childScriptQuit(dir));
@@ -3519,8 +2576,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(result).not.toBe("the run never settled");
-      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test above
-      // explains why `result.code` itself is not the right thing to check here.
       const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 0");
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
@@ -3529,13 +2584,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // HIGH-B: /exit while a turn is in flight used to abandon it outright — controller.abort() was
-  // never called, the turn's own usage was never folded into the final summary, and runTui's
-  // promise never resolved at all (turnInFlight only clears in runTurn's own finally, which
-  // abandoning the turn never triggered), so run() hung forever instead of settling. Mutation-
-  // tested against the pre-fix quit() (no turnInFlight check at all): this test hung on the
-  // RUNLOOP_ABORTED wait below until its own 60s timeout, every time — confirmed red before this
-  // fix, confirmed green after.
   test("submitting /exit while a turn is in flight cancels it gracefully instead of abandoning it (HIGH-B)", async () => {
     const scriptPath = join(dir, "child-quit-mid-turn.mjs");
     writeFileSync(scriptPath, childScriptQuitMidTurn(dir));
@@ -3548,13 +2596,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("/exit");
       child.stdin?.write("\r");
 
-      // MEDIUM-5: visible feedback that quitting is actually doing something, not a TUI that
-      // looks frozen while the cancelled turn unwinds.
       await sawLine("quitting — cancelling the in-flight turn, Ctrl-C to force");
 
-      // The discriminating assertion: pre-fix, quit() never touched turnInFlight or
-      // cancellation, so controller.abort() was never called, the fake runLoop's own abort
-      // listener never fired, and this line never appeared.
       await sawLine("RUNLOOP_ABORTED aborted=true");
 
       const result = await Promise.race([
@@ -3565,23 +2608,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(result).not.toBe("the run never settled");
-      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test explains why
-      // `result.code` itself is not the right thing to check here. The turn was cancelled, not
-      // completed — doneReason is "aborted", which resolves to exit 1, the same code every other
-      // *unaccomplished* run returns (`max-iterations`, `repeated-denials`) — NOT the signal-death
-      // every other abort path in this codebase uses; a deliberate quit is not the fatal-signal
-      // case `raiseSignal` exists for (cli.ts's own comment on this same fact, quit()'s own
-      // comment). `seri "…" && next` must not run `next` off the back of a task /exit cut short
-      // either way, so this is 1, not the clean-quit test's own 0.
       const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 1");
-      // The turn's own usage (spent before it was cancelled) still made it into the final
-      // summary — proof runTurn's usage-folding ran (and quit() waited for it) before resolving,
-      // not that the process just happened to exit some other way.
       expect(stdout).toContain("(tokens: 12 in, 34 out)");
 
-      // LOW-1: a mid-turn /exit leaves the session resumable — a well-formed session still
-      // on disk, not corrupted or removed by the cancel-then-quit sequence.
       const sessionsDir = join(dir, "sessions");
       const sessionId = requireSessionId(sessionsDir);
       const onDisk = loadSession(sessionId, sessionsDir);
@@ -3593,8 +2623,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // MEDIUM-C: a second turn with its own usage — the final summary must sum both, not report only
-  // the last turn's, which addTokens/runTui's own accumulation (cli.ts) claims but had no test.
   test("a multi-turn session's final usage summary sums every turn's tokens, not just the last one", async () => {
     const scriptPath = join(dir, "child-multi-turn-usage.mjs");
     writeFileSync(scriptPath, childScriptMultiTurnUsage(dir));
@@ -3608,16 +2636,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("a second task");
       child.stdin?.write("\r");
       await sawLine("RUNLOOP_CALL 2");
-      // Turn 2's own completion specifically — the plain "(done" text is already
-      // true from turn 1's own, and (unlike under the old <Static> transcript) now also recurs on
-      // every later, unrelated repaint, so counting its raw occurrences can't distinguish "turn 1
-      // repainted again" from "turn 2 actually finished". RUNLOOP_DONE (childScriptMultiTurn's own
-      // comment) is a console.log fired once, exactly at turn 2's own completion, immune to that.
-      // Sending /exit before turn 2's driveLoop call has actually returned would race turnInFlight
-      // instead of testing what this test is about — the marker fires from inside the generator,
-      // slightly AHEAD of driveLoop's own for-await loop fully unwinding, so wait100ms() gives that
-      // unwind (and runTurn's own `finally`) the same margin every other keypress-that-swaps-a-
-      // mounted-component wait in this file already relies on.
       await sawLine("RUNLOOP_DONE 2");
       await wait100ms();
 
@@ -3633,22 +2651,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       ]);
 
       expect(result).not.toBe("the run never settled");
-      // Asserted on stdout's own EXIT_CODE line — childScriptQuit's own sibling test explains why
-      // `result.code` itself is not the right thing to check here.
       const { stdout } = result as Exit;
       expect(stdout).toContain("EXIT_CODE 0");
-      // Turn 1: 10 in, 20 out. Turn 2: 20 in, 40 out. Summed: 30 in, 60 out — not turn 2's own
-      // 20/40 alone.
+      // Turn 1 is 10 in / 20 out; turn 2 is 20 in / 40 out; the summary must be 30 / 60.
       expect(stdout).toContain("(tokens: 30 in, 60 out)");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // MEDIUM-3: /undo, /restore and /rewind are gated while a turn is in flight (a mid-turn
-  // /rewind would truncate session.messages only for the still-running turn's own next
-  // messages-updated to replace the whole array wholesale, erasing the truncation) — /mode is
-  // deliberately NOT gated, and this test confirms that difference rather than just the block.
   test("/rewind is blocked while a turn is in flight, but /mode still works (MEDIUM-3)", async () => {
     const scriptPath = join(dir, "child-turn-in-flight-gate.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -3662,8 +2673,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("/rewind: can't run while a turn is in flight.");
 
-      // Still alive, and /mode (deliberately ungated) still works — proof the block above is
-      // specific to /rewind, not the input box wedged or the whole command path broken.
       child.stdin?.write("/mode");
       await sawLine("/mode");
       child.stdin?.write("\r");
@@ -3673,13 +2682,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Design-question fix (this PR's own follow-up): a submission rejected by the turnInFlight gate
-  // (same /rewind-while-in-flight gate as the test just above) still gets echoed, per this whole
-  // PR's own point — but the echo must not fragment the model's still-streaming answer into two
-  // transcript entries via transcript-append's own default flush behavior. "Hello " streams, /rewind
-  // 1 is sent and rejected while that is still pending, then "world" streams and the turn finishes
-  // — end-to-end proof (not just the reducer-unit level) that the full answer lands as ONE
-  // contiguous transcript entry, "Hello world", not split around the rejected command's own echo.
   test("a submission rejected by the turnInFlight gate is echoed without fragmenting the model's in-progress answer", async () => {
     const flagPath = join(dir, "release-turn");
     const scriptPath = join(dir, "child-rewind-during-stream.mjs");
@@ -3697,16 +2699,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       writeFileSync(flagPath, "");
       await sawLine("done ·");
-      // Bug fixed here (macOS CI): waited on "(done: …)" but never on "Hello world" itself before
-      // counting it. That first fix used `sawLine` (a raw substring check), which is not enough on
-      // its own: the raw pty stream can deliver "Hello world"'s bytes before the synchronized-output
-      // CLOSE marker for the frame that contains them, so `sawLine` can resolve one chunk ahead of
-      // `lastFrame()` actually seeing a closed frame with this line in it — `frameOccurrences` would
-      // then read an empty/stale `lastFrame()` and report 0, the same failure shape this line was
-      // originally fixed for. `sawInFrameTimes` waits on the frame-aware read `frameOccurrences`
-      // itself uses, closing that gap. `frameOccurrences`, not the raw cumulative count, for the
-      // assertion itself: this line recurs in the raw pty capture on every later, unrelated repaint
-      // once rendered once.
       await sawInFrameTimes("Hello world", 1);
 
       expect(frameOccurrences("Hello world")).toBe(1);
@@ -3715,10 +2707,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // LOW-4/MEDIUM-1: the disk-level regression test that should have existed to catch MEDIUM-1 in
-  // the first place — the existing reducer-unit test only checks in-memory state, which the old,
-  // buggy code also got right eventually; the bug was specifically about what landed on disk in
-  // between. Asserts the on-disk session file directly, not the transcript or reducer state.
   test("a mid-turn /mode change is on disk before the turn's next write, and that write does not revert it", async () => {
     const flagPath = join(dir, "release-turn");
     const scriptPath = join(dir, "child-mode-persist.mjs");
@@ -3737,8 +2725,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const sessionId = requireSessionId(sessionsDir);
 
-      // Polled, not asserted immediately: the write happens in App.tsx's own onSessionChange
-      // effect, which fires after the dispatch above, not synchronously with the keypress.
       const deadline = Date.now() + 5_000;
       let mode: string;
       do {
@@ -3746,12 +2732,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       } while (mode !== "auto" && Date.now() < deadline);
       expect(mode).toBe("auto");
 
-      // Release the still-in-flight turn's second messages-updated. Pre-MEDIUM-1-fix, driveLoop's
-      // own direct saveSession call here used the turn-start (pre-/mode) session and clobbered
-      // the file above back to "approve-each" — for the narrow window before the reducer's own
-      // effect corrected it again. HIGH-A: the child script's own MODE_AT_RESUME marker (its own
-      // comment explains why) is what actually observes that window; waiting for a later line in
-      // the transcript, like the old version of this test did, does not.
       writeFileSync(flagPath, "");
       await sawLine("MODE_AT_RESUME auto");
     } finally {
@@ -3759,12 +2739,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // onSessionChange used to call saveSession bare, with nothing to catch a throw. After
-  // prepareSession's own initial save has succeeded, the parent takes an exclusive SQLite lock so
-  // the child's held connection hits SQLITE_BUSY — chmod would not, because the kernel checks
-  // access at open, not at write. A bare throw escaped the React effect entirely and Ink's own
-  // renderer dumped a raw stack trace across the terminal; "could not save the session" never
-  // appeared and the pending `/mode` never completed.
   test("a session-save failure surfaces as a command error instead of hanging forever (finding 1)", async () => {
     const scriptPath = join(dir, "child-save-failure.mjs");
     writeFileSync(scriptPath, childScriptInput(dir));
@@ -3774,8 +2748,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     try {
       await sawLine("RUNLOOP_READY");
 
-      // Lock AFTER the initial save succeeds — prepareSession's own unconditional saveSession
-      // call, unrelated to the bug under test, must be given a real chance to land first.
       lockSessionStore(sessionsDir);
 
       child.stdin?.write("/mode");
@@ -3783,8 +2755,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       child.stdin?.write("\r");
       await sawLine("could not save the session");
 
-      // Still alive, not wedged: restore a writable store and confirm a later command still
-      // completes normally.
       restoreSessionStore(sessionsDir);
       child.stdin?.write("/mode");
       await sawLineTimes("/mode", 2);
@@ -3796,11 +2766,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Pins the `interactive: true` fix on cli.ts's own render() call (its own comment there has the
-  // full account) — without it, Ink's CI auto-detection (`is-in-ci`) treats a real pty as
-  // non-interactive whenever `CI` is set, which is GitHub Actions' own default for every job, and
-  // stops live-rendering regardless of `stdout.isTTY`. `CI=true` is set on the CHILD process only
-  // (childScriptCiEnv's own first line) to reproduce that exact condition without needing real CI.
   test("the TUI still renders and responds to input when CI=true is set (the GitHub Actions default)", async () => {
     const scriptPath = join(dir, "child-ci-env.mjs");
     writeFileSync(scriptPath, childScriptCiEnv(dir));
@@ -3818,14 +2783,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // Findings 1+5: this is the test that would have caught finding 1 existing at all — a real
-  // write-tool approval prompt, on a real pty, rendered by the TUI's own ApprovalBox and answered
-  // by an actual keypress, confirming the turn unblocks. Before this fix, this same scenario
-  // opened a SECOND readline.Interface on process.stdin underneath Ink's own raw-mode ownership —
-  // this test does not directly assert that absence (there is nothing to observe about a
-  // readline.Interface from outside the process), but it does prove the REPLACEMENT mechanism
-  // (dispatch a pendingApproval, render it, answer it via Ink's own input, resolve the promise)
-  // works end to end, which the old readline-based prompt never had a route to at all on this path.
   test("a write-tool approval prompt renders in the TUI and a keypress unblocks the turn", async () => {
     const scriptPath = join(dir, "child-approval.mjs");
     writeFileSync(scriptPath, childScriptApproval(dir));
@@ -3833,39 +2790,18 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_READY");
-      // TUI prose (approvalCopy), not the JSON readline the non-interactive path still uses.
       await sawLine(`Write a.txt?`);
       await sawLine("[N]o");
 
       child.stdin?.write("y");
       await sawLine("PROMPT_ANSWER once");
 
-      // Still alive and the turn actually finished — proof the answer really unblocked
-      // driveLoop's own await, not that the process just happened to still be running.
       await sawLine("done ·");
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // D2/D3 (feature-plan.md): the routing-priority reroute end to end — a real turn actually
-  // dispatches to the rerouted provider's own constructor (`via=anthropic`, not the requested
-  // `or`), and the transcript carries exactly the notice D2 requires.
-  //
-  // Does NOT assert a config.json write. D3's own fix — confirmedModel/lastPersistedModel
-  // initialize from `prepared.route` (the pair prepareSession already resolved), not
-  // `prepared.session` (what was merely requested) — means a session whose reroute is already
-  // active BEFORE its first turn even runs looks, to the persist guard, identical to a session
-  // that never touched /model at all: turn 1's own re-resolution lands on the SAME pair the guard
-  // already started at, so the inequality never trips and nothing new is written. This is
-  // deliberate, not an oversight: pinning an automatic fallback to the GLOBAL default the instant
-  // it happens once would mean a transient missing key permanently changes what every future
-  // brand-new session uses, even after the key is added back — the tripwire this protects
-  // (tuiPty.test.ts's own "never touched /model never writes config.json" test) applies with equal
-  // force to "never touched /model, only got auto-rerouted." A LIVE /model pick that itself then
-  // gets rerouted (D4's own scenario) is a genuine mid-session CHANGE and persists normally — that
-  // path is exercised by childScriptModelSwitch's own suite of tests already, unmodified by this
-  // loop.
   test("a routing-priority reroute active from session start takes effect on turn 1 and announces itself once, without touching config.json", async () => {
     const scriptPath = join(dir, "child-reroute.mjs");
     writeFileSync(scriptPath, childScriptReroute(dir));
@@ -3873,44 +2809,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     const { child, sawLine, frameOccurrences, rawOccurrences } = await startChild(scriptPath, dir);
     try {
       await sawLine("RUNLOOP_CALL 1 via=anthropic provider=anthropic");
-      // Split across two checks, not one long toContain/sawLine: measured on a real pty (WSL),
-      // Ink wraps this line across the terminal's own column width, landing "configured" on its
-      // own following line — the same wrapping App.test.tsx's own approval-prompt assertion
-      // already works around.
       const noticePrefix = "↻ routing claude-sonnet-5 via anthropic (your key) — no OpenRouter key";
       await sawLine(noticePrefix);
       await sawLine("configured");
       await sawLine("done ·");
 
-      // Exactly one transcript notice for this one turn — the per-turn cap D2's own acceptance
-      // criterion names, not a re-print on every messages-updated event within it.
-      // `frameOccurrences`, not the raw cumulative count: this line recurs in the raw pty capture
-      // on every later, unrelated repaint once it has rendered once.
       expect(frameOccurrences(noticePrefix)).toBe(1);
 
-      // Bug fixed here (reviewer-verifier, multi-provider-byok-phase-2): prepareSession's own
-      // printWarning (D2's non-interactive-path notice, "⚠ routing…") used to fire unconditionally,
-      // even on the TUI path — printing a SECOND notice for the same session-start reroute
-      // alongside runTurn's own "↻ routing…" transcript line. printWarning's own "⚠ " prefix is
-      // what distinguishes it from the transcript notice's "↻ " prefix, so this asserts the
-      // console-only one never appears once Ink has actually mounted. `rawOccurrences`: an absence
-      // check is safe under the raw cumulative count regardless of source — a repaint can only
-      // ever repeat something that already rendered, never fabricate an occurrence from nothing.
       expect(rawOccurrences("⚠ routing")).toBe(0);
 
-      // The negative control this test's own point rests on: verified by first removing D3's own
-      // fix (initializing confirmedModel/lastPersistedModel from `prepared.session` instead of
-      // `prepared.route`) and re-running this exact assertion — it failed, with config.json
-      // present and SERI_PROVIDER: "anthropic" written on turn 1, confirming the assertion below
-      // actually exercises the fix rather than being vacuously true.
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
 
-      // The session persists the RESOLVED provider (anthropic), not the originally env-requested
-      // one (openrouter, which never had a key) — proof `confirmedModel` initializes from
-      // `prepared.route`, not `prepared.session`, even on a session that starts already-rerouted.
-      // This is also what a later resume reads back as `session.provider`: see cli.test.ts's own
-      // "a resumed session's reroute notice blames the last-confirmed provider" test for the
-      // end-to-end consequence of that on the notice text.
       const sessionsDir = join(dir, "sessions");
       const sessionId = requireSessionId(sessionsDir);
       const deadline = Date.now() + 5_000;
@@ -3924,8 +2833,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }
   }, 60_000);
 
-  // The negative-control sibling of the test above: an explicit pick whose own provider HAS a key
-  // wins even when a native sibling also has one (D2 rule 1) — no reroute, and therefore no notice.
   test("an explicit pick with its own key stays on that provider and never prints a reroute notice", async () => {
     const scriptPath = join(dir, "child-no-reroute.mjs");
     writeFileSync(scriptPath, childScriptNoReroute(dir));
@@ -3935,18 +2842,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       await sawLine("RUNLOOP_CALL 1 via=or provider=openrouter");
       await sawLine("done ·");
 
-      // Absence check, safe under the raw cumulative count regardless of source.
       expect(rawOccurrences("↻ routing")).toBe(0);
     } finally {
       child.kill("SIGKILL");
     }
   }, 60_000);
 
-  // D5-D8 (feature-plan.md): /setup end to end on a real pty. `wait()` is the mandatory 100ms
-  // pause this file's own /model tests already require after any keypress that swaps InputBox for
-  // a different mounted component (or back) — React's own unmount/mount commits a tick after the
-  // dispatch that triggered it (childScriptModelSwitch's own test has the full measured story);
-  // omitting it here would be the identical bug, just for /setup's own panel instead of the picker.
   function seedConfig(target: string, values: Record<string, string>): void {
     const configDir = join(target, ".seri");
     mkdirSync(configDir, { recursive: true });
@@ -3963,11 +2864,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const scriptPath = join(dir, "child-setup-list.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
 
-      // 100 columns, not the default 80: this test is about what /setup lists, not about how a
-      // row degrades when it runs out of room. `envShadowReason`'s text used every one of the 80
-      // default columns before panels took their `PAD_X` interior padding (theme/spacing.ts), so
-      // at 80 the row now middle-truncates and the phrase below never appears whole. The
-      // truncation is pinned by its own test further down rather than left to break this one.
+      // 100 columns, not the default 80: this assertion is about listed rows, not leftover packing.
       const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
         terminalSize: { cols: 100, rows: 30 },
       });
@@ -3989,11 +2886,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The cost of the panel padding, pinned rather than left as a surprise. `envShadowReason`'s
-    // row ended flush against the right border at the classic 80-column default; `PAD_X` on each
-    // side (theme/spacing.ts) takes two columns it did not have, so the row middle-truncates.
-    // Both ends survive and the meaning with them, but the phrase is no longer whole. If the hint
-    // is ever shortened, this test is the one that says so.
     test("at 80 columns the env-shadow hint middle-truncates rather than reaching the border", async () => {
       const scriptPath = join(dir, "child-setup-narrow.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -4011,8 +2903,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        // Polled, not sampled: `lastFrame()` read directly can land on a redraw before the panel
-        // has finished painting, which is the flake this file's own helper comments describe.
         await sawInFrameTimes("environment — unset it in your shell", 1);
 
         expect(frameOccurrences("set by $GROQ_API_KEY in ")).toBe(1);
@@ -4036,7 +2926,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4051,17 +2940,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved ANTHROPIC_API_KEY.");
 
-        // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
-        // caught elsewhere in this file (waitForConfig's own comment).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
           (c) => c.ANTHROPIC_API_KEY === secret,
         );
         expect(config.ANTHROPIC_API_KEY).toBe(secret);
 
-        // The negative control at the process level: the raw key must never have reached stdout,
-        // masked or otherwise — checked against the WHOLE accumulated transcript, not just the
-        // enter-key step's own frame.
         child.kill("SIGKILL");
         const { stdout } = await exited;
         expect(stdout).not.toContain(secret);
@@ -4070,11 +2954,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Code-review finding (PR #73, round 3, item #1): Enter and Delete were dead in the real TUI
-    // twice already — App.test.tsx's own unit test for this covers the same fix at the component
-    // level, but "no test exercises this" is exactly what let the ordering bug through the
-    // component-level pty suite twice, so this test uses raw Enter/Delete (never the 'a'/'r' letter
-    // shortcuts every OTHER /setup pty test above uses) end to end against a real terminal.
     test("Enter opens the enter-key step and Delete requests removal, without using the 'a'/'r' letter shortcuts", async () => {
       seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-existing" });
       const scriptPath = join(dir, "child-setup-enter-delete.mjs");
@@ -4093,22 +2972,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         // Down to openrouter (index 1), removable (config-sourced from seedConfig above).
         child.stdin?.write("\x1b[B");
         await wait100ms();
-        // Raw Enter, not "a" — the whole point of this test.
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("OPENROUTER_API_KEY for openrouter");
 
-        // Escape back to the list, re-selecting the same row, rather than typing a new value — add/
-        // replace via Enter is already exercised at the component level (App.test.tsx); this test's
-        // own job is proving Enter/Delete reach the TUI's real useInput wiring, not re-covering the
-        // write path.
         child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
         await wait100ms();
         await sawLineTimes("/setup — provider API keys", 2);
 
-        // Raw Delete (`\x1b[3~`, parse-keypress.js's own sequence — distinct from backspace's
-        // `\x7f`), not "r".
+        // Raw Delete is \x1b[3~, parse-keypress.js's sequence, distinct from backspace.
         child.stdin?.write("\x1b[3~");
         await wait100ms();
         await sawLine("Remove OPENROUTER_API_KEY");
@@ -4155,9 +3028,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved OPENROUTER_API_KEY.");
 
-        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
-        // here (seedConfig's own pre-write, above), so a bare existence check would return
-        // instantly against the OLD value; the predicate is what actually waits for the replace.
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
           (c) => c.OPENROUTER_API_KEY === "sk-or-replaced-value",
@@ -4197,10 +3067,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("y");
         await sawLine("Removed OPENROUTER_API_KEY.");
 
-        // waitForConfig, not a bare readFileSync right after sawLine — config.json already EXISTS
-        // here (seedConfig's own pre-write, above) WITH the key about to be removed, so a bare
-        // existence check would return instantly against the pre-removal content; the predicate is
-        // what actually waits for the removal to land.
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
           (c) => c.OPENROUTER_API_KEY === undefined,
@@ -4212,7 +3078,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The negative control opening the panel alone (and closing it again) must not write anything.
     test("cancel: opening and closing /setup with Escape writes nothing", async () => {
       const scriptPath = join(dir, "child-setup-cancel.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -4227,8 +3092,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("/setup — provider API keys");
 
-        child.stdin?.write("\x1b"); // Escape
-        await new Promise((resolve) => setTimeout(resolve, 30)); // Escape's own ambiguity window
+        child.stdin?.write("\x1b");
+        await new Promise((resolve) => setTimeout(resolve, 30));
         await wait100ms();
 
         expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
@@ -4256,15 +3121,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // D8: an env-sourced row with NOTHING saved in config.json underneath it reports the
-    // environment as its source and refuses removal — there is genuinely nothing to unset.
     test("an env-shadowed row with no config entry reports the environment as the source and refuses removal", async () => {
       const scriptPath = join(dir, "child-setup-env-shadow.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir, { OPENAI_API_KEY: "sk-openai-env-value" }));
 
-      // 100 columns, for the reason the sibling test above gives: `$OPENAI_API_KEY` is two
-      // characters longer than `$GROQ_API_KEY`, so at the default 80 the padded row clips inside
-      // this prefix and leaves `set by $OPENAI_API_KEY i`.
       const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir, {
         terminalSize: { cols: 100, rows: 30 },
       });
@@ -4276,13 +3136,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        // Not the full "...in your environment — unset it in your shell" text: ListRow.tsx's own
-        // `truncate` (its own comment) genuinely clips this row's label even at 100 columns, same
-        // as every other `formatSetupRow`-fed row — a prefix is the stable sync point, not the
-        // full untruncated phrase.
         await sawLine("set by $OPENAI_API_KEY in");
 
-        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4292,10 +3147,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("r");
         await wait100ms();
 
-        // Refused — removable is false for an env row with NO config.json entry underneath it,
-        // so the confirm-remove step never even opens: no "Remove OPENAI_API_KEY" prompt anywhere
-        // in the transcript, and config.json is never even created (nothing else in this test
-        // writes to it either).
         expect(rawOccurrences("Remove OPENAI_API_KEY")).toBe(0);
         expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
       } finally {
@@ -4303,12 +3154,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Bug fixed here (code-review, PR #73): an env-shadowed row WITH a config.json entry
-    // underneath it (unlike the sibling test above) IS removable — providerKeyState's own
-    // `hasConfigEntry` is independent of which source wins for display. Before the fix, this used
-    // to be silently refused too (removable was read off `source === "config"`, which is always
-    // false in this exact state), making a previously-saved /setup secret permanently unremovable
-    // the moment the same-named env var got exported.
     test("an env-shadowed row WITH a config entry underneath is removable", async () => {
       seedConfig(dir, { OPENAI_API_KEY: "sk-openai-config-value" });
       const scriptPath = join(dir, "child-setup-env-shadow-removable.mjs");
@@ -4323,13 +3168,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/setup — provider API keys");
-        // Item #5 (round 3): the row's OWN text distinguishes this removable case from the
-        // sibling test's non-removable one — not the old "unset it in your shell" text (which
-        // would be actively wrong here: 'r' genuinely removes the config.json entry underneath).
         await sawLine("config entry underneath — removable");
         expect(rawOccurrences("set by $OPENAI_API_KEY in your environment")).toBe(0);
 
-        // groq=0, openrouter=1, anthropic=2, openai=3
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4339,9 +3180,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("r");
         await wait100ms();
 
-        // No longer refused: the confirm-remove step opens, and confirming it removes the
-        // config.json entry — the env var still shadows the (now-absent) config value going
-        // forward, but the stored secret itself is gone, which is the whole point of D8's fix.
         await sawLine("Remove OPENAI_API_KEY");
         child.stdin?.write("y");
         await sawLine("Removed OPENAI_API_KEY.");
@@ -4356,8 +3194,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // A throw out of a key handler does not kill this TUI, but Bun's uncaught-exception
-    // printer dumps a stack into the pty. The assertions below check that dump is absent.
+    // A throw out of a key handler does not kill this TUI; Bun's uncaught-exception path still can.
     test("a config.json that becomes malformed while /setup is already open does not dump a stack trace", async () => {
       seedConfig(dir, { OPENROUTER_API_KEY: "sk-or-value" });
       const scriptPath = join(dir, "child-setup-malformed-config.mjs");
@@ -4374,8 +3211,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("/setup — provider API keys");
 
         const configPath = join(dir, ".seri", "config.json");
-        // Corrupted AFTER the panel already opened successfully once — the risk this test targets
-        // is a SECOND read, from a call site reached only once /setup is already open.
         writeFileSync(configPath, "{not valid json");
 
         child.stdin?.write("\x1b[B");
@@ -4468,10 +3303,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // Stage C (cli-commands-to-tui feature-plan.md): /login, /signup and /logout end to end on a
-  // real pty. `seedAuth`, mirroring `seedConfig`'s own host-side pre-write above, so the /logout
-  // test starts with a real session already on disk rather than exercising createAuthHandlers'
-  // own "Not logged in." branch instead of the one it means to test.
   function seedAuth(target: string): void {
     const configDir = join(target, ".seri");
     mkdirSync(configDir, { recursive: true });
@@ -4497,8 +3328,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
 
-        // Non-blocking proof: the ordinary input box still accepts a task — the pty counterpart
-        // of App.test.tsx's own "still typing" test.
         child.stdin?.write("still typing");
         await sawLine("still typing");
         expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
@@ -4507,9 +3336,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // This test's own job is end to end: the real login()/logout() deps seam, the real reducer
-    // dispatches, and auth.json actually landing on disk. The sign-in chrome lives on the splash
-    // (and on `/login` itself), not as a persistent main-TUI banner.
     test("/login shows the device panel, then resolves: 'Logged in as …' lands in the transcript, auth.json exists, and the raw access token never reaches stdout", async () => {
       const scriptPath = join(dir, "child-auth-login.mjs");
       writeFileSync(scriptPath, childScriptAuth(dir));
@@ -4526,17 +3352,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("Logged in as fake@example.com");
 
-        // waitForConfig, not a bare readFileSync right after sawLine — the same race macOS CI
-        // caught elsewhere in this file (waitForConfig's own comment); auth.json's shape
-        // (AuthSession) is all strings, same as the Record<string, string> that helper expects.
         const auth = await waitForConfig(
           join(dir, ".seri", "auth.json"),
           (c) => c.email === "fake@example.com",
         );
         expect(auth.email).toBe("fake@example.com");
 
-        // The negative control at the process level: the raw access token must never have
-        // reached stdout, checked against the WHOLE accumulated transcript.
         child.kill("SIGKILL");
         const { stdout } = await exited;
         expect(stdout).not.toContain("fake-access-token-must-never-print");
@@ -4545,11 +3366,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The regression this locks (coordinator follow-up on Stage C): before AuthPanel's own
-    // useInput existed, a denied/expired device code left this exact screen up with no keyboard
-    // path back at all — no press, Enter included, ever returned the input box. `childScriptAuth`'s
-    // own /login test above only exercises the SUCCESS round-trip; this one drives
-    // createAuthHandlers' own catch branch (tui/handlers.ts) in a real process.
     test("a failed /login shows the error, and a keypress returns to the ordinary input box", async () => {
       const scriptPath = join(dir, "child-auth-login-fails.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginFails(dir));
@@ -4569,9 +3385,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
 
-        // Proves InputBox is actually back and accepting input, not merely that the process
-        // survived — the same "still typing" convention this file's own auth-banner test above
-        // uses for the identical claim.
         child.stdin?.write("still here");
         await sawLine("still here");
       } finally {
@@ -4579,9 +3392,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The real soft-lock this round closes, end to end (thermo-nuclear + code-review, round 4):
-    // Escape on the device step, while the fake login's own poll never resolves at all — before
-    // this, NOTHING dismissed "starting"/"device" and Ctrl-C fell through to a hard process kill.
     test("Escape abandons a stuck /login and returns to the ordinary input box", async () => {
       const scriptPath = join(dir, "child-auth-login-hangs.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginHangs(dir));
@@ -4596,15 +3406,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("ABCD-1234");
 
-        child.stdin?.write("\x1b"); // Escape
-        // Escape's own ambiguity window — this file's own convention (the /setup cancel test's
-        // own comment).
+        child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
         await wait100ms();
 
-        // Proves InputBox is actually back and accepting input, not merely that the process
-        // survived — the fake's own poll is still hanging in the background at this point, so
-        // this is also proof the abandoned attempt's own dispatches never landed on top of it.
         child.stdin?.write("abandoned, typing something else");
         await sawLine("abandoned, typing something else");
       } finally {
@@ -4612,12 +3417,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The actual regression lock for the round 5 bug (thermo-nuclear): childScriptAuthLoginRace's
-    // own poll resolves ~1s AFTER Escape, checking the real AbortSignal itself — this is what
-    // distinguishes "the poll was genuinely cancelled" from "cancellation doesn't exist and we
-    // just stopped listening" (the previous hangs-forever fake could only prove the latter kind
-    // of thing, never the former — reviewer's own framing). Before the round 5 fix, the fake's own
-    // late resolution would have written auth.json and flipped the banner regardless of Escape.
     test("Escape really cancels a stuck /login: the poll's late resolution ~1s later never writes auth.json or logs in", async () => {
       const scriptPath = join(dir, "child-auth-login-race.mjs");
       writeFileSync(scriptPath, childScriptAuthLoginRace(dir));
@@ -4632,27 +3431,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("ABCD-1234");
 
-        child.stdin?.write("\x1b"); // Escape — well before the fake's own 1000ms delay resolves
+        child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
         await wait100ms();
 
-        // InputBox is back immediately, same as the hangs-forever test above.
         child.stdin?.write("still fine");
         await sawLine("still fine");
 
-        // Now wait PAST the fake's own 1000ms delay, so its late resolution — aborted or not —
-        // has had time to land either way, then assert it never acted.
         await new Promise((resolve) => setTimeout(resolve, 1300));
 
         expect(existsSync(join(dir, ".seri", "auth.json"))).toBe(false);
-        // "Logged in as …" is a transcript line (App.tsx) that this run never dispatches — an
-        // absence check is safe under the raw cumulative count regardless of source (a repaint can
-        // only ever repeat something that already rendered, never fabricate an occurrence from
-        // nothing), unlike the banner text itself (measured live: it redraws multiple times over
-        // the course of this test for reasons unrelated to auth state, so a raw occurrence count on
-        // it can't tell "flipped back on" apart from "just redrew" — the auth.json check above is
-        // this test's own proof the banner's underlying STATE never flipped, which is the thing
-        // that actually matters).
         expect(rawOccurrences("Logged in as fake@example.com")).toBe(0);
       } finally {
         child.kill("SIGKILL");
@@ -4681,10 +3469,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The gate-composition matrix's own zeroKeys x noAuth "both at once" cell, end to end:
-    // reuses childScriptGuidedSetup (no key, no auth.json — the same script the "genuinely blank
-    // first run" describe block below already uses) rather than a new script, since the scenario
-    // is identical; only the assertions differ.
     test("gate composition: zero keys and no auth.json show /setup without the sign-in banner; adding a key falls through to the main view still without it", async () => {
       const scriptPath = join(dir, "child-auth-gate-matrix.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
@@ -4709,9 +3493,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
-        // The fall-through to the main view (prepareSession -> runTui), same sync point
-        // childScriptGuidedSetup's own describe block below uses — login stays on the splash
-        // and on /login, not as a persistent banner after Continue.
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
@@ -4720,18 +3501,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // byok-guided-setup, feature-plan.md (Open 2, BYOK-KEY-STORAGE-AND-SETUP.md): before this fix,
-  // run() called prepareSession unconditionally on a real TTY, which threw and hard-exited the
-  // process (code 1) before Ink ever mounted whenever zero keys were configured anywhere — the
-  // negative control (code-quality.md's "seen to fail" rule): reverting cli.ts's run() gate against
-  // this exact script/assertion reproduces that exit, with no "/setup — provider API keys" text in
-  // the captured stdout at all.
   describe("guided setup on a genuinely blank first run", () => {
-    // byok-guided-setup-default-model bugfix report: closing /setup with at least one key
-    // configured no longer falls straight through — it opens the mandatory model picker
-    // (Decision 1), and only THAT resolves the panel. "Route" is the picker's own column header
-    // (App.tsx's MODEL_PICKER_HEADER) — present regardless of catalog ordering, unlike any
-    // specific row, so it is a reliable sync point for "the picker actually mounted."
     test("mounts /setup directly instead of hard-exiting, and falls through to the task once a key is added and the mandatory default model is picked", async () => {
       const scriptPath = join(dir, "child-guided-setup.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
@@ -4739,8 +3509,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const pty = await startChild(scriptPath, dir);
       const { child, sawLine } = pty;
       try {
-        // No "/setup" keystroke sent — this must appear on its own, unlike every other /setup test
-        // in this file, which types the command first.
         await sawLine("/setup — provider API keys");
 
         // Default cursor is groq (index 0, CATALOG_PROVIDERS order) — "a" opens its enter-key step,
@@ -4761,19 +3529,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         );
         expect(config.GROQ_API_KEY).toBe(secret);
 
-        // Back at the list step (setupListState re-selects groq) — Escape closes the panel, the
-        // same close path the existing "cancel" /setup test above already exercises. Unlike
-        // pre-fix, this does NOT fall straight through: a key is now configured, so onSetupClose
-        // opens the mandatory model picker instead. typePickerFilter waits for the filter chrome
-        // (not just the Route header) so the query is not dropped before useKeyboard is live.
         child.stdin?.write("\x1b");
-        // Narrows to exactly one entry across the whole catalog (groq and openrouter both) —
-        // verified directly against the bundled catalog-manifest.json (the /model multi-route
-        // pty test's own comment, above, has the full story on why this exact string).
         await typePickerFilter(pty, "70b-versatile");
         child.stdin?.write("\r");
 
-        // The fall-through: prepareSession -> runTui -> driveLoop, unchanged, now actually reached.
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
         await sawLine("done ·");
@@ -4789,13 +3548,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Code-review finding, PR #91: run()'s own gate used to `await getModelCatalog()` BEFORE
-    // calling runGuidedSetup, so a slow/offline models.dev blocked /setup's very first paint behind
-    // FETCH_TIMEOUT_MS (10s, model-catalog's own catalog.ts) — a blank terminal on exactly the flow
-    // this feature exists to make instant. childScriptGuidedSetupSlowFetch's own fetch never
-    // resolves at all, so a 5s ceiling (well under that 10s timeout, still generous for a slow
-    // runner) is the negative control: it fails against the pre-fix blocking await and passes once
-    // the fetch is only kicked off, never awaited, ahead of the panel's first render.
     test("mounts /setup instantly even while the model catalog fetch is still in flight", async () => {
       const scriptPath = join(dir, "child-guided-setup-slow-fetch.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
@@ -4810,14 +3562,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
-    // Code-review finding (thermo-nuclear round 2, PR #91): making onSetupClose's own catalog wait
-    // async (instead of chained) made it re-entrant — a second Escape press while `catalogPromise`
-    // was still resolving re-ran the whole tail a second time, and the wait itself was silent (no
-    // feedback between the keypress and the picker appearing). Reuses
-    // childScriptGuidedSetupSlowFetch's own permanently-hanging fetch: `catalogPromise` never
-    // settles within this test's own window, so this exercises exactly the dead-input/re-entrancy
-    // half of the bug (the picker itself can never appear here — that half is what
-    // childScriptGuidedSetupDelayedFetch's own test, below, covers).
     test("Escape during a slow catalog fetch shows visible feedback once, not duplicated by a second press", async () => {
       const scriptPath = join(dir, "child-guided-setup-slow-fetch-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupSlowFetch(dir));
@@ -4836,24 +3580,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved GROQ_API_KEY.");
 
-        // First Escape: the visible-feedback line must appear even though catalogPromise never
-        // resolves in this script.
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Loading available models…");
 
-        // A second Escape while still "closing": the re-entrancy guard must make this a no-op —
-        // NOT a second run of the tail, which (pre-fix) would have re-dispatched the same
-        // transcript line a second time. `frameOccurrences`, not the raw cumulative count: a bug
-        // here would add a SECOND array entry, and both would be visible together in the current
-        // frame (a short transcript, nothing scrolled off) — the raw cumulative count can't
-        // distinguish that from an unrelated repaint of the SAME single entry.
         child.stdin?.write("\x1b");
         await wait100ms();
         expect(frameOccurrences("Loading available models…")).toBe(1);
 
-        // The process is still alive and responsive, not deadlocked — Ctrl-C still reaches the
-        // same fatal idle path every other test in this describe block's Ctrl-C test exercises.
         child.stdin?.write("\x03");
         const { stdout } = await exited;
         expect(stdout).not.toContain("EXIT_CODE");
@@ -4863,15 +3597,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
-    // The other half of the same bug (see the test just above): a user who starts adding a SECOND
-    // key while the first Escape's catalog wait is still pending must not have that in-progress
-    // typing silently discarded when the fetch finally resolves and the picker would otherwise
-    // want to mount over it (App.tsx's own render ternary checks pendingModelPicker before
-    // pendingSetup). `childScriptGuidedSetupDelayedFetch` resolves after 3s — measured live to be
-    // comfortably longer than this test's own first-key-save-and-Escape sequence takes (a 400ms
-    // delay was tried first and measured to already have elapsed by the time Escape was pressed,
-    // making the test vacuous — the picker had already opened before the second-key keystrokes
-    // were even sent).
     test("adding a second key while the catalog fetch is still resolving is not discarded by the picker", async () => {
       const scriptPath = join(dir, "child-guided-setup-delayed-fetch.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
@@ -4890,13 +3615,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved GROQ_API_KEY.");
 
-        // Escape starts the (still-pending) catalog wait.
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Loading available models…");
 
-        // Immediately start adding a SECOND key — well before the 3s delayed fetch resolves.
-        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -4905,10 +3627,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("ANTHROPIC_API_KEY for anthropic");
 
-        // If the picker silently replaced this mid-typing (the bug), the rest of this input would
-        // land in ModelPicker's own filter box instead, and "Saved ANTHROPIC_API_KEY." would
-        // never print — sawLine's own bounded poll is what turns that into a real test failure
-        // rather than a hang.
         const secondSecret = "sk-guided-setup-second-key-secret";
         child.stdin?.write(secondSecret);
         await wait100ms();
@@ -4922,8 +3640,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(config.ANTHROPIC_API_KEY).toBe(secondSecret);
         expect(config.GROQ_API_KEY).toBe(secret);
 
-        // The flow still completes normally afterward: back at the list step, a fresh Escape opens
-        // the picker (catalogPromise is long since resolved by now).
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Route");
@@ -4932,12 +3648,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
-    // Code-review finding, PR #91 round 3: `onSetupClose`'s own `configured` snapshot was captured
-    // BEFORE this wait, then reused once the catalog resolved — a remove-then-confirm round-trip
-    // during the wait returns to the "list" step (the only thing the re-entrancy guard above
-    // checks) without ever tripping it, so the stale snapshot could still show the just-removed
-    // provider as configured. Negative control: pre-fix, this test's own final assertions fail —
-    // the mandatory picker opens instead, offering a model for a provider with no key left.
     test("removing the only key while the catalog fetch is still resolving does not open the picker for it", async () => {
       const scriptPath = join(dir, "child-guided-setup-remove-during-wait.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
@@ -4956,21 +3666,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved GROQ_API_KEY.");
 
-        // Escape starts the (still-pending, 3s) catalog wait.
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Loading available models…");
 
-        // Remove the only configured key well before the 3s delayed fetch resolves — 'r' then 'y'
-        // returns to the "list" step without ever tripping the guard above.
         child.stdin?.write("r");
         await wait100ms();
         child.stdin?.write("y");
         await sawLine("Removed GROQ_API_KEY.");
 
-        // Once the delayed fetch resolves, the mandatory picker must NOT open for a provider that
-        // no longer has a key — this falls through to the same decline/missing-key path a genuine
-        // zero-key close takes.
         const { stdout } = await exited;
         expect(stdout).toContain("EXIT_CODE 1");
         expect(stdout).toContain(
@@ -4982,10 +3686,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
-    // Code-review finding, PR #91 round 3: from the "enter-key" step, Ctrl-D calls onSetupClose
-    // directly (SetupEnterKey's own useInput) — while the wait's `closing` guard was a bare no-op,
-    // this looked like a completely dead key with zero feedback. Negative control: pre-fix, this
-    // test's own final assertion (the "still loading" message) never appears.
     test("Ctrl-D from the enter-key step during the catalog wait gives visible feedback, not a dead key", async () => {
       const scriptPath = join(dir, "child-guided-setup-ctrld-during-wait.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupDelayedFetch(dir));
@@ -5004,13 +3704,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Saved GROQ_API_KEY.");
 
-        // Escape starts the (still-pending, 3s) catalog wait.
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Loading available models…");
 
-        // Navigate to "enter-key" for a second provider, still well before the 3s delayed fetch
-        // resolves. groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -5019,8 +3716,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         await sawLine("ANTHROPIC_API_KEY for anthropic");
 
-        // Ctrl-D here reaches onSetupClose directly (SetupEnterKey's own useInput) while `closing`
-        // is still true.
         child.stdin?.write("\x04");
         await sawLine("Still loading available models");
       } finally {
@@ -5028,10 +3723,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 20_000);
 
-    // The bug this whole loop exists to fix: an anthropic-only guided setup used to fall through
-    // to prepareSession unconditionally, which resolved the untouched default (groq's
-    // openai/gpt-oss-120b) and hard-exited on a SECOND missing-key error naming a provider the
-    // user never configured. The mandatory picker (Decision 1) closes that gap.
     test("a non-groq key added during guided setup lands on the model picked there instead of a second missing-GROQ_API_KEY exit", async () => {
       const scriptPath = join(dir, "child-guided-setup-non-groq.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
@@ -5041,7 +3732,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -5057,11 +3747,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Saved ANTHROPIC_API_KEY.");
 
         child.stdin?.write("\x1b");
-        // Narrows to exactly the two claude-sonnet-5 routes in the bundled manifest (the /model
-        // multi-route pty test's own comment, above, verified this directly against
-        // catalog-manifest.json). byRoutePriority (D2) sorts native before aggregator within a
-        // route group, so the native anthropic row is already the top/default-selected one for
-        // this filtered query — no Down press needed.
         await typePickerFilter(pty, "claude-sonnet-5");
         child.stdin?.write("\r");
 
@@ -5075,16 +3760,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         );
         expect(config.SERI_MODEL).toBe("claude-sonnet-5");
         expect(config.SERI_PROVIDER).toBe("anthropic");
-        // The negative control this test exists for: the exact string pre-fix code printed here,
-        // naming a provider (groq) the user never configured.
         expect(rawOccurrences("GROQ_API_KEY is not set")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // Decision 2: Esc/Ctrl-D at the mandatory picker re-prompts — it must never resolve the panel
-    // and fall through to a keys-but-no-model run, which is exactly the bug this loop fixes.
     test("Escape at the mandatory model picker re-prompts instead of returning to a keys-but-no-model run", async () => {
       const scriptPath = join(dir, "child-guided-setup-picker-escape.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
@@ -5107,22 +3788,16 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\x1b");
         await pty.sawInFrameTimes("Type to filter", 1);
 
-        // Escape at the picker: must re-prompt, not resolve.
         child.stdin?.write("\x1b");
         await wait100ms();
         await sawLine("Pick a model to continue");
 
-        // The picker is still up: a subsequent filter keystroke still narrows it, and config.json
-        // still has no SERI_MODEL — proof Escape neither closed the picker nor let the run
-        // continue on a keys-but-no-model session.
         await typePickerFilter(pty, "70b-versatile");
         const configDuringEscape = JSON.parse(
           readFileSync(join(dir, ".seri", "config.json"), "utf8"),
         );
         expect(configDuringEscape.SERI_MODEL).toBeUndefined();
 
-        // Filter + Enter then falls through normally, proving the picker recovered rather than
-        // being left in some broken half-cancelled state.
         child.stdin?.write("\r");
         await sawLine("> do a task");
         await sawLine("RUNLOOP_READY");
@@ -5131,9 +3806,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Decision 2's own Ctrl-C carve-out: with no `cancel` slot registered for this mount,
-    // deliverSignal takes the fatal branch and kills the process by signal — never resolving
-    // `closed`, so nothing is ever persisted from a run that dies here.
     test("Ctrl-C at the mandatory model picker kills the run without persisting a default model", async () => {
       const scriptPath = join(dir, "child-guided-setup-picker-ctrlc.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetup(dir));
@@ -5159,9 +3831,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\x03");
         const { stdout } = await exited;
 
-        // The child died by signal before childScriptGuidedSetup's own
-        // `console.log("EXIT_CODE " + code)` (helper, above) — and driveLoop/runTui never ran, so
-        // neither line was ever printed.
         expect(stdout).not.toContain("EXIT_CODE");
         expect(stdout).not.toContain("RUNLOOP_READY");
 
@@ -5181,19 +3850,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        child.stdin?.write("\x1b"); // Escape, no key added
+        child.stdin?.write("\x1b");
         await new Promise((resolve) => setTimeout(resolve, 30));
 
-        // Asserted on stdout's own EXIT_CODE line, not the pty's own exit status —
-        // childScriptQuit's own sibling tests (above) explain why: the pty allocator (python3)
-        // reports its own exit status, not the grandchild bun process's.
         const { stdout } = await exited;
         expect(stdout).toContain("EXIT_CODE 1");
-        // Thermo-nuclear finding (round 4): run()'s old re-check `return 1`'d here with no
-        // console.error, silently discarding missingKeyError's own default message. Falling
-        // through to prepareSession's identical catch instead means a decline prints the exact
-        // message a non-interactive missing-key run does — this assertion is the negative
-        // control: it fails against that old silent `return 1`.
         expect(stdout).toContain(
           "GROQ_API_KEY is not set. Set it as an environment variable and re-run.",
         );
@@ -5202,11 +3863,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // A 200-OK models.dev payload that curates to zero rows for the provider the user just
-    // configured used to resolve the panel with no picker at all, landing on prepareSession's
-    // groq-flavoured missing-key exit even though the key just saved was openrouter's. The
-    // mandatory-picker guarantee must hold here too, not just when the live catalog happens to
-    // carry rows for whichever provider the user picks.
     test("Esc after adding a key still opens the mandatory picker when the live catalog carries no rows for that provider", async () => {
       const scriptPath = join(dir, "child-guided-setup-catalog-missing-provider.mjs");
       writeFileSync(scriptPath, childScriptGuidedSetupCatalogMissingProvider(dir));
@@ -5215,7 +3871,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("/setup — provider API keys");
 
-        // groq → openrouter → anthropic
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
@@ -5239,10 +3894,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 20_000);
   });
 
-  // Stage D (cli-commands-to-tui feature-plan.md): /config end to end on a real pty. Reuses
-  // childScriptSetup's exact env/deps (HOME=dir, so config.json lands at <dir>/.seri/config.json,
-  // the same place waitForConfig already polls for /setup) — /config reads/writes config.json
-  // through the identical `configDir` resolution /setup does.
   describe("/config", () => {
     test("add a value for a known key, then unset it — the typed value never leaks while being entered", async () => {
       const scriptPath = join(dir, "child-config.mjs");
@@ -5260,29 +3911,15 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("Automatic verification:");
         await sawLine("Verify command:");
 
-        // KNOWN_CONFIG_KEYS order (tui/commands.ts): SERI_VERIFY_ENABLED, SERI_VERIFY_COMMAND —
-        // one Down press reaches the second.
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("a");
         await wait100ms();
         await sawLine("Set Verify command (SERI_VERIFY_COMMAND)");
 
-        // Not "bun run check": CONFIG_KEY_INFO's own description for this key uses that exact
-        // string as its example ('e.g. "bun run check"'), which the entry step's own description
-        // line (below the header) renders unconditionally — a value equal to it would make the
-        // negative control below fail on the description text itself, before anything is typed.
         const value = "bun run typecheck";
         child.stdin?.write(value);
         await wait100ms();
-        // Negative control: while the value is still only ConfigEnterValue's own local state, the
-        // typed characters render as asterisks (its own credential-disclosure guard, applied
-        // unconditionally, not just for secret-shaped keys) — so the raw string must not have
-        // reached the pty's stdout yet. Not asserted after Enter too: SERI_VERIFY_COMMAND's own
-        // `secret: false` (decideConfigOpen's own comment — a command a user should be able to
-        // read back, not see as asterisks) means the list's post-save refresh legitimately shows
-        // it, by design, so a whole-run negative control would be asserting against the code's own
-        // documented behavior rather than a leak.
         expect(rawOccurrences(value)).toBe(0);
 
         child.stdin?.write("\r");
@@ -5324,8 +3961,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/config — settings");
-        // Nothing in config.json yet — the row must read "on" (loadVerifyConfig's own default),
-        // not "not set".
         await sawLine("Automatic verification: on");
 
         child.stdin?.write("\r");
@@ -5347,9 +3982,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         );
         expect(on.SERI_VERIFY_ENABLED).toBe("true");
 
-        // Negative control: this is what actually proves no free-text step ever opened — it goes
-        // red on any implementation that routes the boolean through enter-value
-        // (ConfigEnterValue's own header text).
         expect(rawOccurrences("Set Automatic verification")).toBe(0);
         expect(rawOccurrences("value for")).toBe(0);
       } finally {
@@ -5370,36 +4002,17 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await wait100ms();
         await sawLine("/config — settings");
-        // SERI_VERIFY_ENABLED=false is exported in the child's own env, so the row reads "off"
-        // from that, not from config.json (which has nothing yet).
         await sawLine("Automatic verification: off");
 
         child.stdin?.write("\r");
         await sawLine("Automatic verification: off in config, SERI_VERIFY_ENABLED env still wins.");
 
-        // The toggle flips config.json's OWN stored value (onConfigSelect's own comment,
-        // tui/handlers.ts), not the env-shadowed display value — with no key stored yet,
-        // configBoolean(undefined) reads as "on" (config.ts's own default), so the write lands
-        // as "false", the same direction an unshadowed row would take from that same default
-        // (the "SERI_VERIFY_ENABLED toggles on Enter" test just above, no env involved).
         const config = await waitForConfig(
           join(dir, ".seri", "config.json"),
           (c) => c.SERI_VERIFY_ENABLED === "false",
         );
         expect(config.SERI_VERIFY_ENABLED).toBe("false");
 
-        // The row itself still shows the env-sourced value after the list refreshes — the
-        // transcript sentence above already contains "Automatic verification: off" as a substring
-        // (it's the prefix of "off in config, ..."), so two total occurrences (the first render,
-        // the message) is what proves the row rendered "off" at least once independently of the
-        // confirmation sentence. NOT three (a third for "the refreshed render" too): OpenTUI's own
-        // cell-diff redraw does not re-emit a row whose value hasn't actually changed, so a refresh
-        // that leaves this row showing the same "off" text it already had can legitimately produce
-        // zero new bytes for it — unlike Ink, which always re-wrote the whole frame on any change
-        // elsewhere. The absence check right below is what actually proves the row never
-        // independently rendered "on", not the occurrence count. `rawOccurrences`, not
-        // `frameOccurrences`: this is an absence check (`.toBe(0)`), safe under the raw cumulative
-        // count regardless of source.
         await sawLineTimes("Automatic verification: off", 2);
         expect(rawOccurrences("Automatic verification: on")).toBe(0);
       } finally {
@@ -5408,25 +4021,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // Stage D (cli-commands-to-tui feature-plan.md): /permissions end to end on a real pty. Unlike
-  // every other seed helper in this file (seedConfig writes raw JSON), permissions.yaml's exact
-  // shape (comments, flow style — permissions/store.ts's own writeDocument comment) is a real
-  // dependency contract, not something worth hand-rolling here: `rememberGrant`/`loadGrants` are
-  // imported for real, the same injection-free "call the actual function" choice childScriptAuth's
-  // own comment already makes for auth.json. `worktree` is `dir` itself, matching what the CHILD
-  // resolves via checkpointTarget → projectRoot(process.cwd()): `dir` is a fresh tmpdir with no
-  // enclosing git repo, so projectRoot falls back to `resolve(dir)`, the same value projectKey
-  // resolves here.
   describe("/permissions", () => {
     test("a persisted write_file grant renders, and 'r'/'y' removes it", async () => {
       const permissionsDir = join(dir, "config");
-      // realpathSync, not the raw mkdtempSync path: os.tmpdir() on macOS resolves under
-      // /var/folders/…, itself a symlink to /private/var/folders/… — the CHILD's own
-      // process.cwd() (spawned with cwd: dir) comes back through the OS's getcwd(), which
-      // follows that symlink, so a projectKey computed here from the unresolved `dir` never
-      // matches the one the child computes from its own resolved cwd. Scoped to this local
-      // `worktree`, not applied to the shared `dir` itself: `dir` also feeds childScriptSetup's
-      // HOME (a literal env-var string, never OS-resolved) and this describe block's other tests.
+      // realpathSync: os.tmpdir() on macOS is a symlink, and the store compares resolved paths.
       const worktree = realpathSync(dir);
       const { rememberGrant, loadGrants } = await import("../../src/permissions/store");
       rememberGrant(permissionsDir, worktree, "write_file");
@@ -5452,8 +4050,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("y");
         await sawLine("Removed write_file.");
 
-        // Polling, not a bare synchronous read right after sawLine — the same file-vs-stdout race
-        // waitForConfig's own comment documents for config.json, here for permissions.yaml instead.
         const deadline = Date.now() + 5000;
         let grants = loadGrants(permissionsDir, worktree);
         while (grants.project.includes("write_file") && Date.now() < deadline) {
@@ -5466,24 +4062,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Regression test for the bug /code-review and thermo-nuclear both found on this PR: removing
-    // the "persisted" row used to call forgetGrant unscoped, which strips a same-tool GLOBAL grant
-    // too — even though decidePermissionsOpen only ever shows this row as removable because of its
-    // PROJECT-tier membership. The store-level test (permissions/store.test.ts) pins forgetGrant's
-    // own scope handling; this is the one that pins the call site that actually had the bug —
-    // cli.ts's onPermissionsRemove passing "project" rather than "both" — which nothing else here
-    // exercises (confirmed: reverting that one argument keeps every other test in this suite green).
     test("a global grant survives removing the same tool's project-tier entry", async () => {
       const permissionsDir = join(dir, "config");
-      // realpathSync — see the sibling test's own comment just above for why this is scoped to
-      // a local `worktree` rather than the shared `dir`.
       const worktree = realpathSync(dir);
       const { loadGrants, permissionsPath, projectKey } = await import(
         "../../src/permissions/store"
       );
-      // Hand-written, not rememberGrant after a global seed: rememberGrant's own dedup checks the
-      // tool's presence across BOTH tiers before writing, so seeding global first would make it
-      // silently refuse to also add the project entry.
       mkdirSync(permissionsDir, { recursive: true });
       writeFileSync(
         permissionsPath(permissionsDir),
@@ -5524,9 +4108,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // cli-tui-stage-b-bare-seri, feature-plan.md Stage B acceptance criteria: bare `seri` in a real
-  // TTY mounts the TUI idle (no positionals, no --continue/--resume) instead of hard-exiting with
-  // USAGE, and does not auto-start a turn the way `seri --continue` still does.
   describe("bare seri", () => {
     test("mounts idle with no auto-started turn; a typed task starts one; Ctrl-D then exits 0", async () => {
       const scriptPath = join(dir, "child-bare.mjs");
@@ -5534,13 +4115,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, exited, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        // The mode-indicator/input box's own default-session label (MODE_LABEL, util/format.ts) —
-        // proof the TUI actually mounted rather than the process just sitting there.
         await sawLine("approve-each mode on");
-        // Negative control: nothing auto-started a turn. wait100ms first, matching every other
-        // rawOccurrences()-based negative control in this file (the seedConfig-adjacent /setup
-        // tests above) — rawOccurrences() is a synchronous snapshot, so it has to be given time to
-        // be wrong before it can prove RUNLOOP_READY genuinely never printed.
         await wait100ms();
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
 
@@ -5602,12 +4177,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Regression coverage for the mount-time counterpart of `config-updated`
-    // (reducer.ts/app.tsx): SERI_REASONING_EFFORT seeded in config.json before the process ever
-    // starts must show up in the mode row's own effort-tier suffix from the very first frame — no
-    // turn has run yet, so `runTui`'s own per-turn dispatch (cli.ts) cannot be what put it there.
-    // `terminalSize` widens the pty so leftover packing of the effort-tier suffix is not tight
-    // against the default 80-column fallback (`startChild`'s own comment has the full account).
     test("SERI_REASONING_EFFORT from config.json shows the tier in the mode row before any turn runs", async () => {
       seedConfig(dir, { SERI_REASONING_EFFORT: "medium" });
       const scriptPath = join(dir, "child-effort-default-mount.mjs");
@@ -5618,20 +4187,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       });
       try {
         await sawLine("reasoning-model · groq · medium");
-        // Negative control: this is the mount-time seed, not a turn-triggered one.
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // The spec's own named acceptance test (feature-plan.md finding #7): a fresh, non-resuming,
-    // task-less TTY invocation must persist NO empty-content user message — the latent
-    // `hasNewTask`/`prepareSession` bug bare-seri-mounts-the-TUI exists to fix, not just the
-    // positionals.length===0 hard exit. Asserted on the session JSON's own `messages` array, not a
-    // rendered line — a rendered transcript has nothing to show for a message that was pushed to
-    // `session.messages` in memory but never echoed (echoUserInput is gated on `hasNewTask` too, so
-    // the old bug wouldn't have shown up as a rendered line either).
     test("quitting immediately, with nothing ever typed, persists no empty-content user message", async () => {
       const scriptPath = join(dir, "child-bare-quit.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
@@ -5678,9 +4239,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Max turns set to 1");
 
-        // The typed-box render, un-prefixed — "> do a task" is echoUserInput's OWN prefix,
-        // produced only after submit (Enter), so waiting for it before pressing Enter would never
-        // resolve. Same wait-then-submit shape as "/max-turns 1" just above.
         child.stdin?.write("do a task");
         await sawLine("do a task");
         child.stdin?.write("\r");
@@ -5690,9 +4248,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Negative control: the identical script, minus the /max-turns line — proves the override
-    // above actually changed something, rather than the fake runLoop always printing the same
-    // value regardless of what --max-turns was given.
     test("without a live override, the next turn's driveLoop call receives the --max-turns startup default", async () => {
       const scriptPath = join(dir, "child-max-turns-default.mjs");
       writeFileSync(scriptPath, childScriptMaxTurns(dir));
@@ -5701,7 +4256,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         await sawLine("approve-each mode on");
 
-        // Same un-prefixed wait-then-submit shape as the positive case above.
         child.stdin?.write("do a task");
         await sawLine("do a task");
         child.stdin?.write("\r");
@@ -5725,25 +4279,14 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("/profile new work");
         child.stdin?.write("\r");
         await sawLine("Profile directory");
-        // The full line wraps at Ink's column width somewhere inside this fragment — exactly
-        // where depends on this run's profile-directory path length, which `sawLine` itself
-        // accounts for (its own comment on the adjacent-row-pair check).
         await sawLine("switch the running session's profile");
 
-        // waitForConfig's own reasoning, applied to a directory instead of a file: a bare
-        // existsSync right after sawLine races the mkdirSync a DIFFERENT process (this test) is
-        // reading, the same class of race macOS CI caught for config.json elsewhere in this file.
         const profileDir = join(dir, ".seri", "work");
         const deadline = Date.now() + 5000;
         while (!existsSync(profileDir) && Date.now() < deadline)
           await new Promise((r) => setTimeout(r, 20));
         expect(existsSync(profileDir)).toBe(true);
 
-        // Round 3's own fix: `ensureOwnerOnlyDir`'s "did I create it" answer comes from mkdirSync's
-        // own return value, not a separate existsSync probe beforehand — this is the "already
-        // exists" branch of that answer, exercised by asking for the SAME name a second time.
-        // sawLineTimes, not sawLine, for the typed-echo: "/profile new work" already appeared once
-        // above, so a plain sawLine would resolve immediately against that first occurrence.
         child.stdin?.write("/profile new work");
         await sawLineTimes("/profile new work", 2);
         child.stdin?.write("\r");
@@ -5767,11 +4310,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("may only contain letters, numbers");
 
         await wait100ms();
-        // The actual path a successful traversal would create: join(getBaseConfigDir(), "../etc")
-        // NORMALIZES to a sibling of .seri, not something under it — so `.seri` not existing
-        // proves nothing on its own (it would be equally absent whether or not the traversal was
-        // blocked, since even an unblocked mkdirSync never targets a path under .seri here). This
-        // is the primary assertion; `.seri` itself is also checked, but only as a secondary one.
         expect(existsSync(join(dir, "etc"))).toBe(false);
         expect(existsSync(join(dir, ".seri"))).toBe(false);
       } finally {
@@ -5779,18 +4317,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // Regression guard: commandError (reducer.ts) used to have no clearing action at all, so
-    // App.tsx's unconditional render of it kept the banner on screen through every later render —
-    // including a later, successful command's own. `rawOccurrences(errorText) === 0` cannot prove a
-    // clear here: startChild's stdout is an ever-accumulating raw buffer, so text already printed
-    // can never be "un-printed" from it. Instead: Ink re-renders the whole tree on every state
-    // change, so a still-set commandError gets RE-PRINTED as part of every later render too — this
-    // asserts the error's occurrence count stays flat from immediately BEFORE the second command's
-    // own Enter to immediately after its own confirmation renders. The baseline is taken there, not
-    // right after the error first appears: typing the second command's own text also re-renders the
-    // still-visible banner one or more times before Enter is pressed (Ink re-rendering the whole
-    // live region on each keystroke, not just the input box), which is unrelated to whether Enter's
-    // submission clears it and would otherwise pollute the baseline.
     test("a command-error clears once the next submission renders", async () => {
       const scriptPath = join(dir, "child-profile-new-cleared.mjs");
       writeFileSync(scriptPath, childScriptBare(dir));
@@ -5819,11 +4345,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   });
 
   describe("welcome splash", () => {
-    // The crux test for this feature: GROQ_API_KEY is an *existing* key (same as every other
-    // script in this file), so checkZeroKeysConfigured is false and runGuidedSetup never mounts —
-    // yet the splash still shows, proving it isn't gated behind a first-run/zero-key check.
-    // `dismissSplash: false` (every test in this describe block passes it) opts out of startChild's
-    // own default auto-dismiss, since exercising the splash itself is the whole point here.
     test("the splash renders on a launch with an already-configured provider key, not just a first run", async () => {
       const scriptPath = join(dir, "child-splash-existing-key.mjs");
       writeFileSync(scriptPath, childScriptSetup(dir));
@@ -5835,19 +4356,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine(SPLASH_MARK);
         await sawLine("Continue without logging in");
 
-        // Down twice from the default-selected "Log in" to "Continue without logging in", then
-        // Enter — real menu navigation, not Escape (already exercised by every other test in this
-        // file via startChild's own default dismiss path).
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\x1b[B");
         await wait100ms();
         child.stdin?.write("\r");
 
-        // Falls through into the ordinary flow rather than replacing it.
         await sawLine("RUNLOOP_READY");
-        // Continue without logging in is the login choice. The splash already offered
-        // Log in / Sign up; the main TUI must not re-offer them as a persistent banner.
         expect(rawOccurrences("Sign in with /login, or create an account with /signup")).toBe(0);
       } finally {
         child.kill("SIGKILL");
@@ -5881,20 +4396,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine } = await startChild(scriptPath, dir, { dismissSplash: false });
       try {
         await sawLine(SPLASH_MARK);
-        // "Log in" is the default-selected (first) item — a bare Enter, no navigation, selects it.
         await sawLine("> Log in");
         child.stdin?.write("\r");
-        // Deliberately no `wait100ms()` between the keypress and this check (unlike its
-        // sibling tests, above): `loginFake`'s own ~50ms auto-resolve already races the
-        // device-code panel's on-screen lifetime — a fixed 100ms sleep here reliably lost that
-        // race, letting login succeed and the main TUI mount and redraw this exact row
-        // (`> do a task`) before the check ever ran. `sawLine`'s own poll loop already waits
-        // for the render with no help needed from a fixed delay. The user code is the wait,
-        // not the verification URI: OpenTUI cell-diff splits that URL across two CUP writes,
-        // so a contiguous `https://example.com/device` substring is not a reliable sync point.
         await sawLine("ABCD-1234");
 
-        // childScriptAuth's own loginFake resolves on its own ~50ms later — no further keypress.
         await sawLine("RUNLOOP_READY");
       } finally {
         child.kill("SIGKILL");
@@ -5918,8 +4423,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await wait100ms();
         child.stdin?.write("\r");
 
-        // The regression guard: Continue falls through into the existing mandatory-/setup gate
-        // rather than bypassing it. OpenRouter is a normal BYOK row here, unset.
         await sawLine("/setup — provider API keys");
         await sawLine("openrouter");
         await sawLine("not set");
@@ -5928,10 +4431,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The hosted-login cell of the same gate: auth.json is already on disk (seedAuth), zero
-    // local keys, splash dismissed via Continue. Before the gate treated a hosted session as
-    // blank, this path mounted /setup and never reached RUNLOOP_READY. Reverting
-    // needsGuidedSetup's loadAuthSession check against this script reproduces that.
     test("a logged-in user with zero local keys continues past splash into the main TUI, not /setup", async () => {
       seedAuth(dir);
       const scriptPath = join(dir, "child-splash-logged-in-zero-keys.mjs");
@@ -5953,8 +4452,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY");
         expect(rawOccurrences("/setup — provider API keys")).toBe(0);
-        // done · only exists on the main TUI. lastFrame at RUNLOOP_READY can still be the
-        // cleared splash grid that startChild's dismissSplash wait already names.
         await sawInFrameTimes("done ·", 1);
         expect(lastFrame()).toContain(" · seri");
         expect(lastFrame()).not.toContain("openrouter");
@@ -5964,14 +4461,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // `--continue`/`--resume` used to call runTurn unconditionally on mount (cli.ts's own runStart
-  // "resume" branch), even when the resumed session's last message already had a final assistant
-  // reply — a redundant, unprompted model call that appended a duplicate reply to the session.
   describe("--continue mount", () => {
-    // awaitsReply's own full truth table (all four `loop.ts` end states) is unit-tested directly in
-    // tests/session/awaitsReply.test.ts, with no pty and no win32 skip — these two tests exist only
-    // to prove connectDispatch actually wires that predicate into the mount, not to re-cover the
-    // predicate's own cases.
     function seedSession(sessionsDir: string, messages: ModelMessage[]): void {
       saveSession(
         {
@@ -5996,11 +4486,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       const { child, sawLine, rawOccurrences } = await startChild(scriptPath, dir);
       try {
-        // Liveness proof before the negative control, same convention as "bare seri"'s own
-        // negative control above: the mode indicator (this seed's `permissionMode: "read-only"`)
-        // proves the child mounted AND resumed the seeded session, not merely that it never got
-        // that far — rawOccurrences() staying at 0 for a process that never mounted would pass for
-        // the wrong reason.
         await sawLine("read-only mode on");
         await wait100ms();
         expect(rawOccurrences("RUNLOOP_READY")).toBe(0);
@@ -6025,9 +4510,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // D1-D3 (altScreen.ts, signals.ts, cli.ts's own enterAltScreen/exitAltScreen call sites): one
-  // continuous alt-screen session per launch, entered once before the first Ink mount and exited
-  // exactly once on every exit path — never left active, and never torn down twice.
   describe("alt-screen enter/exit lifecycle", () => {
     test("/exit: enters the alt screen once and exits it once, after Ink's own teardown", async () => {
       const scriptPath = join(dir, "child-altscreen-exit.mjs");
@@ -6059,10 +4541,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // H-4's own scenario (the "second Ctrl-C" test above), re-asserted for the alt screen: the
-    // fatal path runs signals.ts's own `cleanups` (Ink's `instance.unmount()` among them) before
-    // `onSignalCleanupLast`'s `exitAltScreen` — proven here by the exit sequence still landing
-    // exactly once despite the process dying by signal rather than returning from run().
     test("fatal Ctrl-C: exits the alt screen exactly once when the process dies by signal", async () => {
       const scriptPath = join(dir, "child-altscreen-fatal-ctrlc.mjs");
       writeFileSync(scriptPath, childScriptCancel(dir));
@@ -6072,16 +4550,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
         child.stdin?.write("\x03");
         await sawLine("RUNLOOP_ABORTED aborted=true");
-        // The first press's cancel slot is now spent (same reasoning as the "second Ctrl-C" test
-        // above) — this second press finds it empty and falls through to signals.ts's fatal path.
         child.stdin?.write("\x03");
 
-        // Asserted on "settled", not on `signal`/`code` — same reason the "second Ctrl-C" test
-        // above only checks this much: `child` here is the python3 pty allocator, and its own `-c`
-        // script (`pty.spawn(sys.argv[1:])`, startChild's own comment) never forwards the return
-        // value to `sys.exit`, so python3 always exits normally once that call returns, regardless
-        // of how the grandchild actually died. Not independently checkable from outside the dying
-        // process on this pty harness.
         const result = await Promise.race([
           exited,
           new Promise<"the run never settled">((r) =>
@@ -6108,10 +4578,7 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("RUNLOOP_READY");
         const pidMatch = /PID=(\d+)/.exec(stdoutSoFar());
         if (pidMatch === null) throw new Error(`no PID= line in ${JSON.stringify(stdoutSoFar())}`);
-        // The pid of the bun process actually running the TUI — not `child.pid`, the python3 pty
-        // allocator's own pid (this function's own header comment). Killed directly, bypassing the
-        // pty entirely, the same way a real `Stop-Process`/systemd stop reaches the process rather
-        // than the terminal it happens to be attached to.
+        // Not child.pid: that is python3.
         process.kill(Number(pidMatch[1]), "SIGTERM");
 
         const result = await Promise.race([
@@ -6128,11 +4595,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // H-2's own scenario ("driveLoop rejecting settles run() instead of hanging forever", above),
-    // re-asserted for the alt screen: run()'s `try { runResult = await runTui(...) } catch (err) {
-    // return fatalDuringTui(err, ...) }` (cli.ts) is what exits it here, via `fatalDuringTui`'s own
-    // `exitAltScreen()` call — not the unconditional `exitAltScreen()` right before `printUsage`,
-    // which sits after that try/catch and is never reached once `runTui` has thrown.
     test("uncaught throw: exits the alt screen exactly once", async () => {
       const scriptPath = join(dir, "child-altscreen-rejects.mjs");
       writeFileSync(scriptPath, childScriptRejects(dir));
@@ -6151,14 +4613,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         expect(rawOccurrences("\x1b[?1049l")).toBe(1);
       } finally {
-        // Already exited in the success case; harmless if the process is already gone.
       }
     }, 60_000);
   });
 
-  // App.tsx's own viewport: the transcript is now a measured, tail-anchored, scrollable
-  // region rather than an append-only `<Static>` — these are the real-terminal counterpart of
-  // App.test.tsx's own viewport tests, on a real pty rather than ink-testing-library's stub.
   describe("transcript viewport scrolling", () => {
     test("a transcript longer than the terminal shows the newest line and hides the oldest, with the InputBox still visible", async () => {
       const scriptPath = join(dir, "child-viewport-overflow.mjs");
@@ -6167,20 +4625,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       const { child, sawLine, lastFrame, sawInFrameTimes } = await startChild(scriptPath, dir);
       try {
         await sawLine("RUNLOOP_READY");
-        // `sawInFrameTimes`, not `sawLine`: the raw pty stream can deliver these bytes before the
-        // synchronized-output CLOSE marker for the frame that contains them, so a raw substring
-        // check can resolve one chunk ahead of `lastFrame()` actually seeing a closed frame with
-        // this line in it — reading `lastFrame()` right after would then race an empty/stale frame.
         await sawInFrameTimes("line-299.txt", 1);
 
         const frame = lastFrame();
         expect(frame).toContain("line-299.txt");
         expect(frame).not.toContain("line-0.txt");
-        // Not "┌": InputBox.tsx's own `border={["top", "bottom"]}` never renders corners at all
-        // (confirmed true under the old Ink InputBox too — `borderLeft={false} borderRight={false}`)
-        // — its own top/bottom rule is what proves it's still visible below the transcript.
         expect(frame).toContain("─".repeat(10));
-        expect(frame).not.toContain("╭"); // square corners, not rounded (Design conformance)
+        expect(frame).not.toContain("╭");
       } finally {
         child.kill("SIGKILL");
       }
@@ -6197,8 +4648,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("done ·");
 
         child.stdin?.write("\x1b[5~"); // Page Up
-        // `sawInFrameTimes`, not `sawLine`, immediately before reading `lastFrame()` below — same
-        // raw-vs-frame race as above.
         await sawInFrameTimes("↑ scrolled — End to follow", 1);
 
         const frame = lastFrame();
@@ -6223,10 +4672,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("↑ scrolled — End to follow");
 
         child.stdin?.write("\x1b[F"); // End
-        // No new distinctive text to `sawLine` on here — the indicator's own DISAPPEARANCE is what
-        // this asserts, so it has to be polled on `lastFrame()` directly rather than waited for via
-        // `sawLine`'s cumulative-capture semantics (the same reasoning `stdoutSoFar`'s own comment
-        // gives for why a live snapshot, not the cumulative one, is what's needed here).
         const deadline = Date.now() + 5_000;
         while (lastFrame().includes("↑ scrolled") && Date.now() < deadline) {
           await new Promise((r) => setTimeout(r, 20));
@@ -6241,15 +4686,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
   });
 
-  // THE risky half of /clear (cli.ts's own comment on the rebind block, onSubmit): without it,
-  // `prepared.checkpointer`/`prepared.tools` keep closing over the OLD session's id, so a tool call
-  // made after /clear silently keeps appending checkpoints to the OLD session's git ref/log —
-  // no error, no warning. `childScriptClear`'s own fake runLoop calls the REAL
-  // `opts.tools.write_file.execute` on every turn (not a synthetic tool-call/tool-result pair),
-  // reading `opts.tools` fresh each call — the only way a real checkpoint through the real
-  // checkpointer can land under whichever session id `prepared.tools` is CURRENTLY bound to.
-  // Every `refs/seri/sessions/*` ref currently in the store — read-only enumeration, no
-  // SHADOW_CONFIG (shadowGit.ts's own config, needed for commits) required for a plain listing.
   function listSessionRefs(gitDir: string): string[] {
     const result = spawnSync(
       "git",
@@ -6268,14 +4704,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       writeFileSync(scriptPath, childScriptClear(dir));
 
       const sessionsDir = join(dir, "sessions");
-      // `dir` is the session's own `cwd` (startChild's own `cwd` param, below, is what sets the
-      // child process's real process.cwd() — the same value loadOrCreateSession's fresh-session
-      // branch records as `session.cwd`) — not inside a real git repo, so `projectRoot` falls back
-      // to `dir` itself, matching checkpointTarget's own resolution exactly. `realpathSync`, not the
-      // raw `dir`: the "/permissions" describe block's own comment on this (above) explains why —
-      // os.tmpdir() on macOS resolves under a symlink, so the CHILD's own `process.cwd()` (spawned
-      // with `cwd: dir`) comes back already resolved, and a store key computed here from the
-      // unresolved `dir` would point at a directory the child never wrote to.
       const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
@@ -6298,11 +4726,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         child.stdin?.write("\r");
         await sawLine("Started a new session");
 
-        // clearCommand's own ordering (cli.ts) awaits sessionUpdated — and, on the TUI path,
-        // tuiPresenter's sessionUpdated does not settle until onSessionChange's own saveSession
-        // call for the new session has actually run — BEFORE printing "Started a new session", so
-        // the new file is already on disk by the time that line appears above; this loop exists
-        // only to read its id, not to wait for it.
         const ids2 = listSessionIds(sessionsDir).filter((id) => id !== oldId);
         expect(ids2).toHaveLength(1);
         const newId = ids2[0]!;
@@ -6315,12 +4738,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("WROTE 2");
         await sawLine("done ·");
 
-        // The new session got a real checkpoint, through a real checkpointer.
         const newRef = `refs/seri/sessions/${newId}`;
         expect(resolveRef(gitDir, newRef)).toBeDefined();
 
-        // The old session's file and ref are exactly as they were before /clear — the second tool
-        // call did not also land there.
         expect(loadSession(oldId, sessionsDir)).toEqual(oldSnapshot);
         expect(resolveRef(gitDir, oldRef)).toBe(oldCommitBeforeClear);
       } finally {
@@ -6328,22 +4748,11 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The rebind's own atomicity fix: `clearCommand`'s `await presenter.sessionUpdated(next)`
-    // throws when the persist promise rejects, but `dispatch({ type: "session-updated", ... })`
-    // (tuiPresenter's own sessionUpdated) already ran synchronously before that rejection — so
-    // `liveState.session.id` has already changed by the time onSubmit's `finally` runs, regardless
-    // of whether `clearCommand` itself ever reached its own `presenter.message(message)`. Takes an
-    // exclusive SQLite lock so the NEW session's `saveSession` call fails, and confirms
-    // the checkpointer still moved off the old session's ref despite that failure — this is what
-    // would go red if the rebind were still living in the `try` block it used to (onSubmit's own
-    // comment explains why).
     test("checkpointing still rebinds off the old session even when /clear's own persist fails", async () => {
       const scriptPath = join(dir, "child-clear-persist-failure.mjs");
       writeFileSync(scriptPath, childScriptClear(dir));
 
       const sessionsDir = join(dir, "sessions");
-      // realpathSync — see the sibling test's own comment just above for why this is scoped to
-      // `worktree` here, not applied to the shared `dir` itself.
       const storeDir = checkpointStoreDir(join(dir, "checkpoints"), realpathSync(dir));
       const gitDir = join(storeDir, "git");
 
@@ -6361,19 +4770,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         expect(oldCommitBeforeClear).toBeDefined();
         const refsBeforeClear = listSessionRefs(gitDir);
 
-        // Exclusive lock: the child's held connection would still write after chmod.
         lockSessionStore(sessionsDir);
 
         child.stdin?.write("/clear");
         await sawLine("/clear");
         child.stdin?.write("\r");
-        // NOT "Started a new session": clearCommand's own ordering (its comment) never reaches
-        // `presenter.message(message)` once `sessionUpdated` has thrown. `onSessionChange`'s own
-        // printWarning call and onSubmit's outer `catch` both surface the same underlying message.
         await sawLine("could not save the session");
 
-        // Restored before driving the next turn: this test is about whether checkpointing rebound,
-        // not about the new session ever landing in the store (it doesn't, and never will for this id).
         restoreSessionStore(sessionsDir);
 
         child.stdin?.write("do another task");
@@ -6384,13 +4787,8 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         await sawLine("WROTE 2");
         await sawLine("done ·");
 
-        // The old session's ref did not receive a second commit — the post-/clear tool call did
-        // not land there, even though /clear's own persist never succeeded.
         expect(resolveRef(gitDir, oldRef)).toBe(oldCommitBeforeClear);
 
-        // A single new ref appeared, and it has a real commit — the checkpointer moved onto the
-        // new (unpersisted) session id, which only happens if bindSession ran from the `finally`
-        // block despite clearCommand's own throw.
         const newRefs = listSessionRefs(gitDir).filter((ref) => !refsBeforeClear.includes(ref));
         expect(newRefs).toHaveLength(1);
         expect(resolveRef(gitDir, newRefs[0] ?? "")).toBeDefined();
@@ -6421,29 +4819,12 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("RUNLOOP_READY 2");
         await sawLine("EMITTED 2 1");
-        // sawLineTimes, not sawLine: turn 1 already printed this identical line, so a bare
-        // `sawLine` here would resolve immediately against that earlier occurrence instead of
-        // waiting for turn 2's own — this file's own sawLineTimes doc comment describes exactly
-        // this pitfall.
         await sawLineTimes("done ·", 2);
-        // `archivistLine`'s own "(archivist: ..." stats line (cli/output.ts) is dispatched into
-        // the transcript only when maybeRunArchivist actually returns a report — i.e. only once
-        // shouldRunArchivist's own trigger fired. A bounded margin, not `sawLine`, since this half
-        // asserts an ABSENCE — but a short one: maybeRunArchivist's own model call fails fast
-        // against the fake provider (this file's own header comment above), so it does not need
-        // anywhere near as long as a real network round trip would.
         await new Promise((r) => setTimeout(r, 2_000));
 
-        // 9 pre-clear + 1 post-clear would cross ARCHIVIST_TOOL_CALL_INTERVAL (10) if the counter
-        // survived /clear unreset — it must not have.
+        // 9 pre-clear + 1 post-clear would cross ARCHIVIST_TOOL_CALL_INTERVAL (10) if the counter survived.
         expect(rawOccurrences("(archivist:")).toBe(0);
 
-        // The positive half: a third turn's 9 more tool calls (1 + 9 = 10) crosses the interval
-        // from wherever the counter actually sits after /clear + turn 2. If that were still 10
-        // (the un-reset bug this test guards against), it would have already fired above and reset
-        // itself before this turn ever ran (archivist.ts's own comment on `toolCallsSinceRun = 0`
-        // after a run), leaving turn 3's 9 back under the interval — so this line appearing at all,
-        // specifically now rather than after turn 2, is what proves the counter restarted at 0.
         child.stdin?.write("do a third task");
         await sawLine("do a third task");
         child.stdin?.write("\r");
@@ -6460,11 +4841,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
   });
 
   describe("/clear end-to-end", () => {
-    // MEDIUM-3's own gate (SlashCommand.mutatesRunState, cli.ts): /clear mutates run state (a
-    // brand-new session id, an emptied transcript), so it must be refused — not queued, not
-    // partially applied — while a turn is in flight, the same discipline /undo/, /restore and
-    // /rewind already get. `childScriptInput`'s own runLoop never settles, so `turnInFlight` stays
-    // true for the life of this test.
     test("/clear during an in-flight turn is refused; session and messages are untouched", async () => {
       const scriptPath = join(dir, "child-clear-midturn.mjs");
       writeFileSync(scriptPath, childScriptInput(dir));
@@ -6480,8 +4856,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
         await sawLine("/clear: can't run while a turn is in flight.");
 
-        // No new session was minted, and the one in-flight session's own messages are exactly what
-        // they were before the refused /clear — a real rebind never touched anything.
         const ids = listSessionIds(sessionsDir);
         expect(ids).toHaveLength(1);
         const loaded = loadSession<ModelMessage>(ids[0]!, sessionsDir);
@@ -6492,12 +4866,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     }, 60_000);
 
     describe.skipIf(!isGitAvailable())("after a real /clear", () => {
-      // clearCommand's own load-bearing order (cli.ts's comment on it): the transcript wipe must
-      // land AFTER the message so the wipe does not erase its own confirmation, but it must ALSO
-      // land after the `> /clear` echo (already in the transcript by the time clearCommand runs)
-      // so wiping actually removes it. `lastFrame()`, not `rawOccurrences`: the raw pty capture
-      // keeps every byte ever written, including a since-cleared line's own earlier appearance —
-      // only the CURRENT frame can prove an absence.
       test("the transcript shows the confirmation, not the echoed `> /clear`", async () => {
         const scriptPath = join(dir, "child-clear-visible.mjs");
         writeFileSync(scriptPath, childScriptClear(dir));
@@ -6521,10 +4889,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         }
       }, 60_000);
 
-      // Complements the old-session snapshot check in the "/clear rebinds checkpointing"
-      // describe above, at the message-array level: the old session's own conversation is
-      // exactly what it was before /clear, with nothing from the NEW session's own further
-      // turn mixed in.
       test("the old session's messages are exactly its pre-/clear messages, none of the post-/clear turn", async () => {
         const scriptPath = join(dir, "child-clear-persist.mjs");
         writeFileSync(scriptPath, childScriptClear(dir));
@@ -6560,10 +4924,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }, 60_000);
     });
   });
-  // The message queue, end to end against the real cli.ts — the reducer and App tests cover the
-  // shape and the keys, but whether a submission is DEFERRED rather than rejected, and whether a
-  // cancel actually promotes the next one, are properties of runTurn's own lifecycle and only
-  // observable here. childScriptQueue's own comment explains what its fake does differently.
   describe("message queue", () => {
     async function queueOneBehindTurn() {
       const scriptPath = join(dir, "queue.mjs");
@@ -6577,11 +4937,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       return { ...started, scriptPath };
     }
 
-    // Two rows, not one, and that is the whole point: a one-row queue drains through a path that
-    // never reads the tail, so every single-row test here stayed green while a two-row queue
-    // rotated in place and started nothing. `queue-head-taken` leaves the tail behind, and cli.ts's
-    // FIFO gate used to read that tail as "something is ahead of this" and re-append the very head
-    // it had just been handed.
     async function queueTwoBehindTurn() {
       const started = await queueOneBehindTurn();
       started.child.stdin?.write("third message");
@@ -6597,9 +4952,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         const frame = lastFrame();
         expect(frame).toContain("1 queued");
         expect(frame).toContain("second message");
-        // The half that today gets wrong: the old path echoed "> second message" into the
-        // transcript and THEN rejected it, so the message read as accepted and was unrecoverable.
-        // A queued message has not been sent, so it is not in the transcript at all.
         expect(frameOccurrences("> second message")).toBe(0);
         expect(frame).not.toContain("A turn is already running");
       } finally {
@@ -6612,8 +4964,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_ABORTED 1");
-        // The whole feature in one line: a second turn exists, and nothing but the drain could
-        // have started it — no key was pressed after the Escape.
         await sawLine("RUNLOOP_CALL 2");
       } finally {
         child.kill("SIGKILL");
@@ -6625,8 +4975,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       try {
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_CALL 2");
-        // The row that was second is now the only one left. Rotation looked identical to a drain
-        // on the count alone — it kept saying "2 queued" — so the count is what pins it.
         await sawInFrameTimes("1 queued", 1);
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_CALL 3");
@@ -6635,10 +4983,6 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // The claim research.md is built on, and the reason this file's fake yields a messages-updated
-    // ending on a user message at all. runLoop really can leave a session that way (its own
-    // onToolPhaseEnd push), and appending the queue head beside it would put two user messages in
-    // front of a provider we ship no model for.
     test("promoting the queue head never leaves two adjacent user messages", async () => {
       const { child, sawLine } = await queueOneBehindTurn();
       try {
@@ -6658,20 +5002,13 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
             index > 0 && message.role === "user" && messages[index - 1].role === "user",
         );
         expect(adjacent).toEqual([]);
-        // Not a vacuous pass, and 5 rather than 3 is what makes that true. Turn 1 alone reaches
-        // disk as three rows ending on the fake's own trailing user message, and a run that stopped
-        // there would satisfy the assertion above without the promoted head ever being appended —
-        // the pair it exists to rule out would not have had a chance to form. Five is turn 1's three
-        // plus the separator and the head.
+        // 5 rather than 3 is what keeps this from a vacuous pass.
         expect(messages.length).toBeGreaterThanOrEqual(5);
       } finally {
         child.kill("SIGKILL");
       }
     }, 60_000);
 
-    // Cancelling means "I am done with this one, move on", whichever key said so. Ctrl-C used to
-    // discard the whole queue and Esc used to advance it, which made the same visible action —
-    // stopping the turn on screen — do opposite things to work the user could see queued.
     test("Ctrl-C cancels and the queue head starts, the same as Escape", async () => {
       const { child, sawLine, lastFrame } = await queueOneBehindTurn();
       try {
@@ -6697,21 +5034,10 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
       }
     }, 60_000);
 
-    // signals.ts clears its one cancel slot as it invokes it, so an ungated second Escape would
-    // find it empty and take the fatal path — process death by signal, mid-unwind, with the queue
-    // and the session going with it. The latch is what keeps Escape from inheriting a contract
-    // that only ever belonged to Ctrl-C.
-    //
-    // The first press has to be observed before the extras are written. Three ESC bytes in one
-    // burst are not three Escape keypresses: the tty CSI parser holds the first byte to see
-    // whether a sequence follows, and the rest are consumed as that sequence. The turn then
-    // never cancels, which is a different bug than the latch this test names.
     test("a second Escape during the unwind is inert, not fatal", async () => {
       const { child, sawLine } = await queueOneBehindTurn();
       try {
-        // One Escape per tick, not a burst: three ESC bytes in one read become a CSI
-        // prefix and never reach InputBox as Escape, which is what a full-frame
-        // repaint (paper ground + hairline) makes more likely.
+        // One Escape per tick: three ESC bytes in one read become a CSI.
         child.stdin?.write("\x1b");
         await sawLine("RUNLOOP_ABORTED 1");
         child.stdin?.write("\x1b");
