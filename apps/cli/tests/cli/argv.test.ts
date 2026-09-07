@@ -45,9 +45,7 @@ describe("run (--selftest)", () => {
     }
 
     expect(code).toBe(0);
-    // Matched rather than compared: the vendored rg's version moves when it is re-vendored, and
-    // pinning it here would fail the build for a reason that has nothing to do with the CLI. What
-    // has to hold is that the line names a version and the mode that produced it.
+    // Vendored rg's version moves when it is re-vendored.
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatch(/^selftest ok: ripgrep \d+\.\d+\.\d+$/);
   });
@@ -84,10 +82,6 @@ describe("run (argv and usage errors)", () => {
     else process.env[key] = original;
   }
 
-  // The save/stub/try/finally/restore block the tests below repeated verbatim. `console.error` is
-  // silenced rather than collected because none of them asserts on it — the ones that reach it (a
-  // provider error, a run stopped at a cap) only ever needed it kept out of the test output. A
-  // test that wants to assert on stderr stubs it itself, as the two that do already have.
   async function captureLogs(
     invoke: () => Promise<number>,
   ): Promise<{ code: number; logs: string[] }> {
@@ -106,8 +100,6 @@ describe("run (argv and usage errors)", () => {
 
   beforeEach(() => {
     sessionsDir = mkdtempSync(join(tmpdir(), "seri-cli-test-sessions-"));
-    // Redirect the config dir to an empty temp dir so a real config.json on this machine
-    // can never supply GROQ_API_KEY and mask the "unset" case (same guard as groq.test.ts).
     tmpConfigRoot = mkdtempSync(join(tmpdir(), "seri-cli-test-config-"));
     process.env.HOME = tmpConfigRoot;
   });
@@ -119,10 +111,6 @@ describe("run (argv and usage errors)", () => {
     rmSync(tmpConfigRoot, { recursive: true, force: true });
   });
 
-  // `--help` matched nothing in cli.ts, so it fell through to the task path and was sent to the
-  // model as the user message: a session file on disk and a full turn burned (5 tool calls,
-  // observed live) to answer a request for the usage text. The key has to be set, or getGroqModel
-  // throws before saveSession and the last two assertions would pass for the wrong reason.
   test.each(["--help", "-h"])(
     "%p prints usage without creating a session or calling the model",
     async (flag) => {
@@ -150,12 +138,6 @@ describe("run (argv and usage errors)", () => {
     },
   );
 
-  // The defect above, one argument away: gating on argv.length meant `seri -h config` was not "the
-  // whole invocation", so it fell through to the task path and wrote a session file and billed a
-  // real turn to answer a request for the usage text. Under parseArgs a flag is a flag in any
-  // position, so this form prints usage without ever reaching the task path — and so do `seri
-  // --help --resume` and `seri --version --quiet`, both usage errors now rather than a route to
-  // the task path at all.
   test.each(["--help", "-h"])(
     "%p followed by another argument still prints usage",
     async (flag) => {
@@ -174,11 +156,6 @@ describe("run (argv and usage errors)", () => {
     },
   );
 
-  // Inverts the pre-parseArgs behaviour: under parseArgs a flag anywhere in argv is a flag, so
-  // `seri fix the --help output` now prints usage and never reaches the model — measured on the
-  // compiled binary that `claude fix the --help output` behaves the same way. `--` is the
-  // documented escape for a task that contains what looks like a flag, exercised in the same test
-  // so it never needs a third copy of this fake.
   test.each(["--help", "-h"])(
     "a task containing %p prints usage instead of reaching the model; -- escapes it",
     async (flag) => {
@@ -214,8 +191,6 @@ describe("run (argv and usage errors)", () => {
     },
   );
 
-  // The same inversion for the third flag: `seri fix the --selftest flag` now runs the
-  // build-verification selftest and never reaches the model; `--` escapes it the same way.
   test("a task containing --selftest runs the selftest instead of reaching the model; -- escapes it", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
@@ -253,9 +228,6 @@ describe("run (argv and usage errors)", () => {
     });
   });
 
-  // The verb-dispatch counterpart of the flag-escaping tests above: `--` has to shield "serve" and
-  // "exec" themselves, not just flag-shaped words after them, or `seri -- serve` starts the daemon
-  // instead of sending "serve" as task text — the bug this pins (round 1/2 of PR 210's review).
   test.each(["serve", "exec", "doctor", "update"])(
     "`seri -- %s` sends the verb as task text instead of dispatching it",
     async (verb) => {
@@ -282,8 +254,6 @@ describe("run (argv and usage errors)", () => {
     } finally {
       console.error = originalError;
     }
-    // No daemon running: reaches handleExecCommand's own "no daemon" exit, proving "exec" (before
-    // `--`) was dispatched rather than folded into task text.
     expect(code).toBe(1);
     expect(errors.join("\n")).toContain("no daemon is running");
   });
@@ -299,17 +269,10 @@ describe("run (argv and usage errors)", () => {
 
     expect(code).toBe(0);
     expect(logs.join("\n")).toContain("Usage:");
-    // Same two guards as the --help case above: with the key set, a fall-through to the task path
-    // would call the model and write a session file rather than failing at getGroqModel.
     expect(capture()).toBeUndefined();
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
-  // The hole PR #27 left open: `--resume` used to take an optional value, so `--help` after it was
-  // rejected as a session id (leading dash) and joined into the task instead — the most recent
-  // session resumed and a turn was billed to answer a request for the usage text. `--resume` now
-  // takes a mandatory value, and parseArgs itself throws on this shape (measured) before any of our
-  // code runs, so no case here is written for it beyond routing the throw to exit 2.
   test("`--resume --help` is a usage error, not a resumed session and a billed turn", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
 
@@ -368,8 +331,6 @@ describe("run (argv and usage errors)", () => {
     expect(capture()?.maxIterations).toBe(3);
   });
 
-  // parseArgs accepts `--max-turns abc` happily (measured) — it has no numeric option type — so
-  // this validation is not redundant with the parser's own checks.
   test.each(["0", "abc"])("`--max-turns %s` is a usage error", async (value) => {
     const { fake, capture } = fakeRunLoop();
 
@@ -425,8 +386,6 @@ describe("run (argv and usage errors)", () => {
     expect(capture()?.permissionMode).toBe("auto");
   });
 
-  // Same shape as "flags but no task is a usage error" above: proves the flag did not accidentally
-  // become the task itself.
   test("`--dangerously-skip-permissions` with no task is a usage error, and creates no session", async () => {
     const { fake, capture } = fakeRunLoop();
 
@@ -720,9 +679,6 @@ describe("run (argv and usage errors)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
-  // End-to-end --profile behaviour through run() itself. Deliberately does NOT pass
-  // deps.sessionsDir, so the session lands wherever the path layer actually resolves against the
-  // beforeEach-redirected HOME above — that is the whole point.
   describe("run (--profile)", () => {
     const originalSeriProfile = process.env.SERI_PROFILE;
 
@@ -761,8 +717,6 @@ describe("run (argv and usage errors)", () => {
       expect(existsSync(join(base, "sessions"))).toBe(false);
     });
 
-    // The executable form of D1: SERI_PROFILE names one profile, --profile names another, and the
-    // flag wins — no envd/ directory is ever created.
     test("--profile beats SERI_PROFILE", async () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       process.env.SERI_PROFILE = "envd";
@@ -790,8 +744,6 @@ describe("run (argv and usage errors)", () => {
 
       expect(code).toBe(2);
       expect(capture()).toBeUndefined();
-      // Rejected before any subcommand dispatch, so nothing under the config root exists at all —
-      // not even the base default's own sessions/.
       expect(existsSync(getBaseConfigDir())).toBe(false);
     });
 
@@ -819,10 +771,6 @@ describe("run (argv and usage errors)", () => {
       expect(logs.join("\n")).toContain("--profile");
     });
 
-    // A usage error from an UNRELATED flag used to be returned before setProfileOverride ran (it
-    // lived in run(), after parseCliArgs), so a previous successful run()'s --profile leaked into
-    // this failed call and would have stayed set for whatever run() came after it. Moved into
-    // parseCliArgs itself, before any validation that can short-circuit, so every call resets it.
     test("a later run() with an unrelated usage error does not leak a prior --profile override", async () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       const { fake } = fakeRunLoop();
@@ -842,11 +790,6 @@ describe("run (argv and usage errors)", () => {
       expect(getConfigDir()).toBe(getBaseConfigDir());
     });
 
-    // The case the reset above actually exists for: parseArgs() itself throws (an unrecognized
-    // flag under `strict: true`), before `values.profile` is ever read — a failure that a reset
-    // placed only after the try/catch would never see. The unrelated-usage-error test above
-    // exercises a DIFFERENT failure (a post-parse validation check), which runs after
-    // setProfileOverride(values.profile) already succeeded and so cannot exercise this path.
     test("a later run() whose own parseArgs() throws does not leak a prior --profile override", async () => {
       process.env.GROQ_API_KEY = "fake-test-key";
       const { fake } = fakeRunLoop();
