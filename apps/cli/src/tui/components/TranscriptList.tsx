@@ -8,18 +8,7 @@ import { theme } from "../theme/theme";
 import { formatReasoningCaret, systemEntryFg, type TranscriptEntry } from "../util/format";
 import { FileChangeLines } from "./FileChangeLines";
 
-// Its own memoized component, not an inline `.map()` in App's own JSX: `state.transcript`'s
-// reference changes when the reducer commits a new array, so `memo` here lets React skip
-// rebuilding and re-diffing the whole elements array on a render triggered by unrelated state (a
-// streamed token's `state.turn.tokens` tick, a scroll-banner flip) — not just skip the per-row
-// markdown work `TranscriptRow`'s own `memo` (below) already bails out of.
-//
-// When App passes window metrics, only viewport+overscan rows mount; spacer boxes stand in for
-// the unmounted prefix/suffix so the scrollbox's `scrollHeight` stays the height of the full
-// array. Isolated mounts (tests, ChildTranscript) omit metrics and still map every entry.
 export function indentReasoningBody(body: string): string {
-  // Caret is already TOOL_INDENT + mark; the body sits one indent further so
-  // it hangs under the word, not under the arrow.
   const pad = `${TOOL_INDENT}${TOOL_INDENT}`;
   return body
     .split("\n")
@@ -82,40 +71,10 @@ export const TranscriptList = memo(function TranscriptList({
   );
 });
 
-// The `●` marker's own width plus one gutter column, reserved on the assistant markdown block
-// below via `paddingLeft` so wrapped/multi-line content never starts under the bullet — kept as
-// one named pair (glyph + derived width) instead of two independently-hardcoded numbers, so a
-// future change to the marker can't silently desync the gutter from what it's actually leaving
-// room for.
 const BULLET = "●";
 const BULLET_GUTTER = BULLET.length + 1;
 
-// One transcript entry's own render, split by role. `role === "assistant"` gets real markdown
-// (bold/headers/lists/links/tables/monochrome-syntax-highlighted code) with the `●` marker
-// rendered as an absolutely-positioned overlay (out of flex flow) rather than an in-flow row
-// sibling, so it survives a multi-line markdown block as one glyph pinned to the row's own top-left
-// corner, not repeated or lost mid-wrap: a `flexDirection="row"` sibling's cross-axis never grows
-// to fit `<markdown>`'s wrapped content (reproduced live — that shape clipped every multi-line
-// assistant message to one row), so the bullet has to sit outside that flex flow entirely for the
-// block to size itself off `<markdown>` alone. `BULLET_GUTTER` reserves the column(s) the overlay
-// paints into. `role === "user"` gets `theme.userBg`'s background band, stretched to the
-// transcript's full width (Yoga's default cross-axis behavior for a column-flex parent's children,
-// which a plain `<text bg=...>` never gets since a text node's own background stops at its own
-// characters). No horizontal padding on it, unlike every other surface: a padding cell belongs to
-// the box rather than to any text node, so a drag beginning on one starts no selection at all —
-// and the left edge is where a reader starts a drag. Verified against
-// tests/tui/transcriptSelection.test.tsx, which went from selecting the row to reporting no
-// selection. The band still reads as a turn marker rather than a stray
-// smudge the width of its own text. A muted system entry with `markdown` set (the archivist
-// summary) is the one exception among non-assistant rows: it reuses the same `<markdown>` path,
-// `fg={theme.muted}`, and no `●` / `BULLET_GUTTER` — a secondary note, not an answer. Everything
-// else (tool calls/results/errors/done markers, and the archivist stats line) stays plain text:
-// none of those are model prose, and a tool result can legitimately contain a literal
-// `*`/`#`/backtick that must render as-is, not get parsed as markdown syntax.
-// Memoized: `TranscriptList` above re-runs when `state.transcript` is a new array, but each
-// entry's own object reference stays stable until that row is rewritten — so `memo` lets React
-// skip re-invoking this for every already-rendered row (assistant rows re-parse and re-highlight
-// markdown, the expensive case) and only render new or rewritten ones.
+// OpenTUI row-flex never grows a sibling to wrapped markdown height, so the bullet is position absolute. Padding cells are not text nodes; a drag starting on padding selects nothing.
 const TranscriptRow = memo(function TranscriptRow({
   entry,
   gap,
@@ -125,11 +84,7 @@ const TranscriptRow = memo(function TranscriptRow({
 }) {
   if (entry.role === "assistant") {
     return (
-      // minHeight={1}: without an in-flow bullet sibling, this box's height comes from `<markdown>`
-      // alone — an assistant entry whose text is whitespace-only (reachable: `pushLine`,
-      // state/reducer.ts, flushes on `state.streaming.length > 0`, which whitespace satisfies)
-      // measures to zero rows and would otherwise make the whole entry, bullet included, disappear
-      // instead of rendering a blank line the way the old row-flex layout did for free.
+      // Without an in-flow bullet, OpenTUI sizes this box from markdown alone; whitespace-only content measures 0 rows.
       <box minHeight={1} marginTop={gap}>
         <text fg={theme.text} position="absolute" top={0} left={0}>
           {BULLET}

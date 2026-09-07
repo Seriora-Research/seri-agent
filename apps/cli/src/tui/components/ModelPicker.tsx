@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// Ported from panels/ModelPicker.tsx: same logic, OpenTUI's element/hook names.
-
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
@@ -22,12 +20,6 @@ import { isDismiss, isEnter, isPrintableKey, splitAtTerminator } from "../util/k
 
 const FILTER_PLACEHOLDER = 'Type to filter — try "included", "free" or "paid"…';
 
-// /model's own live state (tui/reducer.ts's pendingModelPicker) — mirrors ApprovalBox's shape
-// exactly: its own keyboard handler, a single-bordered box, mutually exclusive with InputBox.
-// `filterQuery` is local component state, not reducer state, for the same reason InputBox's own
-// `value` is: this is transient UI data with no reason to survive a resolve/cancel or be visible
-// to anything outside this component. The selection index is owned by useListWindow instead, for
-// the same reason.
 export function ModelPicker({
   entries,
   onModelSelected,
@@ -47,13 +39,6 @@ export function ModelPicker({
   const filtered =
     filterQuery.length === 0 ? entries : entries.filter((row) => matchesFilter(row, filterQuery));
 
-  // Fixes a prior bug where the window rendered always started at `filtered.slice(0, windowSize)`
-  // — the first N entries, regardless of the selection — so Down past the visible window moved
-  // the highlight somewhere nothing on screen showed, and with 279 catalog entries most of the
-  // list was unreachable. `useListWindow`'s own window only moves when the selection would
-  // otherwise land outside it (`handleArrowKey`), not recomputed fresh from the selection on every
-  // render, which would re-center the window on every keypress instead of sliding it only when
-  // actually needed.
   const {
     selected: selectedIndex,
     visible,
@@ -71,8 +56,6 @@ export function ModelPicker({
   }
 
   useKeyboard((key) => {
-    // Escape OR Ctrl-D — deliberately NOT ApprovalBox's Ctrl-D (which triggers app quit): this is
-    // "never mind, back to typing", not a graceful-quit sequence.
     if (isDismiss(key)) {
       onModelPickerCancel?.();
       return;
@@ -88,23 +71,13 @@ export function ModelPicker({
       resetScroll();
       return;
     }
-    // A plain, printable keypress (util/keys.ts's own comment explains the OpenTUI-vs-Ink
-    // distinction `isPrintableKey` reconstructs). Each keypress is its own discrete event under
-    // OpenTUI's byte-level parser, unlike Ink's `useInput`, which could hand a combined
-    // multi-character pty chunk (typed filter text immediately followed by Enter) to one `input`
-    // call — the terminator-splitting this used to need for that case moved to `usePaste` below,
-    // the only path a multi-character chunk can still arrive through.
     if (isPrintableKey(key)) {
       setFilterQuery((query) => query + key.sequence);
       resetScroll();
     }
   });
 
-  // OpenTUI delivers a terminal paste as its own event (bracketed paste), never through
-  // `useKeyboard` — see InputBox.tsx's own comment. `splitAtTerminator` (util/keys.ts) applies the
-  // same way: everything before the first `\r`/`\n` narrows the filter and selects the top match
-  // now, same as pressing Enter right there; everything after is handed to `onModelSelected` so it
-  // can prefill the very next InputBox mount.
+  // OpenTUI delivers paste as its own event; a terminator in the chunk selects now and prefills leftover input.
   function insertPastedText(text: string) {
     const split = splitAtTerminator(text);
     if (split === null) {
@@ -120,8 +93,7 @@ export function ModelPicker({
 
   usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
 
-  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
-  // `insertPastedText` so the two paste paths cannot drift on what an embedded terminator does.
+  // Ctrl-V is not a paste event; share insertPastedText with usePaste.
   useClipboardPaste(insertPastedText);
 
   const promptText = filterQuery.length === 0 ? "> " : `> ${filterQuery}`;
@@ -130,16 +102,7 @@ export function ModelPicker({
   return (
     <PanelBox title="/model">
       <box flexDirection="row">
-        {/* Cursor sits immediately after the prompt/query, matching where a real caret belongs;
-        the placeholder (empty filter only) renders after it instead of between them. `promptText`,
-        the cursor, and the placeholder are three separate `<text>` siblings, the same shape
-        ui/ListRow.tsx's own fix needed (see that file's comment). `flexShrink={0}` on `promptText`
-        and the cursor is required, the same as ListRow's own marker — without it, the row's flex
-        layout shrinks `promptText` (dropping its own trailing space) once the placeholder no
-        longer fits at a narrow width, even with an EMPTY filter query where the cursor itself was
-        never the thing squeezed. Only the placeholder (the one sibling that should lose width)
-        keeps `truncate`; `wrapMode="none"` on it is required too, the same as ListRow's own label,
-        for `truncate` to clip instead of soft-wrap the placeholder across two lines. */}
+        {/* OpenTUI defaults flexShrink to 1, which shrinks promptText including its trailing space once the placeholder no longer fits. wrapMode none is required for truncate to clip instead of wrap. */}
         <text flexShrink={0}>{promptText}</text>
         <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
           {" "}
@@ -150,9 +113,7 @@ export function ModelPicker({
           </text>
         )}
       </box>
-      {/* The 2-space indent and the header text are separate `<text>` siblings, not one string —
-      ui/ListRow.tsx's own comment explains why: a single truncated `<text>` whose content spans
-      more than one child renders BLANK once it overflows. */}
+      {/* A single truncated text node whose content spans more than one child renders blank on overflow. */}
       <box flexDirection="row">
         <text fg={theme.muted}>{"  "}</text>
         <text fg={theme.muted} truncate>

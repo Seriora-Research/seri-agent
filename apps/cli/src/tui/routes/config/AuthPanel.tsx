@@ -7,9 +7,6 @@ import { ErrorLine } from "../../ui/ErrorLine";
 import { singleLine } from "../../util/format";
 import { isEnter } from "../../util/keys";
 
-// Blocking auth panel for WorkOS device login and Grok/Codex browser OAuth. Escape on every
-// step, Enter on result. Without Escape, Ctrl-C during starting/device/browser is a hard kill
-// because no turn is in flight. Dismiss aborts the in-flight poll or callback server.
 function authModeLabel(mode: string): string {
   if (mode === "grok") return "Grok subscription";
   if (mode === "codex") return "ChatGPT plan";
@@ -54,13 +51,7 @@ export function AuthPanel({ state, onDismiss }: { state: AuthPanelState; onDismi
   }
   return (
     <PanelBox title="login" borderColor={state.error ? theme.error : theme.muted}>
-      {/* `state.error` is a single boolean discriminant on this "result" variant, so the branch
-      happens once here rather than as several independently-conditional props — one of the two
-      resulting elements is ErrorLine's own constant-styled alert line, the other a plain
-      unstyled one, and neither needs the other's styling. `singleLine` runs on both branches
-      (ErrorLine calls it internally on the error one) because either message can carry an
-      embedded newline that `truncate` alone does not guard. The outer box's own `borderColor`
-      ternary stays local — it styles the box, not this line. */}
+      {/* OpenTUI truncate does not collapse embedded newlines; singleLine runs on both branches. */}
       {state.error ? (
         <ErrorLine message={state.message} />
       ) : (

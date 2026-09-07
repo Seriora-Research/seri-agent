@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// Ported from panels/SetupPanel.tsx: same logic, OpenTUI's element/hook names.
-
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste } from "@opentui/react";
 import type { ModelProvider } from "@seri/model-catalog";
@@ -298,11 +296,6 @@ function SetupEnterKey({
   onSetupClose?: (leftoverInput?: string) => void;
 }) {
   const { provider, keyName, error, busy, note } = pendingSetup;
-  // The real value lives here, never in anything rendered — the frame below only ever shows
-  // `"*".repeat(value.length)`. This is the one piece of state in this whole file a leaked render
-  // would turn into a credential disclosure, which is why it exists nowhere else: not in
-  // `pendingSetup` (reducer state, visible to anything that reads it), not passed back to cli.ts
-  // until the moment it actually submits.
   const [value, setValue] = useState("");
 
   useKeyboard((key) => {
@@ -327,13 +320,7 @@ function SetupEnterKey({
     setValue((current) => current + key.sequence);
   });
 
-  // OpenTUI delivers a terminal paste as its own event (bracketed paste), never through
-  // `useKeyboard` (InputBox.tsx's own comment) — under Ink this field's typed handler also
-  // received a paste, which is why it stripped `\r\n` from whatever arrived; that stripping moves
-  // here unchanged. Unlike InputBox/ModelPicker, this deliberately does NOT split on an embedded
-  // terminator and auto-submit: a pasted key is never expected to contain a newline, and silently
-  // accepting one into a credential is worse than the rare dropped keystroke this simplification
-  // could cost (SetupEnterKey's original Ink-era comment, carried over unchanged).
+  // OpenTUI delivers bracketed paste to usePaste, never useKeyboard.
   function insertPastedText(text: string) {
     if (busy) return;
     setValue((current) => current + text.replace(/[\r\n]/g, ""));
@@ -341,8 +328,6 @@ function SetupEnterKey({
 
   usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
 
-  // Ctrl-V, which no terminal turns into the paste event above — see the hook's own comment. Shares
-  // `insertPastedText` so a key pasted either way is stripped of newlines the same.
   useClipboardPaste(insertPastedText);
 
   return (

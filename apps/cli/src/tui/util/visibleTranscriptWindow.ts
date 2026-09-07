@@ -1,7 +1,3 @@
-// Pure range math for the transcript mount window — no React, no OpenTUI.
-// Unmeasured rows count as ESTIMATE_ROWS (1): underestimating mounts extra overscan,
-// overestimating leaves a blank spacer in the viewport.
-
 export const ESTIMATE_ROWS = 1;
 export const OVERSCAN_ROWS = 40;
 export const COLD_START_COUNT = 30;

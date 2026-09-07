@@ -1,6 +1,4 @@
 /** @jsxImportSource @opentui/react */
-// Only two steps, no value-entry step: there is nothing to type here, only tools to revoke.
-
 import { useKeyboard } from "@opentui/react";
 import { useListWindow } from "../../hooks/useListWindow";
 import type { PermissionRow } from "../../state/commands";
@@ -11,9 +9,6 @@ import { ConfirmPrompt } from "../../ui/ConfirmPrompt";
 import { ListRow } from "../../ui/ListRow";
 import { isDismiss, isPrintableKey } from "../../util/keys";
 
-// /permissions' own live state (state/reducer.ts's pendingPermissions) — mirrors SetupPanel's
-// step-dispatcher shape with one fewer step; the confirm-remove step delegates to the shared
-// ConfirmPrompt (ui/ConfirmPrompt.tsx) instead of a step-specific sub-component.
 export function PermissionsPanel({
   pendingPermissions,
   onPermissionsRemove,
