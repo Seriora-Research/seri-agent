@@ -142,11 +142,6 @@ describe("reportFromCatalogPricing", () => {
     });
   });
 
-  // The negative control for the `provider` parameter this plan adds: "llama-3.3-70b-versatile"
-  // exists in the catalog, but only under "groq" — asking for it under "anthropic" must miss the
-  // lookup and degrade to unknown, not silently find the groq entry. This is the one case that
-  // would still pass if a hardcoded "groq" survived inside findCatalogEntry's call, unnoticed by
-  // every other test in this file.
   test("returns unknown/none when the model id exists in the catalog but under a different provider", () => {
     expect(
       reportFromCatalogPricing(
@@ -162,8 +157,6 @@ describe("reportFromCatalogPricing", () => {
     });
   });
 
-  // Code-review finding: pricing ALL of usage.inputTokens at the full rate double-bills whatever
-  // portion was actually a cache read/write.
   test("prices cache-read and cache-write tokens at the catalog's cache rates, not the full rate", () => {
     const cachedUsage: LanguageModelUsage = {
       inputTokens: 1_000_000,
@@ -176,15 +169,12 @@ describe("reportFromCatalogPricing", () => {
       outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
       totalTokens: 1_000_000,
     };
-    // 600k * $1.00/M + 300k * $0.10/M + 100k * $0.50/M = 0.6 + 0.03 + 0.05 = 0.68
+
     const report = reportFromCatalogPricing("cached-model", "groq", cachedUsage, fixtureCatalog);
     expect(report.status).toBe("estimated");
     expect(report.amountUsd).toBeCloseTo(0.68, 6);
   });
 
-  // The branch Anthropic actually exercises (D4's own finding: its usage carries
-  // inputTokenDetails.cacheReadTokens/cacheWriteTokens), proven against an anthropic catalog
-  // entry rather than reusing the groq fixture above.
   test("prices an anthropic entry's cache-read tokens at its cache rate", () => {
     const cachedUsage: LanguageModelUsage = {
       inputTokens: 1_000_000,
@@ -197,7 +187,7 @@ describe("reportFromCatalogPricing", () => {
       outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
       totalTokens: 1_000_000,
     };
-    // 700k * $3.00/M + 300k * $0.30/M = 2.1 + 0.09 = 2.19
+
     const report = reportFromCatalogPricing(
       "claude-cached-model",
       "anthropic",
@@ -220,7 +210,7 @@ describe("reportFromCatalogPricing", () => {
       outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
       totalTokens: 1_000_000,
     };
-    // llama-3.3-70b-versatile has no cacheReadPerMTok — the whole 1M still prices at $0.59/M.
+
     const report = reportFromCatalogPricing(
       "llama-3.3-70b-versatile",
       "groq",
@@ -232,7 +222,6 @@ describe("reportFromCatalogPricing", () => {
 });
 
 describe("reportForSubscription", () => {
-  // Pricing a flat-rate turn from the catalog would bill the user for tokens they already bought.
   test("reports included with no dollar amount", () => {
     expect(reportForSubscription()).toEqual({
       amountUsd: undefined,
@@ -243,8 +232,6 @@ describe("reportForSubscription", () => {
 });
 
 describe("a subscription turn is not priced from the catalog", () => {
-  // The gap a reviewer caught: reportForSubscription existed with no production caller, so a
-  // subscription turn was still being costed like a metered one.
   test("reportForSubscription never returns a dollar amount", () => {
     const report = reportForSubscription();
     expect(report.amountUsd).toBeUndefined();

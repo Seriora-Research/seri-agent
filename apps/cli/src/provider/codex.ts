@@ -66,9 +66,7 @@ export function getCodexSubscriptionModel(
   sessionId: string = randomUUID(),
   fetchFn: typeof fetch = fetch,
 ): LanguageModel {
-  // ChatGPT-plan Responses has no storage. store:false must be a providerOptions
-  // value the SDK sees, so getArgs also sets include: reasoning.encrypted_content.
-  // A fetch-layer JSON.parse/stringify of the full conversation cannot do that.
+  // ChatGPT-plan Responses has no storage; store:false must be a providerOptions value so getArgs also sets include: reasoning.encrypted_content.
   return wrapLanguageModel({
     model: createOpenAI({
       apiKey: UNUSED_PLACEHOLDER_KEY,

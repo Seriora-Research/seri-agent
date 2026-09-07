@@ -16,8 +16,7 @@ let tmpRoot: string;
 
 beforeEach(() => {
   delete process.env.ANTHROPIC_API_KEY;
-  // Point the config dir at an empty temp dir so a real config.json on this
-  // machine can never supply ANTHROPIC_API_KEY and mask the "unset" case.
+
   tmpRoot = mkdtempSync(join(tmpdir(), "seri-anthropic-test-"));
   process.env.HOME = tmpRoot;
 });

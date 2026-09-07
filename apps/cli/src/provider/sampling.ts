@@ -18,11 +18,7 @@ export type ResolvedSampling = {
   seedRecord: SamplingRecord;
 };
 
-// Codex (`openai` + subscription) answers `Unsupported parameter: temperature`
-// (and the same for seed). OpenAI Responses — the key-path surface — has no
-// `seed` field. Anthropic has never had one. The Grok CLI proxy is
-// Responses-shaped and unconfirmed; both subscription paths therefore omit
-// both knobs rather than risk a 400 on a paid turn.
+// Codex ChatGPT-plan Responses rejects temperature and seed; OpenAI Responses has no seed (gateway Chat Completions does); Anthropic has never had seed.
 export function temperatureSupport(
   provider: ModelProvider | undefined,
   credential: RouteCredential | undefined,
@@ -39,8 +35,7 @@ export function seedSupport(
   if (provider === undefined) return "unsupported";
   if (credential === "subscription") return "unsupported";
   if (provider === "anthropic") return "unsupported";
-  // The OpenAI key path is Responses, which has no seed. The gateway is
-  // Chat Completions (`.chat()`), which does.
+
   if (provider === "openai" && credential !== "gateway") return "unsupported";
   return "supported";
 }

@@ -2,11 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { dispatchModel } from "../../src/provider/model";
 import type { ResolvedRoute } from "../../src/provider/routing";
 
-// Regression for the gap this PR's own manual e2e testing found live: getGatewayModel
-// (provider/gateway.ts) was defined and exported but never called anywhere — resolveRoute could
-// set ResolvedRoute.credential: "gateway", but nothing downstream read it, so a gateway-covered route
-// always fell through to getModel's provider switch and threw missingKeyError the instant a turn
-// ran, instead of actually routing through the gateway.
 describe("dispatchModel", () => {
   test("a gateway-credential route dispatches through getGatewayModel, never getModel's provider switch", () => {
     const route: ResolvedRoute = {

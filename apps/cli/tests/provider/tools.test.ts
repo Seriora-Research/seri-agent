@@ -18,7 +18,6 @@ import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 
-// Minimal stub satisfying the AI SDK's execute() options param; unused by our adapters.
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",
   messages: [],
@@ -100,9 +99,6 @@ describe("toolDefinitions", () => {
     expect(result).toBe("hello there");
   });
 
-  // The description is the only model-facing channel that says so: the tool result is the returned
-  // string wrapped as `{ type: "json", value }`, indistinguishable from a tool that did write, and
-  // the model was observed treating a returned edit as a saved file and moving on.
   test("edit's description says the result has to be written with write_file", () => {
     expect(toolDefinitions.edit.description).toContain("write_file");
   });
@@ -170,9 +166,6 @@ describe("toolDefinitions", () => {
 });
 
 describe("FS_MUTATING_TOOL_NAMES", () => {
-  // `edit` is in WRITE_TOOL_NAMES for permission reasons but writes nothing (see the test above:
-  // it returns the edited string and the caller writes it). Checkpointing on it would snapshot a
-  // tree identical to the previous one, so the two sets must not be allowed to converge.
   test("excludes edit", () => {
     expect(FS_MUTATING_TOOL_NAMES).not.toContain("edit");
   });
@@ -186,9 +179,6 @@ describe("FS_MUTATING_TOOL_NAMES", () => {
 
 describe("READ_ONLY_TOOL_NAMES", () => {
   test("is exactly read_file/grep/glob", () => {
-    // Sorted on a copy: READ_ONLY_TOOL_NAMES is `readonly` in production and shared by reference
-    // into roles.ts's explore/plan tool lists — sorting it in place here would mutate a value the
-    // rest of this test process still reads.
     expect([...READ_ONLY_TOOL_NAMES].sort()).toEqual(["glob", "grep", "read_file"]);
   });
 
@@ -200,8 +190,6 @@ describe("READ_ONLY_TOOL_NAMES", () => {
 });
 
 describe("DISPATCH_TOOL_NAME", () => {
-  // The whole one-level subagent recursion guard (subagents/registry.ts): this name is not a key of
-  // toolDefinitions, so no subagent ToolSet built from it can ever contain the tool.
   test("is not a key of toolDefinitions", () => {
     expect(Object.keys(toolDefinitions)).not.toContain(DISPATCH_TOOL_NAME);
   });
@@ -245,8 +233,6 @@ describe("classifyBuiltin", () => {
     expect(classifyBuiltin(SKILL_TOOL_NAME)).toBe("read");
   });
 
-  // The point of enumerating the read class rather than the write one: MCP makes the tool set open,
-  // so a name nothing here has ever seen has to cost an approval instead of being waved through.
   test("classifies a name it has never seen write", () => {
     expect(classifyBuiltin("mcp_exa_web_search")).toBe("write");
     expect(classifyBuiltin("no_tool_has_ever_been_called_this")).toBe("write");
@@ -254,16 +240,10 @@ describe("classifyBuiltin", () => {
 });
 
 describe("memory_write (Stage 6b)", () => {
-  // Deliberately absent (spec's own explicit non-change): memory_write is built by
-  // memory/tool.ts's makeMemoryWriteTool factory and reaches exactly one ToolSet, built directly
-  // in memory/archivist.ts's runArchivist — never through toolDefinitions.
   test("is not a key of toolDefinitions", () => {
     expect(Object.keys(toolDefinitions)).not.toContain("memory_write");
   });
 
-  // memory_write writes under the profile root, not the worktree: WRITE_TOOL_NAMES/gate.ts
-  // classify worktree-write permission blocking, and FS_MUTATING_TOOL_NAMES is what a checkpoint
-  // snapshots ahead of — neither applies to a file shadow-git has nothing to snapshot.
   test("is in neither WRITE_TOOL_NAMES nor FS_MUTATING_TOOL_NAMES", () => {
     expect(WRITE_TOOL_NAMES).not.toContain("memory_write");
     expect(FS_MUTATING_TOOL_NAMES).not.toContain("memory_write");
