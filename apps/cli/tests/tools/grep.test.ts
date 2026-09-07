@@ -27,13 +27,10 @@ describe("grep (default mode)", () => {
     expect(result.files).toHaveLength(2);
     expect(result.files?.every((file) => file.endsWith(".txt"))).toBe(true);
     expect(result.files?.some((file) => file.endsWith("c.txt"))).toBe(false);
-    // The whole point of the default: no line text is carried back.
     expect(result.matches).toBeUndefined();
     expect(result.truncated).toBe(false);
   });
 
-  // Mirrors glob.test.ts: the guard has two call sites, and a test covering one of them would let
-  // the other regress silently.
   test("a missing path is reported as a missing path, not as a ripgrep exit code", async () => {
     const missing = join(tmpDir, "does-not-exist");
 
@@ -52,8 +49,6 @@ describe("grep (default mode)", () => {
   });
 
   test("searches for a pattern that looks like a flag instead of letting rg parse it", async () => {
-    // Without a `--` separator rg reads "--force" as an unrecognized flag, exits 2, and the
-    // model gets a thrown error instead of the match it asked for.
     writeFileSync(join(tmpDir, "flag.txt"), "run it with --force here\n");
 
     const result = await grep("--force", { path: tmpDir });
@@ -107,9 +102,7 @@ describe("grep (content mode)", () => {
   });
 
   test("survives a line that is not valid UTF-8, and still returns the other files' matches", async () => {
-    // rg emits base64 `bytes` instead of `text` for anything that is not valid UTF-8. Reading
-    // `.text` unconditionally threw here and lost every match in the tree, not just this one.
-    // 0xE9 is 'é' in latin-1 and is invalid on its own in UTF-8.
+    // rg emits base64 `bytes` instead of `text` for anything that is not valid UTF-8.
     writeFileSync(
       join(tmpDir, "latin1.txt"),
       Buffer.concat([Buffer.from("needle caf"), Buffer.from([0xe9]), Buffer.from(" x\n")]),
@@ -125,15 +118,12 @@ describe("grep (content mode)", () => {
   });
 
   test("returns a capped page instead of throwing when rg outruns the stdout buffer", async () => {
-    // The bug this tool shipped with: a broad pattern over a large tree threw
-    // `rg exited with code null:` and lost every match rg had already found.
     writeFileSync(join(tmpDir, "big.txt"), "needle here on this line\n".repeat(60_000));
 
     const result = await grep("needle", { path: tmpDir, mode: "content" });
 
     expect(result.matches).toHaveLength(MAX_RESULTS);
     expect(result.truncated).toBe(true);
-    // The buffer cuts mid-line, so the partial trailing event must not reach JSON.parse.
     expect(result.matches?.every((match) => match.text === "needle here on this line")).toBe(true);
   });
 });
@@ -152,7 +142,6 @@ describe("grep (count mode)", () => {
   });
 
   test("splits the path from the count on the right, so a Windows drive letter survives", async () => {
-    // rg prints `path:count`, and an absolute Windows path already contains a colon of its own.
     const result = await grep("hello", { path: tmpDir, mode: "count" });
 
     expect(result.counts).toHaveLength(1);
@@ -161,8 +150,6 @@ describe("grep (count mode)", () => {
   });
 
   test("still names the file when the path is a single file rather than a directory", async () => {
-    // rg drops the filename prefix when handed exactly one file and prints a bare count, so
-    // without --with-filename the parser returned a fragment of the digits as the file name.
     const result = await grep("hello", { path: join(tmpDir, "a.txt"), mode: "count" });
 
     expect(result.counts).toHaveLength(1);

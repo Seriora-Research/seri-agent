@@ -27,9 +27,7 @@ describe("glob", () => {
   });
 
   test("resolves a path that rg would otherwise read as a flag", async () => {
-    // Two dashes, not one: rg happily treats `-weird` as a path, but reads `--weird` as a long
-    // flag and exits 2 with "unrecognized flag", which runRipgrep turns into a thrown error.
-    // The dashes have to lead the argument, so the path must be relative — hence the chdir.
+    // rg treats `--weird` as a long flag and exits 2; `-weird` is a path.
     mkdirSync(join(tmpDir, "--weird"));
     writeFileSync(join(tmpDir, "--weird", "d.js"), "d");
 
@@ -45,11 +43,6 @@ describe("glob", () => {
     }
   });
 
-  // The model called glob against a directory that did not exist and got rg's exit code and its
-  // localized OS strerror back, through the loop, as `Tool "glob" threw during execution: Error:
-  // rg exited with code 2: rg: <path>: IO error for operation on <path>: …`. Asserted on our own
-  // message and on the ABSENCE of rg's, never on rg's wording — that tail differs between Windows
-  // and Linux and is localized on both.
   test("a missing path is reported as a missing path, not as a ripgrep exit code", async () => {
     const missing = join(tmpDir, "does-not-exist");
 
@@ -60,10 +53,6 @@ describe("glob", () => {
     expect(error.message).not.toContain("IO error for operation");
   });
 
-  // The path exists; only the traversal through its parent is denied — which existsSync could not
-  // tell apart from the case above, so both arrived as "Path not found" and sent the model looking
-  // somewhere else instead of at the permissions. Guarded like config/commands.test.ts's 0600 case:
-  // chmod does not deny access this way on Windows, and root ignores the mode bits outright.
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "an unreadable path is reported as a permission problem, not as a missing path",
     async () => {
@@ -77,7 +66,7 @@ describe("glob", () => {
 
         expect(error.message).toBe(`Permission denied: ${target}`);
       } finally {
-        // Restored before afterEach, which cannot remove a directory it cannot enter.
+        // afterEach cannot rm a directory it cannot enter.
         chmodSync(parent, 0o755);
       }
     },

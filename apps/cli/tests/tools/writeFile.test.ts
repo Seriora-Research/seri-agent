@@ -53,7 +53,7 @@ describe("writeFile", () => {
       expect(readFileSync(upperPath, "utf8")).toBe("first");
       expect(readFileSync(lowerPath, "utf8")).toBe("second");
     } else {
-      // win32/darwin have case-insensitive filesystems: writing foo.ts overwrites Foo.ts.
+      // win32/darwin filesystems are case-insensitive: writing foo.ts overwrites Foo.ts.
       expect(readFileSync(upperPath, "utf8")).toBe("second");
       expect(readFileSync(lowerPath, "utf8")).toBe("second");
     }
@@ -76,11 +76,6 @@ describe("writeFile", () => {
     }
   });
 
-  // eolCache.ts: a write_file immediately following a read_file on the same
-  // path should reuse the EOL that read_file already saw, instead of re-reading the file from
-  // disk. The file is mutated directly (bypassing both tools) between the read and the write —
-  // if writeFile re-read it for EOL detection rather than using the cache, it would see the
-  // mutated LF content and write LF, not the originally-cached CRLF.
   test("a write following a read on the same path reuses the read's cached EOL instead of re-reading the file", () => {
     const filePath = join(tmpRoot, "crlf-cache.txt");
     writeFileSync(filePath, "old\r\ncontent\r\n");
@@ -103,9 +98,6 @@ describe("writeFile", () => {
     expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
   });
 
-  // eolCache.ts: bash/powershell can touch any file, not just the one a prior read_file cached the
-  // EOL for, so a shell call in between has to drop the whole cache rather than leave writeFile
-  // trusting a line-ending style that command may have just changed on disk.
   test.skipIf(!isBashAvailable())(
     "a shell command between a read and a write invalidates the cached EOL",
     async () => {

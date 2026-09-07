@@ -3,11 +3,6 @@ import { edit } from "../../src/tools/edit";
 import { describeNearMiss } from "../../src/tools/nearMiss";
 
 describe("describeNearMiss", () => {
-  // The case whose absence hid the defect this reframe fixes. `tryLineTrimmedMatch` (edit.ts:28-60)
-  // already trim-matches EVERY line, so a failure that survives the cascade with a correct first
-  // line means a LATER line differs — the dominant real case. Naming line 1 here would name the one
-  // line the model got right; measured on the first implementation, it did exactly that and printed
-  // the same string as both `actual` and `searched`.
   test("names the LATER differing line when the first line of a multi-line oldString matches", () => {
     const content = [
       "export function getApiKey(name) {",
@@ -31,9 +26,6 @@ describe("describeNearMiss", () => {
     expect(report).not.toContain("line 1");
   });
 
-  // Window selection, not first-hit: the window starting at line 5 scores 2 trim-matching lines
-  // ("if (y) {" and "}"), while the earlier one starting at line 2 scores 1 (its "}" alone).
-  // Taking the first window that matched anything at all would name line 2.
   test("picks the window with the most matching lines, not the first window that matches at all", () => {
     const content = ["const a = 1;", "if (x) {", "  go();", "}", "if (y) {", "  stop();", "}"].join(
       "\n",
@@ -53,11 +45,6 @@ describe("describeNearMiss", () => {
     expect(report).toContain("log(err);");
   });
 
-  // A window is selected on "at least one line trim-matched", and a lone `}` clears that. Without
-  // a quality floor on the pair actually printed, the report then asserts two entirely unrelated
-  // lines as a near miss — the same degenerate-probe class the similarity floor exists to stop,
-  // just reached through stage 1 instead of stage 2. Realistic: a model misremembering a block it
-  // is editing lines up the closing brace and nothing else.
   test("a window carried by a lone closing brace is refused, not reported as a near miss", () => {
     const content = [
       "export function handler(req: Request) {",
@@ -78,9 +65,6 @@ describe("describeNearMiss", () => {
     expect(report).toBeNull();
   });
 
-  // Stage 2 scores oldString's first non-blank line against every content line, so when that probe
-  // is a lone `}` some brace in the file scores 1.0 and the report prints identical `actual` and
-  // `searched` — the H2 symptom arriving from the other side. An exact match is not a near miss.
   test("stage 2 never names a line that exactly matches the probe", () => {
     const content = [
       "function a() {",
@@ -96,11 +80,6 @@ describe("describeNearMiss", () => {
     expect(report).toBeNull();
   });
 
-  // The same class as the lone `}` above, and the reason the test is "no alphanumeric character"
-  // rather than a length: `});` is three characters and the most common closer in JS/TS, so any
-  // length cut that admits it admits the hole, and any cut that excludes it moves the hole to
-  // `}));` and `],`. What disqualifies all of them is that they are pure punctuation — they occur
-  // everywhere and identify no position.
   test("a window carried only by `});` is refused, exactly as a lone brace is", () => {
     const content = [
       "app.get('/session', async (req: Request) => {",
@@ -121,9 +100,6 @@ describe("describeNearMiss", () => {
     expect(report).toBeNull();
   });
 
-  // The other half of patience diff's rule, and the half a punctuation test cannot express:
-  // `return;` has identifiers, but occurring three times it says nothing about WHICH window is the
-  // right one. Frequency, not character class, is what makes a line a usable anchor.
   test("a line that repeats in the content cannot qualify a window on its own", () => {
     const content = [
       "const a = 1;",
@@ -145,11 +121,6 @@ describe("describeNearMiss", () => {
     ).toBeNull();
   });
 
-  // The case window scoring alone cannot serve, and the most common edit shape there is. A
-  // one-line oldString can never score in a window: if a content line trim-matched it, tier 1
-  // would have replaced it, so `edit` never reaches here with one. The character-similarity
-  // fallback is what covers it — and knowing what you searched for is not knowing what is
-  // actually there, which is the whole point of the report.
   test("a single-line oldString off by one character names the right line and shows both texts", () => {
     const content = "function total(a, b) {\n  const sum = a + b;\n  return sum;\n}\n";
     const report = describeNearMiss(content, "  const sum = a - b;");
@@ -160,8 +131,6 @@ describe("describeNearMiss", () => {
     expect(report).toContain("const sum = a - b;");
   });
 
-  // The same fallback, reached from a MULTI-line oldString where no line trim-matches anywhere.
-  // Window scoring alone returns null here even though line 2 is one character away.
   test("a multi-line oldString with nothing trim-matching still names the closest line", () => {
     const content = "function total(a, b) {\n  const sum = a + b;\n  return sum;\n}\n";
     const report = describeNearMiss(content, "  const sum = a - b;\n  return total;");
@@ -176,8 +145,6 @@ describe("describeNearMiss", () => {
   });
 });
 
-// The tool-result half of the same behaviour. `edit` throws, the loop turns the throw into an
-// `error-text` tool result (loop.ts:339-346), so what the model reads is exactly this message.
 describe("edit's no-match failure message", () => {
   const content = [
     "export function getApiKey(name) {",

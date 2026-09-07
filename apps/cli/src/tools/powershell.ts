@@ -16,8 +16,6 @@ export async function runPowerShell(
       cwd,
     );
   } finally {
-    // See bash.ts's runBash: a command can touch any file, so the whole cache is dropped rather
-    // than trusting whatever it held before this call ran.
     clearEolCache();
   }
 }
