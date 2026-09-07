@@ -20,10 +20,7 @@ const EMPTY_SOURCES: readonly CompletionSource[] = [];
 const FRAME_CHROME_X = 2 + 2 * PAD_X;
 
 // A wrapping text with the cursor as a row-flex sibling pins the caret to the first wrapped line; Yoga's cross-axis never follows the wrap.
-export function inputCaretLayout(
-  text: string,
-  width: number,
-): { above: string[]; last: string } {
+export function inputCaretLayout(text: string, width: number): { above: string[]; last: string } {
   const cols = Math.max(1, width);
   if (text.length === 0) return { above: [], last: "" };
   const above: string[] = [];

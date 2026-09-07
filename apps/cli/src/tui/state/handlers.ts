@@ -505,8 +505,7 @@ export function createConfigHandlers(opts: {
   function dispatchConfigUpdated(): void {
     try {
       dispatch({ type: "config-updated", config: loadConfig(configDir) });
-    } catch {
-    }
+    } catch {}
   }
 
   function onConfigSelect(key: string): void {
