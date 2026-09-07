@@ -42,8 +42,6 @@ export function createRunScheduled(opts: {
       ...input.session,
       messages: input.session.messages as ModelMessage[],
 
-
-
       systemPrompt: buildSystemPrompt({
         agentsContent: loadAgentsFileFn(input.session.cwd),
         skills: [],
@@ -80,19 +78,12 @@ export function createRunScheduled(opts: {
       verifyConfig: loadVerifyConfig(opts.configDir),
       memory: loadMemory({ configDir: opts.configDir, worktree: session.cwd }),
 
-
       agents: builtinRegistry(),
       skills: new Map(),
       rules: new Map(),
       rulesState: createRulesState(),
 
-
-
-
-
       hooks: { registry: new Map() },
-
-
 
       mcp: new Map(),
       mcpClients: createMcpClients(createSessionDial(opts.configDir)),

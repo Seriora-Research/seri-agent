@@ -9,17 +9,8 @@ export type AuthSession = {
   email: string;
   obtainedAt: string;
 
-
-
-
   expiresAt?: string;
 };
-
-
-
-
-
-
 
 export function expiresAtFrom(expiresIn: number | undefined): string | undefined {
   if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn < 0) {
@@ -40,8 +31,6 @@ export function saveAuthSession(session: AuthSession, configDir: string): void {
   writeFileSync(authPath(configDir), JSON.stringify(session), { mode: 0o600 });
 }
 
-
-
 export function loadAuthSession(configDir: string): AuthSession | undefined {
   const path = authPath(configDir);
   if (!existsSync(path)) return undefined;
@@ -51,7 +40,6 @@ export function loadAuthSession(configDir: string): AuthSession | undefined {
     return undefined;
   }
 }
-
 
 export function hasHostedAuth(configDir: string): boolean {
   const session = loadAuthSession(configDir);

@@ -16,9 +16,6 @@ import {
 } from "./registry";
 import type { McpEntry, McpRegistry } from "./types";
 
-
-
-
 export type McpPanelRow =
   | { readonly kind: "header"; readonly scope: ExtensionSource; readonly sourceFile: string }
   | {
@@ -29,16 +26,10 @@ export type McpPanelRow =
       readonly toolCount: number | undefined;
     };
 
-
 /** Session registry mutation from `/mcp add` or `/mcp remove`; `added` leaves the model tool array byte-identical when the entry has no cataloged tools. */
 export type McpRegistryChange =
   | { readonly kind: "added"; readonly entry: McpEntry }
   | { readonly kind: "removed"; readonly name: string };
-
-
-
-
-
 
 export function mcpCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
@@ -59,19 +50,11 @@ function groupOrder(entries: readonly McpEntry[]): [ExtensionSource, McpEntry[]]
     else group.push(entry);
   }
 
-
-
   const order: ExtensionSource[] = ["project", "user"];
   return order
     .map((source): [ExtensionSource, McpEntry[]] => [source, bySource.get(source) ?? []])
     .filter(([, group]) => group.length > 0);
 }
-
-
-
-
-
-
 
 export function mcpStatusWord(status: McpServerStatus): string {
   if (status.state === "connected") return "connected";
@@ -79,10 +62,6 @@ export function mcpStatusWord(status: McpServerStatus): string {
   if (status.state === "failed") return "unreachable";
   return "idle, connects on first use";
 }
-
-
-
-
 
 export function mcpLoginLine(name: string, result: McpLoginResult): string {
   if (result.status === "success") {
@@ -92,12 +71,8 @@ export function mcpLoginLine(name: string, result: McpLoginResult): string {
   if (result.status === "timeout") return `Authenticating "${name}" timed out.`;
   if (result.status === "aborted") return `Authenticating "${name}" was cancelled.`;
 
-
-
-
   return `Could not authenticate "${name}": ${truncate(result.message.replace(/\s+/g, " "), 200)}`;
 }
-
 
 export function mcpPanelRows(
   registry: McpRegistry,
@@ -111,7 +86,6 @@ export function mcpPanelRows(
     const sourceFile =
       scope === "project" ? relative(worktree, first.spec.filePath) : first.spec.filePath;
     rows.push({ kind: "header", scope, sourceFile });
-
 
     for (const entry of [...entries].sort((a, b) =>
       a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0,
@@ -127,13 +101,6 @@ export function mcpPanelRows(
   }
   return rows;
 }
-
-
-
-
-
-
-
 
 function listLines(registry: McpRegistry, clients: McpClients): string[] {
   if (registry.size === 0) {
@@ -175,17 +142,12 @@ function addResult(
     return { lines: [`"${url}" must be an https URL.`] };
   }
 
-
-
-
   const filePath = join(getMcpDir(deps.configDir), SERVERS_FILENAME);
   try {
     addServerToFile(filePath, { name, url: url as string, headers: {} });
   } catch (err) {
     return { lines: [messageOf(err)] };
   }
-
-
 
   return {
     lines: [`Added "${name}". Connect it from /mcp to preview and trust its tools.`],
@@ -206,8 +168,6 @@ function removeResult(
 
   let removed: boolean;
   try {
-
-
     removed = removeServerFromFile(entry.spec.filePath, name);
   } catch (err) {
     return { lines: [messageOf(err)] };
@@ -216,17 +176,12 @@ function removeResult(
 
   deleteCatalogCache(deps.configDir, name);
 
-
   clearMcpServerAuth(deps.configDir, name);
   return {
     lines: [`Removed "${name}", its cached catalog and its stored credentials.`],
     change: { kind: "removed", name },
   };
 }
-
-
-
-
 
 export function decideMcpCommand(
   args: string[],

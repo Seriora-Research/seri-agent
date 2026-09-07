@@ -14,7 +14,6 @@ const UNIFIED_MARK: Record<UnifiedDiffKind, string> = {
   del: "- ",
 };
 
-
 export function diffLineEntries(before: string, after: string): UnifiedDiffLine[] {
   const beforeLines = before.length === 0 ? [] : before.split("\n");
   const afterLines = after.length === 0 ? [] : after.split("\n");
@@ -61,7 +60,6 @@ export function diffLineEntries(before: string, after: string): UnifiedDiffLine[
   }
   return out;
 }
-
 
 export function diffLines(before: string, after: string): string[] {
   return diffLineEntries(before, after).map((line) => `${UNIFIED_MARK[line.kind]}${line.body}`);

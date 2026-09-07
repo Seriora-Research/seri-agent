@@ -147,7 +147,7 @@ describe("transcript selection", () => {
   test("a drag across the whole unscrolled transcript copies every row in order", async () => {
     const setup = await mountTranscript(MIXED_TRANSCRIPT);
     await flushMarkdown(setup, (frame) => frame.includes("entry point"));
-    await setup.mockMouse.drag(0, 0, 45, 3);
+    await setup.mockMouse.drag(0, 0, 45, 4);
 
     const lines = copiedText(setup).split("\n");
     expect(lines).toHaveLength(3);
@@ -167,8 +167,9 @@ describe("transcript selection", () => {
     await assistant.mockMouse.drag(2, 2, 45, 2);
     expect(copiedText(assistant)).toBe("the parse() entry point handles it");
 
+    // user, gap, assistant, gap, system. y=3 is the assistant-to-system gap and starts no selection.
     const tool = await mountTranscript(MIXED_TRANSCRIPT);
-    await tool.mockMouse.drag(0, 3, 45, 3);
+    await tool.mockMouse.drag(0, 4, 45, 4);
     expect(copiedText(tool)).toBe("tool ran read(src/parse.ts)");
   });
 

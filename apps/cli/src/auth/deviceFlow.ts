@@ -1,25 +1,15 @@
 import { getApiKey } from "../config/config";
 import { type DeviceAuthorization, parseResponseBody, pollDeviceGrant } from "./deviceGrant";
 
-
-
 export { parseResponseBody };
 
-
-
 export const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ1JXPZSYG07NQZBCPQAN46N";
-
-
-
-
 
 export function getWorkosClientId(configDir?: string): string {
   return getApiKey("SERI_WORKOS_CLIENT_ID", configDir) ?? DEFAULT_WORKOS_CLIENT_ID;
 }
 
 const AUTHORIZE_DEVICE_URL = "https://api.workos.com/user_management/authorize/device";
-
-
 
 export const AUTHENTICATE_URL = "https://api.workos.com/user_management/authenticate";
 
@@ -31,19 +21,12 @@ export type TokenResult =
       accessToken: string;
       refreshToken: string;
 
-
-
       expiresIn?: number;
       user: { id: string; email: string };
     }
   | { status: "denied" }
   | { status: "expired" }
   | { status: "error"; message: string }
-
-
-
-
-
   | { status: "aborted" };
 
 export async function requestDeviceCode(
@@ -55,8 +38,6 @@ export async function requestDeviceCode(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ client_id: clientId }),
   });
-
-
 
   const body: any = await parseResponseBody(response);
   if (!response.ok) {
@@ -82,10 +63,6 @@ export function pollForToken(
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
 
-
-
-
-
     signal?: AbortSignal;
   } = {},
 ): Promise<TokenResult> {
@@ -98,7 +75,6 @@ export function pollForToken(
         client_id: clientId,
       }),
 
-
     onSuccess: (body: any) => ({
       accessToken: body.access_token,
       refreshToken: body.refresh_token,
@@ -109,7 +85,6 @@ export function pollForToken(
     ...opts,
   }).then((result): TokenResult => {
     if (result.status === "success") return { status: "success", ...result.value };
-
 
     if (result.status === "tier-denied") return { status: "error", message: result.message };
     return result;

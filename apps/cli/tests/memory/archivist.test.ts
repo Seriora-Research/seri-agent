@@ -18,6 +18,8 @@ import {
   ARCHIVIST_TOOL_CALL_INTERVAL,
   buildArchivistGoal,
   createArchivistState,
+  drainArchivist,
+  enqueueArchivist,
   maybeRunArchivist,
   observeArchivistEvent,
   resetArchivistForRewind,
@@ -80,12 +82,6 @@ describe("shouldRunArchivist", () => {
     expect(shouldRunArchivist(s, 100_000, DEFAULT_COMPACTION_THRESHOLD, false)).toBeUndefined();
   });
 
-
-
-
-
-
-
   test('"near-compaction" fires against DEFAULT_CONTEXT_WINDOW_SIZE, the real fallback a catalog-absent model gets', () => {
     const s = state();
     s.toolCallsSinceRun = 1;
@@ -94,11 +90,6 @@ describe("shouldRunArchivist", () => {
       shouldRunArchivist(s, DEFAULT_CONTEXT_WINDOW_SIZE, DEFAULT_COMPACTION_THRESHOLD, true),
     ).toBe("near-compaction");
   });
-
-
-
-
-
 
   test("near-compaction fires against a caller-supplied compactionThreshold, not the hardcoded default", () => {
     const s = state();
@@ -125,12 +116,38 @@ describe("createArchivistState", () => {
     expect(s.messageCursor).toBe(3);
     expect(s.messages).toEqual(session.messages);
     expect(s.toolCallsSinceRun).toBe(0);
+    expect(s.lastReport).toBeUndefined();
   });
 
+  describe("enqueueArchivist", () => {
+    test("serializes tasks and drainArchivist waits for the last one", async () => {
+      const s = createArchivistState(emptySession());
+      const order: number[] = [];
+      let releaseFirst: () => void = () => {};
+      const firstHold = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
 
+      const first = enqueueArchivist(s, async () => {
+        order.push(1);
+        await firstHold;
+        order.push(2);
+        return undefined;
+      });
+      const second = enqueueArchivist(s, async () => {
+        order.push(3);
+        return undefined;
+      });
 
-
-
+      await Promise.resolve();
+      expect(order).toEqual([1]);
+      releaseFirst();
+      await drainArchivist(s);
+      expect(order).toEqual([1, 2, 3]);
+      await first;
+      await second;
+    });
+  });
 
   test("on an empty session: cursor and tool-call count are both 0, and messages is the session's own array", () => {
     const session = emptySession();
@@ -142,14 +159,6 @@ describe("createArchivistState", () => {
 });
 
 describe("resetArchivistForRewind", () => {
-
-
-
-
-
-
-
-
   test("resets the cursor even when post-rewind growth would defeat the generic bounds check alone", () => {
     const preRewindMessages = Array.from({ length: 5 }, (_, i) => ({
       role: "user" as const,
@@ -159,11 +168,7 @@ describe("resetArchivistForRewind", () => {
     s.messages = preRewindMessages;
     s.messageCursor = 5;
 
-
     const postRewindMessages = preRewindMessages.slice(0, 2);
-
-
-
 
     const grownWithoutReset = [
       ...postRewindMessages,
@@ -176,13 +181,9 @@ describe("resetArchivistForRewind", () => {
     const genericGuardResult = staleCursor > grownWithoutReset.length ? 0 : staleCursor;
     expect(genericGuardResult).toBe(5);
 
-
-
     resetArchivistForRewind(s, postRewindMessages);
     expect(s.messageCursor).toBe(0);
     expect(s.messages).toBe(postRewindMessages);
-
-
 
     s.messages = grownWithoutReset;
     expect(s.messageCursor).toBe(0);
@@ -224,9 +225,6 @@ describe("observeArchivistEvent", () => {
     expect(s.lastInputTokens).toBe(4_000);
   });
 
-
-
-
   test("a compacted event does NOT update lastInputTokens", () => {
     const s = createArchivistState(emptySession());
     s.lastInputTokens = 1_234;
@@ -250,14 +248,6 @@ describe("observeArchivistEvent", () => {
     expect(s.lastInputTokens).toBe(1_234);
   });
 
-
-
-
-
-
-
-
-
   test("a mid-turn compacted event resets the cursor, even when post-compaction growth would defeat the generic bounds check alone", () => {
     const s = createArchivistState(emptySession());
     s.messages = Array.from({ length: 5 }, (_, i) => ({
@@ -266,11 +256,7 @@ describe("observeArchivistEvent", () => {
     }));
     s.messageCursor = 5;
 
-
     const postCompactionMessages = s.messages.slice(0, 2);
-
-
-
 
     const grownWithoutReset = [
       ...postCompactionMessages,
@@ -282,9 +268,6 @@ describe("observeArchivistEvent", () => {
     const staleCursor = 5;
     const genericGuardResult = staleCursor > grownWithoutReset.length ? 0 : staleCursor;
     expect(genericGuardResult).toBe(5);
-
-
-
 
     observeArchivistEvent(s, {
       type: "compacted",
@@ -305,7 +288,6 @@ describe("observeArchivistEvent", () => {
     });
     observeArchivistEvent(s, { type: "messages-updated", messages: postCompactionMessages });
     expect(s.messageCursor).toBe(0);
-
 
     observeArchivistEvent(s, { type: "messages-updated", messages: grownWithoutReset });
     expect(s.messageCursor).toBe(0);
@@ -353,9 +335,6 @@ function stopStream(): LanguageModelV4StreamPart[] {
 }
 
 describe("maybeRunArchivist", () => {
-
-
-
   test("resets an out-of-bounds messageCursor to 0", async () => {
     const ctx = makeCtx();
     const s = createArchivistState(emptySession());
@@ -377,8 +356,6 @@ describe("maybeRunArchivist", () => {
     expect(report).toBeUndefined();
     expect(s.messageCursor).toBe(0);
   });
-
-
 
   test("leaves an in-bounds messageCursor untouched", async () => {
     const ctx = makeCtx();
@@ -585,8 +562,6 @@ describe("maybeRunArchivist", () => {
       s.messages = [{ role: "user", content: "task" }];
       s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
-
-
       await maybeRunArchivist({
         state: s,
         ctx,
@@ -622,6 +597,13 @@ describe("ARCHIVIST_PROMPT", () => {
     expect(ARCHIVIST_PROMPT).toContain("$ARGUMENTS");
     expect(ARCHIVIST_PROMPT).toMatch(/durable false/i);
   });
+
+  test("forbids tool-use constraints as facts or as standing skills", () => {
+    expect(ARCHIVIST_PROMPT).toMatch(/do not run the full test suite/i);
+    expect(ARCHIVIST_PROMPT).toMatch(/not how to use tools/i);
+    expect(ARCHIVIST_PROMPT).toMatch(/standing constraint/i);
+    expect(ARCHIVIST_PROMPT).not.toMatch(/bun test runs the whole suite/i);
+  });
 });
 
 describe("buildArchivistGoal", () => {
@@ -633,9 +615,6 @@ describe("buildArchivistGoal", () => {
     expect(goal).toContain("all three files are empty");
     expect(goal).toContain('"hi"');
   });
-
-
-
 
   test("a non-empty memory goal keeps the entries and budgets, not the coding-agent intro", () => {
     const ctx = makeCtx();
@@ -655,10 +634,6 @@ describe("buildArchivistGoal", () => {
     expect(goal).not.toContain("frozen for this session");
   });
 
-
-
-
-
   test("a transcript whose serialized form exceeds the cap is truncated with a marker", () => {
     const ctx = makeCtx();
     const memory = loadMemory(ctx);
@@ -667,11 +642,6 @@ describe("buildArchivistGoal", () => {
     expect(goal).toContain("characters omitted");
     expect(goal.length).toBeLessThan(JSON.stringify(bigTranscript).length);
   });
-
-
-
-
-
 
   test("truncation keeps content near the END of an oversized transcript, not just the start", () => {
     const ctx = makeCtx();
@@ -684,9 +654,6 @@ describe("buildArchivistGoal", () => {
     expect(goal).toContain("DISTINCTIVE-MARKER-NEAR-THE-END");
   });
 
-
-
-
   test("a transcript under the cap is not truncated", () => {
     const ctx = makeCtx();
     const memory = loadMemory(ctx);
@@ -698,14 +665,6 @@ describe("buildArchivistGoal", () => {
 });
 
 describe("runArchivist", () => {
-
-
-
-
-
-
-
-
   test("a successful run reviews only what's past the cursor, stages a write, reports usage/cost, resets the counter, and advances the cursor", async () => {
     const ctx = makeCtx();
     const model = new MockLanguageModelV4({
@@ -758,22 +717,12 @@ describe("runArchivist", () => {
     expect(state.toolCallsSinceRun).toBe(0);
     expect(state.messageCursor).toBe(3);
 
-
-
-
     expect(report?.staged).toHaveLength(1);
     const [only] = report?.staged ?? [];
     expect(only?.kind).toBe("memory");
     expect(only?.label).toBe("harness/MEMORY.md");
     expect(resolvePendingRef(ctx.configDir, only?.id ?? "")).toHaveLength(1);
   });
-
-
-
-
-
-
-
 
   test("threads its own contextWindow into the child runLoop's opts.contextWindowSize", async () => {
     const ctx = makeCtx();
@@ -860,13 +809,6 @@ describe("runArchivist", () => {
     expect(calls[0]?.opts.reasoningEffort).toBeUndefined();
   });
 
-
-
-
-
-
-
-
   test("the goal reflects the LIVE memory file on disk, not a stale snapshot", async () => {
     const ctx = makeCtx();
     applyWrite(
@@ -902,11 +844,6 @@ describe("runArchivist", () => {
     expect(sentPrompt).toContain("already-recorded-live-fact");
   });
 
-
-
-
-
-
   test("a dispatch that throws resets the counter to 0, returns undefined, and calls onWarning", async () => {
     const ctx = makeCtx();
     const state = createArchivistState(emptySession());
@@ -914,11 +851,6 @@ describe("runArchivist", () => {
     const warnings: string[] = [];
     const model = new MockLanguageModelV4({ doStream: [] });
     const controller = new AbortController();
-
-
-
-
-
 
     const brokenCatalog = { fetchedAt: "", entries: null } as unknown as ModelCatalog;
 
@@ -939,8 +871,6 @@ describe("runArchivist", () => {
     expect(warnings[0]).toContain("archivist run failed");
     expect(state.toolCallsSinceRun).toBe(0);
   });
-
-
 
   test("an already-aborted signal returns undefined silently (no onWarning call) and leaves the counter untouched", async () => {
     const ctx = makeCtx();
@@ -1052,8 +982,6 @@ describe("the archivist provably cannot edit a file, run a command, or dispatch 
       runtime,
     });
 
-
-
     expect(result.summary).toBeDefined();
     for (const path of [distinctivePath]) {
       expect(existsSync(path)).toBe(false);
@@ -1065,7 +993,6 @@ describe("session-1 correction changes session-2 behavior without being repeated
   test("a memory_write with the gate OFF is visible to a fresh loadMemory + buildVolatileTier call, simulating session 2's prepareSession", async () => {
     const ctx = makeCtx();
     setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
-
 
     const beforeTier = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
     expect(beforeTier).not.toContain(
@@ -1084,7 +1011,6 @@ describe("session-1 correction changes session-2 behavior without being repeated
       } as never,
       { toolCallId: "t1", messages: [] } as never,
     );
-
 
     const afterTier = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
     expect(afterTier).toContain("tests are run with bun test from the repo root, never npm test");

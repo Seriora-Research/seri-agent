@@ -87,10 +87,6 @@ describe("explicit session cwd", () => {
   });
 });
 
-
-
-
-
 function mcpConfigDirFor(tmpConfigRoot: string): string {
   return join(tmpConfigRoot, ".seri");
 }
@@ -137,10 +133,6 @@ describe("prepareSession + mcp", () => {
     loadExtensions: () => ({ skills: new Map(), rules: new Map(), hooks: { registry: new Map() } }),
   };
 
-
-
-
-
   beforeEach(() => {
     process.env.GROQ_API_KEY = "fake-test-key";
     tmpConfigRoot = makeDir();
@@ -157,9 +149,6 @@ describe("prepareSession + mcp", () => {
     restoreEnv("SERI_DISABLE_MODELS_FETCH", originalDisableModelsFetch);
     resetCatalogCache();
   });
-
-
-
 
   test("session start performs no network I/O with an MCP server configured", async () => {
     writeGlobalServer("ghost", "https://127.0.0.1:1/mcp");
@@ -197,12 +186,8 @@ describe("prepareSession + mcp", () => {
     const prepared = result as PreparedRun;
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
 
-
     expect(prepared.allowedTools.some((entry) => entry.includes("@"))).toBe(false);
   });
-
-
-
 
   test("a stored MCP grant whose digest no longer matches is dropped and warns", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
@@ -213,7 +198,6 @@ describe("prepareSession + mcp", () => {
       inputSchema: { type: "object" },
     };
     writeGlobalGrant(mcpGrantKey(approvedTool.toolName, toolFingerprint(approvedTool)));
-
 
     const changedTool: McpToolInfo = {
       ...approvedTool,
@@ -411,9 +395,6 @@ describe("bindSession + mcp", () => {
     return result as PreparedRun;
   }
 
-
-
-
   test("bindSession closes the previous mcp clients before installing a fresh pool", async () => {
     const prepared = await freshPrepared();
     let closeCalls = 0;
@@ -450,8 +431,6 @@ describe("bindSession + mcp", () => {
       () => {},
     );
 
-
-
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(closeCalls).toBe(1);
@@ -462,14 +441,7 @@ describe("bindSession + mcp", () => {
   test("bindSession reloads the registry and re-derives allowedTools from the persisted grants on disk", async () => {
     const prepared = await freshPrepared();
 
-
-
-
-
-
     expect(prepared.mcp.has("exa")).toBe(false);
-
-
 
     const configDir = mcpConfigDirFor(tmpConfigRoot);
     mkdirSync(join(configDir, "mcp"), { recursive: true });
@@ -536,10 +508,6 @@ describe("bindSession + mcp", () => {
     expect(prepared.autoModeOnBlock).toBe("ask");
   });
 
-
-
-
-
   async function hookNoticesFor(hooks: HooksLoad): Promise<string[]> {
     const ctx: RunContext = {
       resuming: false,
@@ -575,8 +543,6 @@ describe("bindSession + mcp", () => {
       "⚠ project hooks in /p/.seri/hooks (4 files) have not been reviewed, so none of them ran — /hooks to read them and turn them on",
     ]);
 
-
-
     expect(await hookNoticesFor({ registry: new Map() })).toEqual([]);
   });
 
@@ -590,8 +556,6 @@ describe("bindSession + mcp", () => {
     ).toEqual([
       "⚠ project hooks in /p/.seri/hooks changed since you trusted them (guard.sh, guard.ps1, hooks.yaml and 2 more), so none of them ran — /hooks to review what moved",
     ]);
-
-
 
     expect(
       await hookNoticesFor({

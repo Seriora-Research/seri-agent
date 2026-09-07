@@ -4,12 +4,6 @@ import { join } from "node:path";
 import { runHook } from "../../src/hooks/run";
 import { DEFAULT_HOOK_TIMEOUT_MS, type HookSpec } from "../../src/hooks/types";
 
-
-
-
-
-
-
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const HOOK_DIR = join(REPO_ROOT, ".cursor", "hooks");
 
@@ -24,7 +18,6 @@ function spec(path: string): HookSpec {
     path,
     matcher: undefined,
 
-
     timeoutMs: process.platform === "win32" ? 15_000 : DEFAULT_HOOK_TIMEOUT_MS,
     source: "project",
     filePath: join(HOOK_DIR, "hooks.yaml"),
@@ -32,8 +25,6 @@ function spec(path: string): HookSpec {
 }
 
 const TEST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
-
-
 
 const describeIfPresent = existsSync(blockDangerous) ? describe : describe.skip;
 
@@ -51,8 +42,6 @@ describeIfPresent("the reference hooks in .cursor/hooks/ run under seri unchange
     },
     TEST_TIMEOUT_MS,
   );
-
-
 
   test(
     "rm -rf / is blocked, and the script's own stderr is the reason",

@@ -152,9 +152,6 @@ describe("dispatch_subagents", () => {
     expect(calls[1].startedAt).toBeLessThan(calls[0].endedAt as number);
   });
 
-
-
-
   test("a child that calls dispatch_subagents anyway gets Unknown tool, never a nested dispatch", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
@@ -462,15 +459,9 @@ describe("dispatch_subagents", () => {
     expect(result.results[0].summary).toBe("cancelled before it produced a summary");
   });
 
-
-
-
-
-
   test("writer-role tasks (writer + tester) never overlap in wall-clock time", async () => {
     const { fake, calls } = fakeChildLoop((_opts, index) => ({
       events: [{ type: "done", reason: "no-tool-call" }],
-
 
       before: index === 0 ? () => sleep(30) : undefined,
     }));
@@ -494,9 +485,6 @@ describe("dispatch_subagents", () => {
     const barrier = makeBarrier();
     const { fake, calls } = fakeChildLoop((_opts, index) => {
       if (index === 0) {
-
-
-
         return {
           events: [{ type: "done", reason: "no-tool-call" }],
           before: async () => {
@@ -573,12 +561,6 @@ describe("dispatch_subagents", () => {
     expect(result.results[0].usage).toEqual({ inputTokens: 4, outputTokens: 6, totalTokens: 10 });
     expect(result.totalUsage).toEqual({ inputTokens: 4, outputTokens: 6, totalTokens: 10 });
   });
-
-
-
-
-
-
 
   test("a denied child's summary names the mode and the denial count, not the generic cap message", async () => {
     const model = new MockLanguageModelV4({
@@ -701,7 +683,6 @@ describe("dispatch_subagents", () => {
     expect(result.results).toHaveLength(5);
     expect(result.results[3].summary).toContain("3-task limit");
     expect(result.results[4].summary).toContain("3-task limit");
-
 
     expect(result.results[3].usage).toEqual({});
     expect(result.results[3].doneReason).toBeUndefined();
@@ -1093,9 +1074,6 @@ describe("dispatch_subagents", () => {
     expect(snapshots).toHaveLength(1);
   });
 
-
-
-
   test("an all-tester batch (no writer) still takes exactly one checkpoint snapshot", async () => {
     const { fake } = fakeChildLoop(() => ({
       events: [{ type: "done", reason: "no-tool-call" }],
@@ -1116,10 +1094,6 @@ describe("dispatch_subagents", () => {
     expect(snapshots).toHaveLength(1);
   });
 });
-
-
-
-
 
 function withCustomAgent(spec: Partial<AgentSpec> & { name: string }): AgentRegistry {
   const agents = new Map(builtinRegistry());
@@ -1180,9 +1154,6 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(text).not.toContain('"quiet"');
   });
 
-
-
-
   test("an agent with no description is not in the schema's enum either, but /name still runs it", async () => {
     const agents = withCustomAgent({ name: "quiet", description: "" });
     const schema = dispatchSchema(agents);
@@ -1207,8 +1178,6 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(calls).toHaveLength(1);
     expect(result.results[0].summary).toBe("graded");
   });
-
-
 
   test("a task whose role the registry does not hold comes back as a not-run row", async () => {
     const { fake, calls } = fakeChildLoop(() => ({
@@ -1249,9 +1218,6 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(calls[0].opts.system).toContain('"reviewer" subagent');
     expect(calls[0].opts.system?.startsWith("PARENT SYSTEM")).toBe(true);
   });
-
-
-
 
   test("a custom agent's ToolSet can never contain dispatch_subagents", async () => {
     const { fake, calls } = fakeChildLoop(() => ({

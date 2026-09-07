@@ -1,5 +1,3 @@
-
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,7 +53,6 @@ function fakeListen(result: McpCallbackWait): {
   };
   return { listen: async () => server, closes, waits };
 }
-
 
 function fakeAuth(results: readonly ("AUTHORIZED" | "REDIRECT")[]): {
   authFn: typeof auth;

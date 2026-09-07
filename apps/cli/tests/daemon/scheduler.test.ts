@@ -38,9 +38,7 @@ afterEach(async () => {
   for (const database of openDatabases) {
     try {
       database.close();
-    } catch {
-
-    }
+    } catch {}
   }
   openDatabases = [];
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });

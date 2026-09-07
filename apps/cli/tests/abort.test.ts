@@ -2,24 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { onAbort } from "../src/abort";
 
 describe("onAbort", () => {
-
-
-
-
-
-
-
-
   test("invokes the handler for a signal that is already aborted, not only for one that aborts later", () => {
     const already: string[] = [];
     const past = onAbort(AbortSignal.abort(), () => already.push("cancelled"));
 
-
-
-
     expect(already).toEqual(["cancelled"]);
     expect(past.aborted()).toBe(true);
-
 
     expect(() => past.dispose()).not.toThrow();
 

@@ -1,11 +1,4 @@
-
-
-
 export type ModelProvider = "groq" | "openrouter" | "anthropic" | "openai" | "google" | "xai";
-
-
-
-
 
 export type ReasoningOption =
   | { type: "effort"; values: string[] }
@@ -16,10 +9,6 @@ export type ModelCatalogEntry = {
   id: string;
   provider: ModelProvider;
   displayName: string;
-
-
-
-
 
   family: string | null;
   contextWindow: number;

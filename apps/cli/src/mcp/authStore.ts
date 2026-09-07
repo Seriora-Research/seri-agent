@@ -8,13 +8,7 @@ import type {
 import { atomicWriteFile } from "../atomicWriteFile";
 import { getMcpDir } from "../config/paths";
 
-
-
-
-
 export type McpServerAuth = {
-
-
   readonly serverUrl: string;
   readonly tokens?: OAuthTokens;
   readonly obtainedAt?: string;
@@ -22,19 +16,9 @@ export type McpServerAuth = {
   readonly authorizationServer?: OAuthAuthorizationServerInformation;
 };
 
-
-
-
 export function mcpAuthPath(configDir: string, name: string): string {
   return join(getMcpDir(configDir), "auth", `${name}.json`);
 }
-
-
-
-
-
-
-
 
 export function loadMcpServerAuth(
   configDir: string,
@@ -54,10 +38,6 @@ export function loadMcpServerAuth(
   }
 }
 
-
-
-
-
 export function saveMcpServerAuth(
   configDir: string,
   name: string,
@@ -74,9 +54,6 @@ export function saveMcpServerAuth(
   atomicWriteFile(mcpAuthPath(configDir, name), JSON.stringify(merged));
   return merged;
 }
-
-
-
 
 export function clearMcpServerAuth(configDir: string, name: string): void {
   const path = mcpAuthPath(configDir, name);

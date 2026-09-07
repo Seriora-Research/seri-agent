@@ -58,8 +58,6 @@ function jsonToolResultValue(part: unknown): unknown {
   return payload.value;
 }
 
-
-
 export function todoListFromMessages(messages: readonly ModelMessage[]): TodoList {
   let list: TodoList = [];
   for (const message of messages) {

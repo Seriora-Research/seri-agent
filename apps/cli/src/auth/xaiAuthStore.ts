@@ -6,24 +6,15 @@ import { expiresAtFrom } from "./authStore";
 export type XaiSubscription = {
   accessToken: string;
 
-
   refreshToken: string;
   obtainedAt: string;
 
-
   expiresAt?: string;
-
 
   scope?: string;
 
-
   accountId?: string;
 };
-
-
-
-
-
 
 export const XAI_AUTH_FILENAME = "xai-auth.json";
 
@@ -31,16 +22,9 @@ function xaiAuthPath(configDir: string): string {
   return join(configDir, XAI_AUTH_FILENAME);
 }
 
-
-
-
-
 export function saveXaiSubscription(subscription: XaiSubscription, configDir: string): void {
   atomicWriteFile(xaiAuthPath(configDir), JSON.stringify(subscription));
 }
-
-
-
 
 export function loadXaiSubscription(configDir: string): XaiSubscription | undefined {
   const path = xaiAuthPath(configDir);
@@ -59,8 +43,6 @@ export function loadXaiSubscription(configDir: string): XaiSubscription | undefi
 export function hasXaiSubscription(configDir: string): boolean {
   return loadXaiSubscription(configDir) !== undefined;
 }
-
-
 
 export function clearXaiSubscription(configDir: string): void {
   const path = xaiAuthPath(configDir);

@@ -26,20 +26,10 @@ describe("fetchWithTimeout", () => {
     ).rejects.toThrow("aborted");
   });
 
-
-
-
-
-
-
-
-
   test("aborts a response body that never closes, even after the fetch itself already resolved", async () => {
     const fetchFn = (_url: string, init?: RequestInit): Promise<Response> => {
       const body = new ReadableStream({
         start(controller) {
-
-
           init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
         },
       });

@@ -6,18 +6,12 @@ const MODELS_DEV_URL = "https://models.dev/api.json";
 // models.dev has no documented rate limit; this bounds an unbounded hang, not a measured budget.
 const FETCH_TIMEOUT_MS = 10_000;
 
-
-
-
-
-
 export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
   "groq",
   "openrouter",
   "anthropic",
   "openai",
   "google",
-
 
   "xai",
 ];
@@ -27,7 +21,6 @@ export const GATEWAY_PROVIDER: ModelProvider = "openrouter";
 type RawModel = {
   id: string;
   name: string;
-
 
   family: string | null;
   tool_call: boolean;
@@ -66,8 +59,6 @@ function toEntry(provider: ModelProvider, raw: RawModel): ModelCatalogEntry {
   };
 }
 
-
-
 export function mapRawCatalog(raw: RawCatalogResponse): ModelCatalogEntry[] {
   const entries: ModelCatalogEntry[] = [];
   for (const provider of CATALOG_PROVIDERS) {
@@ -78,30 +69,11 @@ export function mapRawCatalog(raw: RawCatalogResponse): ModelCatalogEntry[] {
   return filterCatalogEntries(entries);
 }
 
-
-
-
-
-
-
-
-
 let cachedPromise: Promise<ModelCatalog> | undefined;
-
-
-
-
-
-
 
 export function resetCatalogCache(): void {
   cachedPromise = undefined;
 }
-
-
-
-
-
 
 export async function loadCatalog(
   manifest: ModelCatalog,
@@ -134,11 +106,6 @@ export function findCatalogEntry(
 ): ModelCatalogEntry | undefined {
   return catalog.entries.find((entry) => entry.id === id && entry.provider === provider);
 }
-
-
-
-
-
 
 export function isZeroPriceEntry(entry: ModelCatalogEntry | undefined): boolean {
   return (

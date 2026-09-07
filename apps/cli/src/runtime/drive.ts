@@ -9,6 +9,7 @@ import {
   BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
   configValue,
   loadConfig,
+  loadMemoryConfig,
   standingDenyReadsOutside,
 } from "../config/config";
 import { loadContainmentExpected } from "../containment/escape";
@@ -20,10 +21,12 @@ import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "../
 import { grantFingerprint } from "../mcp/registry";
 import { mcpCallSubject, withMcp } from "../mcp/tool";
 import {
+  ARCHIVIST_TOOL_CALL_INTERVAL,
   type ArchivistReport,
   type ArchivistState,
-  maybeRunArchivist,
+  enqueueArchivist,
   observeArchivistEvent,
+  runArchivist,
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
 import type { CostReport } from "../provider/cost";
@@ -119,6 +122,7 @@ export type DriveLoopOptions = {
   askUser?: AskUserPresenter;
   composeAskUser?: boolean;
   askOutsideFs?: boolean;
+  onArchivist?: (report: ArchivistReport) => void;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -336,6 +340,48 @@ export async function driveLoop(
   let directSummary: string | undefined;
   let submittedPlan: SubmittedPlan | undefined;
 
+  function queueArchivist(
+    trigger: "tool-count" | "near-compaction",
+    signal: AbortSignal,
+  ): Promise<ArchivistReport | undefined> {
+    const overlay = overlayFor("archivist");
+    return enqueueArchivist(archivistState, async () => {
+      if (archivistState.messageCursor > archivistState.messages.length) {
+        archivistState.messageCursor = 0;
+      }
+      if (
+        trigger === "near-compaction" &&
+        archivistState.messageCursor >= archivistState.messages.length
+      ) {
+        return undefined;
+      }
+      const report = await runArchivist({
+        state: archivistState,
+        trigger,
+        ctx: { configDir: ctx.configDir, worktree },
+        model: overlay.model,
+        route: { model: overlay.modelId, provider: overlay.provider },
+        catalog,
+        contextWindow: overlay.contextWindowSize ?? catalogEntry?.contextWindow,
+        signal,
+        onWarning: printWarning,
+        reasoningEffort: overlay.reasoningEffort,
+        onBeforeTool: hookRunner?.onBeforeTool,
+        onAfterTool: hookRunner?.onAfterTool,
+        containmentEscapeExpected,
+        classifyToolCall: prepared.classifyToolCall,
+        autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
+        runLoop: runLoopFn,
+      });
+      if (report !== undefined) {
+        archivist = report;
+        prepared.trajectory.recordArchivist(report);
+        driveOpts.onArchivist?.(report);
+      }
+      return report;
+    });
+  }
+
   async function* directDispatchEvents(direct: {
     agent: AgentSpec;
     goal: string;
@@ -403,6 +449,13 @@ export async function driveLoop(
           seed: samplingConfig.seed,
           terminalTools:
             driveOpts.planMode === undefined ? undefined : new Set([SUBMIT_PLAN_TOOL_NAME]),
+          onBeforeCompact:
+            driveOpts.runArchivist === false
+              ? undefined
+              : async () => {
+                  if (!loadMemoryConfig(ctx.configDir).archivistEnabled) return;
+                  await queueArchivist("near-compaction", controller.signal);
+                },
         })) {
       observeArchivistEvent(archivistState, event);
       prepared.trajectory.recordLoopEvent(event);
@@ -458,25 +511,14 @@ export async function driveLoop(
       }
     }
 
-    if (driveOpts.runArchivist !== false) {
-      const archivistOverlay = overlayFor("archivist");
-      archivist = await maybeRunArchivist({
-        state: archivistState,
-        ctx: { configDir: ctx.configDir, worktree },
-        contextWindow: catalogEntry?.contextWindow,
-        model: archivistOverlay.model,
-        route: { model: archivistOverlay.modelId, provider: archivistOverlay.provider },
-        catalog,
-        signal: controller.signal,
-        onWarning: printWarning,
-        reasoningEffort: archivistOverlay.reasoningEffort,
-        onBeforeTool: hookRunner?.onBeforeTool,
-        onAfterTool: hookRunner?.onAfterTool,
-        containmentEscapeExpected,
-        classifyToolCall: prepared.classifyToolCall,
-        autoModeOnBlock: prepared.autoModeOnBlock ?? "deny",
-      });
-      prepared.trajectory.recordArchivist(archivist);
+    if (driveOpts.runArchivist !== false && !controller.signal.aborted) {
+      if (
+        loadMemoryConfig(ctx.configDir).archivistEnabled &&
+        archivistState.toolCallsSinceRun >= ARCHIVIST_TOOL_CALL_INTERVAL
+      ) {
+        const background = new AbortController();
+        void queueArchivist("tool-count", background.signal);
+      }
     }
   } finally {
     unregisterCancel();

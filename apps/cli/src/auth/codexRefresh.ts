@@ -72,9 +72,7 @@ async function refreshCodexSubscriptionOnce(
     let accountId = grant.accountId;
     try {
       accountId = extractCodexAccountId(tokens.accessToken);
-    } catch {
-
-    }
+    } catch {}
     const updated = subscriptionFromCodexTokens({ ...tokens, accountId });
     saveCodexSubscription(updated, configDir);
     const credential = grantFromSubscription(updated);
@@ -210,8 +208,6 @@ function rememberPlanType(result: unknown): void {
 const MODEL_LIST_PAGE = 100;
 const MODEL_LIST_MAX_PAGES = 20;
 
-
-
 export const CODEX_PROTOCOL_CLIENT_VERSION = "0.148.0";
 
 function nextCursorOf(result: unknown): string | undefined {
@@ -243,7 +239,6 @@ export async function listCodexModels(opts: RefreshCodexOpts = {}): Promise<Code
     return cachedModels;
   }
 
-
   if (opts.rpc !== undefined) {
     return listCodexModelsOnce(opts);
   }
@@ -273,9 +268,7 @@ async function listCodexModelsViaRpc(rpc: CodexJsonRpc): Promise<CodexListedMode
   const listed = await listAllCodexModelPages(rpc);
   try {
     rememberPlanType(await rpc.request("account/read"));
-  } catch {
-
-  }
+  } catch {}
   return listed;
 }
 

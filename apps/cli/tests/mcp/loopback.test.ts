@@ -1,6 +1,3 @@
-
-
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { mcpCallbackUri } from "../../src/mcp/authProvider";
 import { type CallbackServer, startCallbackServer } from "../../src/mcp/loopback";
@@ -11,8 +8,6 @@ afterEach(() => {
   for (const server of opened) server.close();
   opened = [];
 });
-
-
 
 function freePorts(count: number): number[] {
   const probes = Array.from({ length: count }, () =>
@@ -141,8 +136,6 @@ describe("a taken port falls through to the next candidate", () => {
   });
 });
 
-
-
 describe("the page the browser is left on", () => {
   async function bodyFor(query: string): Promise<string> {
     const server = await start(freePorts(1));
@@ -156,16 +149,11 @@ describe("the page the browser is left on", () => {
     expect(body).toContain("Returning you to seri. You can close this tab.");
   });
 
-
-
   test("a declined login points back at seri rather than explaining itself", async () => {
     const body = await bodyFor("?error=access_denied");
     expect(body).toContain("Authorization failed");
     expect(body).toContain("Return to seri for details.");
   });
-
-
-
 
   test("is self-contained, so nothing on it can fail to load", async () => {
     const body = await bodyFor("?code=abc");
@@ -178,9 +166,6 @@ describe("the page the browser is left on", () => {
     const body = await bodyFor("?code=abc");
     expect(body).toContain("prefers-color-scheme:dark");
   });
-
-
-
 
   test("puts nothing from the request into the page", async () => {
     const body = await bodyFor('?code=%3Cimg%20src%3Dx%20onerror%3D"alert(1)"%3E&state=x');

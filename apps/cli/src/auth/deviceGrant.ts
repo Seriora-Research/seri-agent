@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 export type DeviceAuthorization = {
   deviceCode: string;
   userCode: string;
@@ -15,10 +6,6 @@ export type DeviceAuthorization = {
   expiresIn: number;
   interval: number;
 };
-
-
-
-
 
 export type DeviceGrantResult<T> =
   | { status: "success"; value: T }
@@ -31,15 +18,10 @@ export type DeviceGrantResult<T> =
 export type PollOptions<T> = {
   tokenUrl: string;
 
-
   body: () => URLSearchParams;
   onSuccess: (payload: Record<string, unknown>) => T;
 
-
   describeError?: (raw: unknown) => string;
-
-
-
 
   tierDeniedOn403?: boolean;
   fetchFn?: typeof fetch;
@@ -60,10 +42,6 @@ export async function parseResponseBody(response: Response): Promise<Record<stri
 function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-
-
-
 
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
@@ -94,14 +72,9 @@ export async function pollDeviceGrant<T>(
     });
     const payload = await parseResponseBody(response);
 
-
-
     if (isAborted(signal)) return { status: "aborted" };
 
     if (response.ok) return { status: "success", value: opts.onSuccess(payload) };
-
-
-
 
     if (opts.tierDeniedOn403 === true && response.status === 403) {
       return {

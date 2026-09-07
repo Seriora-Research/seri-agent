@@ -298,6 +298,8 @@ export async function* runLoop(opts: {
   cwd?: string;
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
+  /** Runs after a compact is decided and before messages are evicted. */
+  onBeforeCompact?: () => Promise<void>;
 }): AsyncGenerator<LoopEvent> {
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS;
   const catalogEntry =
@@ -335,6 +337,7 @@ export async function* runLoop(opts: {
   ): AsyncGenerator<LoopEvent, "ok" | "skipped" | "failed" | "aborted"> {
     const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
     if (evictBoundary === null) return "skipped";
+    if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
     try {
       const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
         stream: opts.credential === "subscription" && opts.provider === "openai",

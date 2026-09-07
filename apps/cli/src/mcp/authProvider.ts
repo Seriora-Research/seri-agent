@@ -1,6 +1,3 @@
-
-
-
 import { randomBytes } from "node:crypto";
 import type { OAuthClientMetadata, OAuthClientProvider } from "@ai-sdk/mcp";
 import {
@@ -11,20 +8,13 @@ import {
 } from "./authStore";
 import type { McpServerSpec } from "./types";
 
-
-
 export const MCP_CALLBACK_PORTS: readonly number[] = [41999, 42000, 42001, 42002];
 export const MCP_CALLBACK_PATH = "/callback";
-
-
-
 
 // RFC 8252 §7.3: 127.0.0.1, never "localhost" — a name can resolve to ::1 or a hosts-file hijack.
 export function mcpCallbackUri(port: number): string {
   return `http://127.0.0.1:${port}${MCP_CALLBACK_PATH}`;
 }
-
-
 
 export class McpLoginRequiredError extends Error {
   constructor(readonly server: string) {
@@ -32,10 +22,6 @@ export class McpLoginRequiredError extends Error {
     this.name = "McpLoginRequiredError";
   }
 }
-
-
-
-
 
 export type McpAuthInteraction =
   | { readonly kind: "refuse" }
@@ -56,10 +42,6 @@ export function createMcpAuthProvider(opts: {
     saveMcpServerAuth(configDir, spec.name, patch, spec.url);
   };
 
-
-
-
-
   let codeVerifier: string | undefined;
   let state: string | undefined;
 
@@ -73,7 +55,6 @@ export function createMcpAuthProvider(opts: {
       save({ clientInformation });
     },
     authorizationServerInformation: () => load()?.authorizationServer,
-
 
     saveAuthorizationServerInformation: (authorizationServer) => {
       save({ authorizationServer });
@@ -98,8 +79,6 @@ export function createMcpAuthProvider(opts: {
     storedState: () => state,
 
     get redirectUrl(): string {
-
-
       return interaction.kind === "redirect"
         ? interaction.redirectUri
         : mcpCallbackUri(MCP_CALLBACK_PORTS[0]);
@@ -109,33 +88,19 @@ export function createMcpAuthProvider(opts: {
       return {
         client_name: "seri",
 
-
-
-
         redirect_uris: MCP_CALLBACK_PORTS.map(mcpCallbackUri),
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
-
-
-
-
       };
     },
 
     validateAuthorizationServerURL: (_serverUrl, authorizationServerUrl) => {
-
-
-
       if (new URL(authorizationServerUrl).protocol !== "https:") {
         throw new Error(
           `MCP server "${spec.name}" named a non-https authorization server: ${String(authorizationServerUrl)}`,
         );
       }
       if (interaction.kind !== "refuse") return;
-
-
-
-
 
       const stored = load();
       if (stored?.tokens === undefined || stored.clientInformation === undefined) {
@@ -144,15 +109,9 @@ export function createMcpAuthProvider(opts: {
     },
 
     redirectToAuthorization: (authorizationUrl) => {
-
-
-
       if (interaction.kind === "refuse") throw new McpLoginRequiredError(spec.name);
       interaction.onRedirect(authorizationUrl);
     },
-
-
-
 
     invalidateCredentials: (scope) => {
       if (scope === "all" || scope === "client") clearMcpServerAuth(configDir, spec.name);

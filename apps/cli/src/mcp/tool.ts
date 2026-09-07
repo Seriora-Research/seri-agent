@@ -13,9 +13,6 @@ const DESCRIPTION_HEADER =
   `that takes none. Every tool available this session is listed below, one per line, with what ` +
   `it does and — where the server's own schema says so — its arguments.`;
 
-
-
-
 function argumentSummary(inputSchema: unknown): string {
   if (typeof inputSchema !== "object" || inputSchema === null) return "";
   const schema = inputSchema as Record<string, unknown>;
@@ -46,20 +43,10 @@ function describeMcpTool(info: McpToolInfo): string {
     : `${info.toolName} — ${info.description}`;
 }
 
-
 export function withMcp(tools: ToolSet, registry: McpRegistry, clients: McpClients): ToolSet {
-
-
-
-
-
-
-
-
   const catalogedTools = [...registry.values()]
     .flatMap((entry) => entry.catalog?.tools ?? [])
     .sort((a, b) => (a.toolName < b.toolName ? -1 : a.toolName > b.toolName ? 1 : 0));
-
 
   const [first, ...rest] = catalogedTools.map((info) => info.toolName);
   if (first === undefined) return tools;
@@ -77,13 +64,8 @@ export function withMcp(tools: ToolSet, registry: McpRegistry, clients: McpClien
       execute: async (args, { abortSignal }) => {
         const found = findMcpTool(registry, args.tool);
         if (found === undefined) {
-
-
-
-
           throw new Error(`no MCP tool named "${args.tool}" is available this session`);
         }
-
 
         return callMcpTool(
           clients,
@@ -96,14 +78,6 @@ export function withMcp(tools: ToolSet, registry: McpRegistry, clients: McpClien
     }),
   };
 }
-
-
-
-
-
-
-
-
 
 export function mcpCallSubject(toolName: string, input: unknown): string {
   if (toolName !== MCP_TOOL_NAME) return toolName;

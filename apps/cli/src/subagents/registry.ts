@@ -16,9 +16,7 @@ import {
 import { parseAgentFile } from "./agentFile";
 import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
 
-
 export type AgentSource = "builtin" | ExtensionSource;
-
 
 /** One dispatchable seat: toolNames are keys of toolDefinitions, addendum is composeAddendum, request is complete-or-absent. */
 export type AgentSpec = {
@@ -32,13 +30,8 @@ export type AgentSpec = {
   readonly filePath: string | undefined;
 };
 
-
 /** Insertion order is precedence: built-ins, then global, then project; a later set shadows an earlier one. */
 export type AgentRegistry = ReadonlyMap<string, AgentSpec>;
-
-
-
-
 
 export function composeAddendum(opts: {
   name: string;
@@ -57,10 +50,6 @@ export function composeAddendum(opts: {
   );
 }
 
-
-
-
-
 function builtinAgent(opts: {
   name: Extract<RoutableRole, "explore" | "plan">;
   description: string;
@@ -77,11 +66,6 @@ function builtinAgent(opts: {
     filePath: undefined,
   };
 }
-
-
-
-
-
 
 export const BUILTIN_AGENTS: readonly [AgentSpec, ...AgentSpec[]] = [
   builtinAgent({
@@ -102,18 +86,6 @@ export function builtinRegistry(): AgentRegistry {
   return new Map(BUILTIN_AGENTS.map((spec) => [spec.name, spec]));
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 export function agentToolSet(
   spec: AgentSpec,
   onAfterMutation?: OnAfterMutation,
@@ -126,17 +98,11 @@ export function agentToolSet(
   return onAfterMutation === undefined ? tools : withMutationRecording(tools, onAfterMutation);
 }
 
-
-
-
 export function agentMutatesFilesystem(spec: AgentSpec): boolean {
   return spec.toolNames.some((name) =>
     (FS_MUTATING_TOOL_NAMES as readonly string[]).includes(name),
   );
 }
-
-
-
 
 export function agentRouteRequest(
   spec: AgentSpec,
@@ -150,13 +116,9 @@ export function agentRouteRequest(
   };
 }
 
-
-
 export function describeAgent(spec: AgentSpec): string {
   return `"${spec.name}": ${spec.description} Tools: ${spec.toolNames.join(", ")}.`;
 }
-
-
 
 function agentFilesIn(dir: string, onWarning: (message: string) => void): readonly string[] {
   try {
@@ -169,7 +131,6 @@ function agentFilesIn(dir: string, onWarning: (message: string) => void): readon
     return [];
   }
 }
-
 
 export function loadAgentRegistry(opts: {
   worktree: string;
@@ -184,20 +145,10 @@ export function loadAgentRegistry(opts: {
     dirname: AGENTS_DIRNAME,
   });
 
-
-
-
-
-
   const isReserved = (name: string): boolean =>
     agents.get(name)?.source === "builtin" ||
     isRoutableRole(name) ||
     commandByName(`/${name}`) !== undefined;
-
-
-
-
-
 
   const resolveModel = (id: string): { model: string; provider: ModelProvider } | undefined => {
     const entry = opts.catalog.entries.find((candidate) => candidate.id === id);
@@ -228,8 +179,6 @@ export function loadAgentRegistry(opts: {
       }
       for (const warning of outcome.warnings) opts.onWarning(warning);
 
-
-
       const previous = agents.get(outcome.spec.name);
       if (previous?.source === scope.source && previous.filePath !== undefined) {
         opts.onWarning(
@@ -239,8 +188,6 @@ export function loadAgentRegistry(opts: {
       agents.set(outcome.spec.name, outcome.spec);
       loaded.push(outcome.spec.name);
     }
-
-
 
     if (loaded.length > 0) opts.onWarning(`agents from ${scope.dir}: ${loaded.join(", ")}`);
   }

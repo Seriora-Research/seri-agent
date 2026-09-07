@@ -269,10 +269,7 @@ describe("InputBox (OpenTUI)", () => {
 
   test("the block cursor sits on the last wrapped row, not the first", async () => {
     const setup = await createTestRenderer({ width: 24, height: 8 });
-    await mount(
-      setup,
-      <InputBox prefill={`${"word ".repeat(12)}end`} onSubmit={() => {}} />,
-    );
+    await mount(setup, <InputBox prefill={`${"word ".repeat(12)}end`} onSubmit={() => {}} />);
     await settle(setup);
     await sleep(THROTTLE_MS + 20);
 

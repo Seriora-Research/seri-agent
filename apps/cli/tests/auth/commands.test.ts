@@ -34,8 +34,6 @@ describe("login", () => {
     rmSync(configDir, { recursive: true, force: true });
   });
 
-
-
   test("saves a session with expiresAt absent when pollForToken resolves success without expiresIn", async () => {
     await login("login", "client_123", configDir, {
       ...deps({
@@ -71,10 +69,6 @@ describe("login", () => {
     ).rejects.toThrow(message);
   });
 
-
-
-
-
   test("resolves cleanly, without throwing or calling onMessage, when pollForToken resolves aborted", async () => {
     const messages: string[] = [];
 
@@ -87,11 +81,6 @@ describe("login", () => {
     expect(messages).toEqual([]);
   });
 
-
-
-
-
-
   test("skips onDeviceCode, opening the browser, and polling when the signal is already aborted once requestDeviceCode resolves", async () => {
     const controller = new AbortController();
     const opened: string[] = [];
@@ -101,8 +90,6 @@ describe("login", () => {
     await expect(
       login("login", "client_123", "fake-config-dir", {
         requestDeviceCode: async () => {
-
-
           controller.abort();
           return device;
         },

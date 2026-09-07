@@ -26,7 +26,6 @@ function fakeHandle(overrides: Partial<McpClientHandle> = {}): McpClientHandle {
   };
 }
 
-
 describe("dial once, reuse for the session", () => {
   test("callMcpTool twice against one server dials once", async () => {
     let dialCount = 0;
@@ -72,10 +71,6 @@ describe("a failed dial is evicted", () => {
   });
 });
 
-
-
-
-
 async function expectRejectsPromptly(promise: Promise<unknown>, ms = 200): Promise<void> {
   let timedOut = false;
   const timer = new Promise<never>((_resolve, reject) => {
@@ -106,8 +101,6 @@ describe("the signal reaches both the dial and the call", () => {
     const handle: McpClientHandle = {
       listTools: async () => [],
 
-
-
       callTool: (name, _args, opts) =>
         name === "prime"
           ? Promise.resolve("primed")
@@ -119,9 +112,6 @@ describe("the signal reaches both the dial and the call", () => {
     const clients = createMcpClients(async () => handle);
     await callMcpTool(clients, spec(), "prime", {});
     const promise = callMcpTool(clients, spec(), "web_search", {}, controller.signal);
-
-
-
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     controller.abort();
@@ -164,8 +154,6 @@ describe("callTool flattens content to a string", () => {
 });
 
 describe("a dial that only needs a login says so", () => {
-
-
   test("callMcpTool names /mcp auth instead of reporting the server unreachable", async () => {
     for (const err of [new UnauthorizedError(), new McpLoginRequiredError("exa")]) {
       const clients = createMcpClients(async () => {
@@ -218,9 +206,6 @@ describe("mcpServerStatus", () => {
     await expect(callMcpTool(clients, spec("exa"), "a", {})).rejects.toThrow();
     expect(mcpServerStatus(clients, "exa")).toEqual({ state: "needs-auth" });
   });
-
-
-
 
   test("needs-auth when the dial rejects with McpLoginRequiredError", async () => {
     const clients = createMcpClients(async () => {
@@ -306,8 +291,6 @@ describe("closeMcpClients", () => {
     const warnings: string[] = [];
     closeMcpClients(clients, (m) => warnings.push(m));
     expect(clients.handles.size).toBe(0);
-
-
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(closeCalls).toBe(1);

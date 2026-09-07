@@ -92,9 +92,6 @@ export async function connectCodexAppServer(
   }
   child.stdin.on("error", () => {});
 
-
-
-
   let stderrTail = "";
   child.stderr?.on("data", (chunk: Buffer | string) => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");

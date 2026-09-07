@@ -40,8 +40,6 @@ function connect(refreshToken = "refresh-1"): void {
   );
 }
 
-
-
 function fakeIssuer(onToken: (body: string) => Response): typeof fetch {
   return (async (url: string, init?: RequestInit) => {
     if (String(url).includes(".well-known")) return jsonResponse(true, 200, DISCOVERY);
@@ -55,7 +53,6 @@ describe("the store", () => {
     expect(loadXaiSubscription(dir)?.accessToken).toBe("access-1");
     expect(hasXaiSubscription(dir)).toBe(true);
   });
-
 
   test("a malformed file reads as not connected rather than throwing", () => {
     writeFileSync(join(dir, XAI_AUTH_FILENAME), "{ not json");
@@ -100,8 +97,6 @@ describe("refreshXaiSubscription", () => {
       jsonResponse(true, 200, {})) as unknown as typeof fetch);
     expect(result).toEqual({ status: "not-connected" });
   });
-
-
 
   test("persists the rotated refresh token, and the next refresh sends the new one", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
@@ -148,8 +143,6 @@ describe("refreshXaiSubscription", () => {
     expect(result).toEqual({ status: "tier-denied", message: "tier not allowed" });
     expect(loadXaiSubscription(dir)?.refreshToken).toBe("refresh-1");
   });
-
-
 
   test("concurrent refreshes share a single token request", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
@@ -224,8 +217,6 @@ describe("xaiAuthedFetch", () => {
     expect(auths).toEqual(["Bearer access-1", "Bearer access-2"]);
   });
 
-
-
   test("a 403 passes through without triggering a refresh", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-1");
@@ -261,8 +252,6 @@ describe("the stored file", () => {
 });
 
 describe("a dead rotated refresh token", () => {
-
-
   test("invalid_grant is reconnect-required, not a retryable error", async () => {
     setConfigValue("SERI_GROK_CLIENT_ID", "client-1", dir);
     connect("refresh-dead");

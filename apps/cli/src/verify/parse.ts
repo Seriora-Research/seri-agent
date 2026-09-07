@@ -1,31 +1,9 @@
 export type Diagnostic = { file: string; line: number; column: number; message: string };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const DIAGNOSTIC_LINE = /^(\S.*\.[A-Za-z0-9]+)\((\d+),(\d+)\): ((?:error|warning) TS\d+: .+)$/;
-
-
-
 
 export function parseDiagnostics(text: string): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
-
 
   for (const raw of text.split("\n")) {
     // tsc emits CRLF on Windows; a trailing \r would fail the diagnostic regex.

@@ -6,7 +6,6 @@ import { checkPermission, cycleMode, type PermissionMode } from "../../src/gate/
 
 const READ_TOOL_NAMES = ["read_file", "grep", "glob"];
 
-
 const UNKNOWN_TOOL_NAME = "mcp_exa_web_search";
 
 test("the gate's write class over the built-ins is exactly WRITE_TOOL_NAMES", () => {
@@ -78,8 +77,6 @@ describe("checkPermission", () => {
     });
   });
 
-
-
   describe("an unrecognised tool name", () => {
     test("is blocked in read-only", () => {
       expect(checkPermission(UNKNOWN_TOOL_NAME, "read-only")).toBe("block");
@@ -98,7 +95,6 @@ describe("checkPermission", () => {
       expect(checkPermission(UNKNOWN_TOOL_NAME, "approve-each", allowed)).toBe("allow");
     });
   });
-
 
   describe("a caller-supplied classify", () => {
     test("decides in both directions, overriding the built-in classification", () => {

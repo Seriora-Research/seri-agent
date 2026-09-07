@@ -167,7 +167,6 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
     expect(closesSeenWhileRunning).toBe(0);
 
-
     await macrotick();
     expect(closeCount()).toBe(1);
     expect(pools[0]?.handles.size).toBe(0);

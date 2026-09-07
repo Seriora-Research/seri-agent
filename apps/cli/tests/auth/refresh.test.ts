@@ -59,9 +59,6 @@ describe("refreshAccessToken", () => {
     expect(result.status).toBe("error");
   });
 
-
-
-
   test("a fetchFn rejection (offline, DNS failure) returns {status: 'error'} without throwing", async () => {
     const fetchFn = async () => {
       throw new Error("fetch failed");
@@ -76,7 +73,6 @@ describe("refreshAccessToken", () => {
     expect(result.status).toBe("error");
   });
 
-
   test("a 200 response missing token fields returns {status: 'error'}", async () => {
     const fetchFn = async () => fakeResponse(true, 200, { expires_in: 300 });
 
@@ -88,8 +84,6 @@ describe("refreshAccessToken", () => {
 
     expect(result.status).toBe("error");
   });
-
-
 
   test("a 200 response with tokens but missing expires_in still succeeds, with expiresIn undefined", async () => {
     const fetchFn = async () =>
@@ -103,8 +97,6 @@ describe("refreshAccessToken", () => {
 
     expect(result).toEqual({ status: "success", accessToken: "at-new", refreshToken: "rt-new" });
   });
-
-
 
   test("a body-read rejection returns {status: 'error'} without throwing", async () => {
     const fetchFn = async () =>
@@ -139,8 +131,6 @@ describe("refreshSession", () => {
     writeFileSync(join(configDir, AUTH_FILENAME), JSON.stringify(session));
   }
 
-
-
   test("on success, persists the rotated refresh token and a recomputed expiresAt", async () => {
     seedAuthJson({
       accessToken: "at-old",
@@ -163,9 +153,6 @@ describe("refreshSession", () => {
     expect(onDisk?.accessToken).toBe("at-new");
     expect(onDisk?.refreshToken).toBe("rt-new");
   });
-
-
-
 
   test("a response with no expires_in still succeeds, clearing any previous expiresAt", async () => {
     seedAuthJson({
@@ -222,8 +209,6 @@ describe("refreshSession", () => {
     expect(loadAuthSession(configDir)?.accessToken).toBe("at-old");
   });
 
-
-
   test("a pre-existing auth.json with no expiresAt field still parses and refreshes", async () => {
     seedAuthJson({
       accessToken: "at-old",
@@ -239,10 +224,6 @@ describe("refreshSession", () => {
 
     expect(updated?.accessToken).toBe("at-new");
   });
-
-
-
-
 
   test("concurrent calls for the same configDir share one refresh and both resolve to it", async () => {
     seedAuthJson({
@@ -274,8 +255,6 @@ describe("refreshSession", () => {
     expect(loadAuthSession(configDir)?.accessToken).toBe("at-new");
   });
 
-
-
   test("a later call after the in-flight refresh settles triggers a new refresh", async () => {
     seedAuthJson({
       accessToken: "at-old",
@@ -300,11 +279,6 @@ describe("refreshSession", () => {
     expect(fetchCalls).toBe(2);
   });
 
-
-
-
-
-
   test("a save failure rejects the caller without also emitting an unhandled rejection", async () => {
     seedAuthJson({
       accessToken: "at-old",
@@ -316,9 +290,6 @@ describe("refreshSession", () => {
     const fetchFn = async () =>
       fakeResponse(true, 200, { access_token: "at-new", refresh_token: "rt-new", expires_in: 300 });
     const authPath = join(configDir, AUTH_FILENAME);
-
-
-
 
     chmodSync(configDir, 0o555);
     chmodSync(authPath, 0o444);

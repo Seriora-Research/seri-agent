@@ -3,24 +3,9 @@ import { dirname, join } from "node:path";
 import { foldsCase } from "../caseFold";
 import { getBaseConfigDir } from "../config/paths";
 
-
-
-
 export type ExtensionSource = "user" | "project";
 
 export type ExtensionScope = { readonly dir: string; readonly source: ExtensionSource };
-
-
-
-
-
-
-
-
-
-
-
-
 
 export function findProjectExtensionDir(startDir: string, dirname_: string): string | undefined {
   // NTFS/APFS: cwd casing and $HOME casing are routinely different spellings of the same path.
@@ -35,9 +20,6 @@ export function findProjectExtensionDir(startDir: string, dirname_: string): str
     dir = parent;
   }
 }
-
-
-
 
 export function extensionScopes(opts: {
   worktree: string;

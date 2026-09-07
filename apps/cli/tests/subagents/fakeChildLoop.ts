@@ -4,11 +4,6 @@ type RunLoopOpts = Parameters<typeof runLoop>[0];
 
 export type ChildCall = { opts: RunLoopOpts; startedAt: number; endedAt?: number };
 
-
-
-
-
-
 export function fakeChildLoop(
   script: (
     opts: RunLoopOpts,

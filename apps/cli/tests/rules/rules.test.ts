@@ -112,7 +112,6 @@ describe("loadRuleRegistry", () => {
     expect(warnings.some((w) => w.includes("loose.mdc"))).toBe(true);
   });
 
-
   test("a description-only rule loads nothing and says so", () => {
     const { rules, warnings } = load({
       "project/.seri/rules/asked.mdc": "---\ndescription: Only when asked.\n---\n\nbody\n",
@@ -121,8 +120,6 @@ describe("loadRuleRegistry", () => {
     expect(warnings.some((w) => w.includes("nothing loads it"))).toBe(true);
     expect(renderRulesTier([...rules.values()])).toBe("");
   });
-
-
 
   test("alwaysApply wins over globs when a file sets both", () => {
     const { rules, worktree } = load({
@@ -148,7 +145,6 @@ describe("the context tier", () => {
     expect(prompt).toContain("## style");
     expect(prompt).toContain("Write the minimum code that solves the problem.");
   });
-
 
   test("a globs rule is absent from the prompt entirely", () => {
     const { rules } = load({ "project/.seri/rules/ts.mdc": SCOPED });
@@ -193,7 +189,6 @@ describe("glob matching", () => {
     expect(worktreeRelativePath("/repo", "/repo/sub", "a.ts")).toBe("sub/a.ts");
   });
 
-
   test("a brace group survives comma splitting, and a comma list does not", () => {
     const { rules } = load({
       "project/.seri/rules/brace.mdc": '---\nglobs: "**/*.{ts,tsx}"\n---\n\nbody\n',
@@ -227,7 +222,6 @@ describe("turn injection", () => {
     expect(text).toContain("Make illegal states unrepresentable.");
   });
 
-
   test("touching a non-matching file injects nothing", () => {
     const { injector } = run({ "project/.seri/rules/ts.mdc": SCOPED });
     expect(injector?.([{ toolName: "read_file", input: { path: "README.md" } }])).toBeUndefined();
@@ -250,8 +244,6 @@ describe("turn injection", () => {
     expect(text).toContain("Second rule body.");
   });
 
-
-
   test("only read_file and write_file carry a path the matcher trusts", () => {
     const { injector } = run({ "project/.seri/rules/ts.mdc": SCOPED });
     expect(injector?.([{ toolName: "edit", input: { content: "src/a.ts" } }])).toBeUndefined();
@@ -265,8 +257,6 @@ describe("turn injection", () => {
       injector?.([{ toolName: "read_file", input: { path: "../outside/a.ts" } }]),
     ).toBeUndefined();
   });
-
-
 
   test("a backslash path matches a forward-slash pattern", () => {
     const { injector } = run({

@@ -2,10 +2,6 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
 
-
-
-
-
 export const CODEX_IGNORE_FILENAME = "codex-ignore";
 
 function ignorePath(configDir: string): string {

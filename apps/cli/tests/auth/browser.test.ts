@@ -8,8 +8,6 @@ function setPlatform(platform: string): void {
   Object.defineProperty(process, "platform", { value: platform });
 }
 
-
-
 function fakeLauncher() {
   const seen: {
     executable?: string;
@@ -44,7 +42,6 @@ function fakeLauncher() {
   };
 }
 
-
 function captureConsoleError(): { errors: string[]; restore: () => void } {
   const errors: string[] = [];
   const originalError = console.error;
@@ -69,13 +66,6 @@ describe("openBrowser", () => {
     });
   });
 
-
-
-
-
-
-
-
   test("win32 keeps a URL whose parameters are joined by & in one argument", () => {
     setPlatform("win32");
     const launcher = fakeLauncher();
@@ -84,10 +74,8 @@ describe("openBrowser", () => {
 
     openBrowser(url, launcher.spawnFn);
 
-
     expect(launcher.seen.args?.at(-1)).toBe(`"${url}"`);
     expect(launcher.seen.args).toHaveLength(4);
-
 
     expect(launcher.seen.options?.windowsVerbatimArguments).toBe(true);
   });
@@ -98,8 +86,6 @@ describe("openBrowser", () => {
     const url = "https://api.supabase.com/v1/oauth/authorize?response_type=code&client_id=a";
 
     openBrowser(url, launcher.spawnFn);
-
-
 
     expect(launcher.launched()).toEqual({ executable: "open", args: [url] });
     expect(launcher.seen.options?.windowsVerbatimArguments).toBe(false);
@@ -137,7 +123,6 @@ describe("openBrowser", () => {
     try {
       openBrowser("https://example.com/device", launcher.spawnFn);
 
-
       expect(() => launcher.fireError(new Error("no such command"))).not.toThrow();
     } finally {
       console.restore();
@@ -165,14 +150,7 @@ describe("openBrowser", () => {
     setPlatform("linux");
     const launcher = fakeLauncher();
 
-
-
-
-
     expect(openBrowser("https://example.com/device", launcher.spawnFn)).toBeUndefined();
-
-
-
 
     expect(launcher.seen.options).toEqual({
       stdio: "ignore",

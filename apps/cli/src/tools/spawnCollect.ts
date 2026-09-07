@@ -66,8 +66,7 @@ function killTree(pid: number): void {
   try {
     // POSIX: a negative pid signals the process group spawned with detached: true.
     process.kill(-pid, "SIGKILL");
-  } catch {
-  }
+  } catch {}
 }
 
 const inFlightKills = new Set<() => void>();

@@ -33,11 +33,6 @@ describe("findAgentsFile", () => {
     expect(findAgentsFile(nestedDir)).toBe(nestedAgentsPath);
   });
 
-
-
-
-
-
   test("returns undefined when no AGENTS.md exists in a fresh temp dir", () => {
     expect(findAgentsFile(tmpRoot)).toBeUndefined();
   });

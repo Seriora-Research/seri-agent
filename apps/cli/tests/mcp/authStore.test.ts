@@ -49,9 +49,6 @@ describe("round trip", () => {
 });
 
 describe("the patch merges rather than replaces", () => {
-
-
-
   test("three separate saves accumulate into one record", () => {
     const configDir = makeConfigDir();
     saveMcpServerAuth(configDir, "exa", { clientInformation: { client_id: "cid" } }, URL_A);

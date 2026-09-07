@@ -19,9 +19,6 @@ export type FsPolicyVerdict = "name-gate" | "block" | "ask";
 
 type UnaskedOutsideKey = `${ToolClass}:${PermissionMode}:${"prompt" | "noprompt"}`;
 
-
-
-
 export const UNASKED_OUTSIDE: { readonly [K in UnaskedOutsideKey]: FsPolicyVerdict } = {
   "read:auto:prompt": "ask",
   "read:auto:noprompt": "block",
@@ -48,8 +45,6 @@ export function decideFsPolicy(fact: PolicyFact): FsPolicyVerdict {
   if (fact.consent === "allowed-this-run") return "name-gate";
   return UNASKED_OUTSIDE[unaskedOutsideKey(fact)];
 }
-
-
 
 export function reduceConsent(current: Consent, event: ConsentEvent): Consent {
   if (current !== "unasked") return current;

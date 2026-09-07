@@ -5,43 +5,11 @@ import { type Document, parseDocument, Scalar, YAMLMap } from "yaml";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { projectKey } from "../permissions/store";
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 export const HOOKS_TRUST_FILENAME = "hooks-trust.yaml";
 
 export function hooksTrustPath(configDir: string): string {
   return join(configDir, HOOKS_TRUST_FILENAME);
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 export function digestHooksDir(dir: string): ReadonlyMap<string, string> {
   const digests = new Map<string, string>();
@@ -52,16 +20,11 @@ export function digestHooksDir(dir: string): ReadonlyMap<string, string> {
         a.name.localeCompare(b.name),
       );
     } catch {
-
-
-
       return;
     }
     for (const entry of entries) {
       const path = join(current, entry.name);
       const key = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-
-
 
       if (entry.isDirectory()) {
         walk(path, key);
@@ -84,8 +47,6 @@ export function digestHooksDir(dir: string): ReadonlyMap<string, string> {
 export type TrustVerdict =
   | { readonly kind: "trusted" }
   | { readonly kind: "untrusted" }
-
-
   | { readonly kind: "changed"; readonly files: readonly string[] };
 
 const TEMPLATE = `# seri — the project hook directories you have read and allowed to run.
@@ -105,13 +66,6 @@ hooks: {}
 `;
 
 type StoreState = { status: "missing" } | { status: "malformed" } | { status: "ok"; doc: Document };
-
-
-
-
-
-
-
 
 function readStore(configDir: string): StoreState {
   const path = hooksTrustPath(configDir);
@@ -140,8 +94,6 @@ function storedDigests(doc: Document, key: string): Map<string, string> {
   return stored;
 }
 
-
-
 function changedFiles(
   stored: ReadonlyMap<string, string>,
   current: ReadonlyMap<string, string>,
@@ -166,9 +118,6 @@ export function checkTrust(opts: {
 
   const current = digestHooksDir(opts.dir);
 
-
-
-
   if (current.size === 0) return { kind: "untrusted" };
 
   const stored = storedDigests(state.doc, projectKey(opts.dir));
@@ -178,13 +127,6 @@ export function checkTrust(opts: {
   return changed.length === 0 ? { kind: "trusted" } : { kind: "changed", files: changed };
 }
 
-
-
-
-
-
-
-
 export function trustHooksDir(
   configDir: string,
   dir: string,
@@ -192,9 +134,6 @@ export function trustHooksDir(
 ): void {
   const state = readStore(configDir);
   if (state.status === "malformed") {
-
-
-
     onWarning?.(
       `could not parse ${hooksTrustPath(configDir)}, so the hooks directory was not trusted; fix or delete that file`,
     );
@@ -203,9 +142,6 @@ export function trustHooksDir(
 
   const doc = state.status === "missing" ? parseDocument(TEMPLATE) : state.doc;
 
-
-
-
   const hooks = doc.get("hooks");
   if (hooks instanceof YAMLMap) hooks.flow = false;
   const entry = doc.createNode(Object.fromEntries(digestHooksDir(dir)));
@@ -213,7 +149,6 @@ export function trustHooksDir(
   doc.setIn(["hooks", projectKey(dir)], entry);
   atomicWriteFile(hooksTrustPath(configDir), String(doc));
 }
-
 
 export function untrustHooksDir(configDir: string, dir: string): boolean {
   const state = readStore(configDir);

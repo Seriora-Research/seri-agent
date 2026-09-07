@@ -1,8 +1,6 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 
-
-
 export function resolveAgainstCwd(cwd: string, path: string): string {
   return resolve(cwd, path);
 }
@@ -11,8 +9,6 @@ function normalize(path: string): string {
   const resolved = resolve(path);
   return foldsCase() ? resolved.toLowerCase() : resolved;
 }
-
-
 
 export function isInsideWorkingDir(cwd: string, path: string): boolean {
   const root = normalize(cwd);
@@ -45,8 +41,6 @@ function pathFromInput(input: unknown): string | undefined {
   const path = (input as { path: unknown }).path;
   return typeof path === "string" ? path : undefined;
 }
-
-
 
 export function locationForCall(cwd: string, toolName: string, input: unknown): CallLocation {
   if (!PATH_BEARING_FS_TOOLS.has(toolName)) return "nopath";

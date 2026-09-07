@@ -31,9 +31,6 @@ describe("parseDiagnostics", () => {
     expect(parsed[0].message).toBe("error TS1005: ';' expected.");
   });
 
-
-
-
   test("a line severed by spawnCollect's middle-drop is skipped; the lines around it still parse", () => {
     const head = "src/a.ts(1,1): error TS2322: Type 'number' is not assignable to type 'string'.";
     const tail = "src/z.ts(99,4): error TS2304: Cannot find name 'bar'.";

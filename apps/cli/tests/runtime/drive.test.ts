@@ -14,7 +14,11 @@ import { createMcpClients } from "../../src/mcp/client";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
-import { createArchivistState } from "../../src/memory/archivist";
+import {
+  createArchivistState,
+  drainArchivist,
+  ARCHIVIST_TOOL_CALL_INTERVAL,
+} from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
@@ -271,11 +275,60 @@ describe("driveLoop options", () => {
     );
     expect(recorded).toBe(0);
   });
+
+  test("a tool-count archivist does not block driveLoop returning", async () => {
+    const prepared = preparedStub();
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = false;
+    const toolCalls: LoopEvent[] = Array.from({ length: ARCHIVIST_TOOL_CALL_INTERVAL }, () => ({
+      type: "tool-call",
+      name: "read_file",
+      args: {},
+    }));
+    async function* fake(opts: RunLoopOpts): AsyncGenerator<LoopEvent, RunLoopOpts["messages"]> {
+      if ((opts.system ?? "").includes("You are seri's archivist")) {
+        started = true;
+        await hold;
+        yield { type: "done", reason: "no-tool-call" };
+        return opts.messages;
+      }
+      for (const event of toolCalls) yield event;
+      yield { type: "done", reason: "no-tool-call" };
+      return opts.messages;
+    }
+    const state = createArchivistState(prepared.session);
+    const recorded: unknown[] = [];
+    prepared.trajectory.recordArchivist = (report) => {
+      recorded.push(report);
+    };
+
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      state,
+      undefined,
+      { composeSubagents: false },
+    );
+
+    expect(result.archivist).toBeUndefined();
+    expect(recorded).toHaveLength(0);
+    expect(started).toBe(true);
+    release();
+    await drainArchivist(state);
+    expect(recorded).toHaveLength(1);
+  });
 });
 
 describe("driveLoop directDispatch", () => {
-
-
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
     return {
@@ -327,14 +380,11 @@ describe("driveLoop directDispatch", () => {
     );
     await run;
 
-
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[0]).toEqual({ role: "user", content: "grade the diff" });
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
   });
-
-
 
   test("the user row is the plain task text, and the tool-call names the agent and the goal", async () => {
     const persisted: SessionState<ModelMessage>[] = [];
@@ -494,7 +544,6 @@ describe("driveLoop directDispatch", () => {
 
     expect(result.doneReason).toBe("aborted");
 
-
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
@@ -533,20 +582,9 @@ describe("driveLoop directDispatch", () => {
       },
     );
 
-
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].rewindTo).toBe(1);
   });
-
-
-
-
-
-
-
-
-
-
 
   test("a session with a PreToolUse hook hands the runner down to the child loop", async () => {
     const spec: HookSpec = {
@@ -763,8 +801,6 @@ describe("driveLoop mcp composition", () => {
     inputSchema: {},
   };
 
-
-
   test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
     const prepared = preparedStub();
     prepared.mcp = mcpRegistryWith(searchTool);
@@ -784,10 +820,6 @@ describe("driveLoop mcp composition", () => {
     expect(MCP_TOOL_NAME in (capture()?.tools ?? {})).toBe(true);
     expect(capture()?.callSubject).toBe(mcpCallSubject);
   });
-
-
-
-
 
   test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
     const prepared = preparedStub();

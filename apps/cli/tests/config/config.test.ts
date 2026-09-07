@@ -36,9 +36,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-
-
-
   setProfileOverride(undefined);
   restoreEnv("HOME", originalHome);
   rmSync(tmpRoot, { recursive: true, force: true });
@@ -53,8 +50,6 @@ describe("loadConfig", () => {
     writeFileSync(join(configDir, CONFIG_FILENAME), "");
     expect(loadConfig()).toEqual({});
   });
-
-
 
   test("returns {} when config.json is a NUL byte", () => {
     writeFileSync(join(configDir, CONFIG_FILENAME), Buffer.from([0x00]));
@@ -95,10 +90,6 @@ describe("inspectConfig", () => {
 });
 
 describe("setConfigValues", () => {
-
-
-
-
   test("writes multiple keys in a single call", () => {
     setConfigValues({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
     expect(loadConfig()).toEqual({ SERI_MODEL: "picked-model", SERI_PROVIDER: "openrouter" });
@@ -114,21 +105,6 @@ describe("setConfigValues", () => {
     });
   });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   test("a sabotaged write leaves every key unchanged — one atomic write, not several", () => {
     const path = join(configDir, "config.json");
     writeFileSync(path, JSON.stringify({ SERI_MODEL: "old-model" }));
@@ -142,7 +118,6 @@ describe("setConfigValues", () => {
 
       expect(loadConfig()).toEqual({ SERI_MODEL: "old-model" });
     } finally {
-
       chmodSync(configDir, 0o755);
       chmodSync(path, 0o644);
     }
@@ -179,7 +154,6 @@ describe("loadVerifyConfig", () => {
     delete process.env.SERI_VERIFY_ENABLED;
     delete process.env.SERI_VERIFY_COMMAND;
   });
-
 
   test("enabled with no command when nothing is configured", () => {
     expect(loadVerifyConfig()).toEqual({ enabled: true, command: undefined });
@@ -294,9 +268,6 @@ describe("tuiBackgroundColor", () => {
     expect(tuiBackgroundColor("#141413")).toBe("#141413");
     expect(tuiBackgroundColor("#AABBCC")).toBe("#AABBCC");
   });
-
-
-
 
   test.each([
     ["the documented off switch", "terminal"],

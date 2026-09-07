@@ -1,6 +1,3 @@
-
-
-
 import { describe, expect, test } from "bun:test";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
@@ -54,13 +51,6 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(2);
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
   });
-
-
-
-
-
-
-
 
   test("the last message when a tool executes is the assistant message carrying that tool call", async () => {
     let captured: ModelMessage[] = [];
@@ -152,12 +142,6 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
-
-
-
-
-
-
   test("read-only reports a nonexistent tool as unknown, not as permission-denied", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
@@ -182,8 +166,6 @@ describe("runLoop", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
 
     function toolResultOutputOf(collected: LoopEvent[]): unknown {
-
-
       const toolMessage = collected
         .filter(
           (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
@@ -194,8 +176,6 @@ describe("runLoop", () => {
       return (toolMessage?.content as { output: unknown }[] | undefined)?.[0]?.output;
     }
   });
-
-
 
   test("approve-each never asks the human to approve a tool that does not exist", async () => {
     const model = new MockLanguageModelV4({
@@ -255,11 +235,6 @@ describe("runLoop", () => {
     expect(model.doStreamCalls).toHaveLength(2);
   });
 
-
-
-
-
-
   test("a tool that throws a circular non-Error value is reported instead of crashing the loop", async () => {
     const circular: { message: string; self?: unknown } = {
       message: "tool call validation failed",
@@ -305,8 +280,6 @@ describe("runLoop", () => {
 
     expect(errorEvent?.error).toContain('{"detail":"xxx');
 
-
-
     const update = events.find(
       (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
         e.type === "messages-updated" && e.messages.at(-1)?.role === "tool",
@@ -342,11 +315,6 @@ describe("runLoop", () => {
   });
 
   describe("abort", () => {
-
-
-
-
-
     function twoToolCalls(): LanguageModelV4StreamPart[] {
       return [
         {
@@ -424,9 +392,7 @@ describe("runLoop", () => {
 
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
 
-
       expect(events.find((e) => e.type === "error")).toBeUndefined();
-
 
       expect(events.find((e) => e.type === "messages-updated")).toBeUndefined();
     });
@@ -438,10 +404,6 @@ describe("runLoop", () => {
         write_file: tool({
           description: "write a file",
           inputSchema: z.object({ path: z.string() }),
-
-
-
-
 
           execute: async (input: { path: string }, options) => {
             started.push(input.path);
@@ -466,8 +428,6 @@ describe("runLoop", () => {
         events.push(event);
         if (event.type === "tool-call") controller.abort();
       }
-
-
 
       const { toolCalls, outputs } = toolRowOf(events);
       expect(toolCalls).toBe(2);
@@ -496,12 +456,8 @@ describe("runLoop", () => {
       })) {
         events.push(event);
 
-
         if (event.type === "messages-updated") controller.abort();
       }
-
-
-
 
       expect(started).toEqual([]);
       const { toolCalls, outputs } = toolRowOf(events);
@@ -512,12 +468,6 @@ describe("runLoop", () => {
     });
 
     test("a signal that is already aborted opens no turn at all", async () => {
-
-
-
-
-
-
       const model = new MockLanguageModelV4({
         doStream: async () => streamResult(textOnlyChunks("Hello")),
       });
@@ -537,12 +487,6 @@ describe("runLoop", () => {
     });
 
     test("an abort landing after a completed tool phase opens no further turn", async () => {
-
-
-
-
-
-
       const controller = new AbortController();
       const executed: string[] = [];
       const tools = makeTools(async (input) => {
@@ -571,7 +515,6 @@ describe("runLoop", () => {
       expect(executed).toEqual(["a.txt"]);
       expect(model.doStreamCalls).toHaveLength(1);
 
-
       expect(toolRowOf(events).outputs.map((output) => output.type)).toEqual(["json"]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
@@ -579,8 +522,6 @@ describe("runLoop", () => {
     test("a cancel during compaction ends the turn instead of starting another", async () => {
       const controller = new AbortController();
       const tools = makeTools(async () => "ok");
-
-
 
       const totalIterations = 25;
       const compactAtIteration = 11;
@@ -595,7 +536,6 @@ describe("runLoop", () => {
             ),
           ),
         ),
-
 
         doGenerate: async () => {
           controller.abort();
@@ -617,25 +557,12 @@ describe("runLoop", () => {
         }),
       );
 
-
-
-
       expect(model.doGenerateCalls).toHaveLength(1);
       expect(model.doStreamCalls).toHaveLength(compactAtIteration + 1);
       expect(events.find((e) => e.type === "compacted")).toBeUndefined();
       expect(events.find((e) => e.type === "error")).toBeUndefined();
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
     });
-
-
-
-
-
-
-
-
-
-
 
     test.skipIf(!isBashAvailable() || process.platform === "win32")(
       "a cancel does not wait for a bash command that ignores it",
@@ -672,11 +599,6 @@ describe("runLoop", () => {
         }
         const elapsed = Date.now() - started;
 
-
-
-
-
-
         expect(elapsed).toBeLessThan(10_000);
         expect(events.find((e) => e.type === "tool-result")).toBeUndefined();
         expect(toolRowOf(events).outputs).toEqual([
@@ -705,7 +627,6 @@ describe("runLoop", () => {
           messages: baseMessages,
           permissionMode: "approve-each",
 
-
           approvalPrompt: async () => {
             controller.abort();
             return "no";
@@ -713,9 +634,6 @@ describe("runLoop", () => {
           signal: controller.signal,
         }),
       );
-
-
-
 
       const { toolCalls, outputs } = toolRowOf(events);
       expect(toolCalls).toBe(2);
@@ -886,8 +804,6 @@ describe("runLoop", () => {
           approvalPrompt: async () => {
             promptCalls++;
 
-
-
             return promptCalls === 1 ? "always" : "no";
           },
         }),
@@ -993,10 +909,6 @@ describe("runLoop", () => {
       expect(events.find((e) => e.type === "tool-allowed")).toBeUndefined();
     });
 
-
-
-
-
     test("repeated denials stop the run in materially fewer turns than the cap", async () => {
       const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(50) });
       const events = await collect(
@@ -1015,8 +927,6 @@ describe("runLoop", () => {
       expect(model.doStreamCalls).toHaveLength(3);
       expect(model.doStreamCalls.length).toBeLessThan(50);
 
-
-
       const lastUpdate = events
         .filter(
           (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
@@ -1031,13 +941,6 @@ describe("runLoop", () => {
       expect(lastMessage?.role).toBe("tool");
       expect((lastMessage?.content as unknown[]).length).toBe(assistantCalls);
     });
-
-
-
-
-
-
-
 
     test("read-only blocks never trip repeated-denials, however many times they happen", async () => {
       const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(5) });
@@ -1060,19 +963,6 @@ describe("runLoop", () => {
       ).toBe(true);
       expect(model.doStreamCalls).toHaveLength(5);
     });
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     test("an allowed read resets the streak the same as any other approved call", async () => {
       const model = new MockLanguageModelV4({
@@ -1112,14 +1002,6 @@ describe("runLoop", () => {
       expect(events).toContainEqual({ type: "tool-result", name: "glob", result: [] });
     });
 
-
-
-
-
-
-
-
-
     test("an approval resets the consecutive-denial counter", async () => {
       const model = new MockLanguageModelV4({
         doStream: [
@@ -1148,11 +1030,6 @@ describe("runLoop", () => {
         events.find((e) => e.type === "done" && e.reason === "repeated-denials"),
       ).toBeUndefined();
     });
-
-
-
-
-
 
     test("the denial text names the permission mode and points at /mode", async () => {
       const blockedModel = new MockLanguageModelV4({
@@ -1195,8 +1072,6 @@ describe("runLoop", () => {
       expect(blockedReason).not.toBe(deniedReason);
 
       function toolResultReasonOf(events: LoopEvent[]): string | undefined {
-
-
         const toolMessage = events
           .filter(
             (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
@@ -1210,10 +1085,6 @@ describe("runLoop", () => {
     });
   });
 
-
-
-
-
   describe("project hooks", () => {
     function oneWriteThenText(): MockLanguageModelV4 {
       return new MockLanguageModelV4({
@@ -1225,8 +1096,6 @@ describe("runLoop", () => {
     }
 
     function toolRowOutputs(events: LoopEvent[]): { type: string; reason?: string }[] {
-
-
       const toolMessage = events
         .filter(
           (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
@@ -1239,9 +1108,6 @@ describe("runLoop", () => {
       }[];
       return content.map((part) => part.output);
     }
-
-
-
 
     test("a PreToolUse callback that blocks nothing lets the call through", async () => {
       const executed: unknown[] = [];
@@ -1291,8 +1157,6 @@ describe("runLoop", () => {
 
       expect(executed).toEqual([]);
 
-
-
       expect(prompted).toEqual([]);
       expect(events).toContainEqual({
         type: "permission-denied",
@@ -1303,8 +1167,6 @@ describe("runLoop", () => {
       expect(output?.type).toBe("execution-denied");
       expect(output?.reason).toContain("nope");
     });
-
-
 
     test("a PreToolUse block still blocks in auto, the mode that permits everything", async () => {
       const executed: unknown[] = [];
@@ -1328,11 +1190,6 @@ describe("runLoop", () => {
         reason: "hook",
       });
     });
-
-
-
-
-
 
     test("hook blocks never trip repeated-denials, however many times they happen", async () => {
       const model = new MockLanguageModelV4({ doStream: repeatedWriteCalls(5) });
@@ -1391,14 +1248,10 @@ describe("runLoop", () => {
         }),
       );
 
-
-
-
       expect(seen).toEqual([
         { subject: "write_file", input: { path: "a.txt" }, result: "wrote 3 lines" },
       ]);
       expect(events).toContainEqual({ type: "error", error: "format rewrote a.txt" });
-
 
       expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["json"]);
       const resultIndex = events.findIndex((e) => e.type === "tool-result");
@@ -1406,10 +1259,6 @@ describe("runLoop", () => {
       expect(resultIndex).toBeGreaterThanOrEqual(0);
       expect(errorIndex).toBeGreaterThan(resultIndex);
     });
-
-
-
-
 
     test.each([
       ["PreToolUse", "onBeforeTool"],
@@ -1433,12 +1282,8 @@ describe("runLoop", () => {
 
       expect(events).toContainEqual({ type: "done", reason: "aborted" });
 
-
       expect(toolRowOutputs(events)).toHaveLength(1);
     });
-
-
-
 
     test("a session with neither callback behaves exactly as it did before", async () => {
       const executed: unknown[] = [];
@@ -1772,8 +1617,6 @@ describe("runLoop", () => {
       expect(startedAt).toHaveLength(3);
       expect(Math.max(...startedAt) - Math.min(...startedAt)).toBeLessThan(40);
 
-
-
       expect(elapsed).toBeLessThan(160);
       expect(events.filter((e) => e.type === "tool-result")).toHaveLength(3);
       expect(toolMessageOutputs(events)).toHaveLength(3);
@@ -1978,10 +1821,6 @@ describe("runLoop", () => {
       expect(events.filter((e) => e.type === "tool-result")).toHaveLength(2);
       expect(toolMessageOutputs(events)).toHaveLength(3);
     });
-
-
-
-
 
     test("a sync throw from read_file is an error event, not a crash of the generator", async () => {
       const tools: ToolSet = {
@@ -2211,8 +2050,6 @@ describe("runLoop", () => {
       expect(reason).not.toContain("/mode");
     });
 
-
-
     test("packed blocks never trip repeated-denials, however many times they happen", async () => {
       const model = new MockLanguageModelV4({
         doStream: Array.from({ length: 5 }, (_, i) =>
@@ -2426,9 +2263,6 @@ describe("runLoop", () => {
     };
 
     function classifierOutputReason(events: LoopEvent[]): string | undefined {
-
-
-
       const toolMessage = events
         .filter(
           (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>

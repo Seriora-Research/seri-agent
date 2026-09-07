@@ -34,8 +34,6 @@ function makeTree(files: Record<string, string>): Tree {
   };
 }
 
-
-
 function scripts(dir: string, ...names: string[]): Record<string, string> {
   const files: Record<string, string> = {};
   for (const name of names) {
@@ -70,9 +68,6 @@ describe("loadHookRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-
-
-
   test("an untrusted project hooks directory produces an empty registry and one notice", () => {
     const tree = makeTree({
       [`${PROJECT_HOOKS}/hooks.yaml`]: manifest("block-dangerous"),
@@ -90,8 +85,6 @@ describe("loadHookRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-
-
   test("the same directory loads its hooks once trusted", () => {
     const tree = makeTree({
       [`${PROJECT_HOOKS}/hooks.yaml`]: manifest("block-dangerous"),
@@ -106,8 +99,6 @@ describe("loadHookRegistry", () => {
     expect(result.registry.get("PreToolUse")?.[0]?.source).toBe("project");
     expect(warnings).toEqual([`hooks from ${tree.projectHooks}: block-dangerous`]);
   });
-
-
 
   test("a trusted directory whose script changed stops loading and reports which file moved", () => {
     const tree = makeTree({
@@ -126,7 +117,6 @@ describe("loadHookRegistry", () => {
     });
   });
 
-
   test("the profile root's hooks load with no trust grant at all", () => {
     const tree = makeTree({
       [`${USER_HOOKS}/hooks.yaml`]: manifest("audit"),
@@ -140,8 +130,6 @@ describe("loadHookRegistry", () => {
     expect(result.registry.get("PreToolUse")?.[0]?.source).toBe("user");
     expect(warnings).toEqual([`hooks from ${tree.userHooks}: audit`]);
   });
-
-
 
   test("global and project hooks for one event both run, global first", () => {
     const tree = makeTree({

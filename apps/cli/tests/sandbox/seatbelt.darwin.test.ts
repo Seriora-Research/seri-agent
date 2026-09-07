@@ -23,10 +23,6 @@ function denyDefaultPlusLoopback(): string {
   ].join("\n");
 }
 
-
-
-
-
 const CONNECT_C = `
 #include <arpa/inet.h>
 #include <errno.h>

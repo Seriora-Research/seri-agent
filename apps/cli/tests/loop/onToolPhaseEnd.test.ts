@@ -1,6 +1,3 @@
-
-
-
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -47,7 +44,6 @@ describe("onToolPhaseEnd", () => {
         message.role === "user" && JSON.stringify(message.content).includes("INJECTED-NOTICE"),
     );
     expect(injected).toHaveLength(1);
-
 
     const toolIndex = messages.findIndex((message) => message.role === "tool");
     const injectedIndex = messages.findIndex((message) =>
@@ -103,9 +99,6 @@ describe("onToolPhaseEnd", () => {
 
     expect(users).toHaveLength(1);
   });
-
-
-
 
   test("never touches the system string", async () => {
     const systems: (string | undefined)[] = [];

@@ -25,10 +25,6 @@ describe("scanForInjection", () => {
     expect(scanForInjection("this looks clean and has no hidden character").ok).toBe(true);
   });
 
-
-
-
-
   test("invisible-unicode: rejects a bidi-isolate control character (LRI, U+2066)", () => {
     const result = scanForInjection("this looks⁦clean but has a hidden bidi-isolate");
     expect(result.ok).toBe(false);

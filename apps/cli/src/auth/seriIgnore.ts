@@ -4,9 +4,6 @@ import type { Plan } from "@seri/plans";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { hasHostedAuth } from "./authStore";
 
-
-
-
 export const SERI_IGNORE_FILENAME = "seri-ignore";
 
 function ignorePath(configDir: string): string {
@@ -29,9 +26,6 @@ export function clearSeriIgnore(configDir: string): void {
 export function hostedPlanUsable(configDir: string): boolean {
   return hasHostedAuth(configDir) && !isSeriIgnored(configDir);
 }
-
-
-
 
 export function effectiveHostedPlan(configDir: string, plan: Plan | null): Plan | null {
   if (plan === null || isSeriIgnored(configDir)) return null;

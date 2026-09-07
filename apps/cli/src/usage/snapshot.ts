@@ -35,9 +35,7 @@ export function clearUsageSnapshot(configDir: string): void {
   if (!existsSync(path)) return;
   try {
     unlinkSync(path);
-  } catch {
-
-  }
+  } catch {}
 }
 
 export function snapshotIsFresh(snapshot: UsageSnapshot, now: Date = new Date()): boolean {

@@ -15,9 +15,6 @@ export type PublicLoopEvent =
   | { type: "reasoning-delta"; text: string }
   | { type: "tool-call"; name: string; args: unknown }
   | { type: "tool-result"; name: string; result: unknown }
-
-
-
   | {
       type: "permission-denied";
       name: string;

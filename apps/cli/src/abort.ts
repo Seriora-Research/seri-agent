@@ -1,16 +1,4 @@
-
-
-
-
-
-
-
-
-
-
 export type AbortRegistration = {
-
-
   aborted: () => boolean;
 
   dispose: () => void;

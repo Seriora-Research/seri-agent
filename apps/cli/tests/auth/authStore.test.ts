@@ -108,9 +108,6 @@ describe("expiresAtFrom", () => {
     expect(new Date(result as string).getTime()).toBeGreaterThanOrEqual(before + 300 * 1000);
   });
 
-
-
-
   test("a finite but out-of-Date-range expiresIn returns undefined instead of throwing", () => {
     expect(() => expiresAtFrom(1e300)).not.toThrow();
     expect(expiresAtFrom(1e300)).toBeUndefined();

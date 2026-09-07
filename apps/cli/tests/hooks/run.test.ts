@@ -120,13 +120,9 @@ describe("runHook (injected spawn)", () => {
     );
     expect(outcome.kind).toBe("block");
 
-
     expect(outcome.kind === "block" && outcome.reason.length).toBeLessThan(1_000);
   });
 });
-
-
-
 
 const describeSh = process.platform === "win32" ? describe.skip : describe;
 const describePs1 = process.platform === "win32" ? describe : describe.skip;
@@ -177,9 +173,6 @@ describeSh("runHook (real bash subprocess)", () => {
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("blocked: dangerous command");
   }, 15_000);
-
-
-
 
   test("reads the JSON payload from stdin and finds the tool name in it", async () => {
     const dir = makeTempDir();
@@ -245,16 +238,11 @@ describePs1("runHook (real powershell subprocess)", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain("blocked: dangerous command");
   }, 20_000);
 
-
-
-
   test("reads the JSON payload from stdin and finds the tool name in it", async () => {
     const dir = makeTempDir();
     const path = writePs1Script(
       dir,
       "stdin-check",
-
-
 
       "$payload = [Console]::In.ReadToEnd()\n" +
         'if (($payload | ConvertFrom-Json).tool_name -eq "probe-tool") {\n' +

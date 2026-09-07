@@ -12,14 +12,7 @@ import {
 
 export type MemoryCommandDeps = { configDir: string };
 
-
-
-
-
-
 export type MemoryLine = { text: string; muted?: boolean };
-
-
 
 export type MemoryPanelRow = {
   id: string;
@@ -32,15 +25,9 @@ export type MemoryPanelRow = {
   durable: boolean;
 };
 
-
-
-
-
 const SHORT_ID = 7;
 const ACTION_WIDTH = 8;
 const FILE_WIDTH = 22;
-
-
 
 function column(value: string, width: number): string {
   return truncate(value, width - 1).padEnd(width);
@@ -52,19 +39,11 @@ function writeDetail(p: PendingWrite): string {
   return `${truncate(p.target ?? "", 40)} → ${truncate(p.content ?? "", 40)}`;
 }
 
-
-
-
-
-
 function summaryLine(p: PendingWrite): MemoryLine {
   return {
     text: `${p.id.slice(0, SHORT_ID)}  ${column(p.action, ACTION_WIDTH)}${column(pendingLabel(p), FILE_WIDTH)}${truncate(writeDetail(p), 60)}`,
   };
 }
-
-
-
 
 export function memoryPanelRows(deps: MemoryCommandDeps): MemoryPanelRow[] {
   return listPending(deps.configDir).map((p) => ({
@@ -76,9 +55,6 @@ export function memoryPanelRows(deps: MemoryCommandDeps): MemoryPanelRow[] {
     durable: p.durable,
   }));
 }
-
-
-
 
 export function memoryDiffLines(deps: MemoryCommandDeps, id: string): string[] {
   return forEachMatch(
@@ -93,17 +69,10 @@ export function memoryDiffLines(deps: MemoryCommandDeps, id: string): string[] {
 const ID_ARG_RE = /^(all|[0-9a-f]{4,40})$/;
 const ON_OFF_RE = /^(on|off)$/;
 
-
-
-
-
 export function memoryCommandAccepts(args: string[]): boolean {
   const [sub, ...rest] = args;
 
-
   if (sub === undefined || sub === "list" || sub === "pending") return rest.length === 0;
-
-
 
   if (sub === "diff" || sub === "approve" || sub === "reject")
     return rest.length === 1 && ID_ARG_RE.test(rest[0] ?? "");
@@ -111,15 +80,6 @@ export function memoryCommandAccepts(args: string[]): boolean {
     return rest.length === 1 && ON_OFF_RE.test(rest[0] ?? "");
   return false;
 }
-
-
-
-
-
-
-
-
-
 
 function forEachMatch(
   configDir: string,
@@ -143,11 +103,6 @@ function forEachMatch(
   }
   return lines;
 }
-
-
-
-
-
 
 function countedResult(
   configDir: string,
@@ -178,17 +133,11 @@ function countedResult(
 const USAGE =
   "Usage: /memory | pending | diff <id|all> | approve <id|all> | reject <id|all> | approval on|off | archivist on|off";
 
-
-
-
 export function decideMemoryCommand(
   args: string[],
   deps: MemoryCommandDeps,
 ): { lines: MemoryLine[] } {
   const [sub, ...rest] = args;
-
-
-
 
   if (sub === undefined || sub === "list" || sub === "pending") {
     const pending = listPending(deps.configDir);
@@ -202,8 +151,6 @@ export function decideMemoryCommand(
   }
 
   if (sub === "diff" && rest.length === 1) {
-
-
     return {
       lines: forEachMatch(
         deps.configDir,
@@ -222,8 +169,6 @@ export function decideMemoryCommand(
   }
 
   if (sub === "reject" && rest.length === 1) {
-
-
     return countedResult(deps.configDir, rest[0] as string, "reject", "rejected", (p) => {
       rejectPending(deps.configDir, p);
     });

@@ -453,7 +453,11 @@ describe("tuiReducer: transcript role tagging", () => {
     });
     state = tuiReducer(state, {
       type: "loop-event",
-      event: { type: "tool-result", name: "write_file", result: { written: true, change: persist } },
+      event: {
+        type: "tool-result",
+        name: "write_file",
+        result: { written: true, change: persist },
+      },
     });
     expect(state.transcript.filter((entry) => entry.kind === "file-change")).toHaveLength(1);
     expect(renderLiveToolActivity(state.toolActivity)).toEqual([]);

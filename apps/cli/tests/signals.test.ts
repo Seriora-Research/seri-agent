@@ -5,11 +5,6 @@ import { pathToFileURL } from "node:url";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../src/signals.ts")).href;
 
-
-
-
-
-
 const CHILD = [
   `const m = await import(${JSON.stringify(MODULE)});`,
   `m.onSignalCancel((sig) => {`,
@@ -38,8 +33,6 @@ function startChild(): {
     child.once("exit", (code, signal) => resolve({ code, signal, stdout }));
   });
 
-
-
   const sawLine = async (line: string): Promise<void> => {
     const deadline = Date.now() + 10_000;
     while (!stdout.includes(line) && Date.now() < deadline)
@@ -51,16 +44,8 @@ function startChild(): {
   return { child, exited, sawLine };
 }
 
-
-
-
 describe.skipIf(process.platform === "win32")("signal handling", () => {
   test("one press cancels without killing, and the process still exits BY signal", async () => {
-
-
-
-
-
     const { child, exited, sawLine } = startChild();
     try {
       await sawLine("ready");
@@ -77,9 +62,6 @@ describe.skipIf(process.platform === "win32")("signal handling", () => {
   }, 30_000);
 
   test("a SIGTERM terminates instead of cancelling, even with a cancel registered", async () => {
-
-
-
     const { child, exited, sawLine } = startChild();
     try {
       await sawLine("ready");
@@ -99,7 +81,6 @@ describe.skipIf(process.platform === "win32")("signal handling", () => {
     try {
       await sawLine("ready");
       child.kill("SIGINT");
-
 
       await sawLine("cancelled");
       child.kill("SIGINT");

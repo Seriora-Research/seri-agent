@@ -2,10 +2,6 @@ import { execFileSync } from "node:child_process";
 import pkg from "../../package.json";
 import { gitArgv } from "../checkpoint/gitArgv";
 
-
-
-
-
 declare const SERI_BAKED_COMMIT: string | undefined;
 
 export function readBakedCommit(): string | undefined {

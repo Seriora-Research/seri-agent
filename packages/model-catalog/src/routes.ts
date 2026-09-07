@@ -1,20 +1,5 @@
 import type { ModelCatalogEntry } from "./types";
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const VENDOR_ALIASES: Record<string, string> = { "x-ai": "xai" };
 
 export function routeKey(entry: ModelCatalogEntry): string {
@@ -28,10 +13,6 @@ export function routeKey(entry: ModelCatalogEntry): string {
   return `${vendor}/${slug}`;
 }
 
-
-
-
-
 export function groupRoutes(entries: ModelCatalogEntry[]): Map<string, ModelCatalogEntry[]> {
   const groups = new Map<string, ModelCatalogEntry[]>();
   for (const entry of entries) {
@@ -42,9 +23,6 @@ export function groupRoutes(entries: ModelCatalogEntry[]): Map<string, ModelCata
   }
   return groups;
 }
-
-
-
 
 export function routesFor(
   entries: ModelCatalogEntry[],

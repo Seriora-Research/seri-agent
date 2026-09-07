@@ -32,7 +32,6 @@ function runBinary(
 }
 
 function rmFixture(dir: string): void {
-
   rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 

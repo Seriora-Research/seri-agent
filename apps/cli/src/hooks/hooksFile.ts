@@ -16,15 +16,6 @@ export type HooksFileOutcome = {
   readonly warnings: readonly string[];
 };
 
-
-
-
-
-
-
-
-
-
 // `:` is an NTFS alternate data stream (`dir\a:b.ps1` hangs off `dir\a`); readdirSync will not list it as its own file.
 export const SCRIPT_NAME_SHAPE = /^[^./\\:]+$/;
 
@@ -55,8 +46,6 @@ function parseOneHookEntry(opts: {
     return skip('"script" is missing');
   }
 
-
-
   const skipNamed = (reason: string) => ({
     spec: undefined,
     warning: `${filePath}: hook "${rawScript}" was skipped: ${reason}`,
@@ -75,7 +64,6 @@ function parseOneHookEntry(opts: {
       return skipNamed('"matcher" is not a string');
     }
     try {
-
       matcher = new RegExp(`^(?:${rawMatcher})$`);
     } catch (err) {
       return skipNamed(`"matcher" is not a valid regular expression (${messageOf(err)})`);
@@ -91,9 +79,6 @@ function parseOneHookEntry(opts: {
     timeoutMs = rawTimeout * 1000;
   }
 
-
-
-
   const ext = opts.platform === "win32" ? "ps1" : "sh";
   const path = join(opts.dir, `${rawScript}.${ext}`);
   if (!opts.scriptExists(path)) {
@@ -107,9 +92,6 @@ function parseOneHookEntry(opts: {
     warning: undefined,
   };
 }
-
-
-
 
 export function parseHooksFile(opts: {
   text: string;
@@ -131,7 +113,6 @@ export function parseHooksFile(opts: {
     warnings.push(`could not parse ${filePath}: it is not valid YAML (${messageOf(err)})`);
     return { specs: [], warnings };
   }
-
 
   if (doc === null || doc === undefined) return { specs: [], warnings };
 

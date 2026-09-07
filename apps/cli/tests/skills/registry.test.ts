@@ -19,9 +19,6 @@ afterEach(() => {
   roots = [];
 });
 
-
-
-
 function makeTree(files: Record<string, string>): { worktree: string; configDir: string } {
   const root = mkdtempSync(join(tmpdir(), "seri-skills-"));
   roots.push(root);
@@ -104,8 +101,6 @@ describe("loadSkillRegistry", () => {
     expect(warnings.filter((w) => w.includes("notes"))).toEqual([]);
   });
 
-
-
   test("a file with no frontmatter is skipped with a warning naming it", () => {
     const { skills, warnings } = load({
       "project/.seri/skills/loose/SKILL.md": "# Just a heading, no frontmatter\n",
@@ -124,7 +119,6 @@ describe("loadSkillRegistry", () => {
     expect(skills.size).toBe(0);
     expect(warnings.some((w) => w.includes("broken") && w.includes("not valid YAML"))).toBe(true);
   });
-
 
   test("a name that collides with a slash command is refused", () => {
     const { skills, warnings } = load({
@@ -190,8 +184,6 @@ describe("substituteSkillArgs", () => {
     expect(substituteSkillArgs("a=$0 b=$1", "only")).toBe("a=only b=");
   });
 
-
-
   test("a token inside the substituted text is not itself substituted", () => {
     expect(substituteSkillArgs("$ARGUMENTS", "literally $1 dollars")).toBe("literally $1 dollars");
   });
@@ -223,8 +215,6 @@ describe("renderSkillsTier and the context tier", () => {
     expect(skills.get("loop")?.argumentHint).toBe("<mode> <prompt>");
   });
 
-
-
   test("a disable-model-invocation skill is absent from the listing entirely", () => {
     const { skills } = load({
       "project/.seri/skills/manual/SKILL.md":
@@ -254,8 +244,6 @@ describe("renderSkillsTier and the context tier", () => {
       "# Skills",
     );
   });
-
-
 
   test("the assembled system prompt carries the metadata and not the body", () => {
     const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": SIMPLE });

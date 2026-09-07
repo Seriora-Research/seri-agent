@@ -22,7 +22,6 @@ function execOpts(abortSignal?: AbortSignal): ToolExecutionOptions<Record<string
   return { toolCallId: "c1", messages, context: {}, abortSignal };
 }
 
-
 function realishTools(): ToolSet {
   const inert = tool({
     description: "inert",
@@ -76,8 +75,6 @@ afterEach(() => {
 });
 
 describe("withVerification", () => {
-
-
   test("a diagnostic from the check reaches the tool result the model reads", async () => {
     const wrapped = withVerification(realishTools(), {
       command: "tsc --noEmit",
@@ -94,7 +91,6 @@ describe("withVerification", () => {
     expect(asModelSeesIt).toContain("12");
     expect(asModelSeesIt).toContain("Type 'number' is not assignable to type 'string'.");
   });
-
 
   test("negative control: with verification disabled the same call carries no diagnostic", async () => {
     const wrapped = withVerification(realishTools(), {
@@ -153,9 +149,6 @@ describe("withVerification", () => {
     expect((result as { change?: { added: number; removed: number } }).change?.removed).toBe(40);
   });
 
-
-
-
   test("with no command configured the write succeeds and returns normally", async () => {
     const wrapped = withVerification(realishTools(), {});
 
@@ -178,16 +171,12 @@ describe("withVerification", () => {
       },
     });
 
-
     mkdirSync(join(root, "dir"), { recursive: true });
     expect(
       wrapped.write_file?.execute?.({ path: join(root, "dir"), content: "x" }, execOpts()),
     ).rejects.toThrow();
     expect(checks).toBe(0);
   });
-
-
-
 
   test("every tool but write_file comes back identical by reference", () => {
     const tools = realishTools();
@@ -198,8 +187,6 @@ describe("withVerification", () => {
     }
     expect(wrapped.write_file).not.toBe(tools.write_file);
   });
-
-
 
   test("threads the tool call's abortSignal into the check", async () => {
     const controller = new AbortController();
@@ -256,22 +243,8 @@ describe("writeFileVerification", () => {
   });
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 const TSC = join(import.meta.dir, "..", "..", "node_modules", "typescript", "lib", "tsc.js");
 const BUN_ON_PATH = spawnSync("bun", ["--version"], { encoding: "utf8" }).status === 0;
-
 
 const PATHS_ARE_SPACE_FREE = !TSC.includes(" ") && !tmpdir().includes(" ");
 
@@ -290,7 +263,6 @@ describe.skipIf(!existsSync(TSC) || !BUN_ON_PATH || !PATHS_ARE_SPACE_FREE)(
 
     test("writing a file with a type error puts the real compiler's diagnostic in the tool result", async () => {
       const target = join(project, "a.ts");
-
 
       const wrapped = withVerification(realishTools(), {
         command: `bun ${TSC} --noEmit --strict ${target}`,

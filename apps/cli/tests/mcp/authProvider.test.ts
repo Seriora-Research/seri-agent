@@ -43,9 +43,6 @@ function redirect(onRedirect: (url: URL) => void): McpAuthInteraction {
   return { kind: "redirect", redirectUri: mcpCallbackUri(41999), onRedirect };
 }
 
-
-
-
 function validateAs(p: OAuthClientProvider, authorizationServerUrl: string): void {
   const validate = p.validateAuthorizationServerURL;
   if (validate === undefined) throw new Error("the provider must implement it");
@@ -59,8 +56,6 @@ describe("the refuse persona never starts a login", () => {
       McpLoginRequiredError,
     );
   });
-
-
 
   test("a registered client with no tokens still refuses", () => {
     const configDir = makeConfigDir();

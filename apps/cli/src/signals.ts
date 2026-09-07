@@ -1,31 +1,8 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 const cleanups: Array<() => void> = [];
 
 export function onSignalCleanup(fn: () => void): void {
   cleanups.push(fn);
 }
-
-
-
-
 
 let cancel: ((signal: NodeJS.Signals) => void) | undefined;
 
@@ -36,28 +13,11 @@ export function onSignalCancel(fn: (signal: NodeJS.Signals) => void): () => void
   };
 }
 
-
-
-
-
-
-
-
 let lastCleanup: (() => void) | undefined;
 
 export function onSignalCleanupLast(fn: () => void): void {
   lastCleanup = fn;
 }
-
-
-
-
-
-
-
-
-
-
 
 export function raiseSignal(signal: NodeJS.Signals): void {
   process.removeAllListeners(signal);
@@ -65,30 +25,7 @@ export function raiseSignal(signal: NodeJS.Signals): void {
   process.kill(process.pid, signal);
 }
 
-
-
-
-
-
-
-
 export function deliverSignal(signal: NodeJS.Signals): void {
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   if (signal === "SIGINT" && cancel !== undefined) {
     const fn = cancel;
     cancel = undefined;
@@ -99,16 +36,12 @@ export function deliverSignal(signal: NodeJS.Signals): void {
   for (const fn of cleanups) {
     try {
       fn();
-    } catch {
-
-    }
+    } catch {}
   }
 
   try {
     lastCleanup?.();
-  } catch {
-
-  }
+  } catch {}
 
   raiseSignal(signal);
 }

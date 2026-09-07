@@ -57,13 +57,7 @@ function HunkRow({
   );
 }
 
-export function FileChangeStatsLine({
-  added,
-  removed,
-}: {
-  added: number;
-  removed: number;
-}) {
+export function FileChangeStatsLine({ added, removed }: { added: number; removed: number }) {
   return (
     <box flexDirection="row" flexShrink={0}>
       <text fg={theme.diffAdd} flexShrink={0} wrapMode="none">

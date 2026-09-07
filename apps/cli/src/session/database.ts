@@ -13,9 +13,6 @@ export { DATABASE_FILENAME };
 const CURRENT_SCHEMA_VERSION = 4;
 const BUSY_TIMEOUT_MS = 5_000;
 
-
-
-
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
   const resolved = resolve(dir);
   return basename(resolved) === layoutLeaf ? dirname(resolved) : resolved;
@@ -366,15 +363,11 @@ export class SessionDatabase {
     ensureOwnerOnlyDir(configDir);
     this.database = new Database(join(configDir, DATABASE_FILENAME), { create: true });
     try {
-
-
       // SQLITE_BUSY if another process has the same file and the timeout is not already set.
       this.database.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
       this.database.exec("PRAGMA foreign_keys = ON");
       this.database.exec("PRAGMA journal_mode = WAL");
       this.migrate();
-
-
 
       // LIMIT 1, not 0: SQLite can skip MATCH when the limit is zero, hiding a missing FTS5 build. Hyphenated tokens are FTS column syntax, so the probe is a bare term.
       this.database
@@ -579,10 +572,6 @@ export class SessionDatabase {
         .all(sessionId) as { json: string }[]
     ).map((row) => JSON.parse(row.json));
   }
-
-
-
-
 
   pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
     return this.database.transaction(() => {

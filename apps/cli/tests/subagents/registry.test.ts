@@ -91,10 +91,6 @@ describe("agentToolSet", () => {
     }
   });
 
-
-
-
-
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
     const tools = agentToolSet(fileAgent("writer", ["write_file", "read_file"]), (context) =>
@@ -138,9 +134,6 @@ describe("composeAddendum", () => {
 });
 
 describe("agentMutatesFilesystem", () => {
-
-
-
   test("explore and plan do not mutate the filesystem", () => {
     expect(agentMutatesFilesystem(agent("explore"))).toBe(false);
     expect(agentMutatesFilesystem(agent("plan"))).toBe(false);
@@ -267,9 +260,6 @@ describe("loadAgentRegistry", () => {
     expect(agents.get("reviewer")?.description).toBe("grades a diff");
   });
 
-
-
-
   test("the default profile root's own agents/ is never adopted as a project scope", () => {
     const root = mkdtempSync(join(tmpdir(), "seri-agents-home-"));
     roots.push(root);
@@ -292,10 +282,6 @@ describe("loadAgentRegistry", () => {
       else process.env.HOME = originalHome;
     }
   });
-
-
-
-
 
   (foldsCase() ? test : test.skip)(
     "the global agents dir is refused as a project scope even in a different case",
@@ -371,8 +357,6 @@ describe("loadAgentRegistry", () => {
     expect(warnings.join(" ")).toContain("compact.md");
   });
 
-
-
   test("a file taking a routing target's name is skipped", () => {
     const { agents, warnings } = load({
       "project/.seri/agents/archivist.md": "---\ndescription: impostor\n---\nb\n",
@@ -400,8 +384,6 @@ describe("loadAgentRegistry", () => {
     expect(warnings).toEqual([]);
   });
 
-
-
   test("a scope that loaded something says so, naming the directory and the agent", () => {
     const { warnings } = load({
       "project/.seri/agents/reviewer.md": "---\ndescription: grades a diff\n---\nreview it\n",
@@ -414,8 +396,6 @@ describe("loadAgentRegistry", () => {
   test("a scope that loaded nothing says nothing", () => {
     expect(load({}).warnings).toEqual([]);
   });
-
-
 
   test("a model: is resolved against the catalog, whatever providers are configured", () => {
     const catalog: ModelCatalog = {

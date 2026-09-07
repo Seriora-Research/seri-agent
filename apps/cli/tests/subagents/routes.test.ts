@@ -249,8 +249,6 @@ describe("effortForRole", () => {
   });
 
   test("a different pair omits effort even when the parent string is high", () => {
-
-
     expect(
       effortForRole(parentEffort, { provider: "anthropic", modelId: "claude-sonnet-5" }),
     ).toBeUndefined();
@@ -394,7 +392,6 @@ describe("realizedRoute", () => {
     };
     const warning = roleConstructionWarning("plan", intended, "boom");
 
-
     expect(warning).toContain('role "plan" could not use');
     expect(warning).not.toContain('role "oracle"');
   });
@@ -439,10 +436,6 @@ describe("parseRolePins reads env then config from a real config dir", () => {
 });
 
 describe("a subagent pinned to a subscribed provider", () => {
-
-
-
-
   const grokCatalog: ModelCatalog = {
     fetchedAt: "2026-08-28T00:00:00.000Z",
     entries: [entry({ id: "grok-4.5", provider: "xai" }), ...catalog.entries],

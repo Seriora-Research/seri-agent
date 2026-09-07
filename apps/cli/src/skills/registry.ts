@@ -9,14 +9,9 @@ import { parseSkillFile, type SkillSpec, skillBodyOf } from "./skillFile";
 
 export type { SkillSpec } from "./skillFile";
 
-
 export type SkillRegistry = ReadonlyMap<string, SkillSpec>;
 
 export const SKILL_FILENAME = "SKILL.md";
-
-
-
-
 
 function skillFilesIn(dir: string, onWarning: (message: string) => void): readonly string[] {
   try {
@@ -27,9 +22,6 @@ function skillFilesIn(dir: string, onWarning: (message: string) => void): readon
         try {
           return statSync(path).isFile();
         } catch {
-
-
-
           return false;
         }
       });
@@ -38,7 +30,6 @@ function skillFilesIn(dir: string, onWarning: (message: string) => void): readon
     return [];
   }
 }
-
 
 export function loadSkillRegistry(opts: {
   worktree: string;
@@ -51,10 +42,6 @@ export function loadSkillRegistry(opts: {
     configDir: opts.configDir,
     dirname: SKILLS_DIRNAME,
   });
-
-
-
-
 
   const isReserved = (name: string): boolean =>
     isRoutableRole(name) || commandByName(`/${name}`) !== undefined;
@@ -77,9 +64,6 @@ export function loadSkillRegistry(opts: {
       }
       for (const warning of outcome.warnings) opts.onWarning(warning);
 
-
-
-
       const previous = skills.get(outcome.spec.name);
       if (previous?.source === scope.source) {
         opts.onWarning(
@@ -90,13 +74,10 @@ export function loadSkillRegistry(opts: {
       loaded.push(outcome.spec.name);
     }
 
-
-
     if (loaded.length > 0) opts.onWarning(`skills from ${scope.dir}: ${loaded.join(", ")}`);
   }
   return skills;
 }
-
 
 export function readSkillBody(spec: SkillSpec): string {
   const body = skillBodyOf(readFileSync(spec.filePath, "utf8"));
@@ -105,14 +86,6 @@ export function readSkillBody(spec: SkillSpec): string {
   }
   return body;
 }
-
-
-
-
-
-
-
-
 
 const SUBSTITUTION = /\$(ARGUMENTS|\d)/g;
 
@@ -123,14 +96,12 @@ export function substituteSkillArgs(body: string, argumentText: string): string 
   );
 }
 
-
 export function modelVisibleSkills(
   skills: SkillRegistry | readonly SkillSpec[],
 ): readonly SkillSpec[] {
   const all: readonly SkillSpec[] = Array.isArray(skills) ? skills : [...skills.values()];
   return all.filter((skill) => skill.modelInvocable && skill.description.length > 0);
 }
-
 
 export function renderSkillsTier(skills: readonly SkillSpec[]): string {
   const listed = modelVisibleSkills(skills);
@@ -141,7 +112,6 @@ export function renderSkillsTier(skills: readonly SkillSpec[]): string {
       "with the `skill` tool; the instructions themselves are not in this prompt until you do. " +
       "Load one when its description matches the task at hand.",
     "",
-
 
     ...listed.map(
       (skill) =>

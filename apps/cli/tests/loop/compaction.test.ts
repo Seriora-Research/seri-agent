@@ -53,7 +53,6 @@ function summarizerUserText(model: MockLanguageModelV4): string {
     .join("");
 }
 
-
 function buildAlternatingMessages(pairs: number): ModelMessage[] {
   const messages: ModelMessage[] = [{ role: "user", content: "do the task" }];
   for (let i = 0; i < pairs; i++) {
@@ -97,9 +96,6 @@ describe("findSafeEvictionBoundary", () => {
   });
 
   test("a huge 19-message tail is cut while a tiny 20-message tail is kept", () => {
-
-
-
     const hugeBody = "H".repeat(20_000);
     const huge: ModelMessage[] = [];
     for (let i = 0; i < 9; i++) {

@@ -3,13 +3,7 @@ import { parse } from "yaml";
 import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
 
-
-
-
-
-
 export type SkillAuthor = "human" | "archivist";
-
 
 export type SkillSpec = {
   readonly name: string;
@@ -27,24 +21,11 @@ export type SkillFileOutcome =
   | { readonly kind: "spec"; readonly spec: SkillSpec; readonly warnings: readonly string[] }
   | { readonly kind: "skipped"; readonly warning: string };
 
-
-
 const FRONTMATTER = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 
 const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
-
-
-
 const MAX_DESCRIPTION_LENGTH = 500;
-
-
-
-
-
-
-
-
 
 const IGNORED_KEYS = ["allowed-tools", "model", "context"] as const;
 
@@ -58,9 +39,6 @@ function readString(value: unknown): string | undefined {
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-
-
-
 function hintFromArguments(value: unknown): string | undefined {
   if (!Array.isArray(value)) return undefined;
   const names = value.filter((entry): entry is string => typeof entry === "string");
@@ -68,7 +46,6 @@ function hintFromArguments(value: unknown): string | undefined {
 }
 
 export function parseSkillFile(opts: {
-
   filePath: string;
   text: string;
   source: ExtensionSource;
@@ -76,7 +53,6 @@ export function parseSkillFile(opts: {
   isReserved: (name: string) => boolean;
 }): SkillFileOutcome {
   const { filePath } = opts;
-
 
   // UTF-8 BOM: Notepad and PowerShell redirection write one ahead of the opening fence.
   const text = opts.text.charCodeAt(0) === 0xfeff ? opts.text.slice(1) : opts.text;
@@ -94,9 +70,6 @@ export function parseSkillFile(opts: {
   }
   const fields = front as Record<string, unknown>;
   const warnings: string[] = [];
-
-
-
 
   const name = (readString(fields.name) ?? basename(dirname(filePath))).toLowerCase();
   if (!NAME_SHAPE.test(name)) {
@@ -126,8 +99,6 @@ export function parseSkillFile(opts: {
   }
   const modelInvocable = fields["disable-model-invocation"] !== true;
   if (description === undefined && modelInvocable) {
-
-
     warnings.push(
       `skill file ${filePath}: no description, so the model is never told this skill exists`,
     );
@@ -147,7 +118,6 @@ export function parseSkillFile(opts: {
     warnings,
   };
 }
-
 
 export function skillBodyOf(text: string): string {
   const stripped = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;

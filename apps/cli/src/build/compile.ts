@@ -1,9 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 
-
-
-
 export function resolveBuildCommit(
   env: NodeJS.ProcessEnv = process.env,
   gitHead: () => string | undefined = readGitHead,

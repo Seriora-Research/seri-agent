@@ -7,7 +7,6 @@ import { diffLines } from "../diffLines";
 import { SKILL_FILENAME } from "./registry";
 import { skillBodyOf } from "./skillFile";
 
-
 export type PendingSkill = {
   id: string;
   stagedAt: string;
@@ -16,13 +15,6 @@ export type PendingSkill = {
   body: string;
   reason: string;
   durable: boolean;
-
-
-
-
-
-
-
 
   worktree: string;
 };
@@ -37,15 +29,9 @@ export function pendingSkillPath(configDir: string, id: string): string {
   return join(pendingSkillDir(configDir), `${id}${PENDING_SUFFIX}`);
 }
 
-
 export function approvedSkillPath(worktree: string, name: string): string {
   return join(worktree, ".seri", SKILLS_DIRNAME, name, SKILL_FILENAME);
 }
-
-
-
-
-
 
 export function renderSkillFile(p: PendingSkill): string {
   return [
@@ -92,14 +78,10 @@ function isPendingSkill(value: unknown): value is PendingSkill {
     typeof v.body === "string" &&
     typeof v.reason === "string" &&
     typeof v.durable === "boolean" &&
-
-
     typeof v.worktree === "string" &&
     v.worktree.length > 0
   );
 }
-
-
 
 export function listPendingSkills(
   configDir: string,
@@ -128,8 +110,6 @@ export function listPendingSkills(
 
 const ID_REF_RE = /^[0-9a-f]{4,40}$/;
 
-
-
 export function resolvePendingSkillRef(configDir: string, ref: string): PendingSkill[] {
   const all = listPendingSkills(configDir);
   if (ref === "all") return all;
@@ -140,7 +120,6 @@ export function resolvePendingSkillRef(configDir: string, ref: string): PendingS
   }
   return matches;
 }
-
 
 export function diffPendingSkill(p: PendingSkill): { path: string; lines: string[] } {
   const path = approvedSkillPath(p.worktree, p.name);
@@ -158,14 +137,10 @@ export function diffPendingSkill(p: PendingSkill): { path: string; lines: string
   };
 }
 
-
-
-
 function normalizeEol(text: string): string {
   // CRLF folded to LF: a skill edited in Notepad and one written by seri must compare equal.
   return text.replace(/\r\n/g, "\n");
 }
-
 
 export function liveSkillFile(p: PendingSkill): string {
   const path = approvedSkillPath(p.worktree, p.name);
@@ -180,9 +155,6 @@ export function approvePendingSkill(
 ): { path: string } {
   const path = approvedSkillPath(p.worktree, p.name);
 
-
-
-
   if (previewedAgainst !== undefined && liveSkillFile(p) !== previewedAgainst) {
     throw new Error(
       `${path} changed since it was previewed. Run /skills diff ${p.id} again to see the current file, then approve.`,
@@ -196,7 +168,6 @@ export function approvePendingSkill(
 export function rejectPendingSkill(configDir: string, p: PendingSkill): void {
   unlinkSync(pendingSkillPath(configDir, p.id));
 }
-
 
 export function existingSkillBody(worktree: string, name: string): string | undefined {
   const path = approvedSkillPath(worktree, name);

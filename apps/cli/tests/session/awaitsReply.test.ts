@@ -28,8 +28,6 @@ describe("awaitsReply", () => {
     expect(awaitsReply(messages)).toBe(false);
   });
 
-
-
   test("returns true when the last message is a tool-result row (interrupted mid agentic-loop)", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "do a task" },
@@ -51,8 +49,6 @@ describe("awaitsReply", () => {
     ];
     expect(awaitsReply(messages)).toBe(true);
   });
-
-
 
   test("returns true when the last message is an assistant message with unresolved tool calls", () => {
     const messages: ModelMessage[] = [
