@@ -29,11 +29,7 @@ import {
   writeTree,
 } from "../../src/checkpoint/shadowGit";
 
-// The cold first snapshot of a real repo measured 300 ms on Windows, and every test here takes
-// several snapshots plus a restore. bun's default is comfortably too tight on a loaded runner.
-// 30 s rather than 15: the heaviest test here also runs `git init` and a real `git commit` in a
-// second repo (~217 ms for the commit alone on Windows), and observed 19.8 s once while the other
-// checkpoint files ran alongside it.
+// Cold first snapshot measured 300 ms on Windows; bun's default timeout is too tight on a loaded runner.
 const GIT_TEST_TIMEOUT_MS = 30_000;
 
 let root: string;
@@ -51,8 +47,6 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-// A worktree carrying every content shape that has ever broken a round trip: LF, CRLF, binary
-// with NUL/0xFF, nested, and a file with no trailing newline.
 function seedWorktree(dir: string): void {
   writeFileSync(join(dir, ".gitignore"), "*.log\nnode_modules/\n");
   writeFileSync(join(dir, "lf.txt"), "line1\nline2\n");
@@ -82,8 +76,6 @@ function manifest(dir: string): Record<string, string> {
   return out;
 }
 
-// The two halves of a restore, as /undo runs them: plan first so the caller can show what is
-// about to be deleted, then apply.
 function restore(tree: string): { restored: string[]; deleted: string[] } {
   const plan = planRestore(gitDir, workTree, tree);
   applyRestore(gitDir, workTree, plan.deleted);
@@ -150,12 +142,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
   test(
     "really deletes a non-ASCII path rather than reporting a deletion that did not happen",
     () => {
-      // core.quotePath defaults to true, so git names this file `"\321\202\320\265..."` — quotes
-      // and octal escapes included — unless the listing is asked for with -z. Handing that string
-      // to rmSync throws EFAULT on Windows between read-tree and checkout-index, so nothing gets
-      // restored; on POSIX `force: true` swallows the ENOENT, the file survives, and it is still
-      // reported as deleted. Cyrillic rather than an accented Latin letter on purpose: it has no
-      // Unicode decomposition, so macOS's core.precomposeunicode cannot make this flaky.
+      // Cyrillic has no Unicode decomposition, so macOS core.precomposeunicode cannot make this flaky.
       const name = "тест-файл.txt";
       seedWorktree(workTree);
       initShadow(gitDir);
@@ -167,7 +154,6 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
 
       expect(deleted).toEqual([name]);
       expect(existsSync(join(workTree, name))).toBe(false);
-      // The restore must have completed, not thrown part-way through it.
       expect(readFileSync(join(workTree, "lf.txt"), "utf8")).toBe("line1\nline2\n");
     },
     GIT_TEST_TIMEOUT_MS,
@@ -214,8 +200,6 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       expect([...deleted].sort()).toEqual(["newdir/deep.txt", "newfile.txt"]);
       expect(restored).toEqual(["sub/nested.txt"]);
 
-      // git does not track directories, so the removal pass empties `newdir/` but cannot remove
-      // it. Documented behaviour, asserted so it cannot change silently.
       expect(existsSync(join(workTree, "newdir"))).toBe(true);
     },
     GIT_TEST_TIMEOUT_MS,
@@ -379,9 +363,7 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
         process.env.GIT_DIR = join(root, "sentinel-gitdir");
         snapshot();
       } finally {
-        // `delete` when the variable was originally unset — reassigning a captured `undefined`
-        // sets it to the literal string "undefined" in Node/Bun and poisons every later test in
-        // this process. That exact bug broke CI twice; see .claude/rules/code-quality.md.
+        // Reassigning a captured `undefined` sets process.env to the literal string "undefined" in Node/Bun.
         if (originalIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
         else process.env.GIT_INDEX_FILE = originalIndexFile;
         if (originalGitDir === undefined) delete process.env.GIT_DIR;
