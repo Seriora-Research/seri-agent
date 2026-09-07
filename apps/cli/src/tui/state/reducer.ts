@@ -24,7 +24,7 @@ import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
 import { ERROR_MARK } from "../theme/theme";
-import { fileChangeFromTool, fileChangePlainText } from "../../fileChange";
+import { fileChangeFromTool, fileChangePlainText, sameHunk } from "../../fileChange";
 import {
   estimateTokens,
   formatDoneLine,
@@ -788,6 +788,20 @@ function flushStreaming(state: TuiState): TuiState {
   };
 }
 
+function lastFileChangeThisTurn(
+  transcript: TranscriptEntry[],
+): { index: number; change: NonNullable<TranscriptEntry["fileChange"]> } | undefined {
+  for (let index = transcript.length - 1; index >= 0; index--) {
+    const entry = transcript[index];
+    if (entry === undefined) continue;
+    if (entry.role === "user") return undefined;
+    if (entry.kind === "file-change" && entry.fileChange !== undefined) {
+      return { index, change: entry.fileChange };
+    }
+  }
+  return undefined;
+}
+
 function commitFileChange<T extends { transcript: TranscriptEntry[] }>(
   state: T,
   name: string,
@@ -796,26 +810,31 @@ function commitFileChange<T extends { transcript: TranscriptEntry[] }>(
 ): T {
   const change = fileChangeFromTool(name, args, result);
   if (change === undefined) return state;
-  return {
-    ...state,
-    transcript: [
-      ...state.transcript,
-      {
-        role: "system",
-        text: fileChangePlainText(change),
-        kind: "file-change",
-        fileChange: change,
-      },
-    ],
+  const last = lastFileChangeThisTurn(state.transcript);
+  if (last !== undefined && sameHunk(last.change, change)) return state;
+  const entry: TranscriptEntry = {
+    role: "system",
+    text: fileChangePlainText(change),
+    kind: "file-change",
+    fileChange: change,
   };
+  if (last !== undefined && last.change.title === "Edit" && change.title === "Edit") {
+    const transcript = state.transcript.slice();
+    transcript[last.index] = entry;
+    return { ...state, transcript };
+  }
+  return { ...state, transcript: [...state.transcript, entry] };
 }
 
 function flushToolActivity(state: TuiState): TuiState {
+  const rows: TranscriptEntry[] = [];
   const summary = formatToolSummary(state.toolActivity);
-  if (summary === undefined) return { ...state, toolActivity: [] };
+  if (summary !== undefined) {
+    rows.push({ role: "system", text: summary, muted: true, kind: "tool-summary" });
+  }
   return {
     ...state,
-    transcript: [...state.transcript, { role: "system", text: summary, muted: true }],
+    transcript: rows.length === 0 ? state.transcript : [...state.transcript, ...rows],
     toolActivity: [],
   };
 }
@@ -937,15 +956,21 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       return openOrAppendReasoning(state, event.text, Date.now());
     case "tool-call": {
       const settled = settleReasoning(state, Date.now());
-      return {
-        ...flushStreaming(settled),
-        status:
-          event.name === "dispatch_subagents" || event.name === TODO_TOOL_NAME
-            ? ""
-            : `Running ${event.name}…`,
-        pendingTool: { name: event.name, args: event.args },
-        toolActivity: recordCall(settled.toolActivity, event.name, event.args),
-      };
+      const flushed = flushStreaming(settled);
+      return commitFileChange(
+        {
+          ...flushed,
+          status:
+            event.name === "dispatch_subagents" || event.name === TODO_TOOL_NAME
+              ? ""
+              : `Running ${event.name}…`,
+          pendingTool: { name: event.name, args: event.args },
+          toolActivity: recordCall(flushed.toolActivity, event.name, event.args),
+        },
+        event.name,
+        event.args,
+        undefined,
+      );
     }
     case "tool-result": {
       const nextList = event.name === TODO_TOOL_NAME ? parseTodoList(event.result) : undefined;

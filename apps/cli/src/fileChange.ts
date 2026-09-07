@@ -1,5 +1,5 @@
 import path from "node:path";
-import { diffLines } from "./diffLines";
+import { diffLineEntries, type UnifiedDiffKind } from "./diffLines";
 
 export const FILE_CHANGE_LINE_CAP = 12;
 export const FILE_CHANGE_LINE_CHAR_CAP = 240;
@@ -9,6 +9,7 @@ export type DiffLineKind = "context" | "add" | "del";
 export type FileChangeLine = {
   kind: DiffLineKind;
   text: string;
+  lineNumber?: number;
 };
 
 export type FileChangeView = {
@@ -25,11 +26,11 @@ function lf(text: string): string {
   return text.replace(/\r\n/g, "\n");
 }
 
-function kindOf(line: string): DiffLineKind {
-  if (line.startsWith("+ ")) return "add";
-  if (line.startsWith("- ")) return "del";
-  return "context";
-}
+const UNIFIED_MARK: Record<UnifiedDiffKind, string> = {
+  context: "  ",
+  add: "+ ",
+  del: "- ",
+};
 
 function capBody(text: string): string {
   return text.length > FILE_CHANGE_LINE_CHAR_CAP
@@ -79,7 +80,11 @@ export function buildFileChange(
   after: string,
   opts?: { path?: string; maxLines?: number },
 ): FileChangeView {
-  const raw = diffLines(lf(before), lf(after)).map((text) => ({ kind: kindOf(text), text }));
+  const raw = diffLineEntries(lf(before), lf(after)).map((line) => ({
+    kind: line.kind,
+    text: `${UNIFIED_MARK[line.kind]}${line.body}`,
+    lineNumber: line.lineNumber,
+  }));
   const added = raw.filter((line) => line.kind === "add").length;
   const removed = raw.filter((line) => line.kind === "del").length;
   const kind = before.length === 0 ? "create" : "update";
@@ -113,6 +118,18 @@ export function fileChangePlainText(change: FileChangeView): string {
   return [`${change.title}  ${stats}`, ...body].join("\n");
 }
 
+export function sameHunk(left: FileChangeView, right: FileChangeView): boolean {
+  if (left.added !== right.added || left.removed !== right.removed) return false;
+  const signature = (change: FileChangeView) =>
+    change.lines
+      .filter((line) => line.kind !== "context")
+      .map((line) => `${line.kind}\0${line.text}`);
+  const a = signature(left);
+  const b = signature(right);
+  if (a.length !== b.length) return false;
+  return a.every((line, index) => line === b[index]);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -140,13 +157,12 @@ export function isFileChangeView(value: unknown): value is FileChangeView {
   ) {
     return false;
   }
-  return view.lines.every(
-    (line) =>
-      line !== null &&
-      typeof line === "object" &&
-      isDiffLineKind((line as FileChangeLine).kind) &&
-      typeof (line as FileChangeLine).text === "string",
-  );
+  return view.lines.every((line) => {
+    if (line === null || typeof line !== "object") return false;
+    const row = line as FileChangeLine;
+    if (!isDiffLineKind(row.kind) || typeof row.text !== "string") return false;
+    return row.lineNumber === undefined || typeof row.lineNumber === "number";
+  });
 }
 
 export function fileChangeFromTool(

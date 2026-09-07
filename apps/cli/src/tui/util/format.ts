@@ -25,12 +25,14 @@ export type TranscriptEntry = {
   text: string;
   muted?: boolean;
   markdown?: boolean;
-  kind?: "reasoning" | "quota-exhausted" | "file-change";
+  kind?: "reasoning" | "quota-exhausted" | "file-change" | "tool-summary";
   body?: string;
   expanded?: boolean;
   elapsedMs?: number;
   fileChange?: FileChangeView;
 };
+
+export type TranscriptKind = NonNullable<TranscriptEntry["kind"]>;
 
 export const REASONING_MARK_CLOSED = "▸";
 export const REASONING_MARK_OPEN = "▾";

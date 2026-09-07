@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/react */
 import { decodePasteBytes } from "@opentui/core";
-import { useKeyboard, usePaste } from "@opentui/react";
+import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
-import { FRAME } from "../theme/spacing";
+import { FRAME, PAD_X } from "../theme/spacing";
 import { theme } from "../theme/theme";
 import { applyCompletion, type CompletionSource, resolveCompletion } from "../util/completion";
-import { INPUT_PLACEHOLDER, slideWindow } from "../util/format";
+import { DEFAULT_COLUMNS, INPUT_PLACEHOLDER, slideWindow } from "../util/format";
 import { isEnter, isPrintableKey, splitAtTerminator } from "../util/keys";
 import { COMPLETION_POPUP_ROWS, CompletionPopup } from "./CompletionPopup";
 
@@ -16,6 +16,28 @@ const COMPLETION_WINDOW_TOP: { selected: number; offset: number } = { selected: 
 const THROTTLE_MS = 50;
 
 const EMPTY_SOURCES: readonly CompletionSource[] = [];
+
+const FRAME_CHROME_X = 2 + 2 * PAD_X;
+
+// A wrapping text with the cursor as a row-flex sibling pins the caret to the first wrapped line; Yoga's cross-axis never follows the wrap.
+export function inputCaretLayout(
+  text: string,
+  width: number,
+): { above: string[]; last: string } {
+  const cols = Math.max(1, width);
+  if (text.length === 0) return { above: [], last: "" };
+  const above: string[] = [];
+  for (let i = 0; i < text.length; i += cols) {
+    const chunk = text.slice(i, i + cols);
+    if (i + cols < text.length) {
+      above.push(chunk);
+      continue;
+    }
+    if (chunk.length >= cols) return { above: [...above, chunk], last: "" };
+    return { above, last: chunk };
+  }
+  return { above, last: "" };
+}
 
 export function InputBox({
   onSubmit,
@@ -45,6 +67,8 @@ export function InputBox({
   arrowsReservedRef?: MutableRefObject<boolean>;
 }) {
   const sources = completionSources ?? EMPTY_SOURCES;
+  const { width: rawWidth } = useTerminalDimensions();
+  const innerWidth = Math.max(1, (rawWidth || DEFAULT_COLUMNS) - FRAME_CHROME_X);
   const [value, setValue] = useState(prefill ?? "");
   const [completionWindow, setCompletionWindow] = useState(COMPLETION_WINDOW_TOP);
   const [dismissedFor, setDismissedFor] = useState<string | undefined>(undefined);
@@ -189,20 +213,39 @@ export function InputBox({
       : resolveCompletion(sources, value);
 
   // OpenTUI defaults flexShrink to 1; without 0 the marker and cursor shrink before the placeholder clips.
-  const field = (
-    <>
-      <text fg={theme.text} flexShrink={0}>
-        {bare ? value : `> ${value}`}
-      </text>
-      <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
-        {" "}
-      </text>
-    </>
+  const caret = (
+    <text fg={theme.onInk} bg={theme.accent} flexShrink={0}>
+      {" "}
+    </text>
   );
 
   if (bare === true) {
-    return <box flexDirection="row">{field}</box>;
+    return (
+      <box flexDirection="row">
+        <text fg={theme.text} flexShrink={0} wrapMode="none" truncate>
+          {value}
+        </text>
+        {caret}
+      </box>
+    );
   }
+
+  const { above, last } = inputCaretLayout(`> ${value}`, innerWidth);
+  const lastRow = (
+    <box flexDirection="row">
+      {last.length > 0 ? (
+        <text fg={theme.text} flexShrink={0} wrapMode="none">
+          {last}
+        </text>
+      ) : null}
+      {caret}
+      {value.length === 0 && (
+        <text fg={theme.muted} marginLeft={1} truncate wrapMode="none" flexGrow={1}>
+          {INPUT_PLACEHOLDER}
+        </text>
+      )}
+    </box>
+  );
 
   return (
     <>
@@ -213,13 +256,13 @@ export function InputBox({
           offset={completionWindow.offset}
         />
       )}
-      <box flexDirection="row" {...FRAME}>
-        {field}
-        {value.length === 0 && (
-          <text fg={theme.muted} marginLeft={1} truncate wrapMode="none" flexGrow={1}>
-            {INPUT_PLACEHOLDER}
+      <box flexDirection="column" {...FRAME}>
+        {above.map((line, index) => (
+          <text key={index} fg={theme.text} flexShrink={0} wrapMode="none">
+            {line}
           </text>
-        )}
+        ))}
+        {lastRow}
       </box>
     </>
   );

@@ -429,6 +429,12 @@ export function formatToolSummary(entries: ToolActivityEntry[]): string | undefi
   const parts: string[] = [];
   for (const entry of entries) {
     if (entry.count <= 0) continue;
+    if (
+      (entry.name === "edit" || entry.name === "write_file") &&
+      entry.anomalyLines.length === 0
+    ) {
+      continue;
+    }
     const phrase = countPhrase(entry);
     parts.push(parts.length === 0 ? phrase : `${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}`);
   }

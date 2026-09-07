@@ -48,7 +48,12 @@ export const TranscriptList = memo(function TranscriptList({
           <TranscriptRow
             key={index}
             entry={entry}
-            gap={gapBefore(transcript[index - 1]?.role, entry.role)}
+            gap={gapBefore(
+              transcript[index - 1]?.role,
+              entry.role,
+              transcript[index - 1]?.kind,
+              entry.kind,
+            )}
           />
         ))}
       </>
@@ -62,7 +67,15 @@ export const TranscriptList = memo(function TranscriptList({
         const index = start + offset;
         return (
           <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
-            <TranscriptRow entry={entry} gap={gapBefore(transcript[index - 1]?.role, entry.role)} />
+            <TranscriptRow
+              entry={entry}
+              gap={gapBefore(
+                transcript[index - 1]?.role,
+                entry.role,
+                transcript[index - 1]?.kind,
+                entry.kind,
+              )}
+            />
           </box>
         );
       })}
