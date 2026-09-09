@@ -21,6 +21,11 @@ import {
 } from "../gate/packedRenderer";
 import { locationForCall } from "../gate/workingDir";
 import {
+  dropUnsupportedImages,
+  isImageRead,
+  toolOutputForImage,
+} from "../imageParts";
+import {
   type CostReport,
   openRouterServedProvider,
   reportForOpenRouter,
@@ -255,6 +260,13 @@ function isConcurrentReadTool(name: string): boolean {
   return (READ_ONLY_TOOL_NAMES as readonly string[]).includes(name);
 }
 
+function toolResultOutput(
+  result: unknown,
+): ReturnType<typeof toolOutputForImage> | { type: "json"; value: JSONValue } {
+  if (isImageRead(result)) return toolOutputForImage(result);
+  return { type: "json", value: (result ?? null) as JSONValue };
+}
+
 export async function* runLoop(opts: {
   model: LanguageModel;
   tools: ToolSet;
@@ -404,10 +416,12 @@ export async function* runLoop(opts: {
       reportedRetries = 0;
 
       try {
+        const outbound = dropUnsupportedImages(messages, catalogEntry);
+        for (const warning of outbound.warnings) yield { type: "error", error: warning };
         const result = streamText({
           model: opts.model,
           tools: schemaOnlyTools,
-          messages,
+          messages: outbound.messages,
           system: opts.system,
           abortSignal: opts.signal,
           maxRetries: MAX_RETRIES,
@@ -611,7 +625,7 @@ export async function* runLoop(opts: {
           type: "tool-result",
           toolCallId: item.call.toolCallId,
           toolName: item.call.toolName,
-          output: { type: "json", value: (out.value ?? null) as JSONValue },
+          output: toolResultOutput(out.value),
         });
         if (opts.onAfterTool !== undefined) {
           let afterMessages: readonly string[];
@@ -818,7 +832,7 @@ export async function* runLoop(opts: {
         type: "tool-result",
         toolCallId: call.toolCallId,
         toolName: call.toolName,
-        output: { type: "json", value: (toolResult ?? null) as JSONValue },
+        output: toolResultOutput(toolResult),
       });
 
       if (opts.onAfterTool !== undefined) {

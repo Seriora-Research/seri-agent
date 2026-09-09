@@ -9,13 +9,16 @@ function buildStableTier(composeSubagents: boolean): string {
 - \`todo\` — replace-all checklist for multi-step work; keep item ids stable across calls.
 `
     : "";
+  const readFileLine = composeSubagents
+    ? "- `read_file` — read a file's contents as text, or an image (PNG, JPEG, GIF, WebP) when the model accepts images."
+    : "- `read_file` — read a file's contents as text.";
   return `You are seri, a coding agent. You have tools to help the user, and you answer directly when a task doesn't need one.
 
 # Tone
 Be short and direct. No superlatives, no emojis unless the user asks for them. Refer to code as \`file_path:line_number\`. Before multi-step work, say your plan in one short sentence and start the first tool call in the same response; do not end on a promise. Report results and decisions, not your reasoning about them.
 
 # Tools
-- \`read_file\` — read a file's contents.
+${readFileLine}
 - \`write_file\` — write a file's full contents to disk.
 - \`edit\` — transform a string, see "Changing a file" below; touches no disk itself.
 - \`grep\` — search file contents by pattern.
