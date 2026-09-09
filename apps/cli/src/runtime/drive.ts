@@ -419,6 +419,7 @@ export async function driveLoop(
           model,
           tools,
           messages: session.messages,
+          compact: session.compact,
           get permissionMode() {
             return getPermissionMode();
           },
@@ -467,7 +468,11 @@ export async function driveLoop(
       observeArchivistEvent(archivistState, event);
       prepared.trajectory.recordLoopEvent(event);
       if (event.type === "messages-updated") {
-        persist({ ...session, messages: event.messages });
+        persist({
+          ...session,
+          messages: event.messages,
+          ...(event.compact !== undefined ? { compact: event.compact } : {}),
+        });
         onEvent(event);
         continue;
       }

@@ -55,6 +55,7 @@ import {
 } from "../../provider/routing";
 import { codexSubscriptionActive } from "../../provider/subscriptions";
 import { loadRuleRegistry, type RuleRegistry } from "../../rules/registry";
+import { createConversation, snapshotOf, truncateArchive } from "../../loop/conversation";
 import type { SessionState } from "../../session/session";
 import { loadSkillRegistry, type SkillRegistry } from "../../skills/registry";
 import type { TrajectoryWriter } from "../../trajectory/writer";
@@ -585,9 +586,11 @@ export function decideRewind(
 ): { next: SessionState<ModelMessage>; message: string; recordBarrier: () => boolean } {
   const { storeDir } = checkpointTarget(session, dirs);
   const { rewindTo } = rewindConversation({ storeDir, sessionId: session.id, steps: steps(args) });
-  const kept = Math.min(rewindTo, session.messages.length);
-  const dropped = session.messages.length - kept;
-  const next = { ...session, messages: session.messages.slice(0, kept) };
+  const conversation = createConversation(session.messages, session.compact);
+  const kept = Math.min(rewindTo, conversation.archive.length);
+  const dropped = conversation.archive.length - kept;
+  truncateArchive(conversation, kept);
+  const next = { ...session, ...snapshotOf(conversation) };
   const recordBarrier = (): boolean => {
     if (dropped === 0) return false;
     appendBarrier(storeDir, session.id, "rewind");

@@ -52,7 +52,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
-    expect(pragmas.userVersion).toBe(4);
+    expect(pragmas.userVersion).toBe(5);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
       .user_version;
@@ -155,6 +155,59 @@ describe("SessionDatabase", () => {
     ]);
   });
 
+  test("a compact cursor is a header-only update that keeps prefix rows and FTS text", () => {
+    const prefix = [
+      { role: "user", content: "evicted alpha" },
+      { role: "assistant", content: "evicted beta" },
+      { role: "user", content: "evicted gamma" },
+    ];
+    const suffix = [
+      { role: "user", content: "kept delta" },
+      { role: "assistant", content: "kept epsilon" },
+    ];
+    const recap = {
+      role: "user" as const,
+      content:
+        "[Compacted history — 3 earlier messages condensed]\nGoal: g\nProgress: p\nBlockers: b\nNext steps: n",
+    };
+    withDatabase((database) => database.saveSession(state("keep-turns", [...prefix, ...suffix])));
+
+    const before = new Database(join(configDir, DATABASE_FILENAME));
+    const beforeIds = (
+      before
+        .query("SELECT id FROM messages WHERE session_id = 'keep-turns' ORDER BY seq")
+        .all() as { id: number }[]
+    ).map((row) => row.id);
+    before.close();
+
+    withDatabase((database) => {
+      database.saveSession({
+        ...state("keep-turns", [...prefix, ...suffix]),
+        compact: { status: "compacted", windowStart: 3, recap },
+      });
+      const loaded = database.loadSession("keep-turns");
+      expect(loaded?.messages).toEqual([...prefix, ...suffix]);
+      expect(loaded?.compact).toEqual({ status: "compacted", windowStart: 3, recap });
+      expect(database.searchSessions("evicted")).toMatchObject([
+        { sessionId: "keep-turns", messageIndex: 0 },
+        { sessionId: "keep-turns", messageIndex: 1 },
+        { sessionId: "keep-turns", messageIndex: 2 },
+      ]);
+      expect(database.searchSessions("delta")).toMatchObject([
+        { sessionId: "keep-turns", messageIndex: 3 },
+      ]);
+    });
+
+    const after = new Database(join(configDir, DATABASE_FILENAME));
+    const afterIds = (
+      after.query("SELECT id FROM messages WHERE session_id = 'keep-turns' ORDER BY seq").all() as {
+        id: number;
+      }[]
+    ).map((row) => row.id);
+    after.close();
+    expect(afterIds).toEqual(beforeIds);
+  });
+
   function changeDelta(raw: Database, sql: string): number {
     const before = (raw.query("SELECT total_changes() AS n").get() as { n: number }).n;
     raw.exec(sql);
@@ -175,10 +228,12 @@ describe("SessionDatabase", () => {
       END`);
     const oldSeqChurn = changeDelta(setup, "UPDATE messages SET seq = seq + 1");
     setup.exec("UPDATE messages SET seq = 0");
+    setup.exec("ALTER TABLE sessions DROP COLUMN compact_window_start");
+    setup.exec("ALTER TABLE sessions DROP COLUMN compact_recap_json");
     setup.exec("PRAGMA user_version = 3");
     setup.close();
 
-    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(4);
+    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(5);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const seqOnly = changeDelta(raw, "UPDATE messages SET seq = seq + 1");
     const searchText = changeDelta(raw, "UPDATE messages SET search_text = 'goodbye'");

@@ -533,6 +533,12 @@ describe("runLoop", () => {
     const afterPromptSize = model.doStreamCalls[compactedAtCallIndex]?.prompt.length ?? 0;
     expect(afterPromptSize).toBeLessThan(beforePromptSize);
 
+    const afterCompact = events.find(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> =>
+        e.type === "messages-updated" && e.compact?.status === "compacted",
+    );
+    expect(afterCompact?.messages.length).toBeGreaterThan(afterPromptSize);
+
     const finalPrompt = model.doStreamCalls.at(-1)?.prompt;
     expect(JSON.stringify(finalPrompt)).toContain(marker);
   });

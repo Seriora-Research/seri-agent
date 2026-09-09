@@ -41,7 +41,10 @@ import {
   loadSession,
   type SessionState,
   saveSession,
+  searchSessions,
 } from "../../src/session/session";
+import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
+import { createConversation, windowOf } from "../../src/loop/conversation";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import {
   createTrajectoryWriter,
@@ -4744,8 +4747,18 @@ describe("run (/compact)", () => {
     expect(logs).toContain("\n(tokens: 20 in, 10 out)");
 
     const saved = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
-    expect(saved.messages).toHaveLength(21);
-    expect(saved.messages.slice(1)).toEqual(session.messages.slice(10));
+    expect(saved.messages).toHaveLength(30);
+    expect(saved.messages).toEqual(session.messages);
+    expect(saved.compact?.status).toBe("compacted");
+    if (saved.compact?.status !== "compacted") throw new Error("expected compacted cursor");
+    expect(saved.compact.windowStart).toBe(10);
+    expect(
+      saved.messages.some((message) => JSON.stringify(message).includes(COMPACT_HISTORY_PREFIX)),
+    ).toBe(false);
+    const window = windowOf(createConversation(saved.messages, saved.compact));
+    expect(window).toHaveLength(21);
+    expect(window.slice(1)).toEqual(session.messages.slice(10));
+    expect(searchSessions("message", sessionsDir).map((hit) => hit.messageIndex)).toContain(0);
 
     expect(readLog(storeDir, SESSION_ID).some((r) => r.kind === "compaction-barrier")).toBe(true);
 
@@ -5007,7 +5020,8 @@ describe("run (/compact)", () => {
     });
 
     expect(updated?.permissionMode).toBe("read-only");
-    expect(updated?.messages.length).toBeLessThan(session.messages.length);
+    expect(updated?.messages.length).toBe(session.messages.length);
+    expect(updated?.compact?.status).toBe("compacted");
   });
 });
 

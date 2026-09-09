@@ -92,7 +92,8 @@ import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { userContentFrom, type ImageBytes } from "./imageParts";
-import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
+import { findSafeEvictionBoundary } from "./loop/compaction";
+import { compactConversation, createConversation, snapshotOf, windowOf } from "./loop/conversation";
 import {
   type ApprovalAnswer,
   type ApprovalDetail,
@@ -473,7 +474,11 @@ async function compactCommand(
   presenter: CommandPresenter,
   deps: CliDeps = {},
 ): Promise<void> {
-  const evictBoundary = findSafeEvictionBoundary(session.messages, DEFAULT_PRESERVE_RECENT_TOKENS);
+  const conversation = createConversation(session.messages, session.compact);
+  const evictBoundary = findSafeEvictionBoundary(
+    windowOf(conversation),
+    DEFAULT_PRESERVE_RECENT_TOKENS,
+  );
   if (evictBoundary === null) {
     presenter.message("Not enough history to compact.");
     return;
@@ -499,10 +504,10 @@ async function compactCommand(
     cancelledSignal = signal;
     controller.abort();
   });
-  let compacted: Awaited<ReturnType<typeof compactMessages>>;
+  let compacted: Awaited<ReturnType<typeof compactConversation>>;
   try {
     const customInstructions = args.join(" ").trim();
-    compacted = await compactMessages(session.messages, model, evictBoundary, controller.signal, {
+    compacted = await compactConversation(conversation, model, controller.signal, {
       stream: route.credential === "subscription" && route.provider === "openai",
       customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
     });
@@ -516,7 +521,15 @@ async function compactCommand(
     unregisterCancel();
   }
 
-  await presenter.sessionUpdated({ ...presenter.currentSession(), messages: compacted.messages });
+  if (compacted.status === "skipped") {
+    presenter.message("Not enough history to compact.");
+    return;
+  }
+
+  await presenter.sessionUpdated({
+    ...presenter.currentSession(),
+    ...snapshotOf(conversation),
+  });
   const { storeDir } = checkpointTarget(session, dirs);
   try {
     appendBarrier(storeDir, session.id, "compaction");

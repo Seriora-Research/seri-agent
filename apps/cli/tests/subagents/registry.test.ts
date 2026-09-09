@@ -22,7 +22,7 @@ import {
 } from "../../src/subagents/registry";
 
 function execOpts(): ToolExecutionOptions<Record<string, unknown>> {
-  return { toolCallId: "c1", messages: [], context: {} };
+  return { toolCallId: "c1", messages: [], context: { rewindTo: 0 } };
 }
 
 function agent(name: string): AgentSpec {

@@ -35,7 +35,7 @@ function dispatchOpts(
   messages: ModelMessage[] = [],
   abortSignal?: AbortSignal,
 ) {
-  return { toolCallId, messages, context: {}, abortSignal };
+  return { toolCallId, messages, context: { rewindTo: messages.length - 1 }, abortSignal };
 }
 
 function agentSpec(name: string): AgentSpec {

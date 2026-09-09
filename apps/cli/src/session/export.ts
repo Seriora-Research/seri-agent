@@ -12,6 +12,7 @@ function headerOf(state: SessionState): Omit<SessionState, "messages"> {
     ...(state.model !== undefined ? { model: state.model } : {}),
     ...(state.provider !== undefined ? { provider: state.provider } : {}),
     ...(state.reasoningEffort !== undefined ? { reasoningEffort: state.reasoningEffort } : {}),
+    ...(state.compact !== undefined ? { compact: state.compact } : {}),
   };
 }
 

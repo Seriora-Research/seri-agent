@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
 import { foldsCase } from "../caseFold";
 import type { PermissionMode } from "../gate/gate";
+import type { CompactCursor } from "../loop/conversation";
 import {
   configDirForStore,
   SessionDatabase,
@@ -17,6 +18,7 @@ export type SessionState<TMessage = unknown> = {
   model?: string;
   provider?: ModelProvider;
   reasoningEffort?: string;
+  compact?: CompactCursor;
   messages: TMessage[];
 };
 

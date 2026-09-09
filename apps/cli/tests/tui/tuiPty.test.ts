@@ -1365,7 +1365,7 @@ function childScriptClear(dir: string): string {
     `  console.log("\\nRUNLOOP_READY " + calls);`,
     `  await opts.tools.write_file.execute(`,
     `    { path: "note.txt", content: "turn " + calls },`,
-    `    { toolCallId: "c" + calls, messages: opts.messages },`,
+    `    { toolCallId: "c" + calls, messages: opts.messages, context: { rewindTo: Math.max(0, opts.messages.length - 1) } },`,
     `  );`,
     `  console.log("\\nWROTE " + calls);`,
     `  yield { type: "tool-call", name: "write_file", args: { path: "note.txt" } };`,
