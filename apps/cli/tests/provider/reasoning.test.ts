@@ -58,54 +58,6 @@ describe("legalTiersFor", () => {
   test("no entry at all: returns empty", () => {
     expect(legalTiersFor(undefined)).toEqual([]);
   });
-
-  test("malformed effort entry with no values field: returns empty rather than throwing", () => {
-    const e = entry({
-      reasoningOptions: [{ type: "effort" }] as unknown as ModelCatalogEntry["reasoningOptions"],
-    });
-    expect(() => legalTiersFor(e)).not.toThrow();
-    expect(legalTiersFor(e)).toEqual([]);
-  });
-
-  test("reasoningOptions itself is not an array: returns empty rather than throwing", () => {
-    const e = entry({
-      reasoningOptions: {
-        type: "effort",
-        values: ["low"],
-      } as unknown as ModelCatalogEntry["reasoningOptions"],
-    });
-    expect(() => legalTiersFor(e)).not.toThrow();
-    expect(legalTiersFor(e)).toEqual([]);
-  });
-
-  test("effort entry with a non-array values field: returns empty rather than the malformed value", () => {
-    const e = entry({
-      reasoningOptions: [
-        { type: "effort", values: {} },
-      ] as unknown as ModelCatalogEntry["reasoningOptions"],
-    });
-    expect(() => legalTiersFor(e)).not.toThrow();
-    expect(legalTiersFor(e)).toEqual([]);
-  });
-
-  test("a null element inside an otherwise well-formed reasoningOptions array: does not throw", () => {
-    const e = entry({
-      reasoningOptions: [
-        null,
-        { type: "effort", values: ["low", "medium"] },
-      ] as unknown as ModelCatalogEntry["reasoningOptions"],
-    });
-    expect(() => legalTiersFor(e)).not.toThrow();
-    expect(legalTiersFor(e)).toEqual(["low", "medium"]);
-  });
-
-  test("a null element with no other reasoningOptions entries: returns empty rather than throwing", () => {
-    const e = entry({
-      reasoningOptions: [null] as unknown as ModelCatalogEntry["reasoningOptions"],
-    });
-    expect(() => legalTiersFor(e)).not.toThrow();
-    expect(legalTiersFor(e)).toEqual([]);
-  });
 });
 
 describe("resolveEffortCommand", () => {

@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { mapRawCatalog, type RawCatalogResponse } from "./catalog";
+import { mapRawCatalog } from "./catalog";
 import type { ModelCatalog } from "./types";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
@@ -13,7 +13,7 @@ async function main(): Promise<void> {
 
   const response = await fetch(MODELS_DEV_URL);
   if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-  const raw = (await response.json()) as RawCatalogResponse;
+  const raw: unknown = await response.json();
 
   const catalog: ModelCatalog = {
     fetchedAt: new Date().toISOString(),

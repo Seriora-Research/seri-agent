@@ -31,6 +31,14 @@ export function byRoutePriority(a: ModelCatalogEntry, b: ModelCatalogEntry): num
   return CATALOG_PROVIDERS.indexOf(a.provider) - CATALOG_PROVIDERS.indexOf(b.provider);
 }
 
+function minBy<T>(items: readonly T[], compare: (a: T, b: T) => number): T | undefined {
+  let best: T | undefined;
+  for (const item of items) {
+    if (best === undefined || compare(item, best) < 0) best = item;
+  }
+  return best;
+}
+
 export type RouteCredential = "key" | "subscription" | "gateway";
 
 export type ResolvedRoute = {
@@ -116,8 +124,8 @@ export function resolveRoute(
       candidate.provider !== requested.provider &&
       (keys.has(candidate.provider) || subscribed.has(candidate.provider)),
   );
-
-  if (candidates.length === 0) {
+  const chosen = minBy(candidates, byRoutePriority);
+  if (chosen === undefined) {
     const gatewayEntry = gatewayCoverage(catalog, entry, plan, hostedActive);
     if (gatewayEntry !== undefined) {
       return {
@@ -129,8 +137,6 @@ export function resolveRoute(
     }
     return noReroute;
   }
-
-  const [chosen] = [...candidates].sort(byRoutePriority);
 
   return {
     model: chosen.id,

@@ -98,6 +98,25 @@ describe("resolveRoute", () => {
     expect(route.reason).toBe("OPENROUTER_API_KEY");
   });
 
+  test("reroutes to the native sibling when two keyed siblings exist", () => {
+    const multi: ModelCatalog = {
+      ...catalog,
+      entries: [...catalog.entries, entry({ id: "groq/shared-model", provider: "google" })],
+    };
+    const route = resolveRoute(
+      multi,
+      { model: "shared-model", provider: "groq" },
+      new Set(["google", "openrouter"]),
+    );
+    expect(route).toEqual({
+      model: "groq/shared-model",
+      provider: "google",
+      rerouted: true,
+      reason: "GROQ_API_KEY",
+      credential: "key",
+    });
+  });
+
   test("an explicit pick wins over a native sibling even when both have a key", () => {
     const route = resolveRoute(
       catalog,
