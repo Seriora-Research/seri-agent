@@ -115,7 +115,7 @@ import {
   type ArchivistState,
   createArchivistState,
   drainArchivist,
-  resetArchivistForRewind,
+  replaceArchivistTranscript,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
@@ -2082,7 +2082,7 @@ async function runTui(
         );
       }
       if (name === "/rewind" || name === "/compact") {
-        resetArchivistForRewind(archivistState, liveState.session.messages);
+        replaceArchivistTranscript(archivistState, liveState.session.messages);
       }
     } catch (err) {
       dispatch({

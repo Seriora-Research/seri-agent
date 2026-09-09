@@ -23,7 +23,7 @@ import {
   enqueueArchivist,
   maybeRunArchivist,
   observeArchivistEvent,
-  resetArchivistForRewind,
+  replaceArchivistTranscript,
   runArchivist,
   shouldRunArchivist,
 } from "../../src/memory/archivist";
@@ -175,7 +175,7 @@ describe("createArchivistState", () => {
   });
 });
 
-describe("resetArchivistForRewind", () => {
+describe("replaceArchivistTranscript", () => {
   test("resets the cursor even when post-rewind growth would defeat the generic bounds check alone", () => {
     const preRewindMessages = Array.from({ length: 5 }, (_, i) => ({
       role: "user" as const,
@@ -197,7 +197,7 @@ describe("resetArchivistForRewind", () => {
     const genericGuardResult = staleCursor > grownWithoutReset.length ? 0 : staleCursor;
     expect(genericGuardResult).toBe(5);
 
-    resetArchivistForRewind(s, postRewindMessages);
+    replaceArchivistTranscript(s, postRewindMessages);
     expect(s.messageCursor).toBe(0);
     expect(s.messages).toBe(postRewindMessages);
 
@@ -759,7 +759,7 @@ describe("runArchivist", () => {
       content: `old ${i + 1}`,
     }));
     const state = createArchivistState({ ...emptySession(), messages: preRewind });
-    resetArchivistForRewind(state, preRewind.slice(0, 2));
+    replaceArchivistTranscript(state, preRewind.slice(0, 2));
     setMessages(state, [
       ...preRewind.slice(0, 2),
       { role: "user", content: "post-rewind fact worth keeping" },

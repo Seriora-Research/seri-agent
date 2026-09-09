@@ -91,7 +91,7 @@ export function drainArchivist(state: ArchivistState): Promise<void> {
   return state.inflight;
 }
 
-export function resetArchivistForRewind(state: ArchivistState, messages: ModelMessage[]): void {
+export function replaceArchivistTranscript(state: ArchivistState, messages: ModelMessage[]): void {
   const next = mutateArchivist(state);
   next.messageCursor = 0;
   next.messages = messages;
