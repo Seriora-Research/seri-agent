@@ -156,6 +156,18 @@ describe("createArchivistState", () => {
     expect(s.toolCallsSinceRun).toBe(0);
     expect(s.messages).toBe(session.messages);
   });
+
+  test("a stored cursor past the session length starts at 0", () => {
+    const session = {
+      ...emptySession(),
+      messages: [
+        { role: "user" as const, content: "a" },
+        { role: "user" as const, content: "b" },
+      ],
+    };
+    const s = createArchivistState(session, 5);
+    expect(s.messageCursor).toBe(0);
+  });
 });
 
 describe("resetArchivistForRewind", () => {

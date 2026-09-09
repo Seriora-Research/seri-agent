@@ -142,6 +142,44 @@ describe("idle archivist flush", () => {
     database.close();
   });
 
+  test("a stored cursor past the session length still reviews the current transcript", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    database.saveSession({
+      id: "sess-idle",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [
+        { role: "user", content: "remember the bun test runner" },
+        { role: "user", content: "this repo uses bun" },
+      ],
+    });
+    database.setArchivistCursor("sess-idle", 5);
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    await flushIdleArchivist({
+      database,
+      sessionId: "sess-idle",
+      ctx: { configDir, worktree: configDir },
+      model: new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("nothing to store")),
+      }),
+      route: { model: "m", provider: "groq" },
+      catalog,
+      contextWindow: 100_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake,
+    });
+    const goal = JSON.stringify(calls[0]?.opts.messages);
+    expect(goal).toContain("remember the bun test runner");
+    expect(goal).toContain("this repo uses bun");
+    expect(database.getArchivistCursor("sess-idle")).toBe(2);
+    database.close();
+  });
+
   test("a turn that starts during idle flush is not evicted off a new handle", async () => {
     const configDir = makeDir();
     const database = new SessionDatabase(configDir);
