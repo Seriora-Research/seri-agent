@@ -20,11 +20,7 @@ import {
   packedUploadAppliesTo,
 } from "../gate/packedRenderer";
 import { locationForCall } from "../gate/workingDir";
-import {
-  dropUnsupportedImages,
-  isImageRead,
-  toolOutputForImage,
-} from "../imageParts";
+import { dropUnsupportedImages, isImageRead, toolOutputForImage } from "../imageParts";
 import {
   type CostReport,
   openRouterServedProvider,

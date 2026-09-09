@@ -33,7 +33,8 @@ describe("summarizeResult", () => {
   });
 
   test("read_file image results store mime and decoded byte count, not the payload", () => {
-    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
     const { value } = summarizeResult("read_file", {
       kind: "image",
       mime: "image/png",

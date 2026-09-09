@@ -4,12 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
 import { runLoop } from "../../src/loop/loop";
 import { userContentFrom, sniffImage } from "../../src/imageParts";
-import {
-  collect,
-  streamResult,
-  textOnlyChunks,
-  toolCallChunks,
-} from "./fixtures";
+import { collect, streamResult, textOnlyChunks, toolCallChunks } from "./fixtures";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -50,7 +45,9 @@ describe("runLoop image parts", () => {
     });
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
     const prompt = JSON.stringify(model.doStreamCalls[0]?.prompt);
-    expect(prompt).not.toContain(sniffed.bytes ? Buffer.from(sniffed.bytes).toString("base64") : "");
+    expect(prompt).not.toContain(
+      sniffed.bytes ? Buffer.from(sniffed.bytes).toString("base64") : "",
+    );
     expect(prompt).toContain("see this");
   });
 

@@ -104,9 +104,7 @@ describe("readFile", () => {
     bytes[2] = 0x4e;
     bytes[3] = 0x47;
     writeFileSync(filePath, bytes);
-    expect(readFile(filePath, { images: true })).toBe(
-      "this image is larger than 4194304 bytes",
-    );
+    expect(readFile(filePath, { images: true })).toBe("this image is larger than 4194304 bytes");
     expect(readFile(filePath, { images: false })).toBe(
       "this file is an image; scheduled runs do not ingest screenshots",
     );

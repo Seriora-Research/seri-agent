@@ -1047,9 +1047,7 @@ async function runTui(
   const pendingImages: ImageBytes[] = [];
   const echoUserInput = (text: string): void => {
     const shown =
-      text.trim().length > 0
-        ? text.trim()
-        : pendingImages.map((image) => image.mime).join(", ");
+      text.trim().length > 0 ? text.trim() : pendingImages.map((image) => image.mime).join(", ");
     dispatch({ type: "transcript-append", line: `> ${shown}`, role: "user", flush: false });
     dispatch({ type: "command-error-cleared" });
   };

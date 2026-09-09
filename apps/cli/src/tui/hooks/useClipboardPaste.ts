@@ -32,7 +32,8 @@ export function useClipboardPaste(
       // `createHostClipboard` throws synchronously when no native clipboard exists (@opentui/core NativeClipboardBackend).
       void hostClipboard()
         .read({
-          preferredTypes: onImageRef.current === undefined ? ["text/plain"] : ["image/png", "text/plain"],
+          preferredTypes:
+            onImageRef.current === undefined ? ["text/plain"] : ["image/png", "text/plain"],
         })
         .then((result) => {
           if (!mounted.current || result.status !== "read") return;

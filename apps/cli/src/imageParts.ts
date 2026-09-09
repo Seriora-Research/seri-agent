@@ -79,9 +79,7 @@ export function isImageRead(value: unknown): value is ImageRead {
   if (value === null || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return (
-    record.kind === "image" &&
-    typeof record.mime === "string" &&
-    typeof record.data === "string"
+    record.kind === "image" && typeof record.mime === "string" && typeof record.data === "string"
   );
 }
 
