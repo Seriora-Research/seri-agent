@@ -696,9 +696,14 @@ export class SessionDatabase {
 
   skipMissedSchedules(nowMs: number): void {
     this.database.transaction(() => {
+      const inFlight = (
+        this.database.query("SELECT id FROM schedules WHERE running = 1").all() as { id: string }[]
+      ).map((row) => row.id);
+      const retry = new Set(inFlight);
       this.database.query("UPDATE schedules SET running = 0").run();
       for (const schedule of this.listEnabledSchedules()) {
         if (schedule.nextRunAtMs === null || schedule.nextRunAtMs > nowMs) continue;
+        if (retry.has(schedule.id)) continue;
         if (schedule.timing.kind === "once") {
           this.database
             .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
@@ -725,21 +730,7 @@ export class SessionDatabase {
         )
         .get(id, nowMs) as ScheduleRow | null;
       if (row === null) return undefined;
-      const schedule = scheduleFromRow(row);
-      if (schedule.timing.kind === "once") {
-        this.database
-          .query(
-            "UPDATE schedules SET running = 1, enabled = 0, next_run_at_ms = NULL WHERE id = ?",
-          )
-          .run(id);
-      } else {
-        this.database
-          .query("UPDATE schedules SET running = 1, next_run_at_ms = ? WHERE id = ?")
-          .run(
-            advanceInterval(schedule.nextRunAtMs!, schedule.timing.everySeconds * 1000, nowMs),
-            id,
-          );
-      }
+      this.database.query("UPDATE schedules SET running = 1 WHERE id = ?").run(id);
       return this.getSchedule(id);
     })();
   }
@@ -748,31 +739,51 @@ export class SessionDatabase {
     this.database.query("UPDATE schedules SET running = 0 WHERE id = ?").run(id);
   }
 
-  insertScheduleRun(row: {
-    id: string;
-    scheduleId: string;
-    sessionId: string;
-    status: string;
-    response: string | null;
-    error: string | null;
-    startedAt: string;
-    finishedAt: string | null;
-  }): void {
-    this.database
-      .query(
-        `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id,
-        row.scheduleId,
-        row.sessionId,
-        row.status,
-        row.response,
-        row.error,
-        row.startedAt,
-        row.finishedAt,
-      );
+  commitScheduleFire(
+    row: {
+      id: string;
+      scheduleId: string;
+      sessionId: string;
+      status: string;
+      response: string | null;
+      error: string | null;
+      startedAt: string;
+      finishedAt: string | null;
+    },
+    nowMs: number,
+  ): void {
+    this.database.transaction(() => {
+      this.database
+        .query(
+          `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.id,
+          row.scheduleId,
+          row.sessionId,
+          row.status,
+          row.response,
+          row.error,
+          row.startedAt,
+          row.finishedAt,
+        );
+      const schedule = this.getSchedule(row.scheduleId);
+      if (schedule === undefined) return;
+      if (schedule.timing.kind === "once") {
+        this.database
+          .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
+          .run(row.scheduleId);
+        return;
+      }
+      if (schedule.nextRunAtMs === null) return;
+      this.database
+        .query("UPDATE schedules SET next_run_at_ms = ? WHERE id = ?")
+        .run(
+          advanceInterval(schedule.nextRunAtMs, schedule.timing.everySeconds * 1000, nowMs),
+          row.scheduleId,
+        );
+    })();
   }
 
   listScheduleRuns(scheduleId: string): ScheduleRunRecord[] {
