@@ -20,8 +20,11 @@ const messages: ModelMessage[] = [
   },
 ];
 
-function execOpts(toolCallId = "c1"): ToolExecutionOptions<Record<string, unknown>> {
-  return { toolCallId, messages, context: {} };
+function execOpts(
+  toolCallId = "c1",
+  rewindTo = messages.length - 1,
+): ToolExecutionOptions<Record<string, unknown>> {
+  return { toolCallId, messages, context: { rewindTo } };
 }
 
 function fakeTools(execute: (args: { path: string }) => unknown): ToolSet {
@@ -108,7 +111,7 @@ describe("withCheckpoints", () => {
     );
   });
 
-  test("hands the callback the toolCallId, the args, and messages.length - 1 as the rewind anchor", async () => {
+  test("hands the callback the toolCallId, the args, and context.rewindTo as the rewind anchor", async () => {
     const calls: MutationContext[] = [];
     const wrapped = withCheckpoints(
       fakeTools(() => "ok"),
@@ -125,6 +128,41 @@ describe("withCheckpoints", () => {
         rewindTo: messages.length - 1,
       },
     ]);
+  });
+
+  test("records the injected archive index even when the execute window is shorter", async () => {
+    const calls: MutationContext[] = [];
+    const wrapped = withCheckpoints(
+      fakeTools(() => "ok"),
+      (context) => calls.push(context),
+    );
+    const window: ModelMessage[] = [
+      { role: "user", content: "recap" },
+      { role: "assistant", content: "tail" },
+      { role: "user", content: "next" },
+    ];
+
+    await wrapped.write_file?.execute?.(
+      { path: "a.txt" },
+      { toolCallId: "c1", messages: window, context: { rewindTo: 17 } },
+    );
+
+    expect(calls[0]?.rewindTo).toBe(17);
+    expect(window).toHaveLength(3);
+  });
+
+  test("throws when execute context has no rewindTo", async () => {
+    const wrapped = withCheckpoints(
+      fakeTools(() => "ok"),
+      () => {},
+    );
+
+    expect(
+      wrapped.write_file?.execute?.(
+        { path: "a.txt" },
+        { toolCallId: "c1", messages, context: {} },
+      ),
+    ).rejects.toThrow("rewindTo");
   });
 
   test("onAfterMutation runs after the tool resolves, with the same context onBeforeMutation saw", async () => {

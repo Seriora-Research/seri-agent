@@ -1025,7 +1025,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "messages-updated":
       return {
         ...state,
-        session: { ...state.session, messages: event.messages },
+        session: {
+          ...state.session,
+          messages: event.messages,
+          ...(event.compact !== undefined ? { compact: event.compact } : {}),
+        },
         checklist: todoListFromMessages(event.messages),
       };
     case "done": {

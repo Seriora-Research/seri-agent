@@ -3,7 +3,12 @@ import type { JSONValue, LanguageModel, LanguageModelUsage, ModelMessage, ToolSe
 import { tool } from "ai";
 import { z } from "zod";
 import { joinTiers } from "../agents/systemPrompt";
-import type { MutationContext, OnAfterMutation, OnBeforeMutation } from "../checkpoint/wrapTools";
+import {
+  type MutationContext,
+  type OnAfterMutation,
+  type OnBeforeMutation,
+  rewindToFromContext,
+} from "../checkpoint/wrapTools";
 import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
@@ -410,7 +415,7 @@ export function createDispatchTool(
           tool: DISPATCH_TOOL_NAME,
           toolCallId: options.toolCallId,
           args,
-          rewindTo: options.messages.length - 1,
+          rewindTo: rewindToFromContext(options.context),
         };
         runtime.checkpointer.onBeforeMutation(context);
       }

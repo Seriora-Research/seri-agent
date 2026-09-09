@@ -42,6 +42,14 @@ import {
   isContextOverflowError,
   MAX_RETRIES,
 } from "./compaction";
+import {
+  type CompactCursor,
+  applyRecap,
+  createConversation,
+  rewindContextOf,
+  snapshotOf,
+  windowOf,
+} from "./conversation";
 
 export { DEFAULT_PRESERVE_RECENT_TOKENS } from "./compaction";
 
@@ -57,7 +65,7 @@ export type LoopEvent =
       name: string;
       reason: "blocked" | "declined" | "hook" | "containment";
     }
-  | { type: "messages-updated"; messages: ModelMessage[] }
+  | { type: "messages-updated"; messages: ModelMessage[]; compact?: CompactCursor }
   | {
       type: "compacted";
       summary: CompactionSummary;
@@ -306,6 +314,7 @@ export async function* runLoop(opts: {
   cwd?: string;
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
+  compact?: CompactCursor;
   /** Runs after a compact is decided and before messages are evicted. */
   onBeforeCompact?: () => Promise<void>;
 }): AsyncGenerator<LoopEvent> {
@@ -324,11 +333,15 @@ export async function* runLoop(opts: {
   const samplingFields = samplingCallFields(sampling);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
-  const messages: ModelMessage[] = [...opts.messages];
-  let estimatedTokens = estimateTokens(messages);
+  const conversation = createConversation(opts.messages, opts.compact);
+  const messages = conversation.archive;
+  let estimatedTokens = estimateTokens(windowOf(conversation));
   function appendMessage(message: ModelMessage): void {
     messages.push(message);
     estimatedTokens += estimateTokens(message);
+  }
+  function messagesUpdated(): Extract<LoopEvent, { type: "messages-updated" }> {
+    return { type: "messages-updated", ...snapshotOf(conversation) };
   }
   const turnUserText = lastUserText(opts.messages);
 
@@ -343,16 +356,19 @@ export async function* runLoop(opts: {
   async function* tryCompact(
     onSummarizerFail: "soft" | "hard",
   ): AsyncGenerator<LoopEvent, "ok" | "skipped" | "failed" | "aborted"> {
-    const evictBoundary = findSafeEvictionBoundary(messages, preserveRecentTokens);
+    const window = windowOf(conversation);
+    const evictBoundary = findSafeEvictionBoundary(window, preserveRecentTokens);
     if (evictBoundary === null) return "skipped";
     if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
     try {
-      const compacted = await compactMessages(messages, opts.model, evictBoundary, opts.signal, {
+      const compacted = await compactMessages(window, opts.model, evictBoundary, opts.signal, {
         stream: opts.credential === "subscription" && opts.provider === "openai",
         ...samplingFields,
       });
-      messages.splice(0, messages.length, ...compacted.messages);
-      estimatedTokens = estimateTokens(messages);
+      const recap = compacted.messages[0];
+      if (recap === undefined) throw new Error("compactMessages returned an empty window");
+      applyRecap(conversation, recap, compacted.evictedCount);
+      estimatedTokens = estimateTokens(windowOf(conversation));
       for (let attempt = 1; attempt <= compacted.retries; attempt++) {
         yield { type: "retry", attempt };
       }
@@ -363,7 +379,7 @@ export async function* runLoop(opts: {
         usage: compacted.usage,
         tokensBefore: compacted.tokensBefore,
       };
-      yield { type: "messages-updated", messages: [...messages] };
+      yield messagesUpdated();
       return "ok";
     } catch (err) {
       if (opts.signal?.aborted) {
@@ -412,7 +428,7 @@ export async function* runLoop(opts: {
       reportedRetries = 0;
 
       try {
-        const outbound = dropUnsupportedImages(messages, catalogEntry);
+        const outbound = dropUnsupportedImages(windowOf(conversation), catalogEntry);
         for (const warning of outbound.warnings) yield { type: "error", error: warning };
         const result = streamText({
           model: opts.model,
@@ -533,7 +549,7 @@ export async function* runLoop(opts: {
     if (toolCalls.length === 0) {
       if (text) {
         appendMessage({ role: "assistant", content: [{ type: "text", text }] });
-        yield { type: "messages-updated", messages: [...messages] };
+        yield messagesUpdated();
       }
       yield { type: "done", reason: "no-tool-call" };
       return;
@@ -550,7 +566,7 @@ export async function* runLoop(opts: {
       });
     }
     appendMessage({ role: "assistant", content: assistantContent });
-    yield { type: "messages-updated", messages: [...messages] };
+    yield messagesUpdated();
 
     const toolResults: ToolContent = [];
     const executed: { toolName: string; input: unknown }[] = [];
@@ -575,7 +591,7 @@ export async function* runLoop(opts: {
           execute(call.input, {
             toolCallId: call.toolCallId,
             messages,
-            context: {},
+            context: rewindContextOf(conversation),
             abortSignal: opts.signal,
           }),
         )
@@ -806,7 +822,7 @@ export async function* runLoop(opts: {
         toolResult = await toolDef.execute(call.input, {
           toolCallId: call.toolCallId,
           messages,
-          context: {},
+          context: rewindContextOf(conversation),
           abortSignal: opts.signal,
         });
         if (opts.terminalTools?.has(call.toolName)) terminalHit = true;
@@ -865,7 +881,7 @@ export async function* runLoop(opts: {
     }
 
     appendMessage({ role: "tool", content: toolResults });
-    yield { type: "messages-updated", messages: [...messages] };
+    yield messagesUpdated();
 
     if (unanswered.length > 0) {
       yield { type: "done", reason: "aborted" };
@@ -885,7 +901,7 @@ export async function* runLoop(opts: {
     const appended = executed.length === 0 ? undefined : opts.onToolPhaseEnd?.(executed);
     if (appended !== undefined && appended.length > 0) {
       appendMessage({ role: "user", content: [{ type: "text", text: appended }] });
-      yield { type: "messages-updated", messages: [...messages] };
+      yield messagesUpdated();
     }
   }
 

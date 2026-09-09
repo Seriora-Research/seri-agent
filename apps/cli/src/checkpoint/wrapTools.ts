@@ -14,6 +14,18 @@ export type OnBeforeMutation = (context: MutationContext) => void;
 // Fires only after the mutation has landed; optional and void like OnBeforeMutation.
 export type OnAfterMutation = (context: MutationContext) => void;
 
+export function rewindToFromContext(context: unknown): number {
+  if (
+    typeof context === "object" &&
+    context !== null &&
+    "rewindTo" in context &&
+    typeof context.rewindTo === "number"
+  ) {
+    return context.rewindTo;
+  }
+  throw new Error("tool execute context.rewindTo must be an archive index");
+}
+
 export function withCheckpoints(
   tools: ToolSet,
   onBeforeMutation: OnBeforeMutation,
@@ -38,7 +50,7 @@ export function withCheckpoints(
               tool: name,
               toolCallId: options.toolCallId,
               args,
-              rewindTo: options.messages.length - 1,
+              rewindTo: rewindToFromContext(options.context),
             };
             onBeforeMutation(context);
             const value = await execute(args, options);
