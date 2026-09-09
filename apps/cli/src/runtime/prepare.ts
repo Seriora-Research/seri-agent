@@ -307,15 +307,20 @@ export function buildCheckpointedTools(opts: {
   onCheckpoint?: (entry: { op: "snapshot"; tool: string; toolCallId: string }) => void;
 }): { checkpointer: Checkpointer; tools: ToolSet } {
   const live = createCheckpointer(opts);
-  const checkpointer = Object.assign(
-    (context: Parameters<Checkpointer>[0]) => {
-      live(context);
+  const checkpointer: Checkpointer = {
+    onBeforeMutation: (context) => {
+      live.onBeforeMutation(context);
       opts.onCheckpoint?.({ op: "snapshot", tool: context.tool, toolCallId: context.toolCallId });
     },
-    { onAfterMutation: live.onAfterMutation, invalidate: live.invalidate },
-  );
+    onAfterMutation: live.onAfterMutation,
+    invalidate: live.invalidate,
+  };
   const tools = withVerification(
-    withCheckpoints(createToolDefinitions(opts.cwd), checkpointer, checkpointer.onAfterMutation),
+    withCheckpoints(
+      createToolDefinitions(opts.cwd),
+      checkpointer.onBeforeMutation,
+      checkpointer.onAfterMutation,
+    ),
     opts.verifyConfig,
   );
   return { checkpointer, tools };

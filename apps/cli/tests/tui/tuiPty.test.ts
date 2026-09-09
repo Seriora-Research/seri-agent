@@ -4994,7 +4994,9 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
         let messages: { role: string }[] = [];
         do {
           messages = loadSession(sessionId, sessionsDir).messages as { role: string }[];
-        } while (messages.length < 5 && Date.now() < deadline);
+          if (messages.length >= 5) break;
+          await new Promise((r) => setTimeout(r, 20));
+        } while (Date.now() < deadline);
 
         const adjacent = messages.filter(
           (message, index) =>
