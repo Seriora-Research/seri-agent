@@ -3,15 +3,10 @@ import type { JSONValue } from "ai";
 import { loadReasoningEffortConfig } from "../config/config";
 
 export function legalTiersFor(entry?: ModelCatalogEntry): string[] {
-  // models.dev is unvalidated JSON.
-  const raw = entry?.reasoningOptions;
-  const opts = Array.isArray(raw) ? raw : [];
-
-  const effort = opts.find((o) => o != null && typeof o === "object" && o.type === "effort");
-
-  if (effort) return Array.isArray(effort.values) ? effort.values : [];
-  const toggle = opts.find((o) => o != null && typeof o === "object" && o.type === "toggle");
-  if (toggle) return ["off", "on"];
+  const opts = entry?.reasoningOptions ?? [];
+  const effort = opts.find((o) => o.type === "effort");
+  if (effort) return effort.values;
+  if (opts.some((o) => o.type === "toggle")) return ["off", "on"];
   return [];
 }
 
