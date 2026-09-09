@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { ModelCatalog } from "@seri/model-catalog";
+import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { buildVolatileTier } from "../../src/agents/systemPrompt";
 import { setConfigValue } from "../../src/config/config";
@@ -49,6 +50,10 @@ afterEach(() => {
 
 function emptySession() {
   return { id: "s", cwd: "/", systemPrompt: "", permissionMode: "auto" as const, messages: [] };
+}
+
+function setMessages(s: ReturnType<typeof createArchivistState>, messages: ModelMessage[]): void {
+  observeArchivistEvent(s, { type: "messages-updated", messages });
 }
 
 describe("shouldRunArchivist", () => {
@@ -176,9 +181,8 @@ describe("resetArchivistForRewind", () => {
       role: "user" as const,
       content: `message ${i + 1}`,
     }));
-    const s = createArchivistState(emptySession());
-    s.messages = preRewindMessages;
-    s.messageCursor = 5;
+    const s = createArchivistState({ ...emptySession(), messages: preRewindMessages });
+    expect(s.messageCursor).toBe(5);
 
     const postRewindMessages = preRewindMessages.slice(0, 2);
 
@@ -197,7 +201,7 @@ describe("resetArchivistForRewind", () => {
     expect(s.messageCursor).toBe(0);
     expect(s.messages).toBe(postRewindMessages);
 
-    s.messages = grownWithoutReset;
+    setMessages(s, grownWithoutReset);
     expect(s.messageCursor).toBe(0);
   });
 });
@@ -261,14 +265,14 @@ describe("observeArchivistEvent", () => {
   });
 
   test("a mid-turn compacted event resets the cursor, even when post-compaction growth would defeat the generic bounds check alone", () => {
-    const s = createArchivistState(emptySession());
-    s.messages = Array.from({ length: 5 }, (_, i) => ({
+    const preCompactMessages = Array.from({ length: 5 }, (_, i) => ({
       role: "user" as const,
       content: `message ${i + 1}`,
     }));
-    s.messageCursor = 5;
+    const s = createArchivistState({ ...emptySession(), messages: preCompactMessages });
+    expect(s.messageCursor).toBe(5);
 
-    const postCompactionMessages = s.messages.slice(0, 2);
+    const postCompactionMessages = preCompactMessages.slice(0, 2);
 
     const grownWithoutReset = [
       ...postCompactionMessages,
@@ -349,12 +353,16 @@ function stopStream(): LanguageModelV4StreamPart[] {
 describe("maybeRunArchivist", () => {
   test("resets an out-of-bounds messageCursor to 0", async () => {
     const ctx = makeCtx();
-    const s = createArchivistState(emptySession());
-    s.messages = [
-      { role: "user", content: "a" },
-      { role: "user", content: "b" },
-    ];
-    s.messageCursor = 5;
+    const s = createArchivistState(
+      {
+        ...emptySession(),
+        messages: [
+          { role: "user", content: "a" },
+          { role: "user", content: "b" },
+        ],
+      },
+      5,
+    );
     const report = await maybeRunArchivist({
       state: s,
       ctx,
@@ -371,12 +379,16 @@ describe("maybeRunArchivist", () => {
 
   test("leaves an in-bounds messageCursor untouched", async () => {
     const ctx = makeCtx();
-    const s = createArchivistState(emptySession());
-    s.messages = [
-      { role: "user", content: "a" },
-      { role: "user", content: "b" },
-    ];
-    s.messageCursor = 1;
+    const s = createArchivistState(
+      {
+        ...emptySession(),
+        messages: [
+          { role: "user", content: "a" },
+          { role: "user", content: "b" },
+        ],
+      },
+      1,
+    );
     await maybeRunArchivist({
       state: s,
       ctx,
@@ -446,7 +458,7 @@ describe("maybeRunArchivist", () => {
       ],
     });
     const s = createArchivistState(emptySession());
-    s.messages = [{ role: "user", content: "task" }];
+    setMessages(s, [{ role: "user", content: "task" }]);
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     const report = await maybeRunArchivist({
@@ -489,7 +501,7 @@ describe("maybeRunArchivist", () => {
       ],
     };
     const s = createArchivistState(emptySession());
-    s.messages = [{ role: "user", content: "task" }];
+    setMessages(s, [{ role: "user", content: "task" }]);
     s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await maybeRunArchivist({
@@ -571,7 +583,7 @@ describe("maybeRunArchivist", () => {
         ],
       }));
       const s = createArchivistState(emptySession());
-      s.messages = [{ role: "user", content: "task" }];
+      setMessages(s, [{ role: "user", content: "task" }]);
       s.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
       await maybeRunArchivist({
@@ -693,13 +705,17 @@ describe("runArchivist", () => {
         streamResult(stopStream()),
       ],
     });
-    const state = createArchivistState(emptySession());
-    state.messages = [
-      { role: "user", content: "message one, already reviewed" },
-      { role: "assistant", content: [{ type: "text", text: "message two, already reviewed" }] },
-      { role: "user", content: "message three, brand new" },
-    ];
-    state.messageCursor = 2;
+    const state = createArchivistState(
+      {
+        ...emptySession(),
+        messages: [
+          { role: "user", content: "message one, already reviewed" },
+          { role: "assistant", content: [{ type: "text", text: "message two, already reviewed" }] },
+          { role: "user", content: "message three, brand new" },
+        ],
+      },
+      2,
+    );
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     const controller = new AbortController();
@@ -736,6 +752,42 @@ describe("runArchivist", () => {
     expect(resolvePendingRef(ctx.configDir, only?.id ?? "")).toHaveLength(1);
   });
 
+  test("reviews post-rewind growth that would leave a stale cursor in bounds", async () => {
+    const ctx = makeCtx();
+    const preRewind = Array.from({ length: 5 }, (_, i) => ({
+      role: "user" as const,
+      content: `old ${i + 1}`,
+    }));
+    const state = createArchivistState({ ...emptySession(), messages: preRewind });
+    resetArchivistForRewind(state, preRewind.slice(0, 2));
+    setMessages(state, [
+      ...preRewind.slice(0, 2),
+      { role: "user", content: "post-rewind fact worth keeping" },
+      { role: "user", content: "another post-rewind line" },
+      { role: "user", content: "third post-rewind line" },
+      { role: "user", content: "fourth post-rewind line" },
+    ]);
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+    }));
+    await runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 100_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+    const goal = JSON.stringify(calls[0]?.opts.messages);
+    expect(goal).toContain("post-rewind fact worth keeping");
+    expect(state.messageCursor).toBe(6);
+  });
+
   test("threads its own contextWindow into the child runLoop's opts.contextWindowSize", async () => {
     const ctx = makeCtx();
     const { fake, calls } = fakeChildLoop(() => ({
@@ -745,7 +797,7 @@ describe("runArchivist", () => {
       ],
     }));
     const state = createArchivistState(emptySession());
-    state.messages = [{ role: "user", content: "task" }];
+    setMessages(state, [{ role: "user", content: "task" }]);
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await runArchivist({
@@ -773,7 +825,7 @@ describe("runArchivist", () => {
       ],
     }));
     const state = createArchivistState(emptySession());
-    state.messages = [{ role: "user", content: "task" }];
+    setMessages(state, [{ role: "user", content: "task" }]);
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await runArchivist({
@@ -802,7 +854,7 @@ describe("runArchivist", () => {
       ],
     }));
     const state = createArchivistState(emptySession());
-    state.messages = [{ role: "user", content: "task" }];
+    setMessages(state, [{ role: "user", content: "task" }]);
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await runArchivist({
@@ -837,7 +889,7 @@ describe("runArchivist", () => {
 
     const model = new MockLanguageModelV4({ doStream: [streamResult(stopStream())] });
     const state = createArchivistState(emptySession());
-    state.messages = [{ role: "user", content: "task" }];
+    setMessages(state, [{ role: "user", content: "task" }]);
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
 
     await runArchivist({

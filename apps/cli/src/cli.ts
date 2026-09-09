@@ -2081,7 +2081,7 @@ async function runTui(
           deps,
         );
       }
-      if (name === "/rewind") {
+      if (name === "/rewind" || name === "/compact") {
         resetArchivistForRewind(archivistState, liveState.session.messages);
       }
     } catch (err) {
