@@ -4752,9 +4752,9 @@ describe("run (/compact)", () => {
     expect(saved.compact?.status).toBe("compacted");
     if (saved.compact?.status !== "compacted") throw new Error("expected compacted cursor");
     expect(saved.compact.windowStart).toBe(10);
-    expect(saved.messages.some((message) => JSON.stringify(message).includes(COMPACT_HISTORY_PREFIX))).toBe(
-      false,
-    );
+    expect(
+      saved.messages.some((message) => JSON.stringify(message).includes(COMPACT_HISTORY_PREFIX)),
+    ).toBe(false);
     const window = windowOf(createConversation(saved.messages, saved.compact));
     expect(window).toHaveLength(21);
     expect(window.slice(1)).toEqual(session.messages.slice(10));

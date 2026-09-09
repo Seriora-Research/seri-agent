@@ -93,12 +93,7 @@ import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { userContentFrom, type ImageBytes } from "./imageParts";
 import { findSafeEvictionBoundary } from "./loop/compaction";
-import {
-  compactConversation,
-  createConversation,
-  snapshotOf,
-  windowOf,
-} from "./loop/conversation";
+import { compactConversation, createConversation, snapshotOf, windowOf } from "./loop/conversation";
 import {
   type ApprovalAnswer,
   type ApprovalDetail,

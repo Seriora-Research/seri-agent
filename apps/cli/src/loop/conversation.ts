@@ -86,14 +86,9 @@ export function advanceCursor(
   if (!isCompactSummaryMessage(recap)) {
     throw new Error("compact recap must be a structured compacted-history user message");
   }
-  const archiveEvicted =
-    compact.status === "full" ? windowEvictBoundary : windowEvictBoundary - 1;
-  const windowStart =
-    (compact.status === "full" ? 0 : compact.windowStart) + archiveEvicted;
-  return parseCompactCursor(
-    { status: "compacted", windowStart, recap },
-    archiveLength,
-  );
+  const archiveEvicted = compact.status === "full" ? windowEvictBoundary : windowEvictBoundary - 1;
+  const windowStart = (compact.status === "full" ? 0 : compact.windowStart) + archiveEvicted;
+  return parseCompactCursor({ status: "compacted", windowStart, recap }, archiveLength);
 }
 
 export function applyRecap(

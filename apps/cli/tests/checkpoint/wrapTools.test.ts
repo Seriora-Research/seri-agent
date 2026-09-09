@@ -158,10 +158,7 @@ describe("withCheckpoints", () => {
     );
 
     expect(
-      wrapped.write_file?.execute?.(
-        { path: "a.txt" },
-        { toolCallId: "c1", messages, context: {} },
-      ),
+      wrapped.write_file?.execute?.({ path: "a.txt" }, { toolCallId: "c1", messages, context: {} }),
     ).rejects.toThrow("rewindTo");
   });
 

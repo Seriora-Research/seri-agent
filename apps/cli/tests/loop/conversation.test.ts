@@ -26,9 +26,7 @@ function archive(count: number): ModelMessage[] {
   const out: ModelMessage[] = [];
   for (let i = 0; i < count; i++) {
     out.push(
-      i % 2 === 0
-        ? { role: "user", content: `u${i}` }
-        : { role: "assistant", content: `a${i}` },
+      i % 2 === 0 ? { role: "user", content: `u${i}` } : { role: "assistant", content: `a${i}` },
     );
   }
   return out;
@@ -57,10 +55,7 @@ describe("createConversation", () => {
 
   test("windowStart 0 with a recap is illegal", () => {
     expect(() =>
-      parseCompactCursor(
-        { status: "compacted", windowStart: 0, recap: recap(1) },
-        4,
-      ),
+      parseCompactCursor({ status: "compacted", windowStart: 0, recap: recap(1) }, 4),
     ).toThrow("windowStart 0");
   });
 

@@ -200,9 +200,9 @@ describe("SessionDatabase", () => {
 
     const after = new Database(join(configDir, DATABASE_FILENAME));
     const afterIds = (
-      after
-        .query("SELECT id FROM messages WHERE session_id = 'keep-turns' ORDER BY seq")
-        .all() as { id: number }[]
+      after.query("SELECT id FROM messages WHERE session_id = 'keep-turns' ORDER BY seq").all() as {
+        id: number;
+      }[]
     ).map((row) => row.id);
     after.close();
     expect(afterIds).toEqual(beforeIds);
