@@ -1238,7 +1238,7 @@ describe.skipIf(!isGitAvailable() || !isBashAvailable())(
       const options = {
         toolCallId: "c1",
         messages: [{ role: "user" as const, content: "go" }],
-        context: {},
+        context: { rewindTo: 0 },
       };
 
       await tools.bash?.execute?.(

@@ -228,6 +228,8 @@ describe("SessionDatabase", () => {
       END`);
     const oldSeqChurn = changeDelta(setup, "UPDATE messages SET seq = seq + 1");
     setup.exec("UPDATE messages SET seq = 0");
+    setup.exec("ALTER TABLE sessions DROP COLUMN compact_window_start");
+    setup.exec("ALTER TABLE sessions DROP COLUMN compact_recap_json");
     setup.exec("PRAGMA user_version = 3");
     setup.close();
 
