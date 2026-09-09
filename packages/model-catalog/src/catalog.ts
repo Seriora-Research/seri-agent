@@ -26,6 +26,8 @@ type RawModel = {
   tool_call: boolean;
   reasoning: boolean;
   reasoning_options?: ReasoningOption[];
+  attachment?: boolean;
+  modalities?: { input?: string[]; output?: string[] };
   limit: { context: number; output: number };
   cost?: {
     input: number;
@@ -36,6 +38,10 @@ type RawModel = {
 };
 
 export type RawCatalogResponse = Record<string, { models: Record<string, RawModel> }>;
+
+function acceptsImageInput(raw: RawModel): boolean {
+  return raw.modalities?.input?.includes("image") === true;
+}
 
 function toEntry(provider: ModelProvider, raw: RawModel): ModelCatalogEntry {
   return {
@@ -48,6 +54,7 @@ function toEntry(provider: ModelProvider, raw: RawModel): ModelCatalogEntry {
     toolCall: raw.tool_call,
     reasoning: raw.reasoning,
     reasoningOptions: raw.reasoning_options,
+    ...(acceptsImageInput(raw) ? { acceptsImageInput: true } : {}),
     pricing: raw.cost
       ? {
           inputPerMTok: raw.cost.input,
