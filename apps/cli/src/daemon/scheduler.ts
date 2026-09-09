@@ -171,18 +171,20 @@ export class Scheduler {
       for (const due of this.database.listDueSchedules(now)) {
         const claimed = this.database.claimSchedule(due.id, now);
         if (claimed === undefined) continue;
-        await this.fire(claimed).catch(() => undefined);
-        this.database.clearScheduleRunning(claimed.id);
+        try {
+          await this.fire(claimed);
+        } finally {
+          this.database.clearScheduleRunning(claimed.id);
+        }
       }
     } finally {
       this.ticking = false;
     }
   }
 
-  private async fire(schedule: ScheduleRecord): Promise<void> {
-    const sessionId = randomUUID();
+  private mintScheduledSession(schedule: ScheduleRecord): SessionState | undefined {
     const session: SessionState = {
-      id: sessionId,
+      id: randomUUID(),
       cwd: schedule.cwd,
       systemPrompt: "",
       permissionMode: "read-only",
@@ -192,9 +194,15 @@ export class Scheduler {
       this.database.saveSession(session);
       session.messages = [{ role: "user", content: schedule.task }];
       this.database.saveSession(session);
+      return session;
     } catch {
-      return;
+      return undefined;
     }
+  }
+
+  private async fire(schedule: ScheduleRecord): Promise<void> {
+    const session = this.mintScheduledSession(schedule);
+    if (session === undefined) return;
 
     const startedAt = new Date(this.now()).toISOString();
     const runId = randomUUID();
@@ -203,7 +211,7 @@ export class Scheduler {
         {
           id: runId,
           scheduleId: schedule.id,
-          sessionId,
+          sessionId: session.id,
           status,
           response,
           error,
