@@ -144,8 +144,9 @@ export function findSafeEvictionBoundary(
     kept += estimateTokens(messages[boundary]!);
   }
   while (boundary > 0 && messages[boundary]?.role === "tool") {
-    boundary++;
+    boundary--;
   }
+  if (messages[boundary]?.role === "tool") return null;
   if (boundary < minEvictable) return null;
   return boundary;
 }
