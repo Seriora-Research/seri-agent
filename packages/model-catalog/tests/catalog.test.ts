@@ -4,7 +4,6 @@ import {
   isZeroPriceEntry,
   loadCatalog,
   mapRawCatalog,
-  type RawCatalogResponse,
   resetCatalogCache,
 } from "../src/catalog";
 import type { ModelCatalog, ModelCatalogEntry } from "../src/types";
@@ -90,6 +89,22 @@ function rawApiResponse() {
 function fakeFetch(response: unknown, ok = true, status = 200): typeof fetch {
   return (async () =>
     ({ ok, status, json: async () => response }) as unknown as Response) as unknown as typeof fetch;
+}
+
+function validModel(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ok-model",
+    name: "Ok Model",
+    family: "ok",
+    tool_call: true,
+    reasoning: false,
+    limit: { context: 1000, output: 100 },
+    ...overrides,
+  };
+}
+
+function groqRaw(models: Record<string, unknown>) {
+  return { groq: { models } };
 }
 
 describe("loadCatalog", () => {
@@ -211,11 +226,257 @@ describe("loadCatalog", () => {
     expect(second).toBe(fallbackManifest);
     expect(calls).toBe(1);
   });
+
+  test("JSON root null: map throws and loadCatalog falls back to the manifest", async () => {
+    const catalog = await loadCatalog(fallbackManifest, fakeFetch(null));
+
+    expect(catalog).toBe(fallbackManifest);
+  });
+
+  test("JSON root string: map throws and loadCatalog falls back to the manifest", async () => {
+    const catalog = await loadCatalog(fallbackManifest, fakeFetch("not-an-object"));
+
+    expect(catalog).toBe(fallbackManifest);
+  });
+
+  test("JSON object with no usable models: map throws and loadCatalog falls back to the manifest", async () => {
+    const catalog = await loadCatalog(fallbackManifest, fakeFetch({}));
+
+    expect(catalog).toBe(fallbackManifest);
+  });
+});
+
+describe("mapRawCatalog: parse", () => {
+  test("empty object throws", () => {
+    expect(() => mapRawCatalog({})).toThrow();
+  });
+
+  test("only tool_call false models throw", () => {
+    expect(() =>
+      mapRawCatalog(groqRaw({ silent: validModel({ id: "silent", tool_call: false }) })),
+    ).toThrow();
+  });
+
+  test("null root throws", () => {
+    expect(() => mapRawCatalog(null)).toThrow();
+  });
+
+  test("array root throws", () => {
+    expect(() => mapRawCatalog([])).toThrow();
+  });
+
+  test("primitive root throws", () => {
+    expect(() => mapRawCatalog("not-an-object")).toThrow();
+    expect(() => mapRawCatalog(1)).toThrow();
+  });
+
+  test("unknown provider keys are ignored", () => {
+    const entries = mapRawCatalog({
+      groq: { models: { "ok-model": validModel() } },
+      "other-provider": { models: { "ignored-model": validModel({ id: "ignored-model" }) } },
+    });
+
+    expect(entries.map((e) => e.id)).toEqual(["ok-model"]);
+  });
+
+  test("provider value without a models object is skipped", () => {
+    const entries = mapRawCatalog({
+      groq: { not_models: { "ok-model": validModel() } },
+      anthropic: { models: { "claude-ok": validModel({ id: "claude-ok", name: "Claude Ok" }) } },
+    });
+
+    expect(entries.map((e) => e.id)).toEqual(["claude-ok"]);
+  });
+
+  test("skips a model whose id is not a non-empty string", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        empty: validModel({ id: "" }),
+        numbered: validModel({ id: 1 }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+  });
+
+  test("skips a model whose name is not a non-empty string", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        empty: validModel({ name: "" }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+  });
+
+  test("skips a model whose tool_call is not boolean", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        bad: validModel({ id: "bad", tool_call: "yes" }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+  });
+
+  test("skips a model whose reasoning is not boolean", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        bad: validModel({ id: "bad", reasoning: "yes" }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+  });
+
+  test("skips a model whose limit.context or limit.output is not a number", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        badContext: validModel({ id: "bad-context", limit: { context: "1000", output: 100 } }),
+        badOutput: validModel({ id: "bad-output", limit: { context: 1000, output: null } }),
+        nan: validModel({ id: "nan", limit: { context: Number.NaN, output: 100 } }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+  });
+
+  test("family that is not a string is stored as null", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        numbered: validModel({ id: "numbered", family: 1 }),
+        missing: validModel({ id: "missing", family: undefined }),
+      }),
+    );
+
+    expect(entries.find((e) => e.id === "numbered")?.family).toBeNull();
+    expect(entries.find((e) => e.id === "missing")?.family).toBeNull();
+  });
+
+  test("invalid cost omits pricing and keeps the model", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        stringInput: validModel({ id: "string-input", cost: { input: "1", output: 2 } }),
+        missingOutput: validModel({ id: "missing-output", cost: { input: 1 } }),
+        badCache: validModel({
+          id: "bad-cache",
+          cost: { input: 1, output: 2, cache_read: "nope" },
+        }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["string-input", "missing-output", "bad-cache"]);
+    expect(entries.every((e) => e.pricing === undefined)).toBe(true);
+  });
+
+  test("valid cost keeps numeric input/output and optional cache fields", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        priced: validModel({
+          id: "priced",
+          cost: { input: 1, output: 2, cache_read: 0.1, cache_write: 0.2 },
+        }),
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.pricing).toEqual({
+      inputPerMTok: 1,
+      outputPerMTok: 2,
+      cacheReadPerMTok: 0.1,
+      cacheWritePerMTok: 0.2,
+    });
+  });
+
+  test("reasoning_options that is not an array is omitted", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        obj: validModel({
+          id: "obj",
+          reasoning_options: { type: "effort", values: ["low"] },
+        }),
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.reasoningOptions).toBeUndefined();
+  });
+
+  test("null and unknown option elements are dropped; remaining valid options are kept", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        mixed: validModel({
+          id: "mixed",
+          reasoning: true,
+          reasoning_options: [
+            null,
+            { type: "mystery" },
+            { type: "effort", values: ["low", "medium"] },
+          ],
+        }),
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.reasoningOptions).toEqual([{ type: "effort", values: ["low", "medium"] }]);
+  });
+
+  test("effort without a string[] values is dropped; other valid options stay", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        mixed: validModel({
+          id: "mixed",
+          reasoning: true,
+          reasoning_options: [
+            { type: "effort" },
+            { type: "effort", values: {} },
+            { type: "effort", values: ["low", 1] },
+            { type: "toggle" },
+          ],
+        }),
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.reasoningOptions).toEqual([{ type: "toggle" }]);
+  });
+
+  test("if every option is dropped, reasoningOptions is omitted", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        empty: validModel({
+          id: "empty",
+          reasoning: true,
+          reasoning_options: [null, { type: "effort" }],
+        }),
+      }),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.reasoningOptions).toBeUndefined();
+  });
+
+  test("a well-formed sibling next to a malformed model still appears; the malformed one does not", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        bad: validModel({ id: "", name: "Bad" }),
+        good: validModel({ id: "good", name: "Good" }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["good"]);
+    expect(entries[0]?.displayName).toBe("Good");
+  });
 });
 
 describe("mapRawCatalog: reasoning_options", () => {
-  test("maps each of the 3 ReasoningOption shapes through toEntry", () => {
-    const raw: RawCatalogResponse = {
+  test("maps each of the 3 ReasoningOption shapes", () => {
+    const raw = {
       groq: {
         models: {
           "effort-model": {
@@ -267,7 +528,7 @@ describe("mapRawCatalog: reasoning_options", () => {
   });
 
   test("a model with multiple reasoning_options entries (GLM-5.2-shaped) keeps all of them", () => {
-    const raw: RawCatalogResponse = {
+    const raw = {
       groq: {
         models: {
           "glm-shaped": {

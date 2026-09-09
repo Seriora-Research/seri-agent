@@ -18,55 +18,105 @@ export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
 
 export const GATEWAY_PROVIDER: ModelProvider = "openrouter";
 
-type RawModel = {
-  id: string;
-  name: string;
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-  family: string | null;
-  tool_call: boolean;
-  reasoning: boolean;
-  reasoning_options?: ReasoningOption[];
-  limit: { context: number; output: number };
-  cost?: {
-    input: number;
-    output: number;
-    cache_read?: number;
-    cache_write?: number;
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parsePricing(value: unknown): ModelCatalogEntry["pricing"] {
+  if (!isPlainObject(value)) return undefined;
+  const input = finiteNumber(value.input);
+  const output = finiteNumber(value.output);
+  if (input === undefined || output === undefined) return undefined;
+  const pricing: NonNullable<ModelCatalogEntry["pricing"]> = {
+    inputPerMTok: input,
+    outputPerMTok: output,
   };
-};
+  if (value.cache_read !== undefined) {
+    const cacheRead = finiteNumber(value.cache_read);
+    if (cacheRead === undefined) return undefined;
+    pricing.cacheReadPerMTok = cacheRead;
+  }
+  if (value.cache_write !== undefined) {
+    const cacheWrite = finiteNumber(value.cache_write);
+    if (cacheWrite === undefined) return undefined;
+    pricing.cacheWritePerMTok = cacheWrite;
+  }
+  return pricing;
+}
 
-export type RawCatalogResponse = Record<string, { models: Record<string, RawModel> }>;
+function parseReasoningOption(value: unknown): ReasoningOption | undefined {
+  if (!isPlainObject(value)) return undefined;
+  if (value.type === "toggle") return { type: "toggle" };
+  if (value.type === "budget_tokens") return { type: "budget_tokens" };
+  if (value.type === "effort") {
+    if (!Array.isArray(value.values)) return undefined;
+    if (!value.values.every((item): item is string => typeof item === "string")) return undefined;
+    return { type: "effort", values: value.values };
+  }
+  return undefined;
+}
 
-function toEntry(provider: ModelProvider, raw: RawModel): ModelCatalogEntry {
+function parseReasoningOptions(value: unknown): ReasoningOption[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options: ReasoningOption[] = [];
+  for (const item of value) {
+    const option = parseReasoningOption(item);
+    if (option !== undefined) options.push(option);
+  }
+  return options.length > 0 ? options : undefined;
+}
+
+function parseModel(provider: ModelProvider, raw: unknown): ModelCatalogEntry | undefined {
+  if (!isPlainObject(raw)) return undefined;
+  if (!isNonEmptyString(raw.id) || !isNonEmptyString(raw.name)) return undefined;
+  if (typeof raw.tool_call !== "boolean" || typeof raw.reasoning !== "boolean") return undefined;
+  if (!isPlainObject(raw.limit)) return undefined;
+  const contextWindow = finiteNumber(raw.limit.context);
+  const maxOutputTokens = finiteNumber(raw.limit.output);
+  if (contextWindow === undefined || maxOutputTokens === undefined) return undefined;
+
   return {
     id: raw.id,
     provider,
     displayName: raw.name,
-    family: raw.family,
-    contextWindow: raw.limit.context,
-    maxOutputTokens: raw.limit.output,
+    family: typeof raw.family === "string" ? raw.family : null,
+    contextWindow,
+    maxOutputTokens,
     toolCall: raw.tool_call,
     reasoning: raw.reasoning,
-    reasoningOptions: raw.reasoning_options,
-    pricing: raw.cost
-      ? {
-          inputPerMTok: raw.cost.input,
-          outputPerMTok: raw.cost.output,
-          cacheReadPerMTok: raw.cost.cache_read,
-          cacheWritePerMTok: raw.cost.cache_write,
-        }
-      : undefined,
+    reasoningOptions: parseReasoningOptions(raw.reasoning_options),
+    pricing: parsePricing(raw.cost),
   };
 }
 
-export function mapRawCatalog(raw: RawCatalogResponse): ModelCatalogEntry[] {
+export function mapRawCatalog(raw: unknown): ModelCatalogEntry[] {
+  if (!isPlainObject(raw)) {
+    throw new Error("catalog JSON root is not a plain object");
+  }
   const entries: ModelCatalogEntry[] = [];
   for (const provider of CATALOG_PROVIDERS) {
-    const models = raw[provider]?.models;
-    if (!models) continue;
-    for (const model of Object.values(models)) entries.push(toEntry(provider, model));
+    const providerValue = raw[provider];
+    if (!isPlainObject(providerValue)) continue;
+    const models = providerValue.models;
+    if (!isPlainObject(models)) continue;
+    for (const model of Object.values(models)) {
+      const entry = parseModel(provider, model);
+      if (entry !== undefined) entries.push(entry);
+    }
   }
-  return filterCatalogEntries(entries);
+  const usable = filterCatalogEntries(entries);
+  if (usable.length === 0) {
+    throw new Error("catalog JSON had no usable entries");
+  }
+  return usable;
 }
 
 let cachedPromise: Promise<ModelCatalog> | undefined;
@@ -89,7 +139,7 @@ export async function loadCatalog(
     try {
       return await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS, async (response) => {
         if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-        const raw = (await response.json()) as RawCatalogResponse;
+        const raw: unknown = await response.json();
         return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
       });
     } catch {
