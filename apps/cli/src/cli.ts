@@ -116,7 +116,7 @@ import {
   type ArchivistState,
   createArchivistState,
   drainArchivist,
-  resetArchivistForRewind,
+  replaceArchivistTranscript,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
@@ -2065,6 +2065,7 @@ async function runTui(
     }
     if (command.mutatesRunState === true) turnInFlight = true;
     const sessionIdBeforeCommand = liveState.session.id;
+    const messagesBeforeCommand = liveState.session.messages;
     const foldUsage = (u: LanguageModelUsage): void => {
       usage = {
         inputTokens: addTokens(usage.inputTokens, u.inputTokens),
@@ -2088,8 +2089,9 @@ async function runTui(
           deps,
         );
       }
-      if (name === "/rewind") {
-        resetArchivistForRewind(archivistState, liveState.session.messages);
+      if (liveState.session.messages !== messagesBeforeCommand) {
+        replaceArchivistTranscript(archivistState, liveState.session.messages);
+        ctx.database?.setArchivistCursor(liveState.session.id, archivistState.messageCursor);
       }
     } catch (err) {
       dispatch({
