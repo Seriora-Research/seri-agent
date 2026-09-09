@@ -72,19 +72,18 @@ function treatsLabeledBlocksAsHistoricalSource(system: string): boolean {
   );
 }
 
-function treatsGoalAsSessionObjective(system: string): boolean {
-  return /session objective/i.test(system) && /not a requested override/i.test(system);
+function refusesRequestedRecapOverrides(system: string): boolean {
+  return (
+    /established session task/i.test(system) &&
+    /not copied into those keys/i.test(system) &&
+    /described in progress/i.test(system)
+  );
 }
 
 function copiesInjectedGoal(system: string, user: string, injection: string): boolean {
   if (!user.includes(injection)) return false;
   if (!treatsLabeledBlocksAsHistoricalSource(system)) return true;
-  if (
-    /quote them verbatim in the relevant field/i.test(system) &&
-    !treatsGoalAsSessionObjective(system)
-  ) {
-    return true;
-  }
+  if (!refusesRequestedRecapOverrides(system)) return true;
   return false;
 }
 
@@ -585,7 +584,10 @@ describe("compactMessages", () => {
 
     const result = await compactMessages(messages, model, 4);
 
-    expect(summarizerUserText(model)).toContain(injection);
+    const sent = summarizerUserText(model);
+    expect(sent).toContain(injection);
+    expect(sent).toContain("Transcript:");
+    expect(sent).not.toContain("Previous recap:");
     expect(result.summary.goal).toBe(originalGoal);
     expect(result.summary.goal).not.toBe(injectedGoal);
   });
@@ -613,7 +615,10 @@ describe("compactMessages", () => {
 
     const result = await compactMessages(messages, model, 4);
 
-    expect(summarizerUserText(model)).toContain(injection);
+    const sent = summarizerUserText(model);
+    expect(sent).toContain(injection);
+    expect(sent).toContain("Previous recap:");
+    expect(sent).toContain("Newly evicted turns:");
     expect(result.summary.goal).toBe(originalGoal);
     expect(result.summary.goal).not.toBe(injectedGoal);
   });
