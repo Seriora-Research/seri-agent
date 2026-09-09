@@ -16,6 +16,7 @@ export type ModelCatalogEntry = {
   toolCall: boolean;
   reasoning: boolean;
   reasoningOptions?: ReasoningOption[];
+  acceptsImageInput?: boolean;
 
   pricing:
     | {

@@ -182,52 +182,62 @@ export class Scheduler {
     }
   }
 
-  private async fire(schedule: ScheduleRecord): Promise<void> {
-    const sessionId = randomUUID();
+  private mintScheduledSession(schedule: ScheduleRecord): SessionState | undefined {
     const session: SessionState = {
-      id: sessionId,
+      id: randomUUID(),
       cwd: schedule.cwd,
       systemPrompt: "",
       permissionMode: "read-only",
       messages: [],
     };
-    this.database.saveSession(session);
-    session.messages = [{ role: "user", content: schedule.task }];
-    this.database.saveSession(session);
+    try {
+      this.database.saveSession(session);
+      session.messages = [{ role: "user", content: schedule.task }];
+      this.database.saveSession(session);
+      return session;
+    } catch {
+      return undefined;
+    }
+  }
 
-    const tools = createScheduledToolDefinitions(schedule.cwd);
-    assertScheduledToolset(tools);
-    const policy = scheduledRunPolicy();
+  private async fire(schedule: ScheduleRecord): Promise<void> {
+    const session = this.mintScheduledSession(schedule);
+    if (session === undefined) return;
+
     const startedAt = new Date(this.now()).toISOString();
     const runId = randomUUID();
+    const commit = (status: string, response: string | null, error: string | null): void => {
+      this.database.commitScheduleFire(
+        {
+          id: runId,
+          scheduleId: schedule.id,
+          sessionId: session.id,
+          status,
+          response,
+          error,
+          startedAt,
+          finishedAt: new Date(this.now()).toISOString(),
+        },
+        this.now(),
+      );
+    };
     try {
+      const tools = createScheduledToolDefinitions(schedule.cwd);
+      assertScheduledToolset(tools);
+      const policy = scheduledRunPolicy();
       const result = await this.runScheduled({
         scheduleId: schedule.id,
         session,
         tools,
         policy,
       });
-      this.database.insertScheduleRun({
-        id: runId,
-        scheduleId: schedule.id,
-        sessionId,
-        status: result.error === undefined ? "complete" : "error",
-        response: result.response ?? null,
-        error: result.error ?? null,
-        startedAt,
-        finishedAt: new Date(this.now()).toISOString(),
-      });
+      commit(
+        result.error === undefined ? "complete" : "error",
+        result.response ?? null,
+        result.error ?? null,
+      );
     } catch (error) {
-      this.database.insertScheduleRun({
-        id: runId,
-        scheduleId: schedule.id,
-        sessionId,
-        status: "error",
-        response: null,
-        error: error instanceof Error ? error.message : String(error),
-        startedAt,
-        finishedAt: new Date(this.now()).toISOString(),
-      });
+      commit("error", null, error instanceof Error ? error.message : String(error));
     }
   }
 }

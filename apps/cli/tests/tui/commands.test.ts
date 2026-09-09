@@ -1030,14 +1030,14 @@ describe("decideEffortOpen", () => {
 describe.skipIf(!isGitAvailable())("decideUndo", () => {
   test("restores the previous file state and reports what changed", () => {
     const snapshot = checkpointer();
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
       rewindTo: 1,
     });
     writeFileSync(join(workTree, "a.txt"), "after\n");
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c2",
       args: { path: join(workTree, "a.txt") },
@@ -1057,7 +1057,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
   }, 30_000);
 
   test("reports no change when the checkpoint is already the current state", () => {
-    checkpointer()({
+    checkpointer().onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
@@ -1075,7 +1075,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
 
   test("reports preserved files instead of claiming no change when a candidate was held back", () => {
     const snapshot = checkpointer();
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
@@ -1083,7 +1083,7 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
     });
     // Direct write skips the ledger, so the two records share one tree and /undo 1 is the step.
     writeFileSync(join(workTree, "b.txt"), "created outside write_file\n");
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c2",
       args: { path: join(workTree, "a.txt") },
@@ -1106,14 +1106,14 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
 
   test("onPlan fires with the plan before the restore mutates the worktree", () => {
     const snapshot = checkpointer();
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
       rewindTo: 1,
     });
     writeFileSync(join(workTree, "a.txt"), "after\n");
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c2",
       args: { path: join(workTree, "a.txt") },
@@ -1139,14 +1139,14 @@ describe.skipIf(!isGitAvailable())("decideUndo", () => {
 describe.skipIf(!isGitAvailable())("decideRestore", () => {
   test("restores the named commit and reports it", () => {
     const snapshot = checkpointer();
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
       rewindTo: 1,
     });
     writeFileSync(join(workTree, "a.txt"), "after\n");
-    snapshot({
+    snapshot.onBeforeMutation({
       tool: "write_file",
       toolCallId: "c2",
       args: { path: join(workTree, "a.txt") },
@@ -1172,7 +1172,7 @@ describe.skipIf(!isGitAvailable())("decideRestore", () => {
 
 describe.skipIf(!isGitAvailable())("decideRewind", () => {
   test("truncates the session's messages, touches no file, and reports what was dropped", () => {
-    checkpointer()({
+    checkpointer().onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },
@@ -1203,7 +1203,7 @@ describe.skipIf(!isGitAvailable())("decideRewind", () => {
   }, 30_000);
 
   test("does not record the barrier until recordBarrier() is called", () => {
-    checkpointer()({
+    checkpointer().onBeforeMutation({
       tool: "write_file",
       toolCallId: "c1",
       args: { path: join(workTree, "a.txt") },

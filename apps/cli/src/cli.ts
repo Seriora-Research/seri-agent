@@ -11,7 +11,7 @@ import {
   type ModelProvider,
 } from "@seri/model-catalog";
 import type { Plan } from "@seri/plans";
-import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet } from "ai";
+import type { LanguageModel, LanguageModelUsage, ModelMessage, ToolSet, UserContent } from "ai";
 import { createElement } from "react";
 import pkg from "../package.json";
 import { onAbort } from "./abort";
@@ -91,6 +91,7 @@ import type { PermissionMode } from "./gate/gate";
 import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
+import { userContentFrom, type ImageBytes } from "./imageParts";
 import { compactMessages, findSafeEvictionBoundary } from "./loop/compaction";
 import {
   type ApprovalAnswer,
@@ -115,7 +116,7 @@ import {
   type ArchivistState,
   createArchivistState,
   drainArchivist,
-  resetArchivistForRewind,
+  replaceArchivistTranscript,
 } from "./memory/archivist";
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
@@ -931,7 +932,7 @@ function pushTranscriptLine(
   dispatch({ type: "transcript-append", line, muted: opts?.muted, markdown: opts?.markdown });
 }
 
-function withUserTurn(messages: ModelMessage[], content: string): ModelMessage[] {
+function withUserTurn(messages: ModelMessage[], content: UserContent): ModelMessage[] {
   const last = messages[messages.length - 1];
   if (last?.role !== "user") return [...messages, { role: "user", content }];
   return [
@@ -1043,10 +1044,16 @@ async function runTui(
     liveState = tuiReducer(liveState, action);
     reactDispatch?.(action);
   };
+  const pendingImages: ImageBytes[] = [];
   const echoUserInput = (text: string): void => {
-    dispatch({ type: "transcript-append", line: `> ${text.trim()}`, role: "user", flush: false });
+    const shown =
+      text.trim().length > 0 ? text.trim() : pendingImages.map((image) => image.mime).join(", ");
+    dispatch({ type: "transcript-append", line: `> ${shown}`, role: "user", flush: false });
     dispatch({ type: "command-error-cleared" });
   };
+  function consumeUserContent(text: string): UserContent {
+    return userContentFrom(text, pendingImages.splice(0, pendingImages.length));
+  }
   let turnInFlight = false;
   let cancelDelivered = false;
   let queueIds = 0;
@@ -1194,7 +1201,7 @@ async function runTui(
     currentTurn = runTurn(
       {
         ...liveState.session,
-        messages: withUserTurn(liveState.session.messages, prompt),
+        messages: withUserTurn(liveState.session.messages, consumeUserContent(prompt)),
       },
       prompt,
     );
@@ -1894,7 +1901,7 @@ async function runTui(
       currentTurn = runTurn(
         {
           ...liveState.session,
-          messages: withUserTurn(liveState.session.messages, task),
+          messages: withUserTurn(liveState.session.messages, consumeUserContent(task)),
         },
         task,
       );
@@ -1930,7 +1937,7 @@ async function runTui(
       return;
     }
     const trimmed = value.trim();
-    if (trimmed.length === 0) return;
+    if (trimmed.length === 0 && pendingImages.length === 0) return;
     const bangCommand = parseBangLine(trimmed);
     if (bangCommand !== undefined) {
       echoUserInput(value);
@@ -2007,7 +2014,7 @@ async function runTui(
           currentTurn = runTurn(
             {
               ...liveState.session,
-              messages: withUserTurn(liveState.session.messages, prompt),
+              messages: withUserTurn(liveState.session.messages, consumeUserContent(prompt)),
             },
             prompt,
           );
@@ -2039,7 +2046,7 @@ async function runTui(
       currentTurn = runTurn(
         {
           ...liveState.session,
-          messages: withUserTurn(liveState.session.messages, trimmed),
+          messages: withUserTurn(liveState.session.messages, consumeUserContent(trimmed)),
         },
         trimmed,
       );
@@ -2058,6 +2065,7 @@ async function runTui(
     }
     if (command.mutatesRunState === true) turnInFlight = true;
     const sessionIdBeforeCommand = liveState.session.id;
+    const messagesBeforeCommand = liveState.session.messages;
     const foldUsage = (u: LanguageModelUsage): void => {
       usage = {
         inputTokens: addTokens(usage.inputTokens, u.inputTokens),
@@ -2081,8 +2089,9 @@ async function runTui(
           deps,
         );
       }
-      if (name === "/rewind") {
-        resetArchivistForRewind(archivistState, liveState.session.messages);
+      if (liveState.session.messages !== messagesBeforeCommand) {
+        replaceArchivistTranscript(archivistState, liveState.session.messages);
+        ctx.database?.setArchivistCursor(liveState.session.id, archivistState.messageCursor);
       }
     } catch (err) {
       dispatch({
@@ -2137,6 +2146,10 @@ async function runTui(
         home: resolveUserHome(),
       },
       onSubmit,
+      onImagePaste: (image) => {
+        pendingImages.push(image);
+        dispatch({ type: "transcript-append", line: `pasted ${image.mime}`, muted: true });
+      },
       onSessionChange,
       onQuit: quit,
       onEscape,

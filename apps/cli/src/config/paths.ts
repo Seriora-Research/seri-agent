@@ -4,7 +4,6 @@ import { CODEX_SERI_AUTH_FILENAME } from "../auth/codexAuthStore";
 import { CODEX_IGNORE_FILENAME } from "../auth/codexIgnore";
 import { foldsCase } from "../caseFold";
 import { PERMISSIONS_FILENAME } from "../permissions/store";
-import { CONFIG_FILENAME } from "./config";
 import { resolveUserHome } from "./userHome";
 
 export { resolveUserHome } from "./userHome";
@@ -15,6 +14,7 @@ export function getBaseConfigDir(): string {
 
 export const DEFAULT_PROFILE = "default";
 
+export const CONFIG_FILENAME = "config.json";
 export const AGENTS_DIRNAME = "agents";
 export const SKILLS_DIRNAME = "skills";
 export const RULES_DIRNAME = "rules";
@@ -29,33 +29,32 @@ export const DAEMON_DESCRIPTOR_FILENAME = "daemon.json";
 export const DAEMON_LOCK_FILENAME = "daemon.lock";
 
 // install.ps1 writes ~\.seri\bin from $env:USERPROFILE, not $HOME, so HOME≠USERPROFILE on Windows splits the binary and config roots.
-// Lazy: paths.ts reads CONFIG_FILENAME from config.ts and config.ts imports getConfigDir from here; a top-level read throws at import time.
-let reservedProfileNames: ReadonlySet<string> | undefined;
+const RESERVED_PROFILE_NAMES: ReadonlySet<string> = new Set([
+  CONFIG_FILENAME,
+  AUTH_FILENAME,
+  PERMISSIONS_FILENAME,
+  CODEX_IGNORE_FILENAME,
+  CODEX_SERI_AUTH_FILENAME,
+  "sessions",
+  "checkpoints",
+  "rg",
+  "bin",
+  AGENTS_DIRNAME,
+  SKILLS_DIRNAME,
+  RULES_DIRNAME,
+  MCP_DIRNAME,
+  HOOKS_DIRNAME,
+  MEMORIES_DIRNAME,
+  PENDING_DIRNAME,
+  TRAJECTORIES_DIRNAME,
+  PLANS_DIRNAME,
+  DATABASE_FILENAME,
+  DAEMON_DESCRIPTOR_FILENAME,
+  DAEMON_LOCK_FILENAME,
+]);
+
 export function getReservedProfileNames(): ReadonlySet<string> {
-  reservedProfileNames ??= new Set([
-    CONFIG_FILENAME,
-    AUTH_FILENAME,
-    PERMISSIONS_FILENAME,
-    CODEX_IGNORE_FILENAME,
-    CODEX_SERI_AUTH_FILENAME,
-    "sessions",
-    "checkpoints",
-    "rg",
-    "bin",
-    AGENTS_DIRNAME,
-    SKILLS_DIRNAME,
-    RULES_DIRNAME,
-    MCP_DIRNAME,
-    HOOKS_DIRNAME,
-    MEMORIES_DIRNAME,
-    PENDING_DIRNAME,
-    TRAJECTORIES_DIRNAME,
-    PLANS_DIRNAME,
-    DATABASE_FILENAME,
-    DAEMON_DESCRIPTOR_FILENAME,
-    DAEMON_LOCK_FILENAME,
-  ]);
-  return reservedProfileNames;
+  return RESERVED_PROFILE_NAMES;
 }
 
 let override: string | undefined;

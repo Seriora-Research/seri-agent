@@ -2,6 +2,7 @@
 import { decodePasteBytes } from "@opentui/core";
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/react";
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
+import type { ImageBytes } from "../../imageParts";
 import { useClipboardPaste } from "../hooks/useClipboardPaste";
 import { FRAME, PAD_X } from "../theme/spacing";
 import { theme } from "../theme/theme";
@@ -47,6 +48,7 @@ export function InputBox({
   bare,
   completionSources,
   arrowsReservedRef,
+  onImagePaste,
 }: {
   onSubmit: (value: string) => void;
   onQuit?: () => void;
@@ -62,6 +64,7 @@ export function InputBox({
   bare?: boolean;
   completionSources?: readonly CompletionSource[];
   arrowsReservedRef?: MutableRefObject<boolean>;
+  onImagePaste?: (image: ImageBytes) => void;
 }) {
   const sources = completionSources ?? EMPTY_SOURCES;
   const { width: rawWidth } = useTerminalDimensions();
@@ -202,7 +205,7 @@ export function InputBox({
   usePaste((event) => insertPastedText(decodePasteBytes(event.bytes)));
 
   // Ctrl-V is not a paste event; share insertPastedText with usePaste.
-  useClipboardPaste(insertPastedText);
+  useClipboardPaste(insertPastedText, inert ? undefined : onImagePaste);
 
   const completion =
     inert || sources.length === 0 || value === dismissedFor

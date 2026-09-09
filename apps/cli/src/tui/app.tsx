@@ -9,6 +9,7 @@ import { ALLOW_UNSANDBOXED_COMMANDS_KEY, configBoolean, configValue } from "../c
 import type { HumanReply } from "../ask-user/types";
 import { type HostedAccountAccess, hostedAccountAccess } from "../auth/hostedAccountAccess";
 import type { PermissionMode } from "../gate/gate";
+import type { ImageBytes } from "../imageParts";
 import type { ApprovalAnswer } from "../loop/loop";
 import type { McpLoginResult } from "../mcp/login";
 import type { McpCatalog } from "../mcp/types";
@@ -76,6 +77,7 @@ export type AppProps = {
   config: Record<string, string>;
   connectDispatch?: (dispatch: Dispatch) => void;
   onSubmit?: (value: string) => void;
+  onImagePaste?: (image: ImageBytes) => void;
   onSessionChange?: (session: SessionState<ModelMessage>) => void;
   onQuit?: () => void;
   onEscape?: () => void;
@@ -171,6 +173,7 @@ export function App({
   config,
   connectDispatch,
   onSubmit,
+  onImagePaste,
   onSessionChange,
   onQuit,
   onEscape,
@@ -612,6 +615,7 @@ export function App({
         <>
           <InputBox
             onSubmit={onSubmit}
+            onImagePaste={onImagePaste}
             onQuit={onQuit}
             onEscape={state.turn !== undefined && !state.queue.editing ? onEscape : undefined}
             prefill={state.pendingInputPrefill}

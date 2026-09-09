@@ -4246,9 +4246,19 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       onWarning: () => {},
       cwd: workTree,
     });
-    snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
+    snapshot.onBeforeMutation({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: "a.txt" },
+      rewindTo: 1,
+    });
     writeFileSync(join(workTree, "a.txt"), "after\n");
-    snapshot({ tool: "write_file", toolCallId: "c2", args: { path: "a.txt" }, rewindTo: 3 });
+    snapshot.onBeforeMutation({
+      tool: "write_file",
+      toolCallId: "c2",
+      args: { path: "a.txt" },
+      rewindTo: 3,
+    });
     writeFileSync(join(workTree, "a.txt"), "final\n");
 
     saveSession(
@@ -4353,7 +4363,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       sessionId: SESSION_ID,
       onWarning: () => {},
       cwd: workTree,
-    })({ tool: "write_file", toolCallId: "c1", args: { path: "old.ts" }, rewindTo: 1 });
+    }).onBeforeMutation({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: "old.ts" },
+      rewindTo: 1,
+    });
     recordWrite(storeDir, join(workTree, "old.ts"), "old\n");
     rmSync(join(workTree, "old.ts"));
     writeFileSync(join(workTree, "new.ts"), "new\n");
@@ -4395,7 +4410,7 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       onWarning: () => {},
     });
     const record = (rewindTo: number) =>
-      snapshot({
+      snapshot.onBeforeMutation({
         tool: "write_file",
         toolCallId: `c${rewindTo}`,
         args: { path: join(workTree, "a.txt") },
@@ -4453,9 +4468,19 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
         onWarning: () => {},
         cwd: workTree2,
       });
-      snapshot({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "write_file",
+        toolCallId: "c1",
+        args: { path: "a.txt" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree2, "a.txt"), "after\n");
-      snapshot({ tool: "write_file", toolCallId: "c2", args: { path: "a.txt" }, rewindTo: 3 });
+      snapshot.onBeforeMutation({
+        tool: "write_file",
+        toolCallId: "c2",
+        args: { path: "a.txt" },
+        rewindTo: 3,
+      });
       writeFileSync(join(workTree2, "a.txt"), "final\n");
       saveSession(
         { id: SESSION_ID, cwd: workTree2, systemPrompt: "", permissionMode: "auto", messages },
@@ -4483,7 +4508,12 @@ describe.skipIf(!isGitAvailable())("run (/undo and /rewind)", () => {
       sessionId: SESSION_ID,
       onWarning: () => {},
       cwd: workTree,
-    })({ tool: "write_file", toolCallId: "c1", args: { path: "a.txt" }, rewindTo: 9 });
+    }).onBeforeMutation({
+      tool: "write_file",
+      toolCallId: "c1",
+      args: { path: "a.txt" },
+      rewindTo: 9,
+    });
     saveSession(
       {
         id: SESSION_ID,

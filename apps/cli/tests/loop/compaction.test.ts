@@ -184,6 +184,20 @@ describe("estimateTokens additivity", () => {
     for (const message of messages) running += estimateTokens(message);
     expect(running).toBe(estimateTokens(messages));
   });
+
+  test("a file part counts the tagged base64 payload, not zero", () => {
+    const data = "a".repeat(400);
+    const messages: ModelMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "see" },
+          { type: "file", mediaType: "image/png", data: { type: "data", data } },
+        ],
+      },
+    ];
+    expect(estimateTokens(messages)).toBe(Math.ceil("see".length / 4) + Math.ceil(data.length / 4));
+  });
 });
 
 describe("compactMessages", () => {

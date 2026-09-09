@@ -346,9 +346,6 @@ export async function driveLoop(
   ): Promise<ArchivistReport | undefined> {
     const overlay = overlayFor("archivist");
     return enqueueArchivist(archivistState, async () => {
-      if (archivistState.messageCursor > archivistState.messages.length) {
-        archivistState.messageCursor = 0;
-      }
       if (
         trigger === "near-compaction" &&
         archivistState.messageCursor >= archivistState.messages.length

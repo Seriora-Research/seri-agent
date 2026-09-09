@@ -581,6 +581,28 @@ describe("mapRawCatalog: reasoning_options", () => {
   });
 });
 
+describe("mapRawCatalog: acceptsImageInput", () => {
+  test("sets the flag only when modalities.input includes image", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
+        vision: validModel({
+          id: "vision",
+          name: "Vision",
+          modalities: { input: ["text", "image"], output: ["text"] },
+        }),
+        text: validModel({
+          id: "text",
+          name: "Text",
+          attachment: true,
+        }),
+      }),
+    );
+
+    expect(entries.find((e) => e.id === "vision")?.acceptsImageInput).toBe(true);
+    expect(entries.find((e) => e.id === "text")?.acceptsImageInput).toBeUndefined();
+  });
+});
+
 describe("findCatalogEntry", () => {
   test("finds an entry by id and provider", () => {
     expect(findCatalogEntry(fallbackManifest, "fallback-model", "groq")).toEqual(

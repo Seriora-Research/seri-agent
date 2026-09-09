@@ -167,6 +167,8 @@ describe("buildSystemPrompt", () => {
     expect(scheduled).toContain("`read_file`");
     expect(scheduled).toContain("`grep`");
     expect(scheduled).toContain("`glob`");
+    expect(scheduled).not.toContain("PNG");
+    expect(attended).toContain("PNG");
   });
 
   test("the assembled system prompt prefers dedicated tools over a shell for file work", () => {

@@ -77,10 +77,11 @@ function preparedStub(): PreparedRun {
       credential: "key",
     },
     plan: null,
-    checkpointer: Object.assign(() => {}, {
+    checkpointer: {
+      onBeforeMutation: () => {},
       onAfterMutation: () => {},
       invalidate: () => {},
-    }),
+    },
     verifyConfig: loadVerifyConfig(dir),
     memory: loadMemory({ configDir: dir, worktree: dir }),
     agents: builtinRegistry(),
@@ -552,10 +553,11 @@ describe("driveLoop directDispatch", () => {
   test("a mutating agent takes the pre-dispatch snapshot, anchored where the user row lands", async () => {
     const prepared = preparedStub();
     const snapshots: { rewindTo: number }[] = [];
-    prepared.checkpointer = Object.assign(
-      (context: { rewindTo: number }) => snapshots.push(context),
-      { onAfterMutation: () => {}, invalidate: () => {} },
-    );
+    prepared.checkpointer = {
+      onBeforeMutation: (context) => snapshots.push(context),
+      onAfterMutation: () => {},
+      invalidate: () => {},
+    };
     const toolNames = ["read_file", "bash"] as const;
     await driveLoop(
       prepared,

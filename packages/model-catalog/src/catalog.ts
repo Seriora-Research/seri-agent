@@ -72,6 +72,11 @@ function parseReasoningOptions(value: unknown): ReasoningOption[] | undefined {
   return options.length > 0 ? options : undefined;
 }
 
+function parseAcceptsImageInput(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  return Array.isArray(value.input) && value.input.includes("image");
+}
+
 function parseModel(provider: ModelProvider, raw: unknown): ModelCatalogEntry | undefined {
   if (!isPlainObject(raw)) return undefined;
   if (!isNonEmptyString(raw.id) || !isNonEmptyString(raw.name)) return undefined;
@@ -91,6 +96,7 @@ function parseModel(provider: ModelProvider, raw: unknown): ModelCatalogEntry | 
     toolCall: raw.tool_call,
     reasoning: typeof raw.reasoning === "boolean" ? raw.reasoning : false,
     reasoningOptions: parseReasoningOptions(raw.reasoning_options),
+    ...(parseAcceptsImageInput(raw.modalities) ? { acceptsImageInput: true } : {}),
     pricing: parsePricing(raw.cost),
   };
 }

@@ -171,10 +171,15 @@ export function pruneSessions(storeDir: string, keep?: string): void {
   gc(gitDir);
 }
 
-export type Checkpointer = OnBeforeMutation & {
+export type Checkpointer = {
+  onBeforeMutation: OnBeforeMutation;
   onAfterMutation: OnAfterMutation;
   invalidate: () => void;
 };
+
+type SnapshotCursor =
+  | { snapshotted: false; tree?: string; commit?: string }
+  | { snapshotted: true; tree: string; commit: string };
 
 export function createCheckpointer(opts: {
   storeDir: string;
@@ -194,9 +199,7 @@ export function createCheckpointer(opts: {
   let started = false;
   let scoped = false;
   let seq = 0;
-  let previousTree: string | undefined;
-  let previousCommit: string | undefined;
-  let snapshottedThisProcess = false;
+  let cursor: SnapshotCursor = { snapshotted: false };
   const pendingWritePaths = new Set<string>();
   let needsFullAdd = false;
 
@@ -214,8 +217,11 @@ export function createCheckpointer(opts: {
 
     const log = readLog(opts.storeDir, opts.sessionId);
     seq = log.filter((record) => record.kind === "tool").length;
-    previousTree = anchored(log).at(-1)?.tree;
-    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
+    cursor = {
+      snapshotted: false,
+      tree: anchored(log).at(-1)?.tree,
+      commit: resolveRef(gitDir, sessionRef(opts.sessionId)),
+    };
     return true;
   }
 
@@ -291,7 +297,7 @@ export function createCheckpointer(opts: {
     if (messages.length > 0) opts.onWarning(messages.join("; "));
   }
 
-  const handler: OnBeforeMutation = (context) => {
+  const onBeforeMutation: OnBeforeMutation = (context) => {
     if (!enabled) return;
 
     try {
@@ -306,27 +312,21 @@ export function createCheckpointer(opts: {
       warnIfNotCheckpointed(context.tool, context.args, context.toolCallId);
 
       const command = commandOf(context.args);
-      const mustSnapshot =
-        context.tool === "write_file" ||
-        !snapshottedThisProcess ||
-        command === undefined ||
-        isDestructiveCommand(command);
+      const mayChangeTree =
+        context.tool === "write_file" || command === undefined || isDestructiveCommand(command);
 
       const declared =
         context.tool === "write_file" ? (context.args as { path?: unknown }).path : undefined;
       const writeRel = typeof declared === "string" ? writePathRel(declared) : undefined;
-      const pathScoped =
-        mustSnapshot && context.tool === "write_file" && snapshottedThisProcess && !needsFullAdd;
-      const restage = pathScoped
-        ? [
-            ...new Set([...pendingWritePaths, ...(writeRel !== undefined ? [writeRel] : [])]),
-          ].filter((rel) => existsSync(join(opts.worktree, rel)))
-        : undefined;
-      const tree = mustSnapshot
-        ? writeTree(gitDir, opts.worktree, restage)
-        : (previousTree as string);
-      if (mustSnapshot) {
-        snapshottedThisProcess = true;
+      let tree: string;
+      if (!cursor.snapshotted || mayChangeTree) {
+        const pathScoped = cursor.snapshotted && context.tool === "write_file" && !needsFullAdd;
+        const restage = pathScoped
+          ? [
+              ...new Set([...pendingWritePaths, ...(writeRel !== undefined ? [writeRel] : [])]),
+            ].filter((rel) => existsSync(join(opts.worktree, rel)))
+          : undefined;
+        tree = writeTree(gitDir, opts.worktree, restage);
         if (!pathScoped) pendingWritePaths.clear();
         needsFullAdd = context.tool !== "write_file";
         if (writeRel !== undefined) pendingWritePaths.add(writeRel);
@@ -334,12 +334,15 @@ export function createCheckpointer(opts: {
           scoped = true;
           warnAboutScope();
         }
+      } else {
+        tree = cursor.tree;
       }
-      if (tree !== previousTree || previousCommit === undefined) {
-        previousCommit = commitTree(gitDir, opts.worktree, tree, previousCommit);
-        updateRef(gitDir, sessionRef(opts.sessionId), previousCommit);
-        previousTree = tree;
+      let commit = cursor.commit;
+      if (tree !== cursor.tree || commit === undefined) {
+        commit = commitTree(gitDir, opts.worktree, tree, commit);
+        updateRef(gitDir, sessionRef(opts.sessionId), commit);
       }
+      cursor = { snapshotted: true, tree, commit };
 
       append(opts.storeDir, opts.sessionId, {
         kind: "tool",
@@ -347,7 +350,7 @@ export function createCheckpointer(opts: {
         toolCallId: context.toolCallId,
         tool: context.tool,
         tree,
-        commit: previousCommit,
+        commit,
         rewindTo: context.rewindTo,
         at: new Date().toISOString(),
       });
@@ -370,25 +373,31 @@ export function createCheckpointer(opts: {
   };
 
   const invalidate = (): void => {
-    previousTree = undefined;
-    snapshottedThisProcess = false;
+    cursor = { snapshotted: false, commit: cursor.commit };
     pendingWritePaths.clear();
     needsFullAdd = false;
-    previousCommit = resolveRef(gitDir, sessionRef(opts.sessionId));
+    cursor.commit = resolveRef(gitDir, sessionRef(opts.sessionId));
   };
 
-  return Object.assign(handler, { onAfterMutation, invalidate });
+  return { onBeforeMutation, onAfterMutation, invalidate };
 }
 
 function toolRecords(log: CheckpointRecord[]): ToolRecord[] {
   return log.filter((record): record is ToolRecord => record.kind === "tool");
 }
 
-function newestDistinct<T, K>(records: T[], key: (record: T) => K): T[] {
-  const byKey = new Map<K, T>();
-  for (const record of [...records].reverse())
-    if (!byKey.has(key(record))) byKey.set(key(record), record);
-  return [...byKey.values()];
+function newestFirstBy<T, K>(records: T[], keyOf: (record: T) => K): T[] {
+  const seen = new Set<K>();
+  const ranked: T[] = [];
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i];
+    if (record === undefined) continue;
+    const key = keyOf(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    ranked.push(record);
+  }
+  return ranked;
 }
 
 export type RestorePlan = {
@@ -414,7 +423,7 @@ type RestoreOpts = {
 };
 
 function ignoredSince(log: CheckpointRecord[], index: number): string[] {
-  return newestDistinct(
+  return newestFirstBy(
     log.slice(index).filter((record) => record.kind === "ignored"),
     (record) => record.path,
   ).map((record) => record.path);
@@ -491,7 +500,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
 
 export function undoFiles(opts: RestoreOpts & { steps: number }): RestoreResult {
   const log = readLog(opts.storeDir, opts.sessionId);
-  const targets = newestDistinct(toolRecords(log), (record) => record.tree);
+  const targets = newestFirstBy(toolRecords(log), (record) => record.tree);
   const target = targets[opts.steps - 1];
   if (target === undefined) {
     throw new Error(
@@ -509,25 +518,31 @@ export function restoreCommit(opts: RestoreOpts & { commit: string }): RestoreRe
   return restoreTo(opts, opts.commit, ignoredSince(readLog(opts.storeDir, opts.sessionId), 0));
 }
 
+function lastBarrier(log: CheckpointRecord[]): { index: number; cause: BarrierCause } | undefined {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const record = log[i];
+    if (record === undefined) continue;
+    if (record.kind === "compaction-barrier") return { index: i, cause: "compaction" };
+    if (record.kind === "rewind-barrier") return { index: i, cause: "rewind" };
+  }
+  return undefined;
+}
+
 export function rewindConversation(opts: { storeDir: string; sessionId: string; steps: number }): {
   rewindTo: number;
 } {
   const log = readLog(opts.storeDir, opts.sessionId);
-
-  let barrier = -1;
-  let barrierCause: BarrierCause | undefined;
-  for (const [index, record] of log.entries()) {
-    if (record.kind === "compaction-barrier") [barrier, barrierCause] = [index, "compaction"];
-    if (record.kind === "rewind-barrier") [barrier, barrierCause] = [index, "rewind"];
-  }
-
-  const anchors = newestDistinct(toolRecords(log.slice(barrier + 1)), (record) => record.rewindTo);
+  const barrier = lastBarrier(log);
+  const anchors = newestFirstBy(
+    toolRecords(log.slice((barrier?.index ?? -1) + 1)),
+    (record) => record.rewindTo,
+  );
   const rewindTo = anchors[opts.steps - 1]?.rewindTo;
   if (rewindTo === undefined) {
     throw new Error(
-      barrierCause === undefined
+      barrier === undefined
         ? `This session has ${anchors.length} point(s) to rewind to; asked for ${opts.steps}.`
-        : barrierCause === "compaction"
+        : barrier.cause === "compaction"
           ? `This session only has ${anchors.length} point(s) to rewind to since the last compaction; anything older than that was summarized away by compaction and cannot be restored.`
           : `This session only has ${anchors.length} point(s) to rewind to since the last rewind; anything older than that points into messages that rewind removed.`,
     );

@@ -203,6 +203,31 @@ describe("Ctrl-V", () => {
     expect(setup.captureCharFrame()).not.toContain("PNG");
   });
 
+  test("an image representation is handed to onImagePaste instead of the input box", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    nextRead = async () => ({
+      status: "read",
+      representation: { mimeType: "image/png", bytes: png },
+    });
+    const seen: Array<{ mime: string; bytes: Uint8Array }> = [];
+    const setup = await mount(
+      <InputBox
+        onSubmit={() => {}}
+        onImagePaste={(image) => {
+          seen.push(image);
+        }}
+      />,
+    );
+
+    setup.mockInput.pressKey("v", { ctrl: true });
+    await flush(setup);
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    await flush(setup);
+
+    expect(seen).toEqual([{ mime: "image/png", bytes: png }]);
+    expect(setup.captureCharFrame()).not.toContain("PNG");
+  });
+
   test("a read that lands after the surface is gone is dropped, and a failing one is survived", async () => {
     let release: (() => void) | undefined;
     const late = clipboardHolding("late");
