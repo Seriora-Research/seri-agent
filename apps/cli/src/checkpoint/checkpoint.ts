@@ -373,7 +373,7 @@ export function createCheckpointer(opts: {
   };
 
   const invalidate = (): void => {
-    cursor = { snapshotted: false };
+    cursor = { snapshotted: false, commit: cursor.commit };
     pendingWritePaths.clear();
     needsFullAdd = false;
     cursor.commit = resolveRef(gitDir, sessionRef(opts.sessionId));

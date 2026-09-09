@@ -974,7 +974,7 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
 
 describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
   test(
-    "re-derives previousCommit from the session ref, so a checkpoint taken after a restore chains onto it",
+    "re-reads the session ref, so a checkpoint taken after a restore chains onto it",
     () => {
       const snapshot = checkpointer();
       snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
@@ -1105,6 +1105,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     () => {
       const snapshot = checkpointer();
       snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
+      const parent = toolRecords()[0]?.commit ?? "";
 
       const originalPath = process.env.PATH;
       const noGitPath = mkdtempSync(join(tmpdir(), "seri-no-git-"));
@@ -1128,7 +1129,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
         rewindTo: 2,
       });
 
-      expect(toolRecords()[1]?.tree).toMatch(/^[0-9a-f]{40}$/);
+      const gitDir = join(storeDir, "git");
+      const next = toolRecords()[1];
+      expect(plainGit(gitDir, ["show", `${next?.tree}:a.txt`])).toBe("after-throw\n");
+      expect(
+        plainGit(gitDir, ["rev-list", next?.commit ?? ""])
+          .split("\n")
+          .filter(Boolean),
+      ).toContain(parent);
     },
     GIT_TEST_TIMEOUT_MS,
   );
