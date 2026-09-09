@@ -217,6 +217,7 @@ export async function driveLoop(
     provider: ModelProvider;
     modelId: string;
     contextWindowSize: number | undefined;
+    maxOutputTokens: number | undefined;
     reasoningEffort: string | undefined;
     inherited: boolean;
     credential: typeof route.credential;
@@ -274,6 +275,9 @@ export async function driveLoop(
       contextWindowSize: actual.inherited
         ? catalogEntry?.contextWindow
         : findCatalogEntry(catalog, actual.model, actual.provider)?.contextWindow,
+      maxOutputTokens: actual.inherited
+        ? catalogEntry?.maxOutputTokens
+        : findCatalogEntry(catalog, actual.model, actual.provider)?.maxOutputTokens,
       reasoningEffort: effortForChild(
         { provider: route.provider, modelId: route.model, reasoningEffort },
         { provider: actual.provider, modelId: actual.model },
@@ -302,6 +306,7 @@ export async function driveLoop(
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
     compactionThreshold,
+    maxOutputTokens: catalogEntry?.maxOutputTokens,
     system,
     agents: prepared.agents,
     permissionMode: getPermissionMode,
@@ -369,6 +374,7 @@ export async function driveLoop(
         route: { model: overlay.modelId, provider: overlay.provider },
         catalog,
         contextWindow: overlay.contextWindowSize ?? catalogEntry?.contextWindow,
+        maxOutputTokens: overlay.maxOutputTokens ?? catalogEntry?.maxOutputTokens,
         signal,
         onWarning: printWarning,
         reasoningEffort: overlay.reasoningEffort,
@@ -451,6 +457,7 @@ export async function driveLoop(
           catalog,
           contextWindowSize: catalogEntry?.contextWindow,
           compactionThreshold,
+          maxOutputTokens: catalogEntry?.maxOutputTokens,
           reasoningEffort,
           temperature: samplingConfig.temperature,
           seed: samplingConfig.seed,

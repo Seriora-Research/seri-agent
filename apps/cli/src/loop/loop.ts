@@ -96,6 +96,18 @@ const MAX_CONSECUTIVE_DENIALS = 3;
 export const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 
+// The advertised window includes reserved max output; compact against the remainder.
+export function usableInputTokens(
+  contextWindow: number,
+  maxOutputTokens: number | undefined,
+): number {
+  if (maxOutputTokens === undefined || !Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0) {
+    return contextWindow;
+  }
+  if (maxOutputTokens >= contextWindow) return contextWindow;
+  return contextWindow - maxOutputTokens;
+}
+
 const MAX_SERIALISED_ERROR_LENGTH = 500;
 
 // Groq (and other providers) reject with a plain object whose String() is "[object Object]"; JSON.stringify throws on cycles.
@@ -291,6 +303,7 @@ export async function* runLoop(opts: {
   maxIterations?: number;
   system?: string;
   contextWindowSize?: number;
+  maxOutputTokens?: number;
   compactionThreshold?: number;
   preserveRecentTokens?: number;
   signal?: AbortSignal;
@@ -316,6 +329,8 @@ export async function* runLoop(opts: {
       : undefined;
   const contextWindowSize =
     opts.contextWindowSize ?? catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE;
+  const maxOutputTokens = opts.maxOutputTokens ?? catalogEntry?.maxOutputTokens;
+  const usableInput = usableInputTokens(contextWindowSize, maxOutputTokens);
   const legalReasoningEffort = appliedReasoningEffort(opts.reasoningEffort, catalogEntry);
   const sampling = resolveSampling(opts.provider, opts.credential, {
     temperature: opts.temperature,
@@ -387,7 +402,7 @@ export async function* runLoop(opts: {
     }
 
     const tokens = Math.max(lastInputTokens, estimatedTokens);
-    if (tokens / contextWindowSize >= compactionThreshold) {
+    if (tokens / usableInput >= compactionThreshold) {
       const thresholdOutcome = yield* tryCompact("soft");
       if (thresholdOutcome === "aborted") return;
     }

@@ -701,6 +701,7 @@ describe("dispatch_subagents", () => {
         catalog,
         contextWindowSize: 12345,
         compactionThreshold: 0.8,
+        maxOutputTokens: 67890,
         permissionMode: () => liveMode,
         allowedTools: ["write_file"],
         system: "PARENT SYSTEM TIERS",
@@ -722,6 +723,7 @@ describe("dispatch_subagents", () => {
     expect(opts.catalog).toBe(catalog);
     expect(opts.contextWindowSize).toBe(12345);
     expect(opts.compactionThreshold).toBe(0.8);
+    expect(opts.maxOutputTokens).toBe(67890);
     expect(opts.system?.startsWith("PARENT SYSTEM TIERS")).toBe(true);
     expect(opts.system).toContain('"tester" subagent');
     expect(opts.reasoningEffort).toBe("medium");
@@ -782,6 +784,7 @@ describe("dispatch_subagents", () => {
             provider: "anthropic",
             modelId: "claude-sonnet-5",
             contextWindowSize: 200_000,
+            maxOutputTokens: 32_000,
             reasoningEffort: undefined,
             inherited: false,
           };
@@ -797,6 +800,7 @@ describe("dispatch_subagents", () => {
     expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
     expect(calls[0].opts.model).toBe(childModel);
     expect(calls[0].opts.contextWindowSize).toBe(200_000);
+    expect(calls[0].opts.maxOutputTokens).toBe(32_000);
 
     expect(calls[0].opts.reasoningEffort).toBeUndefined();
     expect(result.results[0].model).toBe("claude-sonnet-5");

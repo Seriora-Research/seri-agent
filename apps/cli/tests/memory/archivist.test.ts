@@ -517,7 +517,62 @@ describe("maybeRunArchivist", () => {
     });
 
     expect(calls[0]?.opts.contextWindowSize).toBe(8_000);
+    expect(calls[0]?.opts.maxOutputTokens).toBe(1_024);
     expect(calls[0]?.opts.modelId).toBe("cheap-model");
+  });
+
+  test("near-compaction fires against usable input after subtracting maxOutputTokens", async () => {
+    const ctx = makeCtx();
+    const { fake, calls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const s = createArchivistState(emptySession());
+    setMessages(s, [{ role: "user", content: "task" }]);
+    s.toolCallsSinceRun = 1;
+    s.lastInputTokens = 2_701;
+
+    const report = await maybeRunArchivist({
+      state: s,
+      ctx,
+      contextWindow: 10_000,
+      maxOutputTokens: 4_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+
+    expect(report?.trigger).toBe("near-compaction");
+    expect(calls).toHaveLength(1);
+
+    const { fake: windowOnly, calls: windowOnlyCalls } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "ok" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const s2 = createArchivistState(emptySession());
+    setMessages(s2, [{ role: "user", content: "task" }]);
+    s2.toolCallsSinceRun = 1;
+    s2.lastInputTokens = 2_701;
+    const skipped = await maybeRunArchivist({
+      state: s2,
+      ctx,
+      contextWindow: 10_000,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: windowOnly as unknown as typeof runLoop,
+    });
+    expect(skipped).toBeUndefined();
+    expect(windowOnlyCalls).toHaveLength(0);
   });
 
   test("an env archivist pin is the pair nested runLoop sees, and archivist is still not dispatchable", async () => {
@@ -851,12 +906,14 @@ describe("runArchivist", () => {
       route: { model: "test-model", provider: "groq" },
       catalog: catalogFor(),
       contextWindow: 42_000,
+      maxOutputTokens: 7_777,
       signal: new AbortController().signal,
       onWarning: () => {},
       runLoop: fake as unknown as typeof runLoop,
     });
 
     expect(calls[0]?.opts.contextWindowSize).toBe(42_000);
+    expect(calls[0]?.opts.maxOutputTokens).toBe(7_777);
   });
 
   test("threads its own reasoningEffort into the child runLoop's opts.reasoningEffort", async () => {

@@ -3,7 +3,7 @@ import { APICallError } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { isContextOverflowError } from "../../src/loop/compaction";
-import { type LoopEvent, runLoop } from "../../src/loop/loop";
+import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
   collect,
   makeTools,
@@ -399,5 +399,131 @@ describe("runLoop compaction trigger", () => {
 
     expect(order[0]).toBe("archivist");
     expect(order).toContain("summarizer");
+  });
+
+  test("subtracts maxOutputTokens so a mid-band history compacts; the same history does not without it", async () => {
+    const messages = fatHistory(12, 1_200);
+    const withOutput = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => summaryGenerate(),
+    });
+    const compacted = await collect(
+      runLoop({
+        model: withOutput,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 10_000,
+        maxOutputTokens: 4_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+      }),
+    );
+    expect(compacted.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(withOutput.doGenerateCalls).toHaveLength(1);
+
+    const windowOnly = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => {
+        throw new Error("summarizer must not run");
+      },
+    });
+    const skipped = await collect(
+      runLoop({
+        model: windowOnly,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+      }),
+    );
+    expect(skipped.filter((e) => e.type === "compacted")).toHaveLength(0);
+    expect(windowOnly.doGenerateCalls).toHaveLength(0);
+  });
+
+  test("maxOutputTokens at or above the window does not shrink usable input", async () => {
+    const messages = fatHistory(12, 1_200);
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => {
+        throw new Error("summarizer must not run");
+      },
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 10_000,
+        maxOutputTokens: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(0);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  test("catalog maxOutputTokens subtracts when opts omit window and output", async () => {
+    const messages = fatHistory(12, 1_200);
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => summaryGenerate(),
+    });
+    const catalog = {
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      entries: [
+        {
+          id: "usable-input-model",
+          provider: "groq" as const,
+          displayName: "Usable Input Model",
+          family: "test",
+          contextWindow: 10_000,
+          maxOutputTokens: 4_000,
+          toolCall: true,
+          reasoning: false,
+          pricing: undefined,
+        },
+      ],
+    };
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        provider: "groq",
+        modelId: "usable-input-model",
+        catalog,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+});
+
+describe("usableInputTokens", () => {
+  test("returns the advertised window when output is missing, zero, or at least the window", () => {
+    expect(usableInputTokens(100, undefined)).toBe(100);
+    expect(usableInputTokens(100, 0)).toBe(100);
+    expect(usableInputTokens(100, 100)).toBe(100);
+    expect(usableInputTokens(100, 200)).toBe(100);
+  });
+
+  test("subtracts a smaller positive output from the window", () => {
+    expect(usableInputTokens(100, 30)).toBe(70);
   });
 });

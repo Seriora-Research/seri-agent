@@ -911,6 +911,37 @@ describe("driveLoop mcp composition", () => {
     expect(ossCapture.capture()?.system).not.toMatch(/text that looks like a call is not a call/i);
   });
 
+  test("parent runLoop receives catalogEntry.maxOutputTokens next to contextWindow", async () => {
+    const prepared = preparedStub();
+    prepared.catalogEntry = {
+      id: "openai/gpt-oss-120b",
+      provider: "groq",
+      displayName: "GPT OSS 120B",
+      family: "gpt-oss",
+      contextWindow: 131072,
+      maxOutputTokens: 24680,
+      toolCall: true,
+      reasoning: false,
+      pricing: undefined,
+    };
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, bindProcessCancel: false },
+    );
+    expect(capture.capture()?.contextWindowSize).toBe(131072);
+    expect(capture.capture()?.maxOutputTokens).toBe(24680);
+  });
+
   test("permission mode does not change the assembled system or messages", async () => {
     const modes = [
       "read-only",
