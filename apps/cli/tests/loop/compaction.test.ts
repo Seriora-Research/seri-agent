@@ -148,6 +148,57 @@ describe("findSafeEvictionBoundary", () => {
     expect(messages.slice(5, 8)).toEqual([messages[5], messages[6], messages[7]]);
   });
 
+  test("a packed parallel tool message stays with its assistant when the budget lands on it", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("pad-0"),
+      toolResultMsg("pad-0", "ok"),
+      assistantToolCallMsg("pad-1"),
+      toolResultMsg("pad-1", "ok"),
+      assistantParallelToolCalls(["a", "b"]),
+      {
+        role: "tool",
+        content: ["a", "b"].map((id) => ({
+          type: "tool-result" as const,
+          toolCallId: id,
+          toolName: "write_file",
+          output: { type: "json" as const, value: "ok" },
+        })),
+      },
+      { role: "user", content: "recent" },
+    ];
+    const packed = 6;
+    expect(messages[packed]?.role).toBe("tool");
+    expect(messages[5]?.role).toBe("assistant");
+    const keep = keepTokensForLast(messages, messages.length - packed);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(5);
+    expect(messages.slice(5, 7)).toEqual([messages[5], messages[6]]);
+  });
+
+  test("evicts a tool result that by itself fills the preserve budget, rather than keeping the overflowing pair", () => {
+    const keep = 100;
+    const hugeBody = "H".repeat(4_000);
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("pad-0"),
+      toolResultMsg("pad-0", "ok"),
+      assistantToolCallMsg("pad-1"),
+      toolResultMsg("pad-1", "ok"),
+      assistantToolCallMsg("big"),
+      toolResultMsg("big", hugeBody),
+    ];
+    expect(messages[6]?.role).toBe("tool");
+    expect(estimateTokens(messages[6] as ModelMessage)).toBeGreaterThanOrEqual(keep);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(messages.length);
+    expect(messages.slice(boundary as number)).toEqual([]);
+  });
+
   test("minEvictable still applies after walking back to the assistant", () => {
     const messages: ModelMessage[] = [
       { role: "user", content: "a" },
@@ -155,9 +206,10 @@ describe("findSafeEvictionBoundary", () => {
       toolResultMsg("c0", "ok"),
       assistantToolCallMsg("c1"),
       toolResultMsg("c1", "ok"),
+      { role: "user", content: "recent" },
     ];
     expect(messages[4]?.role).toBe("tool");
-    expect(findSafeEvictionBoundary(messages, keepTokensForLast(messages, 1))).toBeNull();
+    expect(findSafeEvictionBoundary(messages, keepTokensForLast(messages, 2))).toBeNull();
   });
 
   test("returns null when fewer than minEvictable messages would be evicted", () => {

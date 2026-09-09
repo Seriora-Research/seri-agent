@@ -143,10 +143,19 @@ export function findSafeEvictionBoundary(
     boundary--;
     kept += estimateTokens(messages[boundary]!);
   }
-  while (boundary > 0 && messages[boundary]?.role === "tool") {
-    boundary--;
+  const landed = messages[boundary];
+  if (landed?.role === "tool") {
+    if (estimateTokens(landed) >= keepRecentTokens) {
+      while (boundary < messages.length && messages[boundary]?.role === "tool") {
+        boundary++;
+      }
+    } else {
+      while (boundary > 0 && messages[boundary]?.role === "tool") {
+        boundary--;
+      }
+      if (messages[boundary]?.role === "tool") return null;
+    }
   }
-  if (messages[boundary]?.role === "tool") return null;
   if (boundary < minEvictable) return null;
   return boundary;
 }
