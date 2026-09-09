@@ -217,6 +217,7 @@ export async function driveLoop(
     provider: ModelProvider;
     modelId: string;
     contextWindowSize: number | undefined;
+    maxOutputTokens: number | undefined;
     reasoningEffort: string | undefined;
     inherited: boolean;
     credential: typeof route.credential;
@@ -267,13 +268,15 @@ export async function driveLoop(
       }
     }
     const actual = realizedRoute(intended, route, constructed);
+    const overlayEntry = actual.inherited
+      ? catalogEntry
+      : findCatalogEntry(catalog, actual.model, actual.provider);
     const overlay: RoleOverlay = {
       model: actual.inherited ? model : childModel,
       provider: actual.provider,
       modelId: actual.model,
-      contextWindowSize: actual.inherited
-        ? catalogEntry?.contextWindow
-        : findCatalogEntry(catalog, actual.model, actual.provider)?.contextWindow,
+      contextWindowSize: overlayEntry?.contextWindow,
+      maxOutputTokens: overlayEntry?.maxOutputTokens,
       reasoningEffort: effortForChild(
         { provider: route.provider, modelId: route.model, reasoningEffort },
         { provider: actual.provider, modelId: actual.model },
@@ -302,6 +305,7 @@ export async function driveLoop(
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
     compactionThreshold,
+    maxOutputTokens: catalogEntry?.maxOutputTokens,
     system,
     agents: prepared.agents,
     permissionMode: getPermissionMode,
@@ -369,6 +373,7 @@ export async function driveLoop(
         route: { model: overlay.modelId, provider: overlay.provider },
         catalog,
         contextWindow: overlay.contextWindowSize ?? catalogEntry?.contextWindow,
+        maxOutputTokens: overlay.maxOutputTokens ?? catalogEntry?.maxOutputTokens,
         signal,
         onWarning: printWarning,
         reasoningEffort: overlay.reasoningEffort,
@@ -452,6 +457,7 @@ export async function driveLoop(
           catalog,
           contextWindowSize: catalogEntry?.contextWindow,
           compactionThreshold,
+          maxOutputTokens: catalogEntry?.maxOutputTokens,
           reasoningEffort,
           temperature: samplingConfig.temperature,
           seed: samplingConfig.seed,

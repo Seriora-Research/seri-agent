@@ -17,6 +17,7 @@ export async function flushIdleArchivist(args: {
   route: { model: string; provider: ModelProvider };
   catalog: ModelCatalog;
   contextWindow: number | undefined;
+  maxOutputTokens?: number;
   signal: AbortSignal;
   onWarning: (message: string) => void;
   runLoop?: Parameters<typeof runArchivist>[0]["runLoop"];
@@ -33,6 +34,7 @@ export async function flushIdleArchivist(args: {
     route: args.route,
     catalog: args.catalog,
     contextWindow: args.contextWindow,
+    maxOutputTokens: args.maxOutputTokens,
     signal: args.signal,
     onWarning: args.onWarning,
     forceStage: true,
@@ -69,6 +71,7 @@ export async function flushIdleSession(
     route: { model: route.model, provider: route.provider },
     catalog,
     contextWindow: catalogEntry?.contextWindow,
+    maxOutputTokens: catalogEntry?.maxOutputTokens,
     signal,
     onWarning: (message) => printWarning(message),
     runLoop: deps.runLoop,

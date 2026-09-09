@@ -6,6 +6,7 @@ import {
   DEFAULT_CONTEXT_WINDOW_SIZE,
   type LoopEvent,
   runLoop,
+  usableInputTokens,
 } from "../loop/loop";
 import { type CostReport, reportFromCatalogPricing } from "../provider/cost";
 import type { SessionState } from "../session/session";
@@ -121,17 +122,16 @@ export type ArchivistTrigger = "tool-count" | "near-compaction" | "idle-timeout"
 
 export function shouldRunArchivist(
   state: ArchivistState,
-  contextWindowSize: number | undefined,
+  usableInput: number | undefined,
   compactionThreshold: number,
   enabled: boolean,
 ): ArchivistTrigger | undefined {
   if (!enabled) return undefined;
   if (state.toolCallsSinceRun >= ARCHIVIST_TOOL_CALL_INTERVAL) return "tool-count";
   if (
-    contextWindowSize !== undefined &&
+    usableInput !== undefined &&
     state.lastInputTokens !== undefined &&
-    state.lastInputTokens / contextWindowSize >=
-      compactionThreshold * ARCHIVIST_NEAR_COMPACTION_FRACTION
+    state.lastInputTokens / usableInput >= compactionThreshold * ARCHIVIST_NEAR_COMPACTION_FRACTION
   ) {
     return "near-compaction";
   }
@@ -186,6 +186,7 @@ export async function runArchivist(args: {
   route: { model: string; provider: ModelProvider };
   catalog: ModelCatalog;
   contextWindow: number | undefined;
+  maxOutputTokens?: number;
   reasoningEffort?: string;
   signal: AbortSignal;
   onWarning: (message: string) => void;
@@ -225,6 +226,7 @@ export async function runArchivist(args: {
     catalog: args.catalog,
 
     contextWindowSize: args.contextWindow,
+    maxOutputTokens: args.maxOutputTokens,
     permissionMode: () => "auto",
     allowedTools: [],
     pathDenials: [],
@@ -288,6 +290,7 @@ export async function maybeRunArchivist(args: {
   state: ArchivistState;
   ctx: MemoryContext;
   contextWindow: number | undefined;
+  maxOutputTokens?: number;
 
   compactionThreshold?: number;
   model: LanguageModel;
@@ -311,7 +314,7 @@ export async function maybeRunArchivist(args: {
 
   const trigger = shouldRunArchivist(
     args.state,
-    args.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    usableInputTokens(args.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE, args.maxOutputTokens),
     args.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
     enabled,
   );
@@ -326,6 +329,7 @@ export async function maybeRunArchivist(args: {
     route: args.route,
     catalog: args.catalog,
     contextWindow: childEntry?.contextWindow ?? args.contextWindow,
+    maxOutputTokens: childEntry?.maxOutputTokens ?? args.maxOutputTokens,
     reasoningEffort: args.reasoningEffort,
     signal: args.signal,
     onWarning: args.onWarning,

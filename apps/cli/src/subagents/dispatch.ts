@@ -80,6 +80,7 @@ export type SubagentRuntime = {
   catalog: ModelCatalog;
   contextWindowSize?: number;
   compactionThreshold?: number;
+  maxOutputTokens?: number;
 
   reasoningEffort: string | undefined;
   credential?: RouteCredential;
@@ -108,6 +109,7 @@ export type SubagentRuntime = {
     provider: ModelProvider;
     modelId: string;
     contextWindowSize?: number;
+    maxOutputTokens?: number;
     reasoningEffort: string | undefined;
     inherited: boolean;
     credential?: RouteCredential;
@@ -236,6 +238,7 @@ export async function runSubagent(opts: {
     catalog: runtime.catalog,
     contextWindowSize: runtime.contextWindowSize,
     compactionThreshold: runtime.compactionThreshold,
+    maxOutputTokens: runtime.maxOutputTokens,
     reasoningEffort: runtime.reasoningEffort,
     credential: runtime.credential,
     temperature: runtime.temperature,
@@ -387,6 +390,7 @@ async function runAgentChild(opts: {
             provider: overlay.provider,
             modelId: overlay.modelId,
             contextWindowSize: overlay.contextWindowSize,
+            maxOutputTokens: overlay.maxOutputTokens,
             reasoningEffort: overlay.reasoningEffort,
             credential: overlay.credential ?? runtime.credential,
           },
