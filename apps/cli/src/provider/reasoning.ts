@@ -92,7 +92,6 @@ export function buildReasoningProviderOptions(
   tier: string,
 ): Record<string, Record<string, JSONValue>> {
   if (tier === "off" || tier === "none") {
-    // {} sends no providerOptions, which lets the provider default apply.
     switch (provider) {
       case "anthropic":
         return { anthropic: { thinking: { type: "disabled" } } };
