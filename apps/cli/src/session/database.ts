@@ -5,12 +5,13 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { DATABASE_FILENAME } from "../config/paths";
 import type { PermissionMode } from "../gate/gate";
+import { type CompactCursor, parseCompactCursor } from "../loop/conversation";
 import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
 import type { SessionState } from "./session";
 
 export { DATABASE_FILENAME };
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 const BUSY_TIMEOUT_MS = 5_000;
 
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
@@ -141,6 +142,13 @@ const MIGRATIONS = [
       END;
     `,
   },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE sessions ADD COLUMN compact_window_start INTEGER;
+      ALTER TABLE sessions ADD COLUMN compact_recap_json TEXT;
+    `,
+  },
 ] as const;
 
 type SessionRow = {
@@ -151,8 +159,35 @@ type SessionRow = {
   model: string | null;
   provider: ModelProvider | null;
   reasoning_effort: string | null;
+  compact_window_start: number | null;
+  compact_recap_json: string | null;
   updated_at_ms: number;
 };
+
+function compactFields(compact: CompactCursor | undefined): {
+  windowStart: number | null;
+  recapJson: string | null;
+} {
+  if (compact === undefined || compact.status === "full") {
+    return { windowStart: null, recapJson: null };
+  }
+  return { windowStart: compact.windowStart, recapJson: JSON.stringify(compact.recap) };
+}
+
+function compactFromRow(header: SessionRow, archiveLength: number): CompactCursor | undefined {
+  if (header.compact_window_start === null && header.compact_recap_json === null) return undefined;
+  if (header.compact_window_start === null || header.compact_recap_json === null) {
+    throw new Error(`Session "${header.id}" has a partial compact cursor`);
+  }
+  return parseCompactCursor(
+    {
+      status: "compacted",
+      windowStart: header.compact_window_start,
+      recap: JSON.parse(header.compact_recap_json),
+    },
+    archiveLength,
+  );
+}
 
 type MessageRow = {
   id: number;
@@ -419,6 +454,8 @@ export class SessionDatabase {
     const messages = this.database
       .query("SELECT json FROM messages WHERE session_id = ? ORDER BY seq")
       .all(id) as { json: string }[];
+    const parsed = messages.map((message) => JSON.parse(message.json) as TMessage);
+    const compact = compactFromRow(header, parsed.length);
     return {
       id: header.id,
       cwd: header.cwd,
@@ -427,7 +464,8 @@ export class SessionDatabase {
       ...(header.model !== null ? { model: header.model } : {}),
       ...(header.provider !== null ? { provider: header.provider } : {}),
       ...(header.reasoning_effort !== null ? { reasoningEffort: header.reasoning_effort } : {}),
-      messages: messages.map((message) => JSON.parse(message.json) as TMessage),
+      ...(compact !== undefined ? { compact } : {}),
+      messages: parsed,
     };
   }
 
@@ -857,6 +895,7 @@ export class SessionDatabase {
         commonSuffix++;
       }
     }
+    const compact = compactFields(state.compact);
     const headerChanged =
       existing === null ||
       existing.cwd !== state.cwd ||
@@ -864,7 +903,9 @@ export class SessionDatabase {
       existing.permission_mode !== state.permissionMode ||
       existing.model !== (state.model ?? null) ||
       existing.provider !== (state.provider ?? null) ||
-      existing.reasoning_effort !== (state.reasoningEffort ?? null);
+      existing.reasoning_effort !== (state.reasoningEffort ?? null) ||
+      existing.compact_window_start !== compact.windowStart ||
+      existing.compact_recap_json !== compact.recapJson;
     const messagesChanged = commonPrefix !== messages.length || commonPrefix !== encoded.length;
     if (!headerChanged && !messagesChanged) return;
 
@@ -875,8 +916,9 @@ export class SessionDatabase {
     this.database
       .query(
         `INSERT INTO sessions (
-           id, cwd, system_prompt, permission_mode, model, provider, reasoning_effort, updated_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           id, cwd, system_prompt, permission_mode, model, provider, reasoning_effort,
+           compact_window_start, compact_recap_json, updated_at_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = excluded.cwd,
            system_prompt = excluded.system_prompt,
@@ -884,6 +926,8 @@ export class SessionDatabase {
            model = excluded.model,
            provider = excluded.provider,
            reasoning_effort = excluded.reasoning_effort,
+           compact_window_start = excluded.compact_window_start,
+           compact_recap_json = excluded.compact_recap_json,
            updated_at_ms = excluded.updated_at_ms`,
       )
       .run(
@@ -894,6 +938,8 @@ export class SessionDatabase {
         state.model ?? null,
         state.provider ?? null,
         state.reasoningEffort ?? null,
+        compact.windowStart,
+        compact.recapJson,
         updatedAt,
       );
     if (!messagesChanged) return;
