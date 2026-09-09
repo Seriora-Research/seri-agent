@@ -150,14 +150,14 @@ export function findSafeEvictionBoundary(
   return boundary;
 }
 
-const COMPACT_HISTORY_PREFIX = "[Compacted history —";
+export const COMPACT_HISTORY_PREFIX = "[Compacted history —";
 
 function messageText(message: ModelMessage): string {
   if (typeof message.content === "string") return message.content;
   return "";
 }
 
-function isCompactSummaryMessage(message: ModelMessage | undefined): boolean {
+export function isCompactSummaryMessage(message: ModelMessage | undefined): boolean {
   return message?.role === "user" && messageText(message).startsWith(COMPACT_HISTORY_PREFIX);
 }
 
