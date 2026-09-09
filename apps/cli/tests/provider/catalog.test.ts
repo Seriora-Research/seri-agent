@@ -107,7 +107,32 @@ describe("getModelCatalog", () => {
 
     expect(called).toBe(true);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain("models.dev");
+    expect(errors[0]).toContain("unavailable");
+    expect(errors[0]).not.toContain("could not reach");
+    expect(catalog.entries.length).toBeGreaterThan(0);
+  });
+
+  test("a 200 JSON body with no usable models uses the same fallback warning as a failed fetch", async () => {
+    const emptyFetch: typeof fetch = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      }) as unknown as Response) as unknown as typeof fetch;
+
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    let catalog: Awaited<ReturnType<typeof getModelCatalog>>;
+    try {
+      catalog = await getModelCatalog(emptyFetch);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("unavailable");
+    expect(errors[0]).not.toContain("could not reach");
     expect(catalog.entries.length).toBeGreaterThan(0);
   });
 

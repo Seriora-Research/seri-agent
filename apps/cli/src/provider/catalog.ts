@@ -65,7 +65,7 @@ export async function getModelCatalog(
     printWarning(
       process.env.SERI_DISABLE_MODELS_FETCH
         ? "models.dev fetch disabled by SERI_DISABLE_MODELS_FETCH; using the bundled model catalog"
-        : "could not reach models.dev; using the bundled model catalog",
+        : "live models.dev catalog unavailable; using the bundled model catalog",
       sink,
     );
   }

@@ -120,7 +120,7 @@ describe("loadCatalog", () => {
     else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
   });
 
-  test("fetch success: maps and filters live entries from the five cataloged providers, ignoring other provider keys", async () => {
+  test("fetch success: maps and filters live entries from the cataloged providers, ignoring other provider keys", async () => {
     const catalog = await loadCatalog(fallbackManifest, fakeFetch(rawApiResponse()));
 
     expect(catalog.entries).toEqual([
@@ -248,26 +248,26 @@ describe("loadCatalog", () => {
 
 describe("mapRawCatalog: parse", () => {
   test("empty object throws", () => {
-    expect(() => mapRawCatalog({})).toThrow();
+    expect(() => mapRawCatalog({})).toThrow("catalog JSON had no usable entries");
   });
 
   test("only tool_call false models throw", () => {
     expect(() =>
       mapRawCatalog(groqRaw({ silent: validModel({ id: "silent", tool_call: false }) })),
-    ).toThrow();
+    ).toThrow("catalog JSON had no usable entries");
   });
 
   test("null root throws", () => {
-    expect(() => mapRawCatalog(null)).toThrow();
+    expect(() => mapRawCatalog(null)).toThrow("catalog JSON root is not a plain object");
   });
 
   test("array root throws", () => {
-    expect(() => mapRawCatalog([])).toThrow();
+    expect(() => mapRawCatalog([])).toThrow("catalog JSON root is not a plain object");
   });
 
   test("primitive root throws", () => {
-    expect(() => mapRawCatalog("not-an-object")).toThrow();
-    expect(() => mapRawCatalog(1)).toThrow();
+    expect(() => mapRawCatalog("not-an-object")).toThrow("catalog JSON root is not a plain object");
+    expect(() => mapRawCatalog(1)).toThrow("catalog JSON root is not a plain object");
   });
 
   test("unknown provider keys are ignored", () => {
@@ -447,6 +447,7 @@ describe("mapRawCatalog: parse", () => {
             { type: "effort" },
             { type: "effort", values: {} },
             { type: "effort", values: [] },
+            { type: "effort", values: [""] },
             { type: "effort", values: ["low", 1] },
             { type: "toggle" },
           ],

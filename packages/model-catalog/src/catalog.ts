@@ -52,7 +52,9 @@ function parseReasoningOption(value: unknown): ReasoningOption | undefined {
   if (value.type === "budget_tokens") return { type: "budget_tokens" };
   if (value.type === "effort") {
     if (!Array.isArray(value.values) || value.values.length === 0) return undefined;
-    if (!value.values.every((item): item is string => typeof item === "string")) return undefined;
+    if (!value.values.every((item): item is string => typeof item === "string" && item.length > 0)) {
+      return undefined;
+    }
     return { type: "effort", values: value.values };
   }
   return undefined;
