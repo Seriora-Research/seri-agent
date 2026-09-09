@@ -148,6 +148,21 @@ export function loadTrajectoryConfig(configDir?: string): TrajectoryConfig {
   };
 }
 
+export const COMPACTION_THRESHOLD_CONFIG_KEY = "SERI_COMPACTION_THRESHOLD";
+
+export function parseCompactionThreshold(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 1) return undefined;
+  return parsed;
+}
+
+export function loadCompactionThreshold(configDir?: string): number | undefined {
+  return parseCompactionThreshold(
+    configValue(COMPACTION_THRESHOLD_CONFIG_KEY, loadConfig(configDir)),
+  );
+}
+
 export function persistDefaultReasoningEffort(tier: string, configDir?: string): void {
   setConfigValue("SERI_REASONING_EFFORT", tier, configDir);
 }

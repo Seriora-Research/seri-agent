@@ -74,6 +74,7 @@ export type SubagentRuntime = {
   modelId: string;
   catalog: ModelCatalog;
   contextWindowSize?: number;
+  compactionThreshold?: number;
 
   reasoningEffort: string | undefined;
   credential?: RouteCredential;
@@ -229,6 +230,7 @@ export async function runSubagent(opts: {
     modelId: runtime.modelId,
     catalog: runtime.catalog,
     contextWindowSize: runtime.contextWindowSize,
+    compactionThreshold: runtime.compactionThreshold,
     reasoningEffort: runtime.reasoningEffort,
     credential: runtime.credential,
     temperature: runtime.temperature,

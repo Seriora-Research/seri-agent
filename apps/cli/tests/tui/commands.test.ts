@@ -1359,6 +1359,7 @@ describe("decideConfigOpen", () => {
     "SERI_TUI_BACKGROUND",
     "SERI_ALLOW_UNSANDBOXED_COMMANDS",
     "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES",
+    "SERI_COMPACTION_THRESHOLD",
   ];
   const originalEnv = Object.fromEntries(KNOWN_KEYS.map((name) => [name, process.env[name]]));
 
@@ -1389,6 +1390,7 @@ describe("decideConfigOpen", () => {
       "SERI_TUI_BACKGROUND",
       "SERI_ALLOW_UNSANDBOXED_COMMANDS",
       "SERI_BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES",
+      "SERI_COMPACTION_THRESHOLD",
     ]);
     expect(rows.every((row) => row.source === "unset" && row.removable === false)).toBe(true);
   });
@@ -1481,6 +1483,15 @@ describe("decideConfigOpen", () => {
     expect(configKeyInfo("SERI_REASONING_EFFORT").description.length).toBeLessThanOrEqual(78);
     expect(
       decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_REASONING_EFFORT")?.kind,
+    ).toBe("string");
+  });
+
+  test("SERI_COMPACTION_THRESHOLD has a real label, non-empty description, and kind: string", () => {
+    expect(configKeyInfo("SERI_COMPACTION_THRESHOLD").label).not.toBe("SERI_COMPACTION_THRESHOLD");
+    expect(configKeyInfo("SERI_COMPACTION_THRESHOLD").description).not.toBe("");
+    expect(configKeyInfo("SERI_COMPACTION_THRESHOLD").description.length).toBeLessThanOrEqual(78);
+    expect(
+      decideConfigOpen(configConfigDir).find((r) => r.key === "SERI_COMPACTION_THRESHOLD")?.kind,
     ).toBe("string");
   });
 

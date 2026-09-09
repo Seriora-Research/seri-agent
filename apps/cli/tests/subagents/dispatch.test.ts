@@ -700,6 +700,7 @@ describe("dispatch_subagents", () => {
         modelId: "some/model",
         catalog,
         contextWindowSize: 12345,
+        compactionThreshold: 0.8,
         permissionMode: () => liveMode,
         allowedTools: ["write_file"],
         system: "PARENT SYSTEM TIERS",
@@ -720,6 +721,7 @@ describe("dispatch_subagents", () => {
     expect(opts.modelId).toBe("some/model");
     expect(opts.catalog).toBe(catalog);
     expect(opts.contextWindowSize).toBe(12345);
+    expect(opts.compactionThreshold).toBe(0.8);
     expect(opts.system?.startsWith("PARENT SYSTEM TIERS")).toBe(true);
     expect(opts.system).toContain('"tester" subagent');
     expect(opts.reasoningEffort).toBe("medium");
