@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CATALOG_PROVIDERS } from "@seri/model-catalog";
-import { CONFIG_FILENAME } from "../../src/config/config";
+import { CONFIG_FILENAME } from "../../src/config/paths";
 import {
   isModelProvider,
   persistDefaultModel,

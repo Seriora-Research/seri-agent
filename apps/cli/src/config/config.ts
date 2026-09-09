@@ -1,9 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
-import { getConfigDir } from "./paths";
-
-export const CONFIG_FILENAME = "config.json";
+import { CONFIG_FILENAME, getConfigDir } from "./paths";
 
 function configPath(configDir: string): string {
   return join(configDir, CONFIG_FILENAME);

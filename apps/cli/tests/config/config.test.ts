@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigDir, setProfileOverride } from "../../src/config/paths";
 import {
   BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
-  CONFIG_FILENAME,
   getApiKey,
   inspectConfig,
   loadConfig,
@@ -17,6 +15,7 @@ import {
   standingDenyReadsOutside,
   tuiBackgroundColor,
 } from "../../src/config/config";
+import { CONFIG_FILENAME, getConfigDir, setProfileOverride } from "../../src/config/paths";
 
 const originalHome = process.env.HOME;
 
