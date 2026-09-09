@@ -142,8 +142,8 @@ describe("createCheckpointer (git absent)", () => {
   test("warns once, creates no store, and never throws", () => {
     const snapshot = checkpointer({ gitAvailable: () => false });
 
-    snapshot(mutation());
-    snapshot(mutation({ toolCallId: "c2" }));
+    snapshot.onBeforeMutation(mutation());
+    snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
     expect(warnings).toEqual([
       "git was not found on PATH — edits in this session are not checkpointed and cannot be undone",
@@ -158,8 +158,8 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
     () => {
       const snapshot = checkpointer();
 
-      snapshot(mutation({ toolCallId: "c1" }));
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const records = toolRecords();
       expect(records).toHaveLength(2);
@@ -173,7 +173,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "writes the worktree marker beside the shadow git-dir",
     () => {
-      checkpointer()(mutation());
+      checkpointer().onBeforeMutation(mutation());
 
       expect(readFileSync(join(storeDir, "worktree"), "utf8").trim()).toBe(workTree);
       expect(readFileSync(join(storeDir, "git", "info", "attributes"), "utf8")).toBe("* -text\n");
@@ -188,7 +188,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       const snapshot = checkpointer();
 
       const secret = join(workTree, "secret.log");
-      snapshot(mutation({ args: { path: secret } }));
+      snapshot.onBeforeMutation(mutation({ args: { path: secret } }));
 
       expect(warnings).toEqual([
         `${secret} is gitignored, so it is not checkpointed — /undo cannot restore it`,
@@ -207,11 +207,11 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       const outside = join(root, "notes.md");
       const snapshot = checkpointer();
 
-      snapshot(mutation({ toolCallId: "c1", args: { path: outside } }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1", args: { path: outside } }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       expect(toolRecords()).toHaveLength(3);
       expect(warnings).toEqual([
@@ -246,7 +246,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
         worktree,
         sessionId: SESSION,
         onWarning: (m) => warnings.push(m),
-      })({
+      }).onBeforeMutation({
         tool: "write_file",
         toolCallId: "c1",
         args: { path: join(sub, "a.txt") },
@@ -275,10 +275,10 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       writeFileSync(join(workTree, "local-secret.txt"), "SECRET\n");
 
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
       writeFileSync(join(workTree, "made-later.local"), "notes\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const tree = toolRecords()[0]?.tree ?? "";
       expect(plainGit(join(storeDir, "git"), ["ls-tree", "-r", "--name-only", tree])).not.toContain(
@@ -298,7 +298,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "resolves a declared relative path the way the tool that declared it will",
     () => {
-      checkpointer()(mutation({ args: { path: "a.txt" } }));
+      checkpointer().onBeforeMutation(mutation({ args: { path: "a.txt" } }));
 
       expect(warnings).toEqual([
         `a.txt is outside ${workTree}, so it is not checkpointed — /undo cannot restore it`,
@@ -335,9 +335,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
       );
 
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(nested, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       expect(warnings).toEqual([
         "nested is a nested git repository — changes inside are not checkpointed and /undo will not revert them",
@@ -350,7 +350,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
     "says nothing about a path that is not ignored",
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
-      checkpointer()(mutation({ args: { path: join(workTree, "a.txt") } }));
+      checkpointer().onBeforeMutation(mutation({ args: { path: join(workTree, "a.txt") } }));
 
       expect(warnings).toEqual([]);
     },
@@ -360,9 +360,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "resuming a session keeps appending to the same commit chain",
     () => {
-      checkpointer()(mutation({ toolCallId: "c1" }));
+      checkpointer().onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      checkpointer()(mutation({ toolCallId: "c2" }));
+      checkpointer().onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const records = toolRecords();
       expect(records).toHaveLength(2);
@@ -375,10 +375,15 @@ describe.skipIf(!isGitAvailable())("createCheckpointer", () => {
   test(
     "a resumed session's first call snapshots for real even when it is a non-destructive bash command",
     () => {
-      checkpointer()(mutation({ toolCallId: "c1" }));
+      checkpointer().onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "ls" },
+        rewindTo: 2,
+      });
 
       const records = toolRecords();
       expect(records).toHaveLength(2);
@@ -396,7 +401,12 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "snapshots for real on the very first call of a session, even a harmless bash command",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
 
       const records = toolRecords();
       expect(records).toHaveLength(1);
@@ -411,9 +421,19 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "a non-destructive bash call reuses the previous tree instead of restaging the worktree",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "git status" },
+        rewindTo: 2,
+      });
 
       const records = toolRecords();
       expect(records).toHaveLength(2);
@@ -430,9 +450,19 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "a destructive bash call restages the worktree",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "rm -rf build" }, rewindTo: 2 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "rm -rf build" },
+        rewindTo: 2,
+      });
 
       const records = toolRecords();
       expect(records[1]?.tree).not.toBe(records[0]?.tree);
@@ -455,9 +485,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "a destructive bash call restages the worktree: %s",
     (command) => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command }, rewindTo: 2 });
+      snapshot.onBeforeMutation({ tool: "bash", toolCallId: "c2", args: { command }, rewindTo: 2 });
 
       const records = toolRecords();
       expect(records[1]?.tree).not.toBe(records[0]?.tree);
@@ -472,9 +507,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "a destructive bash call restages the worktree even when split across lines by a backslash continuation",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot({
+      snapshot.onBeforeMutation({
         tool: "bash",
         toolCallId: "c2",
         args: { command: "sed \\\n  -i 's/a/b/' file.txt" },
@@ -494,14 +534,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "a destructive PowerShell call restages the worktree even when split across lines by a backtick continuation",
     () => {
       const snapshot = checkpointer();
-      snapshot({
+      snapshot.onBeforeMutation({
         tool: "powershell",
         toolCallId: "c1",
         args: { command: "Get-ChildItem" },
         rewindTo: 1,
       });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot({
+      snapshot.onBeforeMutation({
         tool: "powershell",
         toolCallId: "c2",
         args: { command: "Copy-Item a.txt b.txt `\n  -Force" },
@@ -521,9 +561,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "write_file after a shell snapshot still restages the whole worktree",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
       writeFileSync(join(workTree, "new.txt"), "new\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const records = toolRecords();
       expect(records[1]?.tree).not.toBe(records[0]?.tree);
@@ -538,10 +583,10 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "later write_file restages a previous write without walking the rest of the worktree",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "first\n");
       writeFileSync(join(workTree, "sneaky.txt"), "unrelated\n");
-      snapshot(
+      snapshot.onBeforeMutation(
         mutation({
           toolCallId: "c2",
           args: { path: join(workTree, "b.txt") },
@@ -567,15 +612,15 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
-      snapshot(
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(
         mutation({
           toolCallId: "c2",
           args: { path: join(workTree, "secret.log") },
         }),
       );
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       expect(toolRecords().map((record) => record.toolCallId)).toEqual(["c1", "c2", "c3"]);
       expect(warnings.some((message) => message.startsWith("checkpointing is off"))).toBe(false);
@@ -590,9 +635,24 @@ describe.skipIf(!isGitAvailable())("createCheckpointer (destructive-command gate
     "still appends one record per call when writeTree is skipped, so /undo's per-call granularity is unaffected",
     () => {
       const snapshot = checkpointer();
-      snapshot({ tool: "bash", toolCallId: "c1", args: { command: "ls" }, rewindTo: 1 });
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "git status" }, rewindTo: 2 });
-      snapshot({ tool: "bash", toolCallId: "c3", args: { command: "pwd" }, rewindTo: 3 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c1",
+        args: { command: "ls" },
+        rewindTo: 1,
+      });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "git status" },
+        rewindTo: 2,
+      });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c3",
+        args: { command: "pwd" },
+        rewindTo: 3,
+      });
 
       expect(toolRecords().map((record) => record.toolCallId)).toEqual(["c1", "c2", "c3"]);
     },
@@ -605,11 +665,11 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "restores the previous state, reports what it touched, and leaves a recovery commit",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
       writeFileSync(join(workTree, "new.txt"), "new\n");
       recordWrite(storeDir, join(workTree, "new.txt"), "new\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const result = undo(2);
 
@@ -630,10 +690,10 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "steps over distinct trees, so a deduped no-op checkpoint is never a step that does nothing",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       expect(toolRecords()).toHaveLength(3);
       undo(2);
@@ -647,12 +707,12 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "ranks a tree that reappears later by its newest occurrence, not its oldest",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v1\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
       undo(2);
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
 
       undo(1);
@@ -666,9 +726,9 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "never counts the state an earlier undo replaced as a step",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
 
       undo(1);
@@ -683,9 +743,9 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "keeps every recovery commit it printed reachable from the session ref",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       writeFileSync(join(workTree, "a.txt"), "v3\n");
       const first = undo(1);
@@ -707,10 +767,12 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       writeFileSync(join(workTree, "secret.log"), "original\n");
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }));
+      snapshot.onBeforeMutation(
+        mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }),
+      );
       writeFileSync(join(workTree, "secret.log"), "mutated\n");
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const result = undo(2);
 
@@ -726,11 +788,13 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     () => {
       writeFileSync(join(workTree, ".gitignore"), "*.log\n");
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }));
+      snapshot.onBeforeMutation(
+        mutation({ toolCallId: "c1", args: { path: join(workTree, "secret.log") } }),
+      );
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       writeFileSync(join(workTree, "a.txt"), "v3\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       expect(undo(1).ignored).toEqual([]);
       expect(undo(3).ignored).toEqual([join(workTree, "secret.log")]);
@@ -742,9 +806,9 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "drops a truncated final log line instead of latching checkpointing off for the session",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
       appendFileSync(join(storeDir, `${SESSION}.jsonl`), '{"kind":"tool","seq":2,"tre');
 
       expect(toolRecords()).toHaveLength(2);
@@ -758,7 +822,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
     "rejects a commit that is not in the store without touching the ref or the log",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       const before = readLog(storeDir, SESSION).length;
 
       expect(() =>
@@ -779,7 +843,7 @@ describe.skipIf(!isGitAvailable())("undoFiles", () => {
   test(
     "refuses to step further back than the session goes",
     () => {
-      checkpointer()(mutation());
+      checkpointer().onBeforeMutation(mutation());
 
       expect(() => undo(5)).toThrow("This session has 1 checkpoint(s) to undo to; asked for 5.");
     },
@@ -792,13 +856,18 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
     "an out-of-band file created after a skipped bash call survives — the file this fix exists for",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
 
       // The gap Repro-B exploited: a non-destructive bash call between the checkpoint and the
       // out-of-band edit reuses the previous tree (DESTRUCTIVE_COMMAND_PATTERNS' own comment), so
       // nothing looks at disk again until the next real snapshot — which never comes, because /undo
       // fires next instead.
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "ls" },
+        rewindTo: 2,
+      });
 
       // Made directly with node:fs, the way a user's own editor would — never through write_file,
       // so it can never have a ledger entry.
@@ -825,11 +894,11 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
     "a file seri actually wrote through write_file, and that legitimately should not exist after the restore, is still deleted",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
 
       writeFileSync(join(workTree, "seri-made.txt"), "seri wrote this\n");
       recordWrite(storeDir, join(workTree, "seri-made.txt"), "seri wrote this\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       // c2 snapshotted write_file of a.txt, so the new file is not in that tree — the two
       // records share one filesystem checkpoint, and one undo step lands on "before".
@@ -846,11 +915,11 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
     "a file seri wrote, then something else modified afterward, is preserved rather than deleted",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
 
       writeFileSync(join(workTree, "written-then-edited.txt"), "seri's content\n");
       recordWrite(storeDir, join(workTree, "written-then-edited.txt"), "seri's content\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       // Edited by something else after seri wrote it — the ledger's hash no longer matches what is
       // on disk.
@@ -875,11 +944,11 @@ describe.skipIf(!isGitAvailable())("undoFiles (write-ledger deletion gate)", () 
     "a file that passed the ledger check but was modified before the actual delete is preserved, not deleted",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" })); // captures "before" — where /undo will land
 
       writeFileSync(join(workTree, "raced.txt"), "seri's content\n");
       recordWrite(storeDir, join(workTree, "raced.txt"), "seri's content\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const result = undoFiles({
         storeDir,
@@ -908,17 +977,17 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     "re-derives previousCommit from the session ref, so a checkpoint taken after a restore chains onto it",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       // undoFiles moves the session ref on its own, exactly as restoreTo does in production — this
-      // closure's own previousCommit has no way to know that happened without invalidate().
+      // closure's own cursor has no way to know that happened without invalidate().
       const result = undo(1);
 
       snapshot.invalidate();
       writeFileSync(join(workTree, "a.txt"), "v3\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       // The new checkpoint must chain onto the pre-undo commit restoreTo minted — proving
       // invalidate() re-read the ref rather than parenting the next commit on the stale,
@@ -946,11 +1015,11 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     "invalidate() still lets the next checkpoint chain onto the pre-undo commit when the restore itself threw",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       const c1Tree = toolRecords().at(-1)?.tree ?? "";
 
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       // checkout-index needs a.txt's blob from c1's tree to restore it — deleting the loose object
       // makes that read fail the same way on every platform, unlike a permission-based throw.
@@ -973,7 +1042,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       expect(threw).toBeDefined();
 
       writeFileSync(join(workTree, "a.txt"), "after-throw\n");
-      snapshot(mutation({ toolCallId: "c3" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3" }));
 
       // The pre-undo commit was minted (and the ref moved) before applyRestore threw — readLog,
       // not undo()'s return value, since the throw meant undo(2) above never returned one.
@@ -1000,11 +1069,11 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     "clears the EOL cache even when the restore itself threw",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
       const c1Tree = toolRecords().at(-1)?.tree ?? "";
 
       writeFileSync(join(workTree, "a.txt"), "v2\n");
-      snapshot(mutation({ toolCallId: "c2" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
       const gitDir = join(storeDir, "git");
       const blob = plainGit(gitDir, ["ls-tree", c1Tree, "--", "a.txt"]).split(/\s+/)[2] ?? "";
@@ -1028,9 +1097,9 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
   // resolveRef itself throwing (git failing to even spawn, per shadowGit.ts's spawnGit) is a
   // narrower trigger than a non-zero exit — PATH pointed at a directory with no `git` in it so
   // `spawnSync("git", ...)` cannot find the binary at all, the one case shadowGit.ts's own run()
-  // throws rather than returning a failed GitResult. Proves snapshottedThisProcess is reset before
-  // that throw, not after: a stale `true` there would make the next non-destructive, non-write_file
-  // call skip writeTree and reuse previousTree — already cleared to undefined by this point —
+  // throws rather than returning a failed GitResult. Proves the cursor is marked unhashed before
+  // that throw, not after: a stale hashed cursor would make the next non-destructive, non-write_file
+  // call skip writeTree and reuse cursor.tree — already cleared by this point —
   // corrupting that checkpoint's tree. NOT an emptied `PATH` (`PATH = ""`): confirmed live on Bun
   // 1.4.0/Linux and macOS, `spawnSync` still resolves and runs `git` successfully with an emptied
   // `PATH` in the child's own `env` — a real Bun/POSIX executable-resolution quirk, not something
@@ -1040,7 +1109,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
     "invalidate() still forces a fresh snapshot on the next call when resolveRef itself throws",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1" }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1" }));
 
       const originalPath = process.env.PATH;
       const noGitPath = mkdtempSync(join(tmpdir(), "seri-no-git-"));
@@ -1057,9 +1126,14 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       expect(threw).toBeDefined();
 
       writeFileSync(join(workTree, "a.txt"), "after-throw\n");
-      // A plain "ls" is exactly the case that would have reused the stale, now-undefined
-      // previousTree if snapshottedThisProcess had not been reset before the throw.
-      snapshot({ tool: "bash", toolCallId: "c2", args: { command: "ls" }, rewindTo: 2 });
+      // A plain "ls" is exactly the case that would have reused the stale, now-missing
+      // tree if the cursor had not been marked unhashed before the throw.
+      snapshot.onBeforeMutation({
+        tool: "bash",
+        toolCallId: "c2",
+        args: { command: "ls" },
+        rewindTo: 2,
+      });
 
       expect(toolRecords()[1]?.tree).toMatch(/^[0-9a-f]{40}$/);
     },
@@ -1072,10 +1146,10 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
     "steps over distinct rewind anchors, newest first",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", rewindTo: 3 }));
-      snapshot(mutation({ toolCallId: "c2", rewindTo: 3 })); // same assistant message
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1", rewindTo: 3 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2", rewindTo: 3 })); // same assistant message
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c3", rewindTo: 7 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c3", rewindTo: 7 }));
 
       expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({
         rewindTo: 7,
@@ -1097,7 +1171,7 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
       const snapshot = checkpointer();
       for (const [index, rewindTo] of [3, 7, 9, 7, 8].entries()) {
         writeFileSync(join(workTree, "a.txt"), `v${index}\n`);
-        snapshot(mutation({ toolCallId: `c${index}`, rewindTo }));
+        snapshot.onBeforeMutation(mutation({ toolCallId: `c${index}`, rewindTo }));
       }
 
       const at = (steps: number) =>
@@ -1111,10 +1185,10 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
     "refuses to cross a compaction barrier and says compaction is why",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", rewindTo: 3 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1", rewindTo: 3 }));
       appendBarrier(storeDir, SESSION, "compaction");
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c2", rewindTo: 2 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2", rewindTo: 2 }));
 
       expect(rewindConversation({ storeDir, sessionId: SESSION, steps: 1 })).toEqual({
         rewindTo: 2,
@@ -1130,9 +1204,9 @@ describe.skipIf(!isGitAvailable())("rewindConversation", () => {
     "leaves the filesystem untouched",
     () => {
       const snapshot = checkpointer();
-      snapshot(mutation({ toolCallId: "c1", rewindTo: 3 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c1", rewindTo: 3 }));
       writeFileSync(join(workTree, "a.txt"), "after\n");
-      snapshot(mutation({ toolCallId: "c2", rewindTo: 7 }));
+      snapshot.onBeforeMutation(mutation({ toolCallId: "c2", rewindTo: 7 }));
 
       rewindConversation({ storeDir, sessionId: SESSION, steps: 2 });
 
@@ -1158,7 +1232,8 @@ describe.skipIf(!isGitAvailable() || !isBashAvailable())(
   () => {
     test("captures and undoes a change made only through a shell rewrite and an appending redirection", async () => {
       writeFileSync(join(workTree, "b.txt"), "kept\n");
-      const tools = withCheckpoints(toolDefinitions, checkpointer());
+      const snapshot = checkpointer();
+      const tools = withCheckpoints(toolDefinitions, snapshot.onBeforeMutation);
       const options = {
         toolCallId: "c1",
         messages: [{ role: "user" as const, content: "go" }],
@@ -1263,7 +1338,7 @@ describe.skipIf(!isGitAvailable())("pruneSessions", () => {
     // Seed a log so the resumed session is resuming rather than starting.
     writeFileSync(join(storeDir, `${SESSION}.jsonl`), "");
 
-    checkpointer()(mutation({ toolCallId: "c1" }));
+    checkpointer().onBeforeMutation(mutation({ toolCallId: "c1" }));
 
     expect(listSessionRefs(gitDir)).toContain(`refs/seri/sessions/${SESSION}`);
     // The new checkpoint extends the chain it resumed rather than rooting a new one.

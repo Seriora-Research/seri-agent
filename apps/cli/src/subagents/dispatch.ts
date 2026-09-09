@@ -85,7 +85,10 @@ export type SubagentRuntime = {
 
   pathDenials: readonly PathDenial[];
 
-  checkpointer?: OnBeforeMutation & { onAfterMutation?: OnAfterMutation };
+  checkpointer?: {
+    onBeforeMutation: OnBeforeMutation;
+    onAfterMutation?: OnAfterMutation;
+  };
   onChildUsage?: (usage: LanguageModelUsage, cost: CostReport | undefined) => void;
 
   onChildEvent?: (payload: ChildEventPayload) => void;
@@ -409,7 +412,7 @@ export function createDispatchTool(
           args,
           rewindTo: options.messages.length - 1,
         };
-        runtime.checkpointer(context);
+        runtime.checkpointer.onBeforeMutation(context);
       }
 
       type Runnable = (typeof runnable)[number];
@@ -512,7 +515,7 @@ export async function dispatchDirect(opts: {
   const input = { tasks: [{ role: spec.name, goal }] };
 
   if (agentMutatesFilesystem(spec) && runtime.checkpointer) {
-    runtime.checkpointer({
+    runtime.checkpointer.onBeforeMutation({
       tool: DISPATCH_TOOL_NAME,
       toolCallId,
       args: input,

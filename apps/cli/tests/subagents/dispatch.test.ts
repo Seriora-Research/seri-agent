@@ -1052,7 +1052,7 @@ describe("dispatch_subagents", () => {
     const dispatchTool = createDispatchTool(
       makeRuntime(fake, {
         agents: withMutators(),
-        checkpointer: (context) => snapshots.push(context),
+        checkpointer: { onBeforeMutation: (context) => snapshots.push(context) },
       }),
     );
 
@@ -1065,7 +1065,9 @@ describe("dispatch_subagents", () => {
     ]);
 
     const dispatchTool2 = createDispatchTool(
-      makeRuntime(fake, { checkpointer: (context) => snapshots.push(context) }),
+      makeRuntime(fake, {
+        checkpointer: { onBeforeMutation: (context) => snapshots.push(context) },
+      }),
     );
     await dispatchTool2.execute(
       { tasks: [{ role: "explore", goal: "read" }] },
@@ -1082,7 +1084,7 @@ describe("dispatch_subagents", () => {
     const dispatchTool = createDispatchTool(
       makeRuntime(fake, {
         agents: withMutators(),
-        checkpointer: (context) => snapshots.push(context),
+        checkpointer: { onBeforeMutation: (context) => snapshots.push(context) },
       }),
     );
 
@@ -1241,7 +1243,7 @@ describe("dispatch_subagents with a file-defined agent", () => {
     const dispatchTool = createDispatchTool(
       makeRuntime(fake, {
         agents: withCustomAgent({ name: "fixer", toolNames: ["read_file", "bash"] }),
-        checkpointer: (context) => snapshots.push(context),
+        checkpointer: { onBeforeMutation: (context) => snapshots.push(context) },
       }),
     );
     await dispatchTool.execute(
@@ -1259,7 +1261,7 @@ describe("dispatch_subagents with a file-defined agent", () => {
     const dispatchTool = createDispatchTool(
       makeRuntime(fake, {
         agents: withCustomAgent({ name: "reviewer" }),
-        checkpointer: (context) => snapshots.push(context),
+        checkpointer: { onBeforeMutation: (context) => snapshots.push(context) },
       }),
     );
     await dispatchTool.execute(
