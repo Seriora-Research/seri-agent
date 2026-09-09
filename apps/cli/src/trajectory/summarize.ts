@@ -1,3 +1,4 @@
+import { isImageRead } from "../imageParts";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
 import type { EditOutcomeStatus, Elision } from "./schema";
 
@@ -58,6 +59,9 @@ export function summarizeArgs(name: string, args: unknown): SummarizeResult {
 export function summarizeResult(name: string, result: unknown): SummarizeResult {
   if (name === "read_file" && typeof result === "string") {
     return { value: { bytes: Buffer.byteLength(result) } };
+  }
+  if (name === "read_file" && isImageRead(result)) {
+    return { value: { mime: result.mime, bytes: Buffer.byteLength(result.data, "base64") } };
   }
   if (name === "write_file" && isRecord(result) && result.written === true) {
     return { value: { written: true } };

@@ -31,6 +31,18 @@ describe("summarizeResult", () => {
     expect(value).toEqual({ bytes: 50000 });
     expect(JSON.stringify(value)).not.toContain("yyyy");
   });
+
+  test("read_file image results store mime and decoded byte count, not the payload", () => {
+    const data =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+    const { value } = summarizeResult("read_file", {
+      kind: "image",
+      mime: "image/png",
+      data,
+    });
+    expect(value).toEqual({ mime: "image/png", bytes: Buffer.byteLength(data, "base64") });
+    expect(JSON.stringify(value)).not.toContain("iVBORw0KGgo");
+  });
 });
 
 describe("classifyEditError", () => {

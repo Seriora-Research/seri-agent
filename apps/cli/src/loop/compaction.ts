@@ -51,6 +51,14 @@ function estimatePartTokens(part: unknown): number {
   }
   if (typeof record.text === "string") return charsToTokens(record.text);
   if (typeof record.thinking === "string") return charsToTokens(record.thinking);
+  if (record.type === "file") {
+    const data = record.data;
+    if (typeof data === "string") return charsToTokens(data);
+    if (data !== null && typeof data === "object") {
+      const tagged = data as Record<string, unknown>;
+      if (typeof tagged.data === "string") return charsToTokens(tagged.data);
+    }
+  }
   return 0;
 }
 

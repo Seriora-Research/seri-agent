@@ -307,6 +307,43 @@ describe("mapRawCatalog: reasoning_options", () => {
   });
 });
 
+describe("mapRawCatalog: acceptsImageInput", () => {
+  test("sets the flag only when modalities.input includes image", () => {
+    const raw: RawCatalogResponse = {
+      groq: { models: {} },
+      openrouter: { models: {} },
+      anthropic: {
+        models: {
+          vision: {
+            id: "vision",
+            name: "Vision",
+            family: "claude",
+            tool_call: true,
+            reasoning: false,
+            modalities: { input: ["text", "image"], output: ["text"] },
+            limit: { context: 1000, output: 100 },
+          },
+          text: {
+            id: "text",
+            name: "Text",
+            family: "claude",
+            tool_call: true,
+            reasoning: false,
+            attachment: true,
+            limit: { context: 1000, output: 100 },
+          },
+        },
+      },
+      openai: { models: {} },
+      google: { models: {} },
+    };
+
+    const entries = mapRawCatalog(raw);
+    expect(entries.find((e) => e.id === "vision")?.acceptsImageInput).toBe(true);
+    expect(entries.find((e) => e.id === "text")?.acceptsImageInput).toBeUndefined();
+  });
+});
+
 describe("findCatalogEntry", () => {
   test("finds an entry by id and provider", () => {
     expect(findCatalogEntry(fallbackManifest, "fallback-model", "groq")).toEqual(
