@@ -2058,6 +2058,7 @@ async function runTui(
     }
     if (command.mutatesRunState === true) turnInFlight = true;
     const sessionIdBeforeCommand = liveState.session.id;
+    const messagesBeforeCommand = liveState.session.messages;
     const foldUsage = (u: LanguageModelUsage): void => {
       usage = {
         inputTokens: addTokens(usage.inputTokens, u.inputTokens),
@@ -2081,8 +2082,9 @@ async function runTui(
           deps,
         );
       }
-      if (name === "/rewind" || name === "/compact") {
+      if (liveState.session.messages !== messagesBeforeCommand) {
         replaceArchivistTranscript(archivistState, liveState.session.messages);
+        ctx.database?.setArchivistCursor(liveState.session.id, archivistState.messageCursor);
       }
     } catch (err) {
       dispatch({

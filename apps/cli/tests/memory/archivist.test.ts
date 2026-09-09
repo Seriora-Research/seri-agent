@@ -351,7 +351,7 @@ function stopStream(): LanguageModelV4StreamPart[] {
 }
 
 describe("maybeRunArchivist", () => {
-  test("resets an out-of-bounds messageCursor to 0", async () => {
+  test("an out-of-bounds stored cursor is already 0 before maybeRun", async () => {
     const ctx = makeCtx();
     const s = createArchivistState(
       {
@@ -786,6 +786,49 @@ describe("runArchivist", () => {
     const goal = JSON.stringify(calls[0]?.opts.messages);
     expect(goal).toContain("post-rewind fact worth keeping");
     expect(state.messageCursor).toBe(6);
+  });
+
+  test("a finishing run does not mark a replaced transcript as already reviewed", async () => {
+    const ctx = makeCtx();
+    const preRewind = Array.from({ length: 5 }, (_, i) => ({
+      role: "user" as const,
+      content: `old ${i + 1}`,
+    }));
+    const state = createArchivistState({ ...emptySession(), messages: preRewind });
+    let release: () => void = () => {};
+    const hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: () => void = () => {};
+    const startedHold = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "no-tool-call" }],
+      before: async () => {
+        started();
+        await hold;
+      },
+    }));
+    const run = runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 100_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: fake as unknown as typeof runLoop,
+    });
+    await startedHold;
+    const kept = preRewind.slice(0, 2);
+    replaceArchivistTranscript(state, kept);
+    expect(state.messageCursor).toBe(0);
+    release();
+    await run;
+    expect(state.messageCursor).toBe(0);
   });
 
   test("threads its own contextWindow into the child runLoop's opts.contextWindowSize", async () => {

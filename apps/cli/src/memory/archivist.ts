@@ -47,14 +47,19 @@ export type ArchivistState = {
   toolCallsSinceRun: number;
   readonly messageCursor: number;
   readonly messages: ModelMessage[];
+  readonly transcriptGeneration: number;
   lastInputTokens: number | undefined;
   inflight: Promise<void>;
   lastReport: ArchivistReport | undefined;
 };
 
-type MutableArchivistState = Omit<ArchivistState, "messageCursor" | "messages"> & {
+type MutableArchivistState = Omit<
+  ArchivistState,
+  "messageCursor" | "messages" | "transcriptGeneration"
+> & {
   messageCursor: number;
   messages: ModelMessage[];
+  transcriptGeneration: number;
 };
 
 function mutateArchivist(state: ArchivistState): MutableArchivistState {
@@ -69,6 +74,7 @@ export function createArchivistState(
     toolCallsSinceRun: 0,
     messageCursor: messageCursor > session.messages.length ? 0 : messageCursor,
     messages: session.messages,
+    transcriptGeneration: 0,
     lastInputTokens: undefined,
     inflight: Promise.resolve(),
     lastReport: undefined,
@@ -93,6 +99,7 @@ export function drainArchivist(state: ArchivistState): Promise<void> {
 
 export function replaceArchivistTranscript(state: ArchivistState, messages: ModelMessage[]): void {
   const next = mutateArchivist(state);
+  next.transcriptGeneration++;
   next.messageCursor = 0;
   next.messages = messages;
 }
@@ -103,7 +110,11 @@ export function observeArchivistEvent(state: ArchivistState, event: LoopEvent): 
   if (event.type === "usage")
     state.lastInputTokens = event.usage.inputTokens ?? state.lastInputTokens;
 
-  if (event.type === "compacted") mutateArchivist(state).messageCursor = 0;
+  if (event.type === "compacted") {
+    const next = mutateArchivist(state);
+    next.transcriptGeneration++;
+    next.messageCursor = 0;
+  }
 }
 
 export type ArchivistTrigger = "tool-count" | "near-compaction" | "idle-timeout";
@@ -190,6 +201,7 @@ export async function runArchivist(args: {
 }): Promise<ArchivistReport | undefined> {
   if (args.signal.aborted) return undefined;
 
+  const transcriptGeneration = args.state.transcriptGeneration;
   const transcript = args.state.messages.slice(args.state.messageCursor);
 
   const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
@@ -255,7 +267,9 @@ export async function runArchivist(args: {
   };
   const cost = reportFromCatalogPricing(args.route.model, args.route.provider, usage, args.catalog);
 
-  mutateArchivist(args.state).messageCursor = args.state.messages.length;
+  if (args.state.transcriptGeneration === transcriptGeneration) {
+    mutateArchivist(args.state).messageCursor = args.state.messages.length;
+  }
   args.state.toolCallsSinceRun = 0;
 
   const report: ArchivistReport = {
