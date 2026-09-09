@@ -981,8 +981,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       writeFileSync(join(workTree, "a.txt"), "v2\n");
       snapshot.onBeforeMutation(mutation({ toolCallId: "c2" }));
 
-      // undoFiles moves the session ref on its own, exactly as restoreTo does in production — this
-      // closure's own cursor has no way to know that happened without invalidate().
       const result = undo(1);
 
       snapshot.invalidate();
@@ -1097,10 +1095,7 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
   // resolveRef itself throwing (git failing to even spawn, per shadowGit.ts's spawnGit) is a
   // narrower trigger than a non-zero exit — PATH pointed at a directory with no `git` in it so
   // `spawnSync("git", ...)` cannot find the binary at all, the one case shadowGit.ts's own run()
-  // throws rather than returning a failed GitResult. Proves the cursor is marked unhashed before
-  // that throw, not after: a stale hashed cursor would make the next non-destructive, non-write_file
-  // call skip writeTree and reuse cursor.tree — already cleared by this point —
-  // corrupting that checkpoint's tree. NOT an emptied `PATH` (`PATH = ""`): confirmed live on Bun
+  // throws rather than returning a failed GitResult. NOT an emptied `PATH` (`PATH = ""`): confirmed live on Bun
   // 1.4.0/Linux and macOS, `spawnSync` still resolves and runs `git` successfully with an emptied
   // `PATH` in the child's own `env` — a real Bun/POSIX executable-resolution quirk, not something
   // this test can rely on. A `PATH` pointed at a real, git-less directory fails to resolve on every
@@ -1126,8 +1121,6 @@ describe.skipIf(!isGitAvailable())("createCheckpointer's invalidate()", () => {
       expect(threw).toBeDefined();
 
       writeFileSync(join(workTree, "a.txt"), "after-throw\n");
-      // A plain "ls" is exactly the case that would have reused the stale, now-missing
-      // tree if the cursor had not been marked unhashed before the throw.
       snapshot.onBeforeMutation({
         tool: "bash",
         toolCallId: "c2",

@@ -178,8 +178,8 @@ export type Checkpointer = {
 };
 
 type SnapshotCursor =
-  | { hashed: false; tree?: string; commit?: string }
-  | { hashed: true; tree: string; commit: string };
+  | { snapshotted: false; tree?: string; commit?: string }
+  | { snapshotted: true; tree: string; commit: string };
 
 export function createCheckpointer(opts: {
   storeDir: string;
@@ -199,7 +199,7 @@ export function createCheckpointer(opts: {
   let started = false;
   let scoped = false;
   let seq = 0;
-  let cursor: SnapshotCursor = { hashed: false };
+  let cursor: SnapshotCursor = { snapshotted: false };
   const pendingWritePaths = new Set<string>();
   let needsFullAdd = false;
 
@@ -218,7 +218,7 @@ export function createCheckpointer(opts: {
     const log = readLog(opts.storeDir, opts.sessionId);
     seq = log.filter((record) => record.kind === "tool").length;
     cursor = {
-      hashed: false,
+      snapshotted: false,
       tree: anchored(log).at(-1)?.tree,
       commit: resolveRef(gitDir, sessionRef(opts.sessionId)),
     };
@@ -319,8 +319,8 @@ export function createCheckpointer(opts: {
         context.tool === "write_file" ? (context.args as { path?: unknown }).path : undefined;
       const writeRel = typeof declared === "string" ? writePathRel(declared) : undefined;
       let tree: string;
-      if (!cursor.hashed || mayChangeTree) {
-        const pathScoped = cursor.hashed && context.tool === "write_file" && !needsFullAdd;
+      if (!cursor.snapshotted || mayChangeTree) {
+        const pathScoped = cursor.snapshotted && context.tool === "write_file" && !needsFullAdd;
         const restage = pathScoped
           ? [
               ...new Set([...pendingWritePaths, ...(writeRel !== undefined ? [writeRel] : [])]),
@@ -342,7 +342,7 @@ export function createCheckpointer(opts: {
         commit = commitTree(gitDir, opts.worktree, tree, commit);
         updateRef(gitDir, sessionRef(opts.sessionId), commit);
       }
-      cursor = { hashed: true, tree, commit };
+      cursor = { snapshotted: true, tree, commit };
 
       append(opts.storeDir, opts.sessionId, {
         kind: "tool",
@@ -373,7 +373,7 @@ export function createCheckpointer(opts: {
   };
 
   const invalidate = (): void => {
-    cursor = { hashed: false };
+    cursor = { snapshotted: false };
     pendingWritePaths.clear();
     needsFullAdd = false;
     cursor.commit = resolveRef(gitDir, sessionRef(opts.sessionId));
