@@ -29,6 +29,18 @@ function assistantToolCallMsg(id: string): ModelMessage {
   };
 }
 
+function assistantParallelToolCalls(ids: readonly string[]): ModelMessage {
+  return {
+    role: "assistant",
+    content: ids.map((id) => ({
+      type: "tool-call" as const,
+      toolCallId: id,
+      toolName: "write_file",
+      input: {},
+    })),
+  };
+}
+
 function toolResultMsg(id: string, value: JSONValue): ModelMessage {
   return {
     role: "tool",
@@ -139,19 +151,131 @@ describe("findSafeEvictionBoundary", () => {
       const boundary = findSafeEvictionBoundary(messages, keepTokensForLast(messages, preserve));
       if (boundary === null) continue;
       expect(messages[boundary]?.role).not.toBe("tool");
+      const kept = messages.slice(boundary);
+      for (let i = 0; i < kept.length; i++) {
+        if (kept[i]?.role !== "tool") continue;
+        expect(i).toBeGreaterThan(0);
+        expect(kept[i - 1]?.role).toBe("assistant");
+      }
     }
   });
 
-  test("walks forward past a tool message when the naive cut would split a tool-call/tool-result pair", () => {
+  test("walks back to the assistant tool-call when the naive cut would split a tool-call/tool-result pair", () => {
     const messages = buildAlternatingMessages(10);
     const candidateIndex = 6;
     expect(messages[candidateIndex]?.role).toBe("tool");
+    expect(messages[candidateIndex - 1]?.role).toBe("assistant");
     const keep = keepTokensForLast(messages, messages.length - candidateIndex);
 
     const boundary = findSafeEvictionBoundary(messages, keep);
 
-    expect(boundary).toBe(candidateIndex + 1);
-    expect(messages[boundary as number]?.role).toBe("assistant");
+    expect(boundary).toBe(candidateIndex - 1);
+    const kept = messages.slice(boundary as number);
+    expect(kept[0]).toEqual(messages[candidateIndex - 1]);
+    expect(kept[1]).toEqual(messages[candidateIndex]);
+  });
+
+  test("keeps the pair when a tool result sits on the budget line, rather than evicting it", () => {
+    const messages = buildAlternatingMessages(10);
+    const toolIndex = 8;
+    expect(messages[toolIndex]?.role).toBe("tool");
+    const keep = keepTokensForLast(messages, messages.length - toolIndex);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(toolIndex - 1);
+    expect(messages.slice(boundary as number, (boundary as number) + 2)).toEqual([
+      messages[toolIndex - 1],
+      messages[toolIndex],
+    ]);
+  });
+
+  test("does not split a consecutive tool-result group; the kept suffix starts at the assistant", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("pad-0"),
+      toolResultMsg("pad-0", "ok"),
+      assistantToolCallMsg("pad-1"),
+      toolResultMsg("pad-1", "ok"),
+      assistantParallelToolCalls(["a", "b"]),
+      toolResultMsg("a", "ok"),
+      toolResultMsg("b", "ok"),
+      { role: "user", content: "recent" },
+    ];
+    const secondTool = 7;
+    expect(messages[secondTool]?.role).toBe("tool");
+    expect(messages[6]?.role).toBe("tool");
+    expect(messages[5]?.role).toBe("assistant");
+    const keep = keepTokensForLast(messages, messages.length - secondTool);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(5);
+    expect(messages.slice(5, 8)).toEqual([messages[5], messages[6], messages[7]]);
+  });
+
+  test("a packed parallel tool message stays with its assistant when the budget lands on it", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("pad-0"),
+      toolResultMsg("pad-0", "ok"),
+      assistantToolCallMsg("pad-1"),
+      toolResultMsg("pad-1", "ok"),
+      assistantParallelToolCalls(["a", "b"]),
+      {
+        role: "tool",
+        content: ["a", "b"].map((id) => ({
+          type: "tool-result" as const,
+          toolCallId: id,
+          toolName: "write_file",
+          output: { type: "json" as const, value: "ok" },
+        })),
+      },
+      { role: "user", content: "recent" },
+    ];
+    const packed = 6;
+    expect(messages[packed]?.role).toBe("tool");
+    expect(messages[5]?.role).toBe("assistant");
+    const keep = keepTokensForLast(messages, messages.length - packed);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(5);
+    expect(messages.slice(5, 7)).toEqual([messages[5], messages[6]]);
+  });
+
+  test("evicts a tool result that by itself fills the preserve budget, rather than keeping the overflowing pair", () => {
+    const keep = 100;
+    const hugeBody = "H".repeat(4_000);
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("pad-0"),
+      toolResultMsg("pad-0", "ok"),
+      assistantToolCallMsg("pad-1"),
+      toolResultMsg("pad-1", "ok"),
+      assistantToolCallMsg("big"),
+      toolResultMsg("big", hugeBody),
+    ];
+    expect(messages[6]?.role).toBe("tool");
+    expect(estimateTokens(messages[6] as ModelMessage)).toBeGreaterThanOrEqual(keep);
+
+    const boundary = findSafeEvictionBoundary(messages, keep);
+
+    expect(boundary).toBe(messages.length);
+    expect(messages.slice(boundary as number)).toEqual([]);
+  });
+
+  test("minEvictable still applies after walking back to the assistant", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "a" },
+      assistantToolCallMsg("c0"),
+      toolResultMsg("c0", "ok"),
+      assistantToolCallMsg("c1"),
+      toolResultMsg("c1", "ok"),
+      { role: "user", content: "recent" },
+    ];
+    expect(messages[4]?.role).toBe("tool");
+    expect(findSafeEvictionBoundary(messages, keepTokensForLast(messages, 2))).toBeNull();
   });
 
   test("returns null when fewer than minEvictable messages would be evicted", () => {
