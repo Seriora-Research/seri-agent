@@ -122,17 +122,16 @@ export type ArchivistTrigger = "tool-count" | "near-compaction" | "idle-timeout"
 
 export function shouldRunArchivist(
   state: ArchivistState,
-  contextWindowSize: number | undefined,
+  usableInput: number | undefined,
   compactionThreshold: number,
   enabled: boolean,
 ): ArchivistTrigger | undefined {
   if (!enabled) return undefined;
   if (state.toolCallsSinceRun >= ARCHIVIST_TOOL_CALL_INTERVAL) return "tool-count";
   if (
-    contextWindowSize !== undefined &&
+    usableInput !== undefined &&
     state.lastInputTokens !== undefined &&
-    state.lastInputTokens / contextWindowSize >=
-      compactionThreshold * ARCHIVIST_NEAR_COMPACTION_FRACTION
+    state.lastInputTokens / usableInput >= compactionThreshold * ARCHIVIST_NEAR_COMPACTION_FRACTION
   ) {
     return "near-compaction";
   }

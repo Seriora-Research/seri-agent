@@ -96,7 +96,6 @@ const MAX_CONSECUTIVE_DENIALS = 3;
 export const DEFAULT_CONTEXT_WINDOW_SIZE = 131_072;
 export const DEFAULT_COMPACTION_THRESHOLD = 0.5;
 
-// The advertised window includes reserved max output; compact against the remainder.
 export function usableInputTokens(
   contextWindow: number,
   maxOutputTokens: number | undefined,
