@@ -268,16 +268,15 @@ export async function driveLoop(
       }
     }
     const actual = realizedRoute(intended, route, constructed);
+    const overlayEntry = actual.inherited
+      ? catalogEntry
+      : findCatalogEntry(catalog, actual.model, actual.provider);
     const overlay: RoleOverlay = {
       model: actual.inherited ? model : childModel,
       provider: actual.provider,
       modelId: actual.model,
-      contextWindowSize: actual.inherited
-        ? catalogEntry?.contextWindow
-        : findCatalogEntry(catalog, actual.model, actual.provider)?.contextWindow,
-      maxOutputTokens: actual.inherited
-        ? catalogEntry?.maxOutputTokens
-        : findCatalogEntry(catalog, actual.model, actual.provider)?.maxOutputTokens,
+      contextWindowSize: overlayEntry?.contextWindow,
+      maxOutputTokens: overlayEntry?.maxOutputTokens,
       reasoningEffort: effortForChild(
         { provider: route.provider, modelId: route.model, reasoningEffort },
         { provider: actual.provider, modelId: actual.model },
