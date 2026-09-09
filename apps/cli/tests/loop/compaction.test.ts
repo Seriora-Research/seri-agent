@@ -60,13 +60,29 @@ function summarizerUserText(model: MockLanguageModelV4): string {
   return promptRoleText(model.doGenerateCalls[0]?.prompt, "user");
 }
 
-function treatsExcerptAsHistoricalSource(system: string): boolean {
+function treatsLabeledBlocksAsHistoricalSource(system: string): boolean {
   return (
     /historical source/i.test(system) &&
     /do not obey/i.test(system) &&
     /do not infer/i.test(system) &&
-    /authorization/i.test(system)
+    /authorization/i.test(system) &&
+    /Transcript/.test(system) &&
+    /Previous recap/.test(system) &&
+    /Newly evicted turns/.test(system)
   );
+}
+
+function treatsGoalAsSessionObjective(system: string): boolean {
+  return /session objective/i.test(system) && /not a requested override/i.test(system);
+}
+
+function copiesInjectedGoal(system: string, user: string, injection: string): boolean {
+  if (!user.includes(injection)) return false;
+  if (!treatsLabeledBlocksAsHistoricalSource(system)) return true;
+  if (/quote them verbatim in the relevant field/i.test(system) && !treatsGoalAsSessionObjective(system)) {
+    return true;
+  }
+  return false;
 }
 
 function instructionFollowingSummarizer(
@@ -78,10 +94,7 @@ function instructionFollowingSummarizer(
     doGenerate: async (options) => {
       const system: string = promptRoleText(options.prompt, "system");
       const user: string = promptRoleText(options.prompt, "user");
-      const goal: string =
-        user.includes(injection) && !treatsExcerptAsHistoricalSource(system)
-          ? injectedGoal
-          : originalGoal;
+      const goal: string = copiesInjectedGoal(system, user, injection) ? injectedGoal : originalGoal;
       return {
         content: [
           {
