@@ -6,7 +6,7 @@ import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { ASK_USER_OVERLAY } from "../../src/ask-user/prompt";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
-import { loadVerifyConfig } from "../../src/config/config";
+import { loadVerifyConfig, setConfigValue } from "../../src/config/config";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
@@ -1158,6 +1158,65 @@ describe("driveLoop ask_user", () => {
     const opts = capture.capture();
     expect(opts?.tools[ASK_USER_TOOL_NAME]).toBeDefined();
     expect(opts?.tools[ASK_PLAN_QUESTIONS_TOOL_NAME]).toBeDefined();
+  });
+});
+
+describe("driveLoop compaction threshold", () => {
+  const original = process.env.SERI_COMPACTION_THRESHOLD;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.SERI_COMPACTION_THRESHOLD;
+    else process.env.SERI_COMPACTION_THRESHOLD = original;
+  });
+
+  async function captureThreshold(prepared: PreparedRun): Promise<number | undefined> {
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    return capture.capture()?.compactionThreshold;
+  }
+
+  test("unset and invalid keep 0.5; a fraction in (0, 1] is passed through", async () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    expect(await captureThreshold(preparedStub())).toBe(0.5);
+
+    process.env.SERI_COMPACTION_THRESHOLD = "0";
+    expect(await captureThreshold(preparedStub())).toBe(0.5);
+
+    process.env.SERI_COMPACTION_THRESHOLD = "1.5";
+    expect(await captureThreshold(preparedStub())).toBe(0.5);
+
+    process.env.SERI_COMPACTION_THRESHOLD = "nope";
+    expect(await captureThreshold(preparedStub())).toBe(0.5);
+
+    process.env.SERI_COMPACTION_THRESHOLD = "0.8";
+    expect(await captureThreshold(preparedStub())).toBe(0.8);
+
+    process.env.SERI_COMPACTION_THRESHOLD = "1";
+    expect(await captureThreshold(preparedStub())).toBe(1);
+  });
+
+  test("config.json is used when env is unset, and env wins when both are set", async () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    const fromFile = preparedStub();
+    setConfigValue("SERI_COMPACTION_THRESHOLD", "0.25", fromFile.session.cwd);
+    expect(await captureThreshold(fromFile)).toBe(0.25);
+
+    const shadowed = preparedStub();
+    setConfigValue("SERI_COMPACTION_THRESHOLD", "0.25", shadowed.session.cwd);
+    process.env.SERI_COMPACTION_THRESHOLD = "0.9";
+    expect(await captureThreshold(shadowed)).toBe(0.9);
   });
 });
 

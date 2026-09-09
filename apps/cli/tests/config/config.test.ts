@@ -9,7 +9,9 @@ import {
   loadConfig,
   loadSandboxConfig,
   loadTrajectoryConfig,
+  loadCompactionThreshold,
   loadVerifyConfig,
+  parseCompactionThreshold,
   setConfigValue,
   setConfigValues,
   standingDenyReadsOutside,
@@ -242,6 +244,63 @@ describe("loadTrajectoryConfig", () => {
     delete process.env.SERI_TRAJECTORY_RETENTION_DAYS;
     process.env.SERI_TRAJECTORY_RETENTION_DAYS = "1e3";
     expect(loadTrajectoryConfig().retentionDays).toBe(1000);
+  });
+});
+
+describe("loadCompactionThreshold", () => {
+  const original = process.env.SERI_COMPACTION_THRESHOLD;
+
+  afterEach(() => {
+    restoreEnv("SERI_COMPACTION_THRESHOLD", original);
+  });
+
+  test("returns undefined when nothing is configured", () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    expect(loadCompactionThreshold()).toBeUndefined();
+  });
+
+  test("parses a fraction in (0, 1]", () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    process.env.SERI_COMPACTION_THRESHOLD = "0.8";
+    expect(loadCompactionThreshold()).toBe(0.8);
+    process.env.SERI_COMPACTION_THRESHOLD = "1";
+    expect(loadCompactionThreshold()).toBe(1);
+    process.env.SERI_COMPACTION_THRESHOLD = "1e-1";
+    expect(loadCompactionThreshold()).toBe(0.1);
+  });
+
+  test("zero, above 1, or unparseable is undefined so callers keep 0.5", () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    process.env.SERI_COMPACTION_THRESHOLD = "0";
+    expect(loadCompactionThreshold()).toBeUndefined();
+    process.env.SERI_COMPACTION_THRESHOLD = "1.1";
+    expect(loadCompactionThreshold()).toBeUndefined();
+    process.env.SERI_COMPACTION_THRESHOLD = "nope";
+    expect(loadCompactionThreshold()).toBeUndefined();
+    process.env.SERI_COMPACTION_THRESHOLD = "-0.2";
+    expect(loadCompactionThreshold()).toBeUndefined();
+  });
+
+  test("env wins over config.json", () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    setConfigValue("SERI_COMPACTION_THRESHOLD", "0.25");
+    process.env.SERI_COMPACTION_THRESHOLD = "0.9";
+    expect(loadCompactionThreshold()).toBe(0.9);
+  });
+
+  test("config.json is used when env is unset", () => {
+    delete process.env.SERI_COMPACTION_THRESHOLD;
+    setConfigValue("SERI_COMPACTION_THRESHOLD", "0.25");
+    expect(loadCompactionThreshold()).toBe(0.25);
+  });
+});
+
+describe("parseCompactionThreshold", () => {
+  test("accepts the open-closed interval (0, 1]", () => {
+    expect(parseCompactionThreshold("0.0001")).toBe(0.0001);
+    expect(parseCompactionThreshold("1")).toBe(1);
+    expect(parseCompactionThreshold("0")).toBeUndefined();
+    expect(parseCompactionThreshold(undefined)).toBeUndefined();
   });
 });
 

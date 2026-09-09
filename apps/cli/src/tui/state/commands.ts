@@ -393,6 +393,15 @@ const CONFIG_KEY_INFO = new Map<string, ConfigKeyInfo>([
       booleanUnset: "off",
     },
   ],
+  [
+    "SERI_COMPACTION_THRESHOLD",
+    {
+      label: "Compaction threshold",
+      description: "Fraction of the window that triggers compaction, (0, 1]. Unset keeps 0.5.",
+      kind: "string",
+      takesEffectNextRun: false,
+    },
+  ],
 ]);
 export const KNOWN_CONFIG_KEYS = [...CONFIG_KEY_INFO.keys()];
 

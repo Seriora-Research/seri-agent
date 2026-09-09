@@ -8,6 +8,7 @@ import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output"
 import {
   BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY,
   configValue,
+  loadCompactionThreshold,
   loadConfig,
   loadMemoryConfig,
   standingDenyReadsOutside,
@@ -17,7 +18,12 @@ import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { createHookRunner } from "../hooks/gate";
-import { type ApprovalPrompt, type LoopEvent, runLoop as runLoopReal } from "../loop/loop";
+import {
+  type ApprovalPrompt,
+  DEFAULT_COMPACTION_THRESHOLD,
+  type LoopEvent,
+  runLoop as runLoopReal,
+} from "../loop/loop";
 import { grantFingerprint } from "../mcp/registry";
 import { mcpCallSubject, withMcp } from "../mcp/tool";
 import {
@@ -164,6 +170,8 @@ export async function driveLoop(
   const config = loadConfig(ctx.configDir);
   const reasoningEffort = resolveReasoningEffort(session, config);
   const samplingConfig = loadSamplingConfig(ctx.configDir);
+  const compactionThreshold =
+    loadCompactionThreshold(ctx.configDir) ?? DEFAULT_COMPACTION_THRESHOLD;
   const standingDeny = standingDenyReadsOutside(
     configValue(BLOCK_READS_OUTSIDE_WORKING_DIRECTORIES_KEY, config),
   );
@@ -293,6 +301,7 @@ export async function driveLoop(
     seed: samplingConfig.seed,
     catalog,
     contextWindowSize: catalogEntry?.contextWindow,
+    compactionThreshold,
     system,
     agents: prepared.agents,
     permissionMode: getPermissionMode,
@@ -441,6 +450,7 @@ export async function driveLoop(
           credential: route.credential,
           catalog,
           contextWindowSize: catalogEntry?.contextWindow,
+          compactionThreshold,
           reasoningEffort,
           temperature: samplingConfig.temperature,
           seed: samplingConfig.seed,
