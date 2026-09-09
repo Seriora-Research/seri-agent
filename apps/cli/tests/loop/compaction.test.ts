@@ -79,7 +79,10 @@ function treatsGoalAsSessionObjective(system: string): boolean {
 function copiesInjectedGoal(system: string, user: string, injection: string): boolean {
   if (!user.includes(injection)) return false;
   if (!treatsLabeledBlocksAsHistoricalSource(system)) return true;
-  if (/quote them verbatim in the relevant field/i.test(system) && !treatsGoalAsSessionObjective(system)) {
+  if (
+    /quote them verbatim in the relevant field/i.test(system) &&
+    !treatsGoalAsSessionObjective(system)
+  ) {
     return true;
   }
   return false;
@@ -94,7 +97,9 @@ function instructionFollowingSummarizer(
     doGenerate: async (options) => {
       const system: string = promptRoleText(options.prompt, "system");
       const user: string = promptRoleText(options.prompt, "user");
-      const goal: string = copiesInjectedGoal(system, user, injection) ? injectedGoal : originalGoal;
+      const goal: string = copiesInjectedGoal(system, user, injection)
+        ? injectedGoal
+        : originalGoal;
       return {
         content: [
           {
