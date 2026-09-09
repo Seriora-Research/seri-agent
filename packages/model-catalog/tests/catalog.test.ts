@@ -322,15 +322,16 @@ describe("mapRawCatalog: parse", () => {
     expect(entries.map((e) => e.id)).toEqual(["good"]);
   });
 
-  test("skips a model whose reasoning is not boolean", () => {
+  test("non-boolean reasoning is stored as false and the model is kept", () => {
     const entries = mapRawCatalog(
       groqRaw({
-        bad: validModel({ id: "bad", reasoning: "yes" }),
-        good: validModel({ id: "good", name: "Good" }),
+        flagged: validModel({ id: "flagged", reasoning: "yes" }),
+        missing: validModel({ id: "missing", reasoning: undefined }),
       }),
     );
 
-    expect(entries.map((e) => e.id)).toEqual(["good"]);
+    expect(entries.map((e) => e.id)).toEqual(["flagged", "missing"]);
+    expect(entries.every((e) => e.reasoning === false)).toBe(true);
   });
 
   test("skips a model whose limit.context or limit.output is not a number", () => {
@@ -363,15 +364,25 @@ describe("mapRawCatalog: parse", () => {
       groqRaw({
         stringInput: validModel({ id: "string-input", cost: { input: "1", output: 2 } }),
         missingOutput: validModel({ id: "missing-output", cost: { input: 1 } }),
+      }),
+    );
+
+    expect(entries.map((e) => e.id)).toEqual(["string-input", "missing-output"]);
+    expect(entries.every((e) => e.pricing === undefined)).toBe(true);
+  });
+
+  test("unusable optional cache fields omit cache pricing and keep input and output", () => {
+    const entries = mapRawCatalog(
+      groqRaw({
         badCache: validModel({
           id: "bad-cache",
-          cost: { input: 1, output: 2, cache_read: "nope" },
+          cost: { input: 1, output: 2, cache_read: "nope", cache_write: null },
         }),
       }),
     );
 
-    expect(entries.map((e) => e.id)).toEqual(["string-input", "missing-output", "bad-cache"]);
-    expect(entries.every((e) => e.pricing === undefined)).toBe(true);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.pricing).toEqual({ inputPerMTok: 1, outputPerMTok: 2 });
   });
 
   test("valid cost keeps numeric input/output and optional cache fields", () => {
@@ -435,6 +446,7 @@ describe("mapRawCatalog: parse", () => {
           reasoning_options: [
             { type: "effort" },
             { type: "effort", values: {} },
+            { type: "effort", values: [] },
             { type: "effort", values: ["low", 1] },
             { type: "toggle" },
           ],

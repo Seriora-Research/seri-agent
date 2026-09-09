@@ -39,16 +39,10 @@ function parsePricing(value: unknown): ModelCatalogEntry["pricing"] {
     inputPerMTok: input,
     outputPerMTok: output,
   };
-  if (value.cache_read !== undefined) {
-    const cacheRead = finiteNumber(value.cache_read);
-    if (cacheRead === undefined) return undefined;
-    pricing.cacheReadPerMTok = cacheRead;
-  }
-  if (value.cache_write !== undefined) {
-    const cacheWrite = finiteNumber(value.cache_write);
-    if (cacheWrite === undefined) return undefined;
-    pricing.cacheWritePerMTok = cacheWrite;
-  }
+  const cacheRead = finiteNumber(value.cache_read);
+  if (cacheRead !== undefined) pricing.cacheReadPerMTok = cacheRead;
+  const cacheWrite = finiteNumber(value.cache_write);
+  if (cacheWrite !== undefined) pricing.cacheWritePerMTok = cacheWrite;
   return pricing;
 }
 
@@ -57,7 +51,7 @@ function parseReasoningOption(value: unknown): ReasoningOption | undefined {
   if (value.type === "toggle") return { type: "toggle" };
   if (value.type === "budget_tokens") return { type: "budget_tokens" };
   if (value.type === "effort") {
-    if (!Array.isArray(value.values)) return undefined;
+    if (!Array.isArray(value.values) || value.values.length === 0) return undefined;
     if (!value.values.every((item): item is string => typeof item === "string")) return undefined;
     return { type: "effort", values: value.values };
   }
@@ -77,7 +71,7 @@ function parseReasoningOptions(value: unknown): ReasoningOption[] | undefined {
 function parseModel(provider: ModelProvider, raw: unknown): ModelCatalogEntry | undefined {
   if (!isPlainObject(raw)) return undefined;
   if (!isNonEmptyString(raw.id) || !isNonEmptyString(raw.name)) return undefined;
-  if (typeof raw.tool_call !== "boolean" || typeof raw.reasoning !== "boolean") return undefined;
+  if (typeof raw.tool_call !== "boolean") return undefined;
   if (!isPlainObject(raw.limit)) return undefined;
   const contextWindow = finiteNumber(raw.limit.context);
   const maxOutputTokens = finiteNumber(raw.limit.output);
@@ -91,7 +85,7 @@ function parseModel(provider: ModelProvider, raw: unknown): ModelCatalogEntry | 
     contextWindow,
     maxOutputTokens,
     toolCall: raw.tool_call,
-    reasoning: raw.reasoning,
+    reasoning: typeof raw.reasoning === "boolean" ? raw.reasoning : false,
     reasoningOptions: parseReasoningOptions(raw.reasoning_options),
     pricing: parsePricing(raw.cost),
   };
