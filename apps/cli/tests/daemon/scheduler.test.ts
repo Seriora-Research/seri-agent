@@ -250,12 +250,174 @@ describe("Scheduler", () => {
     now = 80_000;
     const claimed = database.claimSchedule(created.id, now);
     expect(claimed?.running).toBe(true);
-    const afterClaim = database.getSchedule(created.id);
+    expect(claimed?.nextRunAtMs).toBe(now);
     scheduler.start();
     scheduler.stop();
-    now = afterClaim!.nextRunAtMs!;
+    const afterStart = database.getSchedule(created.id);
+    expect(afterStart?.running).toBe(false);
+    expect(afterStart?.nextRunAtMs).toBe(now);
     await scheduler.tick();
     expect(fired).toEqual([created.id]);
+    expect(database.listScheduleRuns(created.id)).toHaveLength(1);
+  });
+
+  test("session mint failure leaves the firing pending with no schedule_runs row", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 30_000;
+    let runScheduledCalls = 0;
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        runScheduledCalls += 1;
+        return { response: "should not run" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "once",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:00:30.000Z" },
+      allowModelReads: true,
+    });
+    const dueAt = database.getSchedule(created.id)!.nextRunAtMs;
+    database.saveSession = () => {
+      throw new Error("cannot persist session");
+    };
+    await scheduler.tick();
+    const after = database.getSchedule(created.id);
+    expect(runScheduledCalls).toBe(0);
+    expect(after?.enabled).toBe(true);
+    expect(after?.running).toBe(false);
+    expect(after?.nextRunAtMs).toBe(dueAt);
+    expect(database.listScheduleRuns(created.id)).toHaveLength(0);
+  });
+
+  test("interval session mint failure does not advance nextRunAt", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 35_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "should not run" }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    const dueAt = now;
+    database.saveSession = () => {
+      throw new Error("cannot persist session");
+    };
+    await scheduler.tick();
+    const after = database.getSchedule(created.id);
+    expect(after?.enabled).toBe(true);
+    expect(after?.nextRunAtMs).toBe(dueAt);
+    expect(database.listScheduleRuns(created.id)).toHaveLength(0);
+  });
+
+  test("a mint failure on one due schedule does not skip the next due schedule", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = 45_000;
+    const seen: string[] = [];
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        seen.push(input.scheduleId);
+        return { response: "ran" };
+      },
+      () => now,
+    );
+    const first = scheduler.create({
+      task: "first",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:00:45.000Z" },
+      allowModelReads: true,
+    });
+    const second = scheduler.create({
+      task: "second",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:00:45.000Z" },
+      allowModelReads: true,
+    });
+    const due = database.listDueSchedules(now);
+    expect(due.map((row) => row.id).sort()).toEqual([first.id, second.id].sort());
+    const failId = due[0]!.id;
+    const okId = due[1]!.id;
+    let remainingFails = 1;
+    const originalSave = database.saveSession.bind(database);
+    database.saveSession = (state) => {
+      if (remainingFails > 0) {
+        remainingFails -= 1;
+        throw new Error("cannot persist session");
+      }
+      originalSave(state);
+    };
+    await scheduler.tick();
+    expect(seen).toEqual([okId]);
+    expect(database.getSchedule(failId)?.enabled).toBe(true);
+    expect(database.listScheduleRuns(failId)).toHaveLength(0);
+    expect(database.listScheduleRuns(okId)).toHaveLength(1);
+    expect(database.getSchedule(okId)?.enabled).toBe(false);
+  });
+
+  test("an interval fire that advances nextRunAt always has a schedule_runs session for that fire", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 40_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "ran" }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    const before = database.getSchedule(created.id)!;
+    now = before.nextRunAtMs!;
+    await scheduler.tick();
+    const after = database.getSchedule(created.id)!;
+    expect(after.nextRunAtMs).toBeGreaterThan(now);
+    const runs = database.listScheduleRuns(created.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("complete");
+    expect(database.loadSession(runs[0]!.sessionId)?.id).toBe(runs[0]!.sessionId);
+  });
+
+  test("runScheduled failure records an error run then consumes the firing", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 50_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        throw new Error("model down");
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "once",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:00:50.000Z" },
+      allowModelReads: true,
+    });
+    await scheduler.tick();
+    const after = database.getSchedule(created.id);
+    expect(after?.enabled).toBe(false);
+    expect(after?.nextRunAtMs).toBeNull();
+    const runs = database.listScheduleRuns(created.id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("error");
+    expect(runs[0]?.error).toBe("model down");
+    expect(database.loadSession(runs[0]!.sessionId)?.id).toBe(runs[0]!.sessionId);
   });
 });
 
