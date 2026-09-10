@@ -102,9 +102,16 @@ function dialOnce(
   const promise = clients
     .dial(spec, signal)
     .then(async (handle) => {
-      const tools = await handle.listTools();
-      clients.status.set(spec.name, { state: "connected", toolCount: tools.length });
-      return handle;
+      try {
+        const tools = await handle.listTools();
+        clients.status.set(spec.name, { state: "connected", toolCount: tools.length });
+        return handle;
+      } catch (err) {
+        try {
+          await handle.close();
+        } catch {}
+        throw err;
+      }
     })
     .catch((err: unknown) => {
       clients.handles.delete(spec.name);
