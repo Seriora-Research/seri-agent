@@ -115,6 +115,6 @@ export function disconnectCodex(
   clearCodexSubscription(configDir);
   if (hasLeftoverCodexSubscription()) ignoreCodexSubscription(configDir);
   onMessage(
-    "Disconnected ChatGPT plan. seri's local credential is gone; ~/.codex/auth.json was not touched.",
+    "Disconnected ChatGPT plan. seri's local credential is gone; access at OpenAI was not revoked.",
   );
 }

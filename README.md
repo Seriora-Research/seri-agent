@@ -169,7 +169,7 @@ Everything below is a slash command inside the session.
 | `/usage` | hosted allowance used |
 | `/exit` | end the session (or Ctrl-D) |
 | `/model` | open the model picker across all six providers and subscription routes |
-| `/setup` | add or replace a provider API key; connect or ignore seri, Grok, or Codex plans |
+| `/setup` | add or replace a provider API key; connect or ignore seri, Grok, or ChatGPT plans |
 | `/login` | sign in to a hosted seri account |
 | `/signup` | create a hosted seri account |
 | `/logout` | leave a hosted seri account |
