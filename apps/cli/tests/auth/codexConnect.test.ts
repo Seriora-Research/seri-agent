@@ -125,9 +125,13 @@ describe("disconnectCodex", () => {
       }),
     );
     const before = require("node:fs").readFileSync(leftover);
-    disconnectCodex(dir, () => {});
+    const messages: string[] = [];
+    disconnectCodex(dir, (message) => messages.push(message));
     expect(existsSync(join(dir, CODEX_SERI_AUTH_FILENAME))).toBe(false);
     expect(require("node:fs").readFileSync(leftover)).toEqual(before);
     expect(existsSync(join(dir, CODEX_IGNORE_FILENAME))).toBe(true);
+    expect(messages).toEqual([
+      "Disconnected ChatGPT plan. seri's local credential is gone; access at OpenAI was not revoked.",
+    ]);
   });
 });

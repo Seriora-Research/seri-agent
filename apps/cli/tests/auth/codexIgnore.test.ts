@@ -67,8 +67,9 @@ describe("codexIgnore", () => {
     expect(isCodexSubscriptionIgnored(configDir)).toBe(true);
     expect(readFileSync(authPath)).toEqual(before);
     expect(statSync(authPath).mtimeMs).toBe(mtime);
-    expect(messages.some((line) => /not touched/i.test(line))).toBe(true);
-    expect(messages.some((line) => /xAI/i.test(line))).toBe(false);
+    expect(messages).toEqual([
+      "Disconnected ChatGPT plan. seri's local credential is gone; access at OpenAI was not revoked.",
+    ]);
   });
 
   test("reconnectCodex clears the ignore and leaves Codex auth untouched", () => {
