@@ -24,6 +24,7 @@ describe("compileArgs", () => {
         entry: "./src/cli.ts",
         outfile: "dist/seri",
         commit: "cafebabecafebabecafebabecafebabecafebabe",
+        platform: "darwin",
       }),
     ).toEqual([
       "build",
@@ -40,7 +41,7 @@ describe("compileArgs", () => {
   });
 
   test("always defines SERI_BAKED_HOSTED_ACCOUNTS=false when no commit is known", () => {
-    const args = compileArgs({ entry: "./src/cli.ts", outfile: "dist/seri" });
+    const args = compileArgs({ entry: "./src/cli.ts", outfile: "dist/seri", platform: "darwin" });
     expect(args).toEqual([
       "build",
       "--compile",
@@ -61,7 +62,164 @@ describe("compileArgs", () => {
         outfile: "dist/seri-linux-x64",
         target: "bun-linux-x64",
         commit: "abc",
+        platform: "linux",
       }),
     ).toContain("bun-linux-x64");
+  });
+
+  test("defines OPENTUI_LIBC glibc for bun-linux-x64", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri-linux-x64",
+        target: "bun-linux-x64",
+        platform: "darwin",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri-linux-x64",
+      "--target",
+      "bun-linux-x64",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+      "--define",
+      'process.env.OPENTUI_LIBC="glibc"',
+    ]);
+  });
+
+  test("defines OPENTUI_LIBC musl for bun-linux-x64-musl", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri-linux-x64-musl",
+        target: "bun-linux-x64-musl",
+        platform: "linux",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri-linux-x64-musl",
+      "--target",
+      "bun-linux-x64-musl",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+      "--define",
+      'process.env.OPENTUI_LIBC="musl"',
+    ]);
+  });
+
+  test("defines OPENTUI_LIBC glibc for bun-linux-arm64", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri-linux-arm64",
+        target: "bun-linux-arm64",
+        platform: "darwin",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri-linux-arm64",
+      "--target",
+      "bun-linux-arm64",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+      "--define",
+      'process.env.OPENTUI_LIBC="glibc"',
+    ]);
+  });
+
+  test("omits OPENTUI_LIBC for bun-darwin-arm64 even on a linux host", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri-darwin-arm64",
+        target: "bun-darwin-arm64",
+        platform: "linux",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri-darwin-arm64",
+      "--target",
+      "bun-darwin-arm64",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+    ]);
+  });
+
+  test("defines OPENTUI_LIBC glibc when target is omitted on linux", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri",
+        platform: "linux",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+      "--define",
+      'process.env.OPENTUI_LIBC="glibc"',
+    ]);
+  });
+
+  test("omits OPENTUI_LIBC when target is omitted on darwin", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri",
+        platform: "darwin",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+    ]);
+  });
+
+  test("omits OPENTUI_LIBC for bun-windows-x64", () => {
+    expect(
+      compileArgs({
+        entry: "./src/cli.ts",
+        outfile: "dist/seri-windows-x64",
+        target: "bun-windows-x64",
+        platform: "linux",
+      }),
+    ).toEqual([
+      "build",
+      "--compile",
+      "--minify",
+      "./src/cli.ts",
+      "--outfile",
+      "dist/seri-windows-x64",
+      "--target",
+      "bun-windows-x64",
+      "--define",
+      "SERI_BAKED_HOSTED_ACCOUNTS=false",
+    ]);
   });
 });
