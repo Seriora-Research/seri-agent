@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile as readFileBytes } from "node:fs/promises";
 import { capToolResult } from "../capToolResult";
 import {
   IMAGE_TOO_LARGE,
@@ -8,10 +8,14 @@ import {
   toImageRead,
   type ImageRead,
 } from "../imageParts";
-import { setCachedEol } from "./eolCache";
+import { eolEpoch, setCachedEol } from "./eolCache";
 
-export function readFile(path: string, opts?: { images?: boolean }): string | ImageRead {
-  const bytes = new Uint8Array(readFileSync(path));
+export async function readFile(
+  path: string,
+  opts?: { images?: boolean; abortSignal?: AbortSignal },
+): Promise<string | ImageRead> {
+  const observedAt = eolEpoch();
+  const bytes = new Uint8Array(await readFileBytes(path, { signal: opts?.abortSignal }));
   const mime = sniffImageMime(bytes);
   if (mime !== undefined) {
     if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
@@ -19,6 +23,6 @@ export function readFile(path: string, opts?: { images?: boolean }): string | Im
     return toImageRead({ mime, bytes });
   }
   const raw = Buffer.from(bytes).toString("utf8");
-  setCachedEol(path, raw.includes("\r\n") ? "CRLF" : "LF");
+  setCachedEol(path, raw.includes("\r\n") ? "CRLF" : "LF", observedAt);
   return capToolResult(raw.replace(/\r\n/g, "\n"));
 }

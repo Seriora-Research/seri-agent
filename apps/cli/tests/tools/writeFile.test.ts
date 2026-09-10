@@ -76,10 +76,10 @@ describe("writeFile", () => {
     }
   });
 
-  test("a write following a read on the same path reuses the read's cached EOL instead of re-reading the file", () => {
+  test("a write following a read on the same path reuses the read's cached EOL instead of re-reading the file", async () => {
     const filePath = join(tmpRoot, "crlf-cache.txt");
     writeFileSync(filePath, "old\r\ncontent\r\n");
-    readFile(filePath);
+    await readFile(filePath);
 
     writeFileSync(filePath, "old\ncontent\n");
 
@@ -87,10 +87,10 @@ describe("writeFile", () => {
     expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
   });
 
-  test("a write following a capped read still reuses the raw file's cached EOL", () => {
+  test("a write following a capped read still reuses the raw file's cached EOL", async () => {
     const filePath = join(tmpRoot, "big-crlf.txt");
     writeFileSync(filePath, `old\r\n${"x".repeat(40_000)}\r\n`);
-    readFile(filePath);
+    await readFile(filePath);
 
     writeFileSync(filePath, "old\ncontent\n");
 
@@ -103,7 +103,7 @@ describe("writeFile", () => {
     async () => {
       const filePath = join(tmpRoot, "crlf-then-shell.txt");
       writeFileSync(filePath, "old\r\ncontent\r\n");
-      readFile(filePath);
+      await readFile(filePath);
 
       await runBash("echo hi");
       writeFileSync(filePath, "old\ncontent\n");

@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
-import { getCachedEol, setCachedEol } from "./eolCache";
+import { advanceEolEpoch, getCachedEol, setCachedEol } from "./eolCache";
 
 const RESERVED_NAMES = new Set([
   "CON",
@@ -80,6 +80,7 @@ export function writeFile(
   for (let attempt = 1; attempt <= MAX_RENAME_ATTEMPTS; attempt++) {
     try {
       renameFn(tempPath, path);
+      advanceEolEpoch();
       setCachedEol(path, eol);
       return { previous };
     } catch (err) {
