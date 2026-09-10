@@ -45,9 +45,9 @@ export function createSetupHandlers(opts: {
   getPendingSetup: () => SetupState | undefined;
   configDir: string;
   onPanelClosed?: () => void;
-  onConnectGrok?: () => Promise<void>;
-  onConnectCodex?: () => Promise<void>;
-  onConnectSeri?: () => Promise<void>;
+  onConnectGrok?: () => Promise<boolean | void>;
+  onConnectCodex?: () => Promise<boolean | void>;
+  onConnectSeri?: () => Promise<boolean | void>;
 }): {
   onSetupSelect: (row: SetupProviderRow) => void;
   onSetupKeyEntered: (provider: ModelProvider, value: string) => Promise<void>;
@@ -63,6 +63,17 @@ export function createSetupHandlers(opts: {
     onConnectCodex,
     onConnectSeri,
   } = opts;
+
+  function dismissSetupThenConnect(connect: (() => Promise<boolean | void>) | undefined): void {
+    dispatch({ type: "setup-resolved" });
+    if (connect === undefined) return;
+    void connect().then(
+      (ok) => {
+        if (ok === true) onPanelClosed?.();
+      },
+      () => undefined,
+    );
+  }
 
   function setupListState(selectedId?: string): SetupState {
     const rows = decideSetupOpen(configDir);
@@ -117,8 +128,7 @@ export function createSetupHandlers(opts: {
           });
           return;
         }
-        dispatch({ type: "setup-resolved" });
-        void onConnectSeri?.();
+        dismissSetupThenConnect(onConnectSeri);
         return;
       }
       if (row.status.status === "connected") {
@@ -224,8 +234,7 @@ export function createSetupHandlers(opts: {
     if (pending?.step === "confirm-connect") {
       if (pending.provider === "openai") {
         if (pending.action === "connect") {
-          dispatch({ type: "setup-resolved" });
-          void onConnectCodex?.();
+          dismissSetupThenConnect(onConnectCodex);
           return;
         }
         try {
@@ -251,8 +260,7 @@ export function createSetupHandlers(opts: {
         dispatchSetupList("subscription:seri");
         return;
       }
-      dispatch({ type: "setup-resolved" });
-      void onConnectGrok?.();
+      dismissSetupThenConnect(onConnectGrok);
       return;
     }
     if (pending?.step === "confirm-remove") {
@@ -310,11 +318,11 @@ export function createAuthHandlers(opts: {
   configDir: string;
   hostedAccountAccess?: () => HostedAccountAccess;
 }): {
-  onLogin: (mode: "login" | "signup") => Promise<void>;
+  onLogin: (mode: "login" | "signup") => Promise<boolean>;
   onLogout: () => void;
   onAbandon: () => void;
-  onConnectGrok: () => Promise<void>;
-  onConnectCodex: () => Promise<void>;
+  onConnectGrok: () => Promise<boolean>;
+  onConnectCodex: () => Promise<boolean>;
 } {
   const { dispatch, deps, configDir } = opts;
   const accessFn = opts.hostedAccountAccess ?? hostedAccountAccess;
@@ -326,10 +334,10 @@ export function createAuthHandlers(opts: {
   let attemptCounter = 0;
   let currentController: AbortController | undefined;
 
-  async function onLogin(mode: "login" | "signup"): Promise<void> {
+  async function onLogin(mode: "login" | "signup"): Promise<boolean> {
     if (accessFn() === "unavailable") {
       dispatch({ type: "transcript-append", line: HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE });
-      return;
+      return false;
     }
     const myAttempt = ++attemptCounter;
     const controller = new AbortController();
@@ -356,11 +364,12 @@ export function createAuthHandlers(opts: {
         },
         signal: controller.signal,
       });
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({ type: "auth-resolved" });
       dispatch({ type: "auth-offer", show: decideAuthOffer(configDir) });
+      return true;
     } catch (err) {
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({
         type: "auth-step",
         state: {
@@ -369,10 +378,11 @@ export function createAuthHandlers(opts: {
           error: true,
         },
       });
+      return false;
     }
   }
 
-  async function onConnectGrok(): Promise<void> {
+  async function onConnectGrok(): Promise<boolean> {
     const myAttempt = ++attemptCounter;
     const controller = new AbortController();
     currentController = controller;
@@ -397,10 +407,11 @@ export function createAuthHandlers(opts: {
         },
         signal: controller.signal,
       });
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({ type: "auth-resolved" });
+      return true;
     } catch (err) {
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({
         type: "auth-step",
         state: {
@@ -409,10 +420,11 @@ export function createAuthHandlers(opts: {
           error: true,
         },
       });
+      return false;
     }
   }
 
-  async function onConnectCodex(): Promise<void> {
+  async function onConnectCodex(): Promise<boolean> {
     const myAttempt = ++attemptCounter;
     const controller = new AbortController();
     currentController = controller;
@@ -432,10 +444,11 @@ export function createAuthHandlers(opts: {
         },
         signal: controller.signal,
       });
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({ type: "auth-resolved" });
+      return true;
     } catch (err) {
-      if (myAttempt !== attemptCounter) return;
+      if (myAttempt !== attemptCounter) return false;
       dispatch({
         type: "auth-step",
         state: {
@@ -444,6 +457,7 @@ export function createAuthHandlers(opts: {
           error: true,
         },
       });
+      return false;
     }
   }
 
