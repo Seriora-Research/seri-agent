@@ -31,7 +31,7 @@ repository; general assistant work is a planned direction.
 - **Six providers in one harness.** Groq, OpenRouter, Anthropic, OpenAI, Google, and xAI.
   Switch with `/model` mid-session without losing context.
 - **Three ways to pay, including consumer subscriptions.** A BYOK API key, a hosted seri
-  account (`/login`), or a **Grok** or **ChatGPT (Codex)** subscription from `/setup`. Keys and
+  account (`/login`), or a **Grok** or **ChatGPT** subscription from `/setup`. Keys and
   subscriptions live side by side in the same session.
 - **Extensibility without a source change.** Agents, skills, rules, MCP servers, and hooks are
   files you drop in `.seri/` (this project) or under your profile (every project).
@@ -65,13 +65,12 @@ serves it.
 | How you pay | What it is |
 | --- | --- |
 | **Key** | your own API key for that provider (`/setup`, or the env var above) |
-| **Subscription** | a plan you already pay for — **seri** (`/login`, free / pro / max / ultra), **Grok** (SuperGrok / X Premium+) on xAI, or **ChatGPT / Codex** on OpenAI |
+| **Subscription** | a plan you already pay for — **seri** (`/login`, free / pro / max / ultra), **Grok** (SuperGrok / X Premium+) on xAI, or **ChatGPT** on OpenAI |
 | **Hosted** | the seri plan above: a seri account that routes on your behalf |
 
-`/setup` lists API keys and Subscriptions in one panel. seri, Grok, and Codex each appear as
-their own subscription row. Connect a Grok plan with a browser sign-in. Connect a ChatGPT plan
-by logging in with the Codex CLI (`codex login`); seri reads that login and does not host its
-own ChatGPT OAuth. Disconnect is local to this profile and leaves the login in place so you
+`/setup` lists API keys and Subscriptions in one panel. seri, Grok, and ChatGPT each appear as
+their own subscription row. Connect a Grok plan or a ChatGPT plan with a browser sign-in.
+Disconnect is local to this profile and leaves the remote login in place so you
 can switch back to the plan or to your own keys.
 
 A subscription and a metered key can both be present. For that vendor the subscription wins, and
@@ -131,7 +130,7 @@ seri
 ```
 
 That opens the TUI. On a first run, guided setup asks how you want to pay: paste a provider
-key and pick a model, or connect a seri, Grok, or ChatGPT (Codex) subscription from `/setup`.
+key and pick a model, or connect a seri, Grok, or ChatGPT subscription from `/setup`.
 Signing into a hosted account on the welcome splash (`Log in` / `Sign up`) skips setup — the
 seri plan covers OpenRouter without a local key, and `/setup` lists it under Subscriptions
 with the plan name (free / pro / max / ultra). OpenRouter stays a normal API-key row for a
