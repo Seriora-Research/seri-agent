@@ -7,9 +7,7 @@ export type TranscriptMeasureCache = {
   size(): number;
 };
 
-export function createTranscriptMeasureCache(
-  onInvalidate: () => void,
-): TranscriptMeasureCache {
+export function createTranscriptMeasureCache(onInvalidate: () => void): TranscriptMeasureCache {
   // Slice keeps the same entry objects; index is only a paint coordinate, so a
   // front-drop at constant length would reuse stale heights if we keyed by index.
   const rows = new Map<

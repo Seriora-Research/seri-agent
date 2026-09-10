@@ -3180,4 +3180,3 @@ describe("tuiReducer: live transcript cap", () => {
     expect(state.transcript).toEqual([]);
   });
 });
-
