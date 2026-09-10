@@ -71,6 +71,25 @@ describe("a failed dial is evicted", () => {
   });
 });
 
+describe("a successful dial whose listTools then fails", () => {
+  test("closes the handle, drops it from the pool, and rethrows the listTools error", async () => {
+    let closed = false;
+    const handle = fakeHandle({
+      listTools: async () => {
+        throw new Error("bad schema");
+      },
+      close: async () => {
+        closed = true;
+        throw new Error("close failed");
+      },
+    });
+    const clients = createMcpClients(async () => handle);
+    await expect(callMcpTool(clients, spec("exa"), "web_search", {})).rejects.toThrow(/bad schema/);
+    expect(closed).toBe(true);
+    expect(clients.handles.has("exa")).toBe(false);
+  });
+});
+
 async function expectRejectsPromptly(promise: Promise<unknown>, ms = 200): Promise<void> {
   let timedOut = false;
   const timer = new Promise<never>((_resolve, reject) => {
