@@ -2925,8 +2925,10 @@ describe("App", () => {
       await flush(setup);
 
       const frame = setup.captureCharFrame();
+      expect(frame).toContain("Disconnect ChatGPT plan");
       expect(frame).toContain("local credential only");
-      expect(frame).toContain("~/.codex/auth.json is not touched");
+      expect(frame).toContain("access at OpenAI is not revoked");
+      expect(frame).not.toContain("codex");
       expect(frame).not.toContain("Grok Build");
 
       setup.mockInput.pressKey("y");
@@ -2973,6 +2975,7 @@ describe("App", () => {
       const frame = setup.captureCharFrame();
       expect(frame).toContain("Re-enable ChatGPT plan");
       expect(frame).toContain("local ignore");
+      expect(frame).not.toContain("codex");
       expect(frame).not.toContain("Grok Build's OAuth client id");
 
       setup.mockInput.pressKey("y");

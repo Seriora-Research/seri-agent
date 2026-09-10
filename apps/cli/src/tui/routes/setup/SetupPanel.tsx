@@ -82,7 +82,7 @@ export function SetupPanel({
     if (pendingSetup.provider === "openai" && pendingSetup.action !== "connect") {
       return (
         <ConfirmPrompt
-          subject="Re-enable ChatGPT plan (this only clears the local ignore; ~/.codex/auth.json is unchanged)"
+          subject="Re-enable ChatGPT plan (this only clears the local ignore)"
           onConfirm={() =>
             onSetupRemove?.({
               kind: "subscription",
@@ -137,7 +137,7 @@ export function SetupPanel({
   if (pendingSetup.step === "confirm-disconnect") {
     const subject =
       pendingSetup.provider === "openai"
-        ? "Disconnect ChatGPT plan (local credential only; ~/.codex/auth.json is not touched)"
+        ? "Disconnect ChatGPT plan (local credential only; access at OpenAI is not revoked)"
         : pendingSetup.provider === "seri"
           ? "Disconnect seri plan (this profile will use your API keys; you stay logged in)"
           : "Disconnect Grok subscription (local credential only; xAI access is not revoked)";

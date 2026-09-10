@@ -125,6 +125,12 @@ describe("command catalog completeness", () => {
     expect(slashInUsage).toEqual([]);
   });
 
+  test("/setup describes ChatGPT plans, not Codex", () => {
+    const description = commandByName("/setup")?.description ?? "";
+    expect(description).toContain("ChatGPT");
+    expect(description).not.toContain("Codex");
+  });
+
   test("SLASH_COMMANDS is the session slice and does not include /exit", () => {
     expect([...SLASH_COMMANDS.keys()]).toEqual([...EXPECTED_SESSION]);
     expect(SLASH_COMMANDS.has("/exit")).toBe(false);
