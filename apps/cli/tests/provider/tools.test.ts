@@ -40,6 +40,21 @@ describe("toolDefinitions", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test("read_file execute forwards abortSignal", async () => {
+    tmpDir = makeTmpDir();
+    const filePath = join(tmpDir, "a.txt");
+    writeFileSync(filePath, "hello");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      toolDefinitions.read_file.execute?.(
+        { path: filePath },
+        { ...execOpts, abortSignal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ name: "AbortError", code: "ABORT_ERR" });
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   test("read_file execute caps an oversized file before it would enter messages", async () => {
     tmpDir = makeTmpDir();
     const filePath = join(tmpDir, "big.txt");

@@ -120,7 +120,10 @@ describe("readFile", () => {
     writeFileSync(filePath, "secret\n");
     const controller = new AbortController();
     controller.abort();
-    await expect(readFile(filePath, { abortSignal: controller.signal })).rejects.toThrow();
+    await expect(readFile(filePath, { abortSignal: controller.signal })).rejects.toMatchObject({
+      name: "AbortError",
+      code: "ABORT_ERR",
+    });
   });
 
   test.skipIf(process.platform === "win32")(

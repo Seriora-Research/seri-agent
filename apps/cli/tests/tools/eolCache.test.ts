@@ -1,23 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import {
-  advanceEolEpoch,
-  clearEolCache,
-  eolEpoch,
-  getCachedEol,
-  setCachedEol,
-} from "../../src/tools/eolCache";
+import { randomUUID } from "node:crypto";
+import { advanceEolEpoch, eolEpoch, getCachedEol, setCachedEol } from "../../src/tools/eolCache";
+
+function key(label: string): string {
+  return `eol-cache-test:${label}:${randomUUID()}`;
+}
 
 describe("eolCache", () => {
-  test("setCachedEol ignores an observation captured before a cache clear", () => {
-    const path = "/tmp/seri-eol-clear.txt";
-    const observedAt = eolEpoch();
-    clearEolCache();
-    setCachedEol(path, "CRLF", observedAt);
-    expect(getCachedEol(path)).toBeUndefined();
-  });
-
   test("setCachedEol ignores an observation captured before a later write", () => {
-    const path = "/tmp/seri-eol-write.txt";
+    const path = key("write");
     const observedAt = eolEpoch();
     advanceEolEpoch();
     setCachedEol(path, "LF");
@@ -25,8 +16,16 @@ describe("eolCache", () => {
     expect(getCachedEol(path)).toBe("LF");
   });
 
+  test("setCachedEol ignores a stale observation when the path was never cached", () => {
+    const path = key("stale");
+    const observedAt = eolEpoch();
+    advanceEolEpoch();
+    setCachedEol(path, "CRLF", observedAt);
+    expect(getCachedEol(path)).toBeUndefined();
+  });
+
   test("setCachedEol still records an observation from the current epoch", () => {
-    const path = "/tmp/seri-eol-current.txt";
+    const path = key("current");
     const observedAt = eolEpoch();
     setCachedEol(path, "CRLF", observedAt);
     expect(getCachedEol(path)).toBe("CRLF");
