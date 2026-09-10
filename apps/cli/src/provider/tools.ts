@@ -20,7 +20,8 @@ export function createToolDefinitions(cwd: string) {
   const readFileTool = tool({
     description: `Read a file's contents as text, or return an image part for PNG/JPEG/GIF/WebP when the model accepts images. Text is capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file.`,
     inputSchema: z.object({ path: z.string() }),
-    execute: ({ path }) => readFile(resolveAgainstCwd(cwd, path), { images: true }),
+    execute: ({ path }, { abortSignal }) =>
+      readFile(resolveAgainstCwd(cwd, path), { images: true, abortSignal }),
   });
 
   const writeFileTool = tool({
@@ -143,8 +144,8 @@ export function createScheduledToolDefinitions(cwd: string) {
     read_file: tool({
       description: `Read a file's contents as text, capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file. Scheduled runs do not ingest image files.`,
       inputSchema: all.read_file.inputSchema,
-      execute: ({ path }: { path: string }) =>
-        readFile(resolveAgainstCwd(cwd, path), { images: false }),
+      execute: ({ path }: { path: string }, { abortSignal }) =>
+        readFile(resolveAgainstCwd(cwd, path), { images: false, abortSignal }),
     }),
     grep: all.grep,
     glob: all.glob,

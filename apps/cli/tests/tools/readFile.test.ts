@@ -117,6 +117,14 @@ describe("readFile", () => {
     );
   });
 
+  test("an already-aborted signal rejects instead of reading", async () => {
+    const filePath = join(tmpRoot, "abort.txt");
+    writeFileSync(filePath, "secret\n");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(readFile(filePath, { abortSignal: controller.signal })).rejects.toThrow();
+  });
+
   test.skipIf(process.platform === "win32")(
     "sibling FIFO reads complete, which a blocking readFile cannot",
     async () => {
@@ -130,7 +138,8 @@ describe("readFile", () => {
         `const m = await import(${JSON.stringify(modulePath)});` +
         `const { writeFile } = await import("node:fs/promises");` +
         `const reads = Promise.all([m.readFile(${JSON.stringify(a)}), m.readFile(${JSON.stringify(b)})]);` +
-        `await Promise.all([writeFile(${JSON.stringify(a)}, "alpha\\n"), writeFile(${JSON.stringify(b)}, "beta\\n")]);` +
+        `await writeFile(${JSON.stringify(b)}, "beta\\n");` +
+        `await writeFile(${JSON.stringify(a)}, "alpha\\n");` +
         `const [ra, rb] = await reads;` +
         `if (ra !== "alpha\\n" || rb !== "beta\\n") { console.error(JSON.stringify({ ra, rb })); process.exit(2); }`;
 

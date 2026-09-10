@@ -12,10 +12,10 @@ import { eolEpoch, setCachedEol } from "./eolCache";
 
 export async function readFile(
   path: string,
-  opts?: { images?: boolean },
+  opts?: { images?: boolean; abortSignal?: AbortSignal },
 ): Promise<string | ImageRead> {
   const observedAt = eolEpoch();
-  const bytes = new Uint8Array(await readFileBytes(path));
+  const bytes = new Uint8Array(await readFileBytes(path, { signal: opts?.abortSignal }));
   const mime = sniffImageMime(bytes);
   if (mime !== undefined) {
     if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
