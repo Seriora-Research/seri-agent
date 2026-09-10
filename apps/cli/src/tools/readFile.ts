@@ -8,12 +8,13 @@ import {
   toImageRead,
   type ImageRead,
 } from "../imageParts";
-import { setCachedEol } from "./eolCache";
+import { eolEpoch, setCachedEol } from "./eolCache";
 
 export async function readFile(
   path: string,
   opts?: { images?: boolean },
 ): Promise<string | ImageRead> {
+  const observedAt = eolEpoch();
   const bytes = new Uint8Array(await readFileBytes(path));
   const mime = sniffImageMime(bytes);
   if (mime !== undefined) {
@@ -22,6 +23,6 @@ export async function readFile(
     return toImageRead({ mime, bytes });
   }
   const raw = Buffer.from(bytes).toString("utf8");
-  setCachedEol(path, raw.includes("\r\n") ? "CRLF" : "LF");
+  setCachedEol(path, raw.includes("\r\n") ? "CRLF" : "LF", observedAt);
   return capToolResult(raw.replace(/\r\n/g, "\n"));
 }

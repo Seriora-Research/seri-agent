@@ -4,8 +4,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { clearEolCache, getCachedEol } from "../../src/tools/eolCache";
 import { readFile } from "../../src/tools/readFile";
 import { spawnCollect } from "../../src/tools/spawnCollect";
+import { writeFile } from "../../src/tools/writeFile";
 
 let tmpRoot: string;
 
@@ -138,6 +140,38 @@ describe("readFile", () => {
         exitCode: result.exitCode,
         stderr: result.stderr,
       }).toEqual({ timedOut: false, exitCode: 0, stderr: "" });
+    },
+    15000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "an in-flight read does not re-seed the EOL cache after a later write",
+    async () => {
+      const fifo = join(tmpRoot, "stale.fifo");
+      expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+
+      const pending = readFile(fifo);
+      writeFile(join(tmpRoot, "other.txt"), "new\n", { eol: "LF" });
+      const { writeFile: writeFifo } = await import("node:fs/promises");
+      await writeFifo(fifo, "old\r\n");
+      await pending;
+      expect(getCachedEol(fifo)).toBeUndefined();
+    },
+    15000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "an in-flight read does not re-seed the EOL cache after a shell-style clear",
+    async () => {
+      const fifo = join(tmpRoot, "cleared.fifo");
+      expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+
+      const pending = readFile(fifo);
+      clearEolCache();
+      const { writeFile: writeFifo } = await import("node:fs/promises");
+      await writeFifo(fifo, "old\r\n");
+      await pending;
+      expect(getCachedEol(fifo)).toBeUndefined();
     },
     15000,
   );
