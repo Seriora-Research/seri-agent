@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile as readFileBytes } from "node:fs/promises";
 import { capToolResult } from "../capToolResult";
 import {
   IMAGE_TOO_LARGE,
@@ -10,8 +10,11 @@ import {
 } from "../imageParts";
 import { setCachedEol } from "./eolCache";
 
-export function readFile(path: string, opts?: { images?: boolean }): string | ImageRead {
-  const bytes = new Uint8Array(readFileSync(path));
+export async function readFile(
+  path: string,
+  opts?: { images?: boolean },
+): Promise<string | ImageRead> {
+  const bytes = new Uint8Array(await readFileBytes(path));
   const mime = sniffImageMime(bytes);
   if (mime !== undefined) {
     if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
