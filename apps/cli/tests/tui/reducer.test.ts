@@ -14,6 +14,7 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
+import { MAX_LIVE_TRANSCRIPT_ROWS } from "../../src/tui/util/liveTranscript";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
 import { buildFileChange } from "../../src/fileChange";
 import { TOOL_INDENT } from "../../src/tui/theme/spacing";
@@ -3127,3 +3128,56 @@ describe("tuiReducer: reasoning spans", () => {
     expect(nextTurn.reasoning).toEqual({ expanded: false });
   });
 });
+
+describe("tuiReducer: live transcript cap", () => {
+  test("drops the oldest live rows past MAX_LIVE_TRANSCRIPT_ROWS", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "keep me" }];
+    let state = initialTuiState(session({ messages }));
+    for (let i = 0; i <= MAX_LIVE_TRANSCRIPT_ROWS; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    expect(state.transcript).toHaveLength(MAX_LIVE_TRANSCRIPT_ROWS);
+    expect(state.transcript[0]).toEqual({ role: "system", text: "line 1" });
+    expect(state.transcript.at(-1)).toEqual({
+      role: "system",
+      text: `line ${MAX_LIVE_TRANSCRIPT_ROWS}`,
+    });
+    expect(state.session.messages).toEqual([{ role: "user", content: "keep me" }]);
+  });
+
+  test("transcript-cleared still empties a capped transcript", () => {
+    let state = initialTuiState(session());
+    for (let i = 0; i <= MAX_LIVE_TRANSCRIPT_ROWS; i++) {
+      state = tuiReducer(state, { type: "transcript-append", line: `line ${i}` });
+    }
+    expect(state.transcript).toHaveLength(MAX_LIVE_TRANSCRIPT_ROWS);
+    const next = tuiReducer(state, { type: "transcript-cleared" });
+    expect(next.transcript).toEqual([]);
+  });
+
+  test("caps each child transcript independently", () => {
+    let state = tuiReducer(
+      initialTuiState(session()),
+      childEvent("t1:0", "explore", "find a", { type: "child-started" }),
+    );
+    for (let i = 0; i <= MAX_LIVE_TRANSCRIPT_ROWS; i++) {
+      state = tuiReducer(
+        state,
+        childEvent("t1:0", "explore", "find a", { type: "text-delta", text: `line ${i}` }),
+      );
+      state = tuiReducer(
+        state,
+        childEvent("t1:0", "explore", "find a", { type: "done", reason: "no-tool-call" }),
+      );
+    }
+    const child = state.subagents[0];
+    expect(child?.transcript).toHaveLength(MAX_LIVE_TRANSCRIPT_ROWS);
+    expect(child?.transcript[0]).toEqual({ role: "assistant", text: "line 1" });
+    expect(child?.transcript.at(-1)).toEqual({
+      role: "assistant",
+      text: `line ${MAX_LIVE_TRANSCRIPT_ROWS}`,
+    });
+    expect(state.transcript).toEqual([]);
+  });
+});
+
