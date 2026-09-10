@@ -66,11 +66,13 @@ export function createSetupHandlers(opts: {
 
   function dismissSetupThenConnect(connect: (() => Promise<boolean | void>) | undefined): void {
     dispatch({ type: "setup-resolved" });
-    void (async () => {
-      if (connect === undefined) return;
-      const result = await connect().catch(() => false);
-      if (result !== false) onPanelClosed?.();
-    })();
+    if (connect === undefined) return;
+    void connect().then(
+      (ok) => {
+        if (ok === true) onPanelClosed?.();
+      },
+      () => undefined,
+    );
   }
 
   function setupListState(selectedId?: string): SetupState {
