@@ -132,7 +132,8 @@ export const COMMAND_META: readonly CommandMeta[] = [
   {
     name: "/setup",
     surface: "tui",
-    description: "add or replace a provider API key; connect or ignore seri, Grok, or ChatGPT plans",
+    description:
+      "add or replace a provider API key; connect or ignore seri, Grok, or ChatGPT plans",
     argsUsage: "",
     accepts: (args) => args.length === 0,
   },
