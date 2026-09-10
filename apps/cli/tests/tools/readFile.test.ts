@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { readFile } from "../../src/tools/readFile";
+import { spawnCollect } from "../../src/tools/spawnCollect";
 
 let tmpRoot: string;
 
@@ -109,4 +112,31 @@ describe("readFile", () => {
       "this file is an image; scheduled runs do not ingest screenshots",
     );
   });
+
+  test.skipIf(process.platform === "win32")(
+    "sibling FIFO reads complete, which a blocking readFile cannot",
+    async () => {
+      const a = join(tmpRoot, "a.fifo");
+      const b = join(tmpRoot, "b.fifo");
+      expect(spawnSync("mkfifo", [a]).status).toBe(0);
+      expect(spawnSync("mkfifo", [b]).status).toBe(0);
+
+      const modulePath = pathToFileURL(join(import.meta.dir, "../../src/tools/readFile.ts")).href;
+      const script =
+        `const m = await import(${JSON.stringify(modulePath)});` +
+        `const { writeFile } = await import("node:fs/promises");` +
+        `const reads = Promise.all([m.readFile(${JSON.stringify(a)}), m.readFile(${JSON.stringify(b)})]);` +
+        `await Promise.all([writeFile(${JSON.stringify(a)}, "alpha\\n"), writeFile(${JSON.stringify(b)}, "beta\\n")]);` +
+        `const [ra, rb] = await reads;` +
+        `if (ra !== "alpha\\n" || rb !== "beta\\n") { console.error(JSON.stringify({ ra, rb })); process.exit(2); }`;
+
+      const result = await spawnCollect(process.execPath, ["-e", script], 2000);
+      expect({
+        timedOut: result.timedOut,
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+      }).toEqual({ timedOut: false, exitCode: 0, stderr: "" });
+    },
+    15000,
+  );
 });
