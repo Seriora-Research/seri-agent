@@ -41,7 +41,7 @@ import {
   findSafeEvictionBoundary,
   isContextOverflowError,
   MAX_RETRIES,
-  streamOutputCap,
+  requestOutputCap,
 } from "./compaction";
 import {
   type CompactCursor,
@@ -431,7 +431,7 @@ export async function* runLoop(opts: {
     let streamCap =
       opts.credential === "subscription" && opts.provider === "openai"
         ? undefined
-        : streamOutputCap(maxOutputTokens);
+        : requestOutputCap(maxOutputTokens);
 
     const applyOpenRouterAffordRetry = (err: unknown): boolean => {
       if (creditRetried || opts.provider !== "openrouter" || streamCap === undefined) return false;

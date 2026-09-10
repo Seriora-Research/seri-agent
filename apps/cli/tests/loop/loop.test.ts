@@ -310,7 +310,7 @@ describe("runLoop", () => {
     });
   }
 
-  test("sends min(catalog maxOutputTokens, 32000) on streamText", async () => {
+  test("sends catalog maxOutputTokens on streamText", async () => {
     const model = new MockLanguageModelV4({
       doStream: async () => streamResult(textOnlyChunks("Hello")),
     });
@@ -325,7 +325,24 @@ describe("runLoop", () => {
         catalog: fableCatalog,
       }),
     );
-    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(32_000);
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(128_000);
+  });
+
+  test("native Anthropic also sends the catalog cap", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "anthropic",
+        maxOutputTokens: 128_000,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(128_000);
   });
 
   test("sends 32000 when the catalog omits maxOutputTokens", async () => {
@@ -402,7 +419,7 @@ describe("runLoop", () => {
     expect(events.find((e) => e.type === "error")).toBeUndefined();
     expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
     expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
-    expect(model.doStreamCalls.some((call) => call.maxOutputTokens === 32_000)).toBe(true);
+    expect(model.doStreamCalls.some((call) => call.maxOutputTokens === 128_000)).toBe(true);
     expect(model.doStreamCalls.at(-1)?.maxOutputTokens).toBe(10_000);
   });
 
