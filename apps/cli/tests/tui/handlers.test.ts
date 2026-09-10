@@ -437,7 +437,10 @@ describe("onSetupSelect for a Codex subscription row", () => {
     await Promise.race([
       closedPromise,
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("guided setup did not close after ChatGPT connect")), 200),
+        setTimeout(
+          () => reject(new Error("guided setup did not close after ChatGPT connect")),
+          200,
+        ),
       ),
     ]);
     expect(closed).toBe(1);
