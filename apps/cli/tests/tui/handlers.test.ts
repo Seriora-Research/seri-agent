@@ -400,6 +400,76 @@ describe("onSetupSelect for a Codex subscription row", () => {
     expect(step?.type === "setup-step" && step.state.step).toBe("list");
     expect(existsSync(join(configDir, CODEX_IGNORE_FILENAME))).toBe(false);
   });
+
+  test("confirm-connect ChatGPT closes guided setup after a successful connect", async () => {
+    let closed = 0;
+    let resolveConnect!: () => void;
+    const connected = new Promise<boolean>((resolve) => {
+      resolveConnect = () => resolve(true);
+    });
+    const closedPromise = new Promise<void>((resolve) => {
+      const { dispatch } = actionsCollector();
+      const { onSetupRemove } = createSetupHandlers({
+        dispatch,
+        getPendingSetup: () => ({
+          step: "confirm-connect",
+          provider: "openai",
+          action: "connect",
+        }),
+        configDir,
+        onConnectCodex: () => connected,
+        onPanelClosed: () => {
+          closed += 1;
+          resolve();
+        },
+      });
+
+      onSetupRemove({
+        kind: "subscription",
+        provider: "openai",
+        status: { status: "not-connected" },
+        removable: false,
+      });
+    });
+
+    expect(closed).toBe(0);
+    resolveConnect();
+    await Promise.race([
+      closedPromise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("guided setup did not close after ChatGPT connect")), 200),
+      ),
+    ]);
+    expect(closed).toBe(1);
+  });
+
+  test("a failed ChatGPT connect does not close guided setup", async () => {
+    let closed = 0;
+    const { dispatch } = actionsCollector();
+    const { onSetupRemove } = createSetupHandlers({
+      dispatch,
+      getPendingSetup: () => ({
+        step: "confirm-connect",
+        provider: "openai",
+        action: "connect",
+      }),
+      configDir,
+      onConnectCodex: async () => false,
+      onPanelClosed: () => {
+        closed += 1;
+      },
+    });
+
+    onSetupRemove({
+      kind: "subscription",
+      provider: "openai",
+      status: { status: "not-connected" },
+      removable: false,
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(0);
+  });
 });
 
 describe("dispatchConfigList (via onConfigBack)", () => {
@@ -620,8 +690,8 @@ describe("createAuthHandlers hosted accounts", () => {
       hostedAccountAccess: () => "unavailable",
     });
 
-    await onLogin("login");
-    await onLogin("signup");
+    expect(await onLogin("login")).toBe(false);
+    expect(await onLogin("signup")).toBe(false);
 
     expect(loginCalls).toBe(0);
     expect(actions).toEqual([
@@ -629,5 +699,20 @@ describe("createAuthHandlers hosted accounts", () => {
       { type: "transcript-append", line: HOSTED_ACCOUNTS_UNAVAILABLE_MESSAGE },
     ]);
     expect(actions.some((action) => action.type === "auth-requested")).toBe(false);
+  });
+
+  test("a throwing ChatGPT connect returns false", async () => {
+    const { dispatch } = actionsCollector();
+    const { onConnectCodex } = createAuthHandlers({
+      dispatch,
+      deps: {
+        connectCodex: async () => {
+          throw new Error("denied");
+        },
+      },
+      configDir: "unused",
+    });
+
+    expect(await onConnectCodex()).toBe(false);
   });
 });
