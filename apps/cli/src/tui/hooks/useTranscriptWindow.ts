@@ -1,5 +1,6 @@
-import type { BoxRenderable } from "@opentui/core";
 import { useRef, useState } from "react";
+import type { TranscriptEntry } from "../util/format";
+import { createTranscriptMeasureCache } from "../util/transcriptMeasureCache";
 import {
   offsetsFromHeights,
   visibleTranscriptWindow,
@@ -14,50 +15,39 @@ export type TranscriptWindowMetrics = {
 };
 
 export function useTranscriptWindow(
-  length: number,
+  transcript: readonly TranscriptEntry[],
   metrics: TranscriptWindowMetrics | undefined,
 ): VisibleTranscriptWindow & {
-  onRowSizeChange: (index: number) => (this: BoxRenderable) => void;
+  onRowSizeChange: (entry: TranscriptEntry) => (this: { height: number }) => void;
 } {
-  const heightsRef = useRef<(number | undefined)[]>([]);
-  const measureCache = useRef(new Map<number, (this: BoxRenderable) => void>());
-  const prevColumns = useRef(metrics?.columns);
   const [, setGen] = useState(0);
+  const cacheRef = useRef(createTranscriptMeasureCache(() => setGen((g) => g + 1)));
+  const prevColumns = useRef(metrics?.columns);
 
   if (metrics !== undefined && prevColumns.current !== metrics.columns) {
-    heightsRef.current = [];
+    cacheRef.current.reset();
     prevColumns.current = metrics.columns;
   }
-  if (heightsRef.current.length > length) {
-    heightsRef.current.length = length;
-  }
 
-  const onRowSizeChange = (index: number) => {
-    let fn = measureCache.current.get(index);
-    if (fn === undefined) {
-      fn = function onRowSizeChange(this: BoxRenderable) {
-        const next = this.height;
-        if (next <= 0) return;
-        if (heightsRef.current[index] === next) return;
-        heightsRef.current[index] = next;
-        setGen((gen) => gen + 1);
-      };
-      measureCache.current.set(index, fn);
-    }
-    return fn;
-  };
+  const heights = cacheRef.current.sync(transcript);
 
   if (metrics === undefined) {
-    return { start: 0, end: length, topSpacer: 0, bottomSpacer: 0, onRowSizeChange };
+    return {
+      start: 0,
+      end: transcript.length,
+      topSpacer: 0,
+      bottomSpacer: 0,
+      onRowSizeChange: cacheRef.current.handlerFor,
+    };
   }
 
-  const offsets = offsetsFromHeights(heightsRef.current, length);
+  const offsets = offsetsFromHeights(heights, transcript.length);
   const win = visibleTranscriptWindow({
-    length,
+    length: transcript.length,
     offsets,
     scrollTop: metrics.scrollTop,
     viewportHeight: metrics.viewportHeight,
     sticky: metrics.sticky,
   });
-  return { ...win, onRowSizeChange };
+  return { ...win, onRowSizeChange: cacheRef.current.handlerFor };
 }

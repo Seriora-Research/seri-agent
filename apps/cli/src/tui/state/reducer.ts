@@ -34,6 +34,7 @@ import {
   type TranscriptEntry,
   type TranscriptRole,
 } from "../util/format";
+import { capLiveTranscript } from "../util/liveTranscript";
 import type { ConfigRow, ModelPickerEntry, PermissionRow, SetupProviderRow } from "./commands";
 import { firstSetupActionIndex } from "./commands";
 import {
@@ -457,6 +458,27 @@ function applyChildEvent(
 }
 
 export function tuiReducer(state: TuiState, action: TuiAction): TuiState {
+  return boundLiveTranscripts(reduceTui(state, action));
+}
+
+function boundLiveTranscripts(state: TuiState): TuiState {
+  const transcript = capLiveTranscript(state.transcript);
+  let subagentsChanged = false;
+  const subagents = state.subagents.map((child) => {
+    const next = capLiveTranscript(child.transcript);
+    if (next === child.transcript) return child;
+    subagentsChanged = true;
+    return { ...child, transcript: next };
+  });
+  if (transcript === state.transcript && !subagentsChanged) return state;
+  return {
+    ...state,
+    ...(transcript === state.transcript ? {} : { transcript }),
+    ...(subagentsChanged ? { subagents } : {}),
+  };
+}
+
+function reduceTui(state: TuiState, action: TuiAction): TuiState {
   switch (action.type) {
     case "session-updated":
       return {

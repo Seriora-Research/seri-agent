@@ -37,7 +37,7 @@ export const TranscriptList = memo(function TranscriptList({
       ? undefined
       : { scrollTop, viewportHeight, sticky, columns };
   const { start, end, topSpacer, bottomSpacer, onRowSizeChange } = useTranscriptWindow(
-    transcript.length,
+    transcript,
     metrics,
   );
 
@@ -66,7 +66,7 @@ export const TranscriptList = memo(function TranscriptList({
       {transcript.slice(start, end).map((entry, offset) => {
         const index = start + offset;
         return (
-          <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(index)}>
+          <box key={index} flexShrink={0} onSizeChange={onRowSizeChange(entry)}>
             <TranscriptRow
               entry={entry}
               gap={gapBefore(
