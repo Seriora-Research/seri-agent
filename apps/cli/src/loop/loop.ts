@@ -32,7 +32,7 @@ import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provid
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
-import { streamErrorText } from "../usage/quotaNotice";
+import { affordableOutputTokens, streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
   compactMessages,
@@ -41,6 +41,7 @@ import {
   findSafeEvictionBoundary,
   isContextOverflowError,
   MAX_RETRIES,
+  streamOutputCap,
 } from "./compaction";
 import {
   type CompactCursor,
@@ -377,6 +378,7 @@ export async function* runLoop(opts: {
     try {
       const compacted = await compactMessages(window, opts.model, evictBoundary, opts.signal, {
         stream: opts.credential === "subscription" && opts.provider === "openai",
+        maxOutputTokens,
         ...samplingFields,
       });
       const recap = compacted.messages[0];
@@ -425,6 +427,20 @@ export async function* runLoop(opts: {
     let text = "";
     const toolCalls: { toolCallId: string; toolName: string; input: unknown }[] = [];
     let overflowRetried = false;
+    let creditRetried = false;
+    let streamCap =
+      opts.credential === "subscription" && opts.provider === "openai"
+        ? undefined
+        : streamOutputCap(maxOutputTokens);
+
+    const applyOpenRouterAffordRetry = (err: unknown): boolean => {
+      if (creditRetried || opts.provider !== "openrouter" || streamCap === undefined) return false;
+      const affordable = affordableOutputTokens(err);
+      if (affordable === undefined || affordable >= streamCap) return false;
+      streamCap = affordable;
+      creditRetried = true;
+      return true;
+    };
 
     // ai@7.0.48 streamText notifies onLanguageModelCallStart from inside the retry wrapper, with no onRetry and neither error nor delay.
     let modelCallStarts = 0;
@@ -452,6 +468,7 @@ export async function* runLoop(opts: {
           abortSignal: opts.signal,
           maxRetries: MAX_RETRIES,
           ...samplingFields,
+          ...(streamCap !== undefined ? { maxOutputTokens: streamCap } : {}),
           ...(providerOptions ? { providerOptions } : {}),
           onLanguageModelCallStart: () => {
             modelCallStarts++;
@@ -486,6 +503,7 @@ export async function* runLoop(opts: {
                 continue streamAttempt;
               }
             }
+            if (applyOpenRouterAffordRetry(part.error)) continue streamAttempt;
             yield { type: "error", error: streamErrorText(part.error, errorText) };
             // ai types result.usage as PromiseLike (no .catch); when doStream rejects with retries exhausted it rejects with AI_NoOutputGeneratedError.
             const failedUsage = await Promise.resolve(result.usage).catch(() => undefined);
@@ -553,6 +571,7 @@ export async function* runLoop(opts: {
             continue;
           }
         }
+        if (applyOpenRouterAffordRetry(err)) continue;
         yield { type: "error", error: streamErrorText(err, errorText) };
         return;
       }

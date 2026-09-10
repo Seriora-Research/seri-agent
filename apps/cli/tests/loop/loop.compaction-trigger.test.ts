@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { APICallError } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { isContextOverflowError } from "../../src/loop/compaction";
+import { isContextOverflowError, streamOutputCap } from "../../src/loop/compaction";
 import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
   collect,
@@ -525,5 +525,23 @@ describe("usableInputTokens", () => {
 
   test("subtracts a smaller positive output from the window", () => {
     expect(usableInputTokens(100, 30)).toBe(70);
+  });
+});
+
+describe("streamOutputCap", () => {
+  test("clamps an advertised cap above 32000", () => {
+    expect(streamOutputCap(128_000)).toBe(32_000);
+  });
+
+  test("keeps an advertised cap at or below 32000", () => {
+    expect(streamOutputCap(8_000)).toBe(8_000);
+    expect(streamOutputCap(32_000)).toBe(32_000);
+  });
+
+  test("sends 32000 when advertised output is missing or not a positive finite number", () => {
+    expect(streamOutputCap(undefined)).toBe(32_000);
+    expect(streamOutputCap(0)).toBe(32_000);
+    expect(streamOutputCap(-1)).toBe(32_000);
+    expect(streamOutputCap(Number.NaN)).toBe(32_000);
   });
 });

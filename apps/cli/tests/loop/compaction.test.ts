@@ -457,6 +457,34 @@ describe("compactMessages", () => {
 
     expect(result.summary.progress).toBe("streamed");
     expect(model.doGenerateCalls).toHaveLength(0);
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBeUndefined();
+  });
+
+  test("generateText sends min(advertised, 32000) so OpenRouter does not reserve 65536", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      assistantToolCallMsg("call-1"),
+      toolResultMsg("call-1", "ok"),
+      { role: "user", content: "keep me, recent tail" },
+    ];
+    const summaryObj = {
+      goal: "finish the task",
+      progress: "capped",
+      blockers: "none",
+      nextSteps: "continue",
+    };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "text", text: JSON.stringify(summaryObj) }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    await compactMessages(messages, model, 3, undefined, { maxOutputTokens: 128_000 });
+
+    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(32_000);
   });
 
   test("does not send oversized tool-result bodies to the summarizer, and does not mutate the evicted messages", async () => {

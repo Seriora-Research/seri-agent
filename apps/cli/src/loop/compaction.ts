@@ -65,6 +65,15 @@ function estimatePartTokens(part: unknown): number {
 // ai@7.0.48 defaults maxRetries to 2 with a 2s first backoff and honours a shorter retry-after / retry-after-ms header.
 export const MAX_RETRIES = 2;
 
+export const STEP_OUTPUT_TOKEN_MAX = 32_000;
+
+export function streamOutputCap(advertised: number | undefined): number {
+  if (advertised === undefined || !Number.isFinite(advertised) || advertised <= 0) {
+    return STEP_OUTPUT_TOKEN_MAX;
+  }
+  return Math.min(advertised, STEP_OUTPUT_TOKEN_MAX);
+}
+
 export const SUMMARIZER_STRING_CAP_BYTES = 2048;
 
 export function elideOversizedStrings(
@@ -243,7 +252,13 @@ export async function compactMessages(
   model: LanguageModel,
   evictBoundary: number,
   signal?: AbortSignal,
-  opts?: { stream?: boolean; customInstructions?: string; temperature?: number; seed?: number },
+  opts?: {
+    stream?: boolean;
+    customInstructions?: string;
+    temperature?: number;
+    seed?: number;
+    maxOutputTokens?: number;
+  },
 ): Promise<{
   messages: ModelMessage[];
   summary: CompactionSummary;
@@ -304,6 +319,7 @@ export async function compactMessages(
       system,
       prompt,
       ...sampling,
+      maxOutputTokens: streamOutputCap(opts?.maxOutputTokens),
     });
     text = generated.text;
     usage = generated.usage;
