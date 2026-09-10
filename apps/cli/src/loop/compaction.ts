@@ -74,6 +74,13 @@ export function streamOutputCap(advertised: number | undefined): number {
   return Math.min(advertised, STEP_OUTPUT_TOKEN_MAX);
 }
 
+export function requestOutputCap(advertised: number | undefined): number {
+  if (advertised === undefined || !Number.isFinite(advertised) || advertised <= 0) {
+    return STEP_OUTPUT_TOKEN_MAX;
+  }
+  return advertised;
+}
+
 export const SUMMARIZER_STRING_CAP_BYTES = 2048;
 
 export function elideOversizedStrings(

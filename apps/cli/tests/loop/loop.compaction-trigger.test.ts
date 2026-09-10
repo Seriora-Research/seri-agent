@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { APICallError } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { isContextOverflowError, streamOutputCap } from "../../src/loop/compaction";
+import {
+  isContextOverflowError,
+  requestOutputCap,
+  streamOutputCap,
+} from "../../src/loop/compaction";
 import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
   collect,
@@ -543,5 +547,19 @@ describe("streamOutputCap", () => {
     expect(streamOutputCap(0)).toBe(32_000);
     expect(streamOutputCap(-1)).toBe(32_000);
     expect(streamOutputCap(Number.NaN)).toBe(32_000);
+  });
+});
+
+describe("requestOutputCap", () => {
+  test("sends the advertised catalog cap without a 32000 clamp", () => {
+    expect(requestOutputCap(128_000)).toBe(128_000);
+    expect(requestOutputCap(8_000)).toBe(8_000);
+  });
+
+  test("sends 32000 when advertised output is missing or not a positive finite number", () => {
+    expect(requestOutputCap(undefined)).toBe(32_000);
+    expect(requestOutputCap(0)).toBe(32_000);
+    expect(requestOutputCap(-1)).toBe(32_000);
+    expect(requestOutputCap(Number.NaN)).toBe(32_000);
   });
 });
