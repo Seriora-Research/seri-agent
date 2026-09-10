@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { quotaExhaustedNotice } from "@seri/plans";
 
 import {
+  affordableOutputTokens,
   quotaExhaustedLine,
   quotaExhaustedLineFromReport,
   quotaLimitFromError,
@@ -62,6 +63,52 @@ describe("quotaLimitFromError", () => {
       statusCode: 402,
     };
     expect(quotaLimitFromError(wrapped)).toBe("requests_today");
+  });
+});
+
+describe("affordableOutputTokens", () => {
+  const affordMessage =
+    "This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford 60956. To increase, visit https://openrouter.ai/settings/credits and add more credits";
+
+  test("reads can-only-afford N from an OpenRouter 402", () => {
+    const err = new APICallError({
+      message: affordMessage,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 402,
+      responseBody: JSON.stringify({ error: { message: affordMessage, code: 402 } }),
+    });
+    expect(affordableOutputTokens(err)).toBe(60956);
+  });
+
+  test("reads N from a wrapped lastError", () => {
+    const err = {
+      lastError: new APICallError({
+        message: affordMessage,
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        requestBodyValues: {},
+        statusCode: 402,
+      }),
+    };
+    expect(affordableOutputTokens(err)).toBe(60956);
+  });
+
+  test("ignores hosted quota 402s", () => {
+    expect(affordableOutputTokens(quotaError("allowance_exhausted"))).toBeUndefined();
+  });
+
+  test("ignores a 402 without an afford count", () => {
+    expect(affordableOutputTokens(quotaError("unknown_plan"))).toBeUndefined();
+  });
+
+  test("ignores a non-402 afford message", () => {
+    const err = new APICallError({
+      message: affordMessage,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 429,
+    });
+    expect(affordableOutputTokens(err)).toBeUndefined();
   });
 });
 

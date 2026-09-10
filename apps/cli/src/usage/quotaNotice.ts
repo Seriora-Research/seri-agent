@@ -91,6 +91,31 @@ export function quotaLimitFromError(err: unknown): QuotaLimit | null {
   return QUOTA_CODES[code as keyof typeof QUOTA_CODES] ?? null;
 }
 
+const AFFORD_OUTPUT_RE = /can only afford (\d+)/i;
+
+function errorSearchText(err: unknown): string {
+  const rec = asRecord(err);
+  const parts: string[] = [];
+  if (err instanceof Error) parts.push(err.message);
+  else if (typeof err === "string") parts.push(err);
+  if (rec !== null) {
+    if (typeof rec.message === "string") parts.push(rec.message);
+    if (typeof rec.responseBody === "string") parts.push(rec.responseBody);
+  }
+  return parts.join("\n");
+}
+
+export function affordableOutputTokens(err: unknown): number | undefined {
+  if (quotaLimitFromError(err) !== null) return undefined;
+  const inner = unwrapError(err);
+  if (statusCodeOf(inner) !== 402) return undefined;
+  const match = AFFORD_OUTPUT_RE.exec(errorSearchText(inner));
+  if (match === null) return undefined;
+  const n = Number(match[1]);
+  if (!Number.isSafeInteger(n) || n < 1) return undefined;
+  return n;
+}
+
 export function quotaLimitFromReport(report: UsageReport): QuotaLimit | null {
   if (report.plan === null) return null;
   if (report.quota.metric === "usd" && report.quota.remaining <= 0) return "included_spend";

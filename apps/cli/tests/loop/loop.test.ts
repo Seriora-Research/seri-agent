@@ -284,6 +284,181 @@ describe("runLoop", () => {
     expect(error).not.toContain("Hosted routes will not run");
   });
 
+  const fableCatalog = {
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+    entries: [
+      {
+        id: "anthropic/claude-fable-5",
+        provider: "openrouter" as const,
+        displayName: "Claude Fable 5",
+        family: "claude",
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        toolCall: true,
+        reasoning: true,
+        pricing: undefined,
+      },
+    ],
+  };
+
+  function openRouterAffordError(affordable: number): APICallError {
+    return new APICallError({
+      message: `This request requires more credits, or fewer max_tokens. You requested up to 65536 tokens, but can only afford ${affordable}. To increase, visit https://openrouter.ai/settings/credits and add more credits`,
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      requestBodyValues: {},
+      statusCode: 402,
+    });
+  }
+
+  test("sends min(catalog maxOutputTokens, 32000) on streamText", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+        modelId: "anthropic/claude-fable-5",
+        catalog: fableCatalog,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(32_000);
+  });
+
+  test("sends 32000 when the catalog omits maxOutputTokens", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+      }),
+    );
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(32_000);
+  });
+
+  test("sends a catalog cap below 32000 unchanged", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+        maxOutputTokens: 8_000,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBe(8_000);
+  });
+
+  test("Codex subscription omits maxOutputTokens", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("Hello")),
+    });
+    await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openai",
+        credential: "subscription",
+        maxOutputTokens: 128_000,
+      }),
+    );
+    expect(model.doStreamCalls[0]?.maxOutputTokens).toBeUndefined();
+  });
+
+  test("OpenRouter afford-N 402 retries once at N and finishes", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async (options) => {
+        if (options.maxOutputTokens === 10_000) {
+          return streamResult(textOnlyChunks("Hello"));
+        }
+        throw openRouterAffordError(10_000);
+      },
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+        modelId: "anthropic/claude-fable-5",
+        catalog: fableCatalog,
+      }),
+    );
+    expect(events.find((e) => e.type === "error")).toBeUndefined();
+    expect(events).toContainEqual({ type: "text-delta", text: "Hello" });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    expect(model.doStreamCalls.some((call) => call.maxOutputTokens === 32_000)).toBe(true);
+    expect(model.doStreamCalls.at(-1)?.maxOutputTokens).toBe(10_000);
+  });
+
+  test("OpenRouter unknown_plan 402 still surfaces", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "Payment Required",
+          url: "https://api.seriora.ai/api/gateway/chat/completions",
+          requestBodyValues: {},
+          statusCode: 402,
+          responseBody: JSON.stringify({ code: "unknown_plan" }),
+        });
+      },
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+      }),
+    );
+    const error = events.find((e) => e.type === "error")?.error;
+    expect(error).toContain("Payment Required");
+    expect(events.at(-1)?.type).toBe("error");
+  });
+
+  test("OpenRouter hosted allowance 402 does not credit-retry", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        throw new APICallError({
+          message: "Payment Required",
+          url: "https://api.seriora.ai/api/gateway/chat/completions",
+          requestBodyValues: {},
+          statusCode: 402,
+          responseBody: JSON.stringify({ code: "allowance_exhausted" }),
+        });
+      },
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+        provider: "openrouter",
+      }),
+    );
+    expect(events.find((e) => e.type === "error")?.error).toBe(
+      quotaExhaustedLine("included_spend"),
+    );
+    expect(model.doStreamCalls.every((call) => call.maxOutputTokens === 32_000)).toBe(true);
+  });
+
   test("emits the token usage of each completed model call", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
