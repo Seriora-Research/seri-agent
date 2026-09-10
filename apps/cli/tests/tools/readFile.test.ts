@@ -4,10 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { clearEolCache, getCachedEol } from "../../src/tools/eolCache";
 import { readFile } from "../../src/tools/readFile";
 import { spawnCollect } from "../../src/tools/spawnCollect";
-import { writeFile } from "../../src/tools/writeFile";
 
 let tmpRoot: string;
 
@@ -157,14 +155,31 @@ describe("readFile", () => {
     "an in-flight read does not re-seed the EOL cache after a later write",
     async () => {
       const fifo = join(tmpRoot, "stale.fifo");
+      const other = join(tmpRoot, "other.txt");
       expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
 
-      const pending = readFile(fifo);
-      writeFile(join(tmpRoot, "other.txt"), "new\n", { eol: "LF" });
-      const { writeFile: writeFifo } = await import("node:fs/promises");
-      await writeFifo(fifo, "old\r\n");
-      await pending;
-      expect(getCachedEol(fifo)).toBeUndefined();
+      const readMod = pathToFileURL(join(import.meta.dir, "../../src/tools/readFile.ts")).href;
+      const writeMod = pathToFileURL(join(import.meta.dir, "../../src/tools/writeFile.ts")).href;
+      const eolMod = pathToFileURL(join(import.meta.dir, "../../src/tools/eolCache.ts")).href;
+      const script =
+        `const m = await import(${JSON.stringify(readMod)});` +
+        `const w = await import(${JSON.stringify(writeMod)});` +
+        `const e = await import(${JSON.stringify(eolMod)});` +
+        `const { writeFile } = await import("node:fs/promises");` +
+        `const pending = m.readFile(${JSON.stringify(fifo)});` +
+        `w.writeFile(${JSON.stringify(other)}, "new\\n", { eol: "LF" });` +
+        `await writeFile(${JSON.stringify(fifo)}, "old\\r\\n");` +
+        `const text = await pending;` +
+        `if (text !== "old\\n") { console.error(JSON.stringify({ text })); process.exit(2); }` +
+        `const cached = e.getCachedEol(${JSON.stringify(fifo)});` +
+        `if (cached !== undefined) { console.error(JSON.stringify({ cached })); process.exit(3); }`;
+
+      const result = await spawnCollect(process.execPath, ["-e", script], 2000);
+      expect({
+        timedOut: result.timedOut,
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+      }).toEqual({ timedOut: false, exitCode: 0, stderr: "" });
     },
     15000,
   );
@@ -175,12 +190,26 @@ describe("readFile", () => {
       const fifo = join(tmpRoot, "cleared.fifo");
       expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
 
-      const pending = readFile(fifo);
-      clearEolCache();
-      const { writeFile: writeFifo } = await import("node:fs/promises");
-      await writeFifo(fifo, "old\r\n");
-      await pending;
-      expect(getCachedEol(fifo)).toBeUndefined();
+      const readMod = pathToFileURL(join(import.meta.dir, "../../src/tools/readFile.ts")).href;
+      const eolMod = pathToFileURL(join(import.meta.dir, "../../src/tools/eolCache.ts")).href;
+      const script =
+        `const m = await import(${JSON.stringify(readMod)});` +
+        `const e = await import(${JSON.stringify(eolMod)});` +
+        `const { writeFile } = await import("node:fs/promises");` +
+        `const pending = m.readFile(${JSON.stringify(fifo)});` +
+        `e.clearEolCache();` +
+        `await writeFile(${JSON.stringify(fifo)}, "old\\r\\n");` +
+        `const text = await pending;` +
+        `if (text !== "old\\n") { console.error(JSON.stringify({ text })); process.exit(2); }` +
+        `const cached = e.getCachedEol(${JSON.stringify(fifo)});` +
+        `if (cached !== undefined) { console.error(JSON.stringify({ cached })); process.exit(3); }`;
+
+      const result = await spawnCollect(process.execPath, ["-e", script], 2000);
+      expect({
+        timedOut: result.timedOut,
+        exitCode: result.exitCode,
+        stderr: result.stderr,
+      }).toEqual({ timedOut: false, exitCode: 0, stderr: "" });
     },
     15000,
   );
