@@ -10,11 +10,22 @@ export function resolveBuildCommit(
   return gitHead();
 }
 
+export function opentuiLibcForCompile(
+  target: string | undefined,
+  platform: NodeJS.Platform,
+): "glibc" | "musl" | undefined {
+  if (target !== undefined && target.includes("musl")) return "musl";
+  if (target !== undefined && target.includes("linux")) return "glibc";
+  if ((target === undefined || target.length === 0) && platform === "linux") return "glibc";
+  return undefined;
+}
+
 export function compileArgs(opts: {
   entry: string;
   outfile: string;
   target?: string;
   commit?: string;
+  platform?: NodeJS.Platform;
 }): string[] {
   const args = ["build", "--compile", "--minify", opts.entry, "--outfile", opts.outfile];
   if (opts.target !== undefined && opts.target.length > 0) {
@@ -23,6 +34,10 @@ export function compileArgs(opts: {
   args.push("--define", `SERI_BAKED_HOSTED_ACCOUNTS=${JSON.stringify(false)}`);
   if (opts.commit !== undefined && opts.commit.length > 0) {
     args.push("--define", `SERI_BAKED_COMMIT=${JSON.stringify(opts.commit)}`);
+  }
+  const libc = opentuiLibcForCompile(opts.target, opts.platform ?? process.platform);
+  if (libc !== undefined) {
+    args.push("--define", `process.env.OPENTUI_LIBC=${JSON.stringify(libc)}`);
   }
   return args;
 }
