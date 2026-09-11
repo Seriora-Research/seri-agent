@@ -13,6 +13,7 @@ import {
   mergeGrokSubscriptionCatalog,
   resetCodexPlanCatalogApplied,
   resetFallbackWarning,
+  snapshotModelCatalog,
   withCodexSubscriptionCatalog,
 } from "../../src/provider/catalog";
 
@@ -177,6 +178,58 @@ describe("getModelCatalog", () => {
     expect(errors[0]).toContain("SERI_DISABLE_MODELS_FETCH");
     expect(errors[0]).not.toContain("could not reach");
     expect(catalog.entries.length).toBeGreaterThan(0);
+  });
+
+  test("snapshotModelCatalog returns bundled entries while fetch hangs, with no unavailable warning", async () => {
+    const hangingFetch: typeof fetch = (() => new Promise(() => {})) as unknown as typeof fetch;
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    const started = Date.now();
+    try {
+      const catalog = await snapshotModelCatalog(hangingFetch);
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(catalog.entries.length).toBeGreaterThan(0);
+      expect(errors).toEqual([]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  test("after a hanging fetch settles, getModelCatalog returns live ids, not the snapshot object", async () => {
+    let resolveFetch!: (json: unknown) => void;
+    const hangingThenLive: typeof fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.includes("models.dev")) {
+        throw new Error(`unexpected fetch ${url}`);
+      }
+      return new Promise((resolve) => {
+        resolveFetch = (json) =>
+          resolve({ ok: true, status: 200, json: async () => json } as unknown as Response);
+      });
+    }) as unknown as typeof fetch;
+
+    const snapshot = await snapshotModelCatalog(hangingThenLive);
+    expect(snapshot.entries.some((entry) => entry.id === "live-model")).toBe(false);
+
+    resolveFetch({
+      groq: {
+        models: {
+          "live-model": {
+            id: "live-model",
+            name: "Live Model",
+            family: "live",
+            tool_call: true,
+            reasoning: false,
+            limit: { context: 2000, output: 200 },
+            cost: { input: 1, output: 2 },
+          },
+        },
+      },
+    });
+    const live = await getModelCatalog(hangingThenLive);
+    expect(live.entries.some((entry) => entry.id === "live-model")).toBe(true);
+    expect(live).not.toBe(snapshot);
   });
 
   test("overlays ChatGPT plan models from HTTP with no Codex CLI", async () => {

@@ -19,8 +19,8 @@ import { loadTrajectoryConfig, loadVerifyConfig, type VerifyConfig } from "../co
 import { getConfigDir, getTrajectoriesDir } from "../config/paths";
 import { messageOf } from "../errors";
 import {
-  classifyToolCall as allowAllClassifier,
   type AutoModeOnBlock,
+  classifyToolCall as allowAllClassifier,
   type ToolCallClassifier,
 } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
@@ -45,7 +45,7 @@ import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
 import { effectiveTools, loadAutoModeOnBlock, loadDenials, loadGrants } from "../permissions/store";
 import { fetchAccountPlan } from "../provider/accountStatus";
-import { getModelCatalog } from "../provider/catalog";
+import { snapshotModelCatalog } from "../provider/catalog";
 import { DEFAULT_PROVIDER, resolveDefaultModel } from "../provider/defaults";
 import { configuredProviders, PROVIDER_DISPLAY_NAMES } from "../provider/keys";
 import { dispatchModel } from "../provider/model";
@@ -87,7 +87,7 @@ export async function resolveModelRoute(
   const requestedProvider =
     requested.provider ?? resolveDefaultModel(configDir).provider ?? DEFAULT_PROVIDER;
   const [catalog, plan] = await Promise.all([
-    getModelCatalog(undefined, warnSink, configDir),
+    snapshotModelCatalog(undefined, warnSink, configDir),
     fetchAccountPlan(configDir),
   ]);
   const route = resolveRoute(

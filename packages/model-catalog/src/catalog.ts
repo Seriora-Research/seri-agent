@@ -124,33 +124,57 @@ export function mapRawCatalog(raw: unknown): ModelCatalogEntry[] {
 }
 
 let cachedPromise: Promise<ModelCatalog> | undefined;
+let snapshot: ModelCatalog | undefined;
+let cacheGeneration = 0;
 
 export function resetCatalogCache(): void {
   cachedPromise = undefined;
+  snapshot = undefined;
+  cacheGeneration += 1;
+}
+
+function ensureLiveFetch(manifest: ModelCatalog, fetchFn: typeof fetch): Promise<ModelCatalog> {
+  if (cachedPromise) return cachedPromise;
+
+  if (process.env.SERI_DISABLE_MODELS_FETCH) {
+    snapshot = manifest;
+    cachedPromise = Promise.resolve(manifest);
+    return cachedPromise;
+  }
+
+  const generation = cacheGeneration;
+  cachedPromise = (async () => {
+    try {
+      const live = await fetchWithTimeout(
+        fetchFn,
+        MODELS_DEV_URL,
+        FETCH_TIMEOUT_MS,
+        async (response) => {
+          if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
+          const raw: unknown = await response.json();
+          return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
+        },
+      );
+      if (generation === cacheGeneration) snapshot = live;
+      return live;
+    } catch {
+      if (generation === cacheGeneration) snapshot = manifest;
+      return manifest;
+    }
+  })();
+  return cachedPromise;
+}
+
+export function peekCatalog(manifest: ModelCatalog, fetchFn: typeof fetch = fetch): ModelCatalog {
+  void ensureLiveFetch(manifest, fetchFn);
+  return snapshot ?? manifest;
 }
 
 export async function loadCatalog(
   manifest: ModelCatalog,
   fetchFn: typeof fetch = fetch,
 ): Promise<ModelCatalog> {
-  if (cachedPromise) return cachedPromise;
-
-  cachedPromise = (async () => {
-    if (process.env.SERI_DISABLE_MODELS_FETCH) {
-      return manifest;
-    }
-
-    try {
-      return await fetchWithTimeout(fetchFn, MODELS_DEV_URL, FETCH_TIMEOUT_MS, async (response) => {
-        if (!response.ok) throw new Error(`models.dev returned ${response.status}`);
-        const raw: unknown = await response.json();
-        return { fetchedAt: new Date().toISOString(), entries: mapRawCatalog(raw) };
-      });
-    } catch {
-      return manifest;
-    }
-  })();
-  return cachedPromise;
+  return ensureLiveFetch(manifest, fetchFn);
 }
 
 export function findCatalogEntry(

@@ -305,9 +305,10 @@ describe("decideModelPickerOpen", () => {
     expect(rows[0]?.rerouteTo).toBeUndefined();
   });
 
-  test("/model passes modelPickerSubscribedProviders the overlay flag", () => {
+  test("/model waits for the live catalog, then overlays via catalogForModelPicker", () => {
     const src = readFileSync(join(import.meta.dir, "../../src/cli.ts"), "utf8");
     expect(src).toContain("catalogForModelPicker(");
+    expect(src).toContain("getModelCatalog(undefined, undefined, configDir)");
     expect(src).toContain("modelPickerSubscribedProviders(configDir, isCodexPlanCatalogApplied())");
     expect(src).not.toContain('isCodexPlanCatalogApplied() ? new Set<ModelProvider>(["openai"])');
   });

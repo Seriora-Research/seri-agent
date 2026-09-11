@@ -4,6 +4,7 @@ export {
   GATEWAY_PROVIDER,
   isZeroPriceEntry,
   loadCatalog,
+  peekCatalog,
   resetCatalogCache,
 } from "./catalog";
 export { fetchWithTimeout } from "./fetchWithTimeout";
