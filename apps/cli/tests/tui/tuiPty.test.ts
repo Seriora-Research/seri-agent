@@ -1514,7 +1514,6 @@ const PTY_RESIZE_SPAWN = 'stty rows "$1" cols "$2"; shift 2; exec "$@"';
 async function startChild(
   scriptPath: string,
   cwd: string,
-  // Most child scripts pass a task, so they must not wait on SPLASH_MARK. Idle / resume still paint splash.
   opts: { dismissSplash?: boolean; terminalSize?: { cols: number; rows: number } } = {},
 ): Promise<{
   child: ReturnType<typeof spawn>;
