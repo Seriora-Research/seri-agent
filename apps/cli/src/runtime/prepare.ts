@@ -226,6 +226,16 @@ export function createSessionTrajectory(
 
 export type RunStart = "idle" | "task" | "resume";
 
+export const WELCOME_SPLASH_FOR_START = {
+  idle: true,
+  resume: true,
+  task: false,
+} as const satisfies Record<RunStart, boolean>;
+
+export function wantsWelcomeSplash(start: RunStart): boolean {
+  return WELCOME_SPLASH_FOR_START[start];
+}
+
 export function runStart(ctx: RunContext): RunStart {
   if (ctx.taskText.length > 0) return "task";
   return ctx.resuming ? "resume" : "idle";

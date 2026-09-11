@@ -5,7 +5,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { SPLASH_MARK } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -90,10 +89,6 @@ async function startChild(scriptPath: string, cwd: string) {
     if (!stdout.includes(line))
       throw new Error(`child never printed ${JSON.stringify(line)}; got ${JSON.stringify(stdout)}`);
   };
-
-  await sawLine(SPLASH_MARK);
-  child.stdin?.write("\x1b");
-  await new Promise((r) => setTimeout(r, 100));
 
   return { child, exited, sawLine, stdoutSoFar: () => stdout };
 }

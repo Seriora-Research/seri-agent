@@ -209,6 +209,7 @@ import {
   rerouteNotice,
   resolveModelRoute,
   runStart,
+  wantsWelcomeSplash,
 } from "./runtime/prepare";
 
 export type { PreMountMessage, PreparedRun, RunSession };
@@ -2333,12 +2334,15 @@ async function finishCliRun(
   prewarmModelCatalog();
 
   let queuedTask: string | undefined;
+  const start = runStart(ctx);
 
   if (isTTY) {
     try {
-      await runWelcomeSplash(ctx.configDir, deps, (task) => {
-        queuedTask = task;
-      });
+      if (wantsWelcomeSplash(start)) {
+        await runWelcomeSplash(ctx.configDir, deps, (task) => {
+          queuedTask = task;
+        });
+      }
       const zeroKeysConfigured = checkZeroKeysConfigured(ctx.configDir);
       if (typeof zeroKeysConfigured === "number") return zeroKeysConfigured;
       if (zeroKeysConfigured) {
@@ -2368,7 +2372,6 @@ async function finishCliRun(
       return fatalDuringTui(err, prepared.preMountMessages);
     }
   } else {
-    const start = runStart(ctx);
     const shouldRunTurn =
       start === "task" || (start === "resume" && awaitsReply(prepared.session.messages));
     if (shouldRunTurn) {
