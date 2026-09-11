@@ -26,6 +26,10 @@ import {
   loadOrCreateSession,
   type PreparedRun,
   prepareSession,
+  type RunStart,
+  runStart,
+  WELCOME_SPLASH_FOR_START,
+  wantsWelcomeSplash,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
 import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
@@ -645,5 +649,31 @@ describe("gatewayNotice", () => {
     expect(gatewayNotice(route, "groq")).toBe(
       "routing openai/gpt-oss-120b on your seri plan — no Groq key configured",
     );
+  });
+});
+
+describe("wantsWelcomeSplash", () => {
+  test("idle shows splash", () => {
+    expect(wantsWelcomeSplash("idle")).toBe(true);
+  });
+
+  test("resume shows splash", () => {
+    expect(wantsWelcomeSplash("resume")).toBe(true);
+  });
+
+  test("task skips splash", () => {
+    expect(wantsWelcomeSplash("task")).toBe(false);
+  });
+
+  test("table keys match every RunStart", () => {
+    const keys = Object.keys(WELCOME_SPLASH_FOR_START).sort();
+    const starts: RunStart[] = ["idle", "resume", "task"];
+    expect(keys).toEqual([...starts].sort());
+  });
+
+  test("runStart prefers non-empty taskText over resuming", () => {
+    expect(runStart({ taskText: "keep going", resuming: true } as RunContext)).toBe("task");
+    expect(runStart({ taskText: "", resuming: true } as RunContext)).toBe("resume");
+    expect(runStart({ taskText: "", resuming: false } as RunContext)).toBe("idle");
   });
 });

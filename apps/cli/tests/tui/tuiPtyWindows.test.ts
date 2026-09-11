@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 // Type-only import: bun test still loads this file on ubuntu/macos CI, and node-pty has no Linux prebuild.
 import type * as PtyModule from "node-pty";
-import { childScriptInput, SPLASH_MARK } from "./helpers";
+import { childScriptInput } from "./helpers";
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 
@@ -133,16 +133,6 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
         dir,
       );
       try {
-        // node-pty Windows _agent.inSocket.write can throw Socket is closed even while outSocket still streams.
-        const sawSplash = await waitFor(SPLASH_MARK, 10_000);
-        if (sawSplash) {
-          // Swallow a failed splash write so the test times out on assertions instead of an unhandled rejection.
-          try {
-            term.write("\x1b");
-            await new Promise((r) => setTimeout(r, 100));
-          } catch {}
-        }
-
         const sawDone = await waitFor("done ·", 20_000);
         if (!sawDone) {
           throw new Error(`child never printed "done ·"; got ${JSON.stringify(decodedSoFar())}`);
@@ -204,14 +194,6 @@ describe.skipIf(process.platform !== "win32" || process.env.CI !== undefined)(
       const pty = await import("node-pty");
       const { term, waitFor, decodedSoFar } = startChildNodePty(pty, scriptPath, dir);
       try {
-        const sawSplash = await waitFor(SPLASH_MARK, 10_000);
-        if (sawSplash) {
-          try {
-            term.write("\x1b");
-            await new Promise((r) => setTimeout(r, 100));
-          } catch {}
-        }
-
         const sawReady = await waitFor("RUNLOOP_READY", 10_000);
         if (!sawReady) {
           throw new Error(
