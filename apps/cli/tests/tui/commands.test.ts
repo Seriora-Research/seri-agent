@@ -1270,7 +1270,12 @@ describe("decideClear", () => {
     const skillCall: ModelMessage = {
       role: "assistant",
       content: [
-        { type: "tool-call", toolCallId: "toolu_SHARED", toolName: "skill", input: { name: "run" } },
+        {
+          type: "tool-call",
+          toolCallId: "toolu_SHARED",
+          toolName: "skill",
+          input: { name: "run" },
+        },
       ],
     };
     const before = session({
