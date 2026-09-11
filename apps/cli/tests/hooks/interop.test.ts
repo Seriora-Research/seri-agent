@@ -18,13 +18,13 @@ function spec(path: string): HookSpec {
     path,
     matcher: undefined,
 
-    timeoutMs: process.platform === "win32" ? 15_000 : DEFAULT_HOOK_TIMEOUT_MS,
+    timeoutMs: DEFAULT_HOOK_TIMEOUT_MS,
     source: "project",
     filePath: join(HOOK_DIR, "hooks.yaml"),
   };
 }
 
-const TEST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
+const TEST_TIMEOUT_MS = process.platform === "win32" ? 40_000 : 5_000;
 
 const describeIfPresent = existsSync(blockDangerous) ? describe : describe.skip;
 

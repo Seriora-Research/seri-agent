@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isBashAvailable, runBash } from "../../src/tools/bash";
-import { readFile } from "../../src/tools/readFile";
+import { readFile, WINDOW_BYTES } from "../../src/tools/readFile";
 import { writeFile } from "../../src/tools/writeFile";
 
 const originalPlatform = process.platform;
@@ -90,6 +90,18 @@ describe("writeFile", () => {
   test("a write following a capped read still reuses the raw file's cached EOL", async () => {
     const filePath = join(tmpRoot, "big-crlf.txt");
     writeFileSync(filePath, `old\r\n${"x".repeat(40_000)}\r\n`);
+    await readFile(filePath);
+
+    writeFileSync(filePath, "old\ncontent\n");
+
+    writeFile(filePath, "new\ncontent\n");
+    expect(readFileSync(filePath, "utf8")).toBe("new\r\ncontent\r\n");
+  });
+
+  test("a write following a windowed read still reuses CRLF that lived only in the skipped middle", async () => {
+    const filePath = join(tmpRoot, "middle-crlf.txt");
+    const pad = "x".repeat(WINDOW_BYTES + 100);
+    writeFileSync(filePath, `${pad}\r\n${pad}`);
     await readFile(filePath);
 
     writeFileSync(filePath, "old\ncontent\n");

@@ -1,28 +1,251 @@
-import { readFile as readFileBytes } from "node:fs/promises";
-import { capToolResult } from "../capToolResult";
+import { type FileHandle, open } from "node:fs/promises";
+import { capFromBoundedWindows, capToolResult, MAX_TOOL_RESULT_CHARS } from "../capToolResult";
 import {
   IMAGE_TOO_LARGE,
+  type ImageRead,
   MAX_IMAGE_BYTES,
   SCHEDULED_IMAGE_REFUSAL,
   sniffImageMime,
   toImageRead,
-  type ImageRead,
 } from "../imageParts";
 import { eolEpoch, setCachedEol } from "./eolCache";
+
+const PREFIX_BYTES = 12;
+export const WINDOW_BYTES = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
+const MIDDLE_CHUNK = 64 * 1024;
+const MAX_UTF8_CONT = 3;
+const MAX_WINDOWED_BYTES = 64 * 1024 * 1024 * 1024;
+
+type Utf16CrlfState = {
+  carry: Buffer;
+  pendingCr: boolean;
+  units: number;
+  sawCrLf: boolean;
+};
 
 export async function readFile(
   path: string,
   opts?: { images?: boolean; abortSignal?: AbortSignal },
 ): Promise<string | ImageRead> {
   const observedAt = eolEpoch();
-  const bytes = new Uint8Array(await readFileBytes(path, { signal: opts?.abortSignal }));
-  const mime = sniffImageMime(bytes);
-  if (mime !== undefined) {
-    if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
-    if (bytes.byteLength > MAX_IMAGE_BYTES) return IMAGE_TOO_LARGE;
-    return toImageRead({ mime, bytes });
+  const signal = opts?.abortSignal;
+  throwIfAborted(signal);
+
+  const handle = await open(path, "r");
+  try {
+    throwIfAborted(signal);
+    const stat = await handle.stat();
+    // procfs reports size 0; FIFOs are not regular files. Slurp this handle so we never
+    // consume a prefix and reopen.
+    if (!stat.isFile() || stat.size === 0) {
+      const bytes = new Uint8Array(await handle.readFile({ signal }));
+      const mime = sniffImageMime(bytes);
+      if (mime !== undefined) {
+        if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
+        if (bytes.byteLength > MAX_IMAGE_BYTES) return IMAGE_TOO_LARGE;
+        return toImageRead({ mime, bytes });
+      }
+      return finishText(path, bytes, observedAt);
+    }
+
+    const prefixLen = Math.min(PREFIX_BYTES, stat.size);
+    const prefix = Buffer.alloc(prefixLen);
+    const prefixGot = await readAt(handle, prefix, 0, signal);
+    const prefixBytes = prefix.subarray(0, prefixGot);
+    const mime = sniffImageMime(prefixBytes);
+    if (mime !== undefined) {
+      if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
+      if (stat.size > MAX_IMAGE_BYTES) return IMAGE_TOO_LARGE;
+      if (prefixGot < prefixLen) return toImageRead({ mime, bytes: prefixBytes });
+      const rest = Buffer.alloc(stat.size - prefixLen);
+      const restGot = await readAt(handle, rest, prefixLen, signal);
+      return toImageRead({ mime, bytes: Buffer.concat([prefixBytes, rest.subarray(0, restGot)]) });
+    }
+
+    if (stat.size <= 2 * WINDOW_BYTES || prefixGot < prefixLen) {
+      if (prefixGot < prefixLen) return finishText(path, prefixBytes, observedAt);
+      const rest = Buffer.alloc(stat.size - prefixLen);
+      const restGot = await readAt(handle, rest, prefixLen, signal);
+      return finishText(path, Buffer.concat([prefixBytes, rest.subarray(0, restGot)]), observedAt);
+    }
+
+    if (stat.size > MAX_WINDOWED_BYTES) {
+      throw new RangeError(`File size ${stat.size} exceeds the windowed-read limit`);
+    }
+
+    return await readWindowedText(handle, path, stat.size, observedAt, signal);
+  } finally {
+    await handle.close();
   }
+}
+
+function finishText(path: string, bytes: Uint8Array, observedAt: number): string {
   const raw = Buffer.from(bytes).toString("utf8");
   setCachedEol(path, raw.includes("\r\n") ? "CRLF" : "LF", observedAt);
   return capToolResult(raw.replace(/\r\n/g, "\n"));
+}
+
+async function readWindowedText(
+  handle: FileHandle,
+  path: string,
+  size: number,
+  observedAt: number,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  const headRaw = Buffer.alloc(WINDOW_BYTES);
+  const headGot = await readAt(handle, headRaw, 0, signal);
+  if (headGot < WINDOW_BYTES) return finishText(path, headRaw.subarray(0, headGot), observedAt);
+
+  const tailRaw = Buffer.alloc(WINDOW_BYTES);
+  const tailGot = await readAt(handle, tailRaw, size - WINDOW_BYTES, signal);
+  if (tailGot < WINDOW_BYTES) {
+    const rest = await readUntilEof(handle, headGot, signal);
+    return finishText(path, Buffer.concat([headRaw.subarray(0, headGot), rest]), observedAt);
+  }
+  const tailSlice = tailRaw.subarray(0, tailGot);
+
+  const headDrop = utf8TrailingIncomplete(headRaw);
+  const tailSkip = utf8LeadingContinuation(tailSlice);
+  const headComplete = headRaw.subarray(0, headRaw.length - headDrop);
+  const tailComplete = tailSlice.subarray(tailSkip);
+  const headLf = Buffer.from(headComplete).toString("utf8").replace(/\r\n/g, "\n");
+  const tailLf = Buffer.from(tailComplete).toString("utf8").replace(/\r\n/g, "\n");
+
+  const state: Utf16CrlfState = {
+    carry: Buffer.alloc(0),
+    pendingCr: false,
+    units: 0,
+    sawCrLf: false,
+  };
+  feedUtf16Crlf(state, headComplete, false);
+
+  const middleStart = WINDOW_BYTES - headDrop;
+  const middleEnd = size - WINDOW_BYTES + tailSkip;
+  const chunk = Buffer.alloc(Math.min(MIDDLE_CHUNK, Math.max(0, middleEnd - middleStart)));
+  for (let pos = middleStart; pos < middleEnd; ) {
+    const n = Math.min(MIDDLE_CHUNK, middleEnd - pos);
+    const slice = n === chunk.length ? chunk : chunk.subarray(0, n);
+    const got = await readAt(handle, slice, pos, signal);
+    if (got === 0) break;
+    feedUtf16Crlf(state, slice.subarray(0, got), false);
+    pos += got;
+  }
+  feedUtf16Crlf(state, tailComplete, true);
+
+  setCachedEol(path, state.sawCrLf ? "CRLF" : "LF", observedAt);
+  return capFromBoundedWindows(headLf, tailLf, state.units);
+}
+
+async function readUntilEof(
+  handle: FileHandle,
+  position: number,
+  signal: AbortSignal | undefined,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const buf = Buffer.alloc(MIDDLE_CHUNK);
+  let pos = position;
+  for (;;) {
+    const got = await readAt(handle, buf, pos, signal);
+    if (got === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, got)));
+    pos += got;
+  }
+  return chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
+}
+
+async function readAt(
+  handle: FileHandle,
+  buffer: Uint8Array,
+  position: number,
+  signal: AbortSignal | undefined,
+): Promise<number> {
+  let offset = 0;
+  while (offset < buffer.length) {
+    throwIfAborted(signal);
+    const { bytesRead } = await handle.read(
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset,
+    );
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return offset;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted !== true) return;
+  const err = new Error("The operation was aborted") as NodeJS.ErrnoException;
+  err.name = "AbortError";
+  err.code = "ABORT_ERR";
+  throw err;
+}
+
+function utf8LeadNeed(byte: number): number {
+  if ((byte & 0x80) === 0) return 1;
+  if ((byte & 0xe0) === 0xc0) return 2;
+  if ((byte & 0xf0) === 0xe0) return 3;
+  if ((byte & 0xf8) === 0xf0) return 4;
+  return 0;
+}
+
+function utf8TrailingIncomplete(bytes: Uint8Array): number {
+  const n = bytes.length;
+  if (n === 0) return 0;
+  let i = n - 1;
+  if ((bytes[i] & 0x80) === 0) return 0;
+  let cont = 0;
+  while (i >= 0 && (bytes[i] & 0xc0) === 0x80) {
+    cont++;
+    i--;
+    if (cont === MAX_UTF8_CONT) break;
+  }
+  if (i < 0) return n;
+  const lead = bytes[i];
+  if (lead === undefined) return n;
+  const need = utf8LeadNeed(lead);
+  const have = n - i;
+  if (need >= 2 && have < need) return have;
+  return 0;
+}
+
+function utf8LeadingContinuation(bytes: Uint8Array): number {
+  let i = 0;
+  while (i < bytes.length && i < MAX_UTF8_CONT && (bytes[i] & 0xc0) === 0x80) i++;
+  return i;
+}
+
+function feedUtf16Crlf(state: Utf16CrlfState, bytes: Uint8Array, flush: boolean): void {
+  const joined = state.carry.length === 0 ? bytes : Buffer.concat([state.carry, bytes]);
+  const drop = flush ? 0 : utf8TrailingIncomplete(joined);
+  const complete = drop === 0 ? joined : joined.subarray(0, joined.length - drop);
+  state.carry = drop === 0 ? Buffer.alloc(0) : Buffer.from(joined.subarray(joined.length - drop));
+  if (complete.length === 0) {
+    if (flush && state.pendingCr) {
+      state.units += 1;
+      state.pendingCr = false;
+    }
+    return;
+  }
+  const text = Buffer.from(complete).toString("utf8");
+  let rest = text;
+  if (state.pendingCr) {
+    state.pendingCr = false;
+    if (text.charCodeAt(0) === 0x0a) {
+      state.sawCrLf = true;
+      state.units += 1;
+      rest = text.slice(1);
+    } else {
+      state.units += 1;
+    }
+  }
+  if (rest.includes("\r\n")) state.sawCrLf = true;
+  const normalizedLen = rest.replace(/\r\n/g, "\n").length;
+  if (!flush && rest.endsWith("\r")) {
+    state.pendingCr = true;
+    state.units += normalizedLen - 1;
+  } else {
+    state.units += normalizedLen;
+  }
 }
