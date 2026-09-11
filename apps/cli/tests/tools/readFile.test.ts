@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { capToolResult, MAX_TOOL_RESULT_CHARS } from "../../src/capToolResult";
+import { getCachedEol } from "../../src/tools/eolCache";
 import { readFile } from "../../src/tools/readFile";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 
@@ -67,6 +69,39 @@ describe("readFile", () => {
     expect(result).toContain("characters omitted");
     expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
     expect(result).not.toContain("�");
+  });
+
+  test("a file well over the window budget matches capToolResult of a full decode", async () => {
+    const windowBytes = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
+    const n = windowBytes + 50_000;
+    const filePath = join(tmpRoot, "windowed.txt");
+    const body = `${"A".repeat(n)}${"B".repeat(n)}`;
+    writeFileSync(filePath, body);
+    const result = await readFile(filePath);
+    const expected = capToolResult(readFileSync(filePath, "utf8").replace(/\r\n/g, "\n"));
+    expect(result).toBe(expected);
+    expect(result).toContain(`[${body.length - MAX_TOOL_RESULT_CHARS} characters omitted]`);
+  });
+
+  test("CRLF only in the skipped middle still caches CRLF", async () => {
+    const windowBytes = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
+    const filePath = join(tmpRoot, "middle-eol.txt");
+    const pad = "x".repeat(windowBytes + 100);
+    writeFileSync(filePath, `${pad}\r\n${pad}`);
+    await readFile(filePath);
+    expect(getCachedEol(filePath)).toBe("CRLF");
+  });
+
+  test("windowed mixed BMP and emoji does not strand a replacement character", async () => {
+    const filePath = join(tmpRoot, "windowed-mix.txt");
+    const body = `x${"\u{1F600}".repeat(20_000)}${"中".repeat(20_000)}${"\u{1F600}".repeat(20_000)}y`;
+    writeFileSync(filePath, body);
+    const result = await readFile(filePath);
+    if (typeof result !== "string") throw new Error("expected text");
+    expect(result).toContain("characters omitted");
+    expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
+    expect(result).not.toContain("�");
+    expect(result).toBe(capToolResult(readFileSync(filePath, "utf8").replace(/\r\n/g, "\n")));
   });
 
   test("attended PNG returns an image read, not utf8 garbage", async () => {
