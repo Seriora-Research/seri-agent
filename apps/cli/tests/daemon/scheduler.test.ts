@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -264,7 +265,7 @@ describe("Scheduler", () => {
   test("session mint failure leaves the firing pending with no schedule_runs row", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);
-    let now = 30_000;
+    const now = 30_000;
     let runScheduledCalls = 0;
     const scheduler = new Scheduler(
       database,
@@ -395,7 +396,7 @@ describe("Scheduler", () => {
   test("runScheduled failure records an error run then consumes the firing", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);
-    let now = 50_000;
+    const now = 50_000;
     const scheduler = new Scheduler(
       database,
       async () => {
@@ -418,6 +419,39 @@ describe("Scheduler", () => {
     expect(runs[0]?.status).toBe("error");
     expect(runs[0]?.error).toBe("model down");
     expect(database.loadSession(runs[0]!.sessionId)?.id).toBe(runs[0]!.sessionId);
+  });
+
+  test("a tick drops stale scheduled sessions and keeps the schedule row", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = Date.parse("2026-09-11T00:00:00.000Z");
+    const dayMs = 24 * 60 * 60 * 1000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "ok" }),
+      () => now,
+      60_000,
+      30,
+    );
+    const created = scheduler.create({
+      task: "report ready",
+      cwd: configDir,
+      timing: { kind: "once", at: "2026-09-11T00:00:00.000Z" },
+      allowModelReads: true,
+    });
+    await scheduler.tick();
+    const run = database.listScheduleRuns(created.id)[0];
+    expect(run?.sessionId).toBeDefined();
+    const sessionId = run!.sessionId;
+    const raw = new Database(join(configDir, "seri.db"));
+    raw
+      .query("UPDATE sessions SET updated_at_ms = ? WHERE id = ?")
+      .run(now - 31 * dayMs, sessionId);
+    raw.close();
+    await scheduler.tick();
+    expect(database.loadSession(sessionId)).toBeUndefined();
+    expect(database.listScheduleRuns(created.id)).toEqual([]);
+    expect(database.getSchedule(created.id)?.id).toBe(created.id);
   });
 });
 
