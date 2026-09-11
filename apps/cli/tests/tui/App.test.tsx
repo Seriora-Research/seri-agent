@@ -641,25 +641,31 @@ describe("App", () => {
     }
   });
 
-  test("the full response appears atomically in TurnStatus's place once the turn's done event fires", async () => {
-    const { setup, dispatch } = await connect();
+  // Windows CI measured 3043ms vs flushMarkdown's 3000ms poll on a loaded runner.
+  test(
+    "the full response appears atomically in TurnStatus's place once the turn's done event fires",
+    async () => {
+      const { setup, dispatch } = await connect();
 
-    dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
-    const answer = Array.from({ length: 5 }, (_, i) => `answer line ${i}`).join("\n");
-    dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
-    await flush(setup);
-    expect(setup.captureCharFrame()).not.toContain("answer line 0");
+      dispatch({ type: "turn-started", startedAt: Date.now(), inputEstimate: 0 });
+      const answer = Array.from({ length: 5 }, (_, i) => `answer line ${i}`).join("\n");
+      dispatch({ type: "loop-event", event: { type: "text-delta", text: answer } });
+      await flush(setup);
+      expect(setup.captureCharFrame()).not.toContain("answer line 0");
 
-    dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
-    await flush(setup);
-    await flushMarkdown(
-      setup,
-      (frame) => frame.includes("answer line 0") && frame.includes("answer line 4"),
-    );
-    const frame = setup.captureCharFrame();
-    expect(frame).toContain("answer line 0");
-    expect(frame).toContain("answer line 4");
-  });
+      dispatch({ type: "loop-event", event: { type: "done", reason: "no-tool-call" } });
+      await flush(setup);
+      await flushMarkdown(
+        setup,
+        (frame) => frame.includes("answer line 0") && frame.includes("answer line 4"),
+        8_000,
+      );
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain("answer line 0");
+      expect(frame).toContain("answer line 4");
+    },
+    { timeout: 15_000 },
+  );
 
   test("the flushed transcript entry is byte-identical to the full concatenation of every text-delta sent during the turn", async () => {
     const { setup, dispatch } = await connect();

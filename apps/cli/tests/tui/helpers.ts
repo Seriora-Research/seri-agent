@@ -66,15 +66,16 @@ export async function flush(setup: TestRendererSetup): Promise<void> {
 export async function flushMarkdown(
   setup: TestRendererSetup,
   isSettled: (frame: string) => boolean,
+  timeoutMs = 3000,
 ): Promise<void> {
-  // 3000ms so bun's 5000ms test timeout can still surface this throw after connect()/flush() setup.
-  const deadline = Date.now() + 3000;
+  // Default 3000ms so bun's 5000ms test timeout can still surface this throw after connect()/flush() setup.
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     await setup.renderOnce();
     if (isSettled(setup.captureCharFrame())) return;
   }
-  throw new Error("flushMarkdown: content never settled within 3000ms");
+  throw new Error(`flushMarkdown: content never settled within ${timeoutMs}ms`);
 }
 
 // waitForFrame and a matching capture both fire while sticky-scroll is still painting; macOS CI copied four entries from a one-row drag unless frame plus scrollTop hold for three 20ms polls.
