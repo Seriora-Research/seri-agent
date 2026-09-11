@@ -34,6 +34,8 @@ import {
 } from "../../src/provider/catalog";
 import bundledManifest from "../../src/provider/catalog-manifest.json";
 import { modelPickerSubscribedProviders } from "../../src/provider/subscriptions";
+import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
+import { createConversation, windowOf } from "../../src/loop/conversation";
 import type { SessionState } from "../../src/session/session";
 import {
   configKeyInfo,
@@ -1245,6 +1247,7 @@ describe("decideClear", () => {
       permissionMode: "auto",
       model: "gpt-5",
       provider: "openai",
+      reasoningEffort: "high",
       messages: [{ role: "user", content: "hi" }],
     });
 
@@ -1254,6 +1257,54 @@ describe("decideClear", () => {
     expect(next.permissionMode).toBe(before.permissionMode);
     expect(next.model).toBe(before.model);
     expect(next.provider).toBe(before.provider);
+    expect(next.reasoningEffort).toBe(before.reasoningEffort);
+  });
+
+  test("drops the compact recap so the new session does not inherit prior tool-call history", () => {
+    const recap: ModelMessage = {
+      role: "user",
+      content:
+        `${COMPACT_HISTORY_PREFIX} 3 earlier messages condensed]\n` +
+        "Goal: ran the run skill\nProgress: p\nBlockers: b\nNext steps: n",
+    };
+    const skillCall: ModelMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "toolu_SHARED",
+          toolName: "skill",
+          input: { name: "run" },
+        },
+      ],
+    };
+    const before = session({
+      messages: [
+        { role: "user", content: "hi" },
+        skillCall,
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "toolu_SHARED",
+              toolName: "skill",
+              output: { type: "text", value: "ok" },
+            },
+          ],
+        },
+        { role: "assistant", content: "done" },
+      ],
+      compact: { status: "compacted", windowStart: 3, recap },
+    });
+
+    const { next } = decideClear(before, configDir, "new-id");
+
+    expect(next.messages).toEqual([]);
+    expect(next.compact).toBeUndefined();
+    expect(JSON.stringify(next)).not.toContain("toolu_SHARED");
+    expect(JSON.stringify(before)).toContain("toolu_SHARED");
+    expect(windowOf(createConversation(next.messages, next.compact))).toEqual([]);
   });
 
   test("rebuilds systemPrompt from cwd's AGENTS.md instead of carrying the old one over", () => {

@@ -28,6 +28,7 @@ import {
   prepareSession,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
+import { saveSession, loadSession } from "../../src/session/session";
 import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
@@ -66,6 +67,49 @@ describe("explicit session cwd", () => {
     expect(session.cwd).toBe(sessionDir);
     expect(session.cwd).not.toBe(original);
     expect(process.cwd()).toBe(original);
+  });
+
+  test("a new session without --continue has no prior skill tool calls even when another session in the store does", () => {
+    const sessionDir = makeDir();
+    const configDir = makeDir();
+    const sessionsDir = join(configDir, "sessions");
+    const stubs = () => ({ skills: new Map(), rules: new Map(), hooks: { registry: new Map() } });
+    saveSession(
+      {
+        id: "prior",
+        cwd: sessionDir,
+        systemPrompt: "",
+        permissionMode: "auto",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "toolu_PRIOR",
+                toolName: "skill",
+                input: { name: "run" },
+              },
+            ],
+          },
+        ],
+      },
+      sessionsDir,
+    );
+
+    const { session } = loadOrCreateSession(
+      false,
+      undefined,
+      sessionsDir,
+      loadAgentsFile,
+      configDir,
+      sessionDir,
+      stubs,
+    );
+    expect(session.id).not.toBe("prior");
+    expect(session.messages).toEqual([]);
+    expect(JSON.stringify(session)).not.toContain("toolu_PRIOR");
+    expect(JSON.stringify(loadSession("prior", sessionsDir))).toContain("toolu_PRIOR");
   });
 
   test("checkpointed tools read relative paths from the session cwd", async () => {

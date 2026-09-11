@@ -208,6 +208,24 @@ describe("SessionDatabase", () => {
     expect(afterIds).toEqual(beforeIds);
   });
 
+  test("an empty session ignores a stored compact recap instead of injecting it as this session's history", () => {
+    const recap = {
+      role: "user" as const,
+      content:
+        "[Compacted history — 3 earlier messages condensed]\nGoal: ran skill run\nProgress: p\nBlockers: b\nNext steps: n",
+    };
+    withDatabase((database) => {
+      database.saveSession({
+        ...state("fresh", []),
+        compact: { status: "compacted", windowStart: 3, recap },
+      });
+      const loaded = database.loadSession("fresh");
+      expect(loaded?.messages).toEqual([]);
+      expect(loaded?.compact).toBeUndefined();
+      expect(JSON.stringify(loaded)).not.toContain("ran skill run");
+    });
+  });
+
   function changeDelta(raw: Database, sql: string): number {
     const before = (raw.query("SELECT total_changes() AS n").get() as { n: number }).n;
     raw.exec(sql);
