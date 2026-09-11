@@ -1073,6 +1073,10 @@ async function runTui(
   const nextQueueId = (): string => `q${++queueIds}`;
   let currentTurn: Promise<void> = Promise.resolve();
   let quitting = false;
+  // bindSession is async (await close). Keep that wait off turnInFlight so /exit
+  // does not deliverSignal against an empty cancel slot. Input stays locked via this.
+  let sessionRebind: Promise<unknown> | undefined;
+  const inputLocked = (): boolean => turnInFlight || sessionRebind !== undefined;
 
   let usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
@@ -1440,7 +1444,7 @@ async function runTui(
     inputText?: string,
     directDispatch?: { agent: AgentSpec; goal: string },
   ): Promise<void> {
-    if (reactDispatch === undefined || turnInFlight) return;
+    if (reactDispatch === undefined || inputLocked()) return;
     turnInFlight = true;
     ranAnyTurn = true;
     const { id: sessionId, provider: requestedProvider } = session as RunSession;
@@ -1636,21 +1640,27 @@ async function runTui(
         ranAnyTurn,
       });
     };
+    const finishAfterClose = async (): Promise<void> => {
+      if (sessionRebind !== undefined) {
+        try {
+          await sessionRebind;
+        } catch {
+          // bindSession already dispatched command-error
+        }
+      }
+      await drainArchivist(archivistState);
+      await closeMcpClients(prepared.mcpClients, printWarning);
+      finishQuit();
+    };
     if (turnInFlight) {
       flushSync(() =>
         pushTranscriptLine(dispatch, "quitting — cancelling the in-flight turn, Ctrl-C to force"),
       );
       await renderer.idle();
       deliverSignal("SIGINT");
-      void currentTurn.then(async () => {
-        await drainArchivist(archivistState);
-        await closeMcpClients(prepared.mcpClients, printWarning);
-        finishQuit();
-      });
+      void currentTurn.then(finishAfterClose);
     } else {
-      await drainArchivist(archivistState);
-      await closeMcpClients(prepared.mcpClients, printWarning);
-      finishQuit();
+      await finishAfterClose();
     }
   }
 
@@ -1887,7 +1897,7 @@ async function runTui(
       }
     },
     "/plan": (args) => {
-      if (turnInFlight) {
+      if (inputLocked()) {
         dispatch({
           type: "command-error",
           message: "A turn is already running; wait for it to finish before submitting another.",
@@ -1929,7 +1939,7 @@ async function runTui(
   }
 
   function drainQueue(): void {
-    if (turnInFlight) return;
+    if (inputLocked()) return;
     if (quitting) return;
     if (liveState.plan.kind === "reviewing") return;
     if (liveState.queue.editing) return;
@@ -1941,6 +1951,7 @@ async function runTui(
 
   async function onSubmit(value: string, fromDrain = false): Promise<void> {
     if (reactDispatch === undefined) return;
+    if (quitting) return;
     if (liveState.queue.editing) {
       const edited = value.trim();
       dispatch(
@@ -1977,7 +1988,7 @@ async function runTui(
     const spec = commandByName(name);
     if (
       !fromDrain &&
-      (turnInFlight || liveState.queue.items.length > 0 || liveState.plan.kind === "reviewing") &&
+      (inputLocked() || liveState.queue.items.length > 0 || liveState.plan.kind === "reviewing") &&
       startsATurn(name, trimmed, prepared)
     ) {
       dispatch({ type: "queue-appended", id: nextQueueId(), text: value });
@@ -1985,6 +1996,13 @@ async function runTui(
     }
     echoUserInput(value);
     if (spec !== undefined && isTuiClaimed(spec)) {
+      if (name !== "/exit" && sessionRebind !== undefined) {
+        dispatch({
+          type: "command-error",
+          message: `${name}: can't run while a turn is in flight.`,
+        });
+        return;
+      }
       if (!spec.accepts(args)) {
         dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
         return;
@@ -2006,7 +2024,7 @@ async function runTui(
           return;
         }
         if (skill !== undefined) {
-          if (turnInFlight) {
+          if (inputLocked()) {
             dispatch({
               type: "command-error",
               message:
@@ -2041,7 +2059,7 @@ async function runTui(
           dispatch({ type: "command-error", message: `${name}: usage ${name} <task>` });
           return;
         }
-        if (turnInFlight) {
+        if (inputLocked()) {
           dispatch({
             type: "command-error",
             message: "A turn is already running; wait for it to finish before submitting another.",
@@ -2051,7 +2069,7 @@ async function runTui(
         currentTurn = runTurn(liveState.session, goal, { agent, goal });
         return;
       }
-      if (turnInFlight) {
+      if (inputLocked()) {
         dispatch({
           type: "command-error",
           message: "A turn is already running; wait for it to finish before submitting another.",
@@ -2071,7 +2089,7 @@ async function runTui(
       dispatch({ type: "command-error", message: `${name}: invalid arguments.` });
       return;
     }
-    if (turnInFlight && command.mutatesRunState === true) {
+    if (inputLocked() && command.mutatesRunState === true) {
       dispatch({
         type: "command-error",
         message: `${name}: can't run while a turn is in flight.`,
@@ -2116,19 +2134,23 @@ async function runTui(
     } finally {
       if (command.mutatesRunState === true) turnInFlight = false;
       if (liveState.session.id !== sessionIdBeforeCommand) {
+        const rebound = bindSession(
+          prepared,
+          liveState.session as RunSession,
+          configDir,
+          ctx.permissionsDir,
+          printWarning,
+        );
+        sessionRebind = rebound;
         try {
-          archivistState = await bindSession(
-            prepared,
-            liveState.session as RunSession,
-            configDir,
-            ctx.permissionsDir,
-            printWarning,
-          );
+          archivistState = await rebound;
         } catch (err) {
           dispatch({
             type: "command-error",
             message: `session switched to ${liveState.session.id} but checkpointing could not be rebound; restart seri before making further edits: ${messageOf(err)}`,
           });
+        } finally {
+          if (sessionRebind === rebound) sessionRebind = undefined;
         }
       }
       // Windows can throw EPERM/EBUSY on the removal half after checkout already rewrote the worktree.
