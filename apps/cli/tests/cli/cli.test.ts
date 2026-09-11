@@ -4100,6 +4100,81 @@ describe("run (/clear)", () => {
     expect(logs.join("\n")).toContain("old-session");
   });
 
+  test("`/clear` of a compacted session does not copy tool-call ids or the recap onto the new session", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "seri-cli-test-clear-compact-cwd-"));
+    const recap: ModelMessage = {
+      role: "user",
+      content:
+        `${COMPACT_HISTORY_PREFIX} 3 earlier messages condensed]\n` +
+        "Goal: invoked the run skill earlier in this session\nProgress: p\nBlockers: b\nNext steps: n",
+    };
+    const existing: SessionState<ModelMessage> = {
+      id: "old-compacted",
+      cwd,
+      systemPrompt: "stale",
+      permissionMode: "auto",
+      model: "llama-3.3-70b-versatile",
+      provider: "groq",
+      messages: [
+        { role: "user", content: "one" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "toolu_SHARED",
+              toolName: "skill",
+              input: { name: "run" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "toolu_SHARED",
+              toolName: "skill",
+              output: { type: "text", value: "ok" },
+            },
+          ],
+        },
+        { role: "assistant", content: "done" },
+      ],
+      compact: { status: "compacted", windowStart: 3, recap },
+    };
+    saveSession(existing, sessionsDir);
+
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await invokeSlash(
+        "/clear",
+        [],
+        { sessionsDir, checkpointsDir: sessionsDir, configDir: getConfigDir() },
+        loadSession("old-compacted", sessionsDir),
+      );
+    } finally {
+      console.log = originalLog;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+
+    const old = loadSession<ModelMessage>("old-compacted", sessionsDir);
+    expect(JSON.stringify(old)).toContain("toolu_SHARED");
+
+    const ids = listSessionIds(sessionsDir);
+    expect(ids).toHaveLength(2);
+    const newId = ids.find((id) => id !== "old-compacted");
+    if (newId === undefined) throw new Error("no new session appeared");
+
+    const loaded = loadSession<ModelMessage>(newId, sessionsDir);
+    expect(loaded.messages).toEqual([]);
+    expect(loaded.compact).toBeUndefined();
+    expect(JSON.stringify(loaded)).not.toContain("toolu_SHARED");
+    expect(JSON.stringify(loaded)).not.toContain("invoked the run skill");
+    expect(windowOf(createConversation(loaded.messages, loaded.compact))).toEqual([]);
+  });
+
   test("argv `/clear` is a task and does not mint via the slash handler", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
     const existing: SessionState = {

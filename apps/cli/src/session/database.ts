@@ -176,6 +176,7 @@ function compactFields(compact: CompactCursor | undefined): {
 
 function compactFromRow(header: SessionRow, archiveLength: number): CompactCursor | undefined {
   if (header.compact_window_start === null && header.compact_recap_json === null) return undefined;
+  if (archiveLength === 0) return undefined;
   if (header.compact_window_start === null || header.compact_recap_json === null) {
     throw new Error(`Session "${header.id}" has a partial compact cursor`);
   }

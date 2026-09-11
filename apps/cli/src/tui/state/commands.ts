@@ -619,9 +619,13 @@ export function decideClear(
   }),
 ): { next: SessionState<ModelMessage>; message: string } {
   const extensions = loadExtensions(session.cwd);
-  const next = {
-    ...session,
+  const next: SessionState<ModelMessage> = {
     id: newId,
+    cwd: session.cwd,
+    permissionMode: session.permissionMode,
+    ...(session.model !== undefined ? { model: session.model } : {}),
+    ...(session.provider !== undefined ? { provider: session.provider } : {}),
+    ...(session.reasoningEffort !== undefined ? { reasoningEffort: session.reasoningEffort } : {}),
     messages: [],
     systemPrompt: buildSystemPrompt({
       agentsContent: loadAgents(session.cwd),
