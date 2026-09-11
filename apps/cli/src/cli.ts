@@ -102,7 +102,7 @@ import {
   type LoopEvent,
   type runLoop as runLoopReal,
 } from "./loop/loop";
-import { createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
+import { closeMcpClients, createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
 import {
   decideMcpCommand,
   type McpRegistryChange,
@@ -1644,10 +1644,12 @@ async function runTui(
       deliverSignal("SIGINT");
       void currentTurn.then(async () => {
         await drainArchivist(archivistState);
+        await closeMcpClients(prepared.mcpClients, printWarning);
         finishQuit();
       });
     } else {
       await drainArchivist(archivistState);
+      await closeMcpClients(prepared.mcpClients, printWarning);
       finishQuit();
     }
   }
@@ -2115,7 +2117,7 @@ async function runTui(
       if (command.mutatesRunState === true) turnInFlight = false;
       if (liveState.session.id !== sessionIdBeforeCommand) {
         try {
-          archivistState = bindSession(
+          archivistState = await bindSession(
             prepared,
             liveState.session as RunSession,
             configDir,

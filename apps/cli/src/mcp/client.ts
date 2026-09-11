@@ -178,16 +178,36 @@ export async function fetchCatalog(
   }
 }
 
-export function closeMcpClients(clients: McpClients, onWarning: (message: string) => void): void {
-  for (const [name, handle] of clients.handles) {
-    handle
-      .then((client) => client.close())
-      .catch((err: unknown) =>
-        onWarning(`could not close MCP server "${name}": ${messageOf(err)}`),
-      );
+const MCP_CLOSE_TIMEOUT_MS = 5_000;
+
+async function closeBounded(close: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      close,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+export async function closeMcpClients(
+  clients: McpClients,
+  onWarning: (message: string) => void,
+  timeoutMs = MCP_CLOSE_TIMEOUT_MS,
+): Promise<void> {
+  const closing = [...clients.handles.entries()].map(([name, handle]) =>
+    closeBounded(
+      handle.then((client) => client.close()),
+      timeoutMs,
+    ).catch((err: unknown) => onWarning(`could not close MCP server "${name}": ${messageOf(err)}`)),
+  );
   clients.handles.clear();
   clients.status.clear();
+  await Promise.all(closing);
 }
 
 export function mcpServerStatus(clients: McpClients, name: string): McpServerStatus {
