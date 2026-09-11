@@ -14,6 +14,15 @@ import { TODO_TOOL_NAME } from "../todo/tool";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+function sqliteBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ((error as { code?: string }).code === "SQLITE_BUSY" ||
+      (error as { code?: string }).code === "SQLITE_BUSY_SNAPSHOT" ||
+      /locked/i.test(error.message))
+  );
+}
+
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 export class ScheduleValidationError extends Error {
@@ -189,7 +198,11 @@ export class Scheduler {
   }
 
   private pruneExpired(): void {
-    this.database.pruneDaemonRetention(this.now() - this.retentionDays * DAY_MS);
+    try {
+      this.database.pruneDaemonRetention(this.now() - this.retentionDays * DAY_MS);
+    } catch (error) {
+      if (!sqliteBusy(error)) throw error;
+    }
   }
 
   private mintScheduledSession(schedule: ScheduleRecord): SessionState | undefined {

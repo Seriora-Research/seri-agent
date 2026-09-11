@@ -612,12 +612,13 @@ export class SessionDatabase {
   }
 
   pruneDaemonRetention(cutoffMs: number): string[] {
-    return this.database.transaction(() => {
-      const cutoffIso = new Date(cutoffMs).toISOString();
-      const ids = (
-        this.database
-          .query(
-            `SELECT id FROM sessions
+    return this.database
+      .transaction(() => {
+        const cutoffIso = new Date(cutoffMs).toISOString();
+        const ids = (
+          this.database
+            .query(
+              `SELECT id FROM sessions
               WHERE updated_at_ms < ?
                 AND (
                   EXISTS (SELECT 1 FROM schedule_runs WHERE session_id = sessions.id)
@@ -630,20 +631,21 @@ export class SessionDatabase {
                      AND started_at >= ?
                 )
               ORDER BY id`,
-          )
-          .all(cutoffMs, cutoffIso) as { id: string }[]
-      ).map((row) => row.id);
-      if (ids.length === 0) return ids;
-      const deleteRuns = this.database.query("DELETE FROM schedule_runs WHERE session_id = ?");
-      const deleteTurns = this.database.query("DELETE FROM turns WHERE session_id = ?");
-      const deleteSession = this.database.query("DELETE FROM sessions WHERE id = ?");
-      for (const id of ids) {
-        deleteRuns.run(id);
-        deleteTurns.run(id);
-        deleteSession.run(id);
-      }
-      return ids;
-    })();
+            )
+            .all(cutoffMs, cutoffIso) as { id: string }[]
+        ).map((row) => row.id);
+        if (ids.length === 0) return ids;
+        const deleteRuns = this.database.query("DELETE FROM schedule_runs WHERE session_id = ?");
+        const deleteTurns = this.database.query("DELETE FROM turns WHERE session_id = ?");
+        const deleteSession = this.database.query("DELETE FROM sessions WHERE id = ?");
+        for (const id of ids) {
+          deleteRuns.run(id);
+          deleteTurns.run(id);
+          deleteSession.run(id);
+        }
+        return ids;
+      })
+      .immediate();
   }
 
   pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {

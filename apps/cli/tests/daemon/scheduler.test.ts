@@ -483,6 +483,31 @@ describe("Scheduler", () => {
     expect(database.listScheduleRuns(created.id)).toEqual([]);
     expect(database.getSchedule(created.id)?.id).toBe(created.id);
   });
+
+  test("a prune lock error does not skip a due fire", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = 70_000;
+    const busy = new Error("database is locked");
+    (busy as { code?: string }).code = "SQLITE_BUSY_SNAPSHOT";
+    database.pruneDaemonRetention = () => {
+      throw busy;
+    };
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "ok" }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "once",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:01:10.000Z" },
+      allowModelReads: true,
+    });
+    await scheduler.tick();
+    expect(database.listScheduleRuns(created.id)).toHaveLength(1);
+    expect(database.listScheduleRuns(created.id)[0]?.status).toBe("complete");
+  });
 });
 
 describe("daemon schedule routes", () => {

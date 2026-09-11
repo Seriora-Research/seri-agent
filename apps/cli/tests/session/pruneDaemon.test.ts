@@ -215,6 +215,54 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
     }
   });
 
+  test("a deferred snapshot cannot delete after a second connection commits", () => {
+    openDir();
+    const database = new SessionDatabase(configDir);
+    try {
+      insertSchedule(database);
+      database.saveSession(session("stale-fire"));
+      fireRun(database, { runId: "run-stale", sessionId: "stale-fire" });
+      ageSession("stale-fire", NOW_MS - 31 * DAY_MS);
+      const snapshot = new Database(join(configDir, DATABASE_FILENAME));
+      try {
+        snapshot.exec("PRAGMA busy_timeout = 5000");
+        snapshot.exec("BEGIN DEFERRED");
+        snapshot.query("SELECT id FROM sessions").all();
+        database.saveSession(session("tui"));
+        expect(() => snapshot.exec("DELETE FROM sessions WHERE id = 'stale-fire'")).toThrow(
+          /locked/i,
+        );
+        snapshot.exec("ROLLBACK");
+      } finally {
+        snapshot.close();
+      }
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stale-fire"]);
+      expect(database.loadSession("tui")?.id).toBe("tui");
+    } finally {
+      database.close();
+    }
+  });
+
+  test("a second connection can save a TUI session and prune still drops the stale fire", () => {
+    openDir();
+    const database = new SessionDatabase(configDir);
+    const tui = new SessionDatabase(configDir);
+    try {
+      insertSchedule(database);
+      database.saveSession(session("stale-fire"));
+      fireRun(database, { runId: "run-stale", sessionId: "stale-fire" });
+      ageSession("stale-fire", NOW_MS - 31 * DAY_MS);
+      tui.saveSession(session("tui"));
+      ageSession("tui", NOW_MS - 90 * DAY_MS);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stale-fire"]);
+      expect(tui.loadSession("tui")?.id).toBe("tui");
+      expect(database.loadSession("stale-fire")).toBeUndefined();
+    } finally {
+      tui.close();
+      database.close();
+    }
+  });
+
   test("a second prune is a no-op and the next open still passes foreign-key checks", () => {
     openDir();
     const database = new SessionDatabase(configDir);
