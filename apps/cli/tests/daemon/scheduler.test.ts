@@ -367,6 +367,36 @@ describe("Scheduler", () => {
     expect(database.getSchedule(okId)?.enabled).toBe(false);
   });
 
+  test("a firing writes schedule_runs before runScheduled returns", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = 55_000;
+    let scheduleId = "";
+    let midFire: { status: string; finishedAt: string | null }[] = [];
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        midFire = database.listScheduleRuns(scheduleId).map((row) => ({
+          status: row.status,
+          finishedAt: row.finishedAt,
+        }));
+        return { response: "ok" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "once",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:00:55.000Z" },
+      allowModelReads: true,
+    });
+    scheduleId = created.id;
+    await scheduler.tick();
+    expect(midFire).toEqual([{ status: "running", finishedAt: null }]);
+    expect(database.listScheduleRuns(created.id)[0]?.status).toBe("complete");
+    expect(database.listScheduleRuns(created.id)[0]?.finishedAt).toBe("1970-01-01T00:00:55.000Z");
+  });
+
   test("an interval fire that advances nextRunAt always has a schedule_runs session for that fire", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);

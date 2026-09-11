@@ -189,9 +189,7 @@ export class Scheduler {
   }
 
   private pruneExpired(): void {
-    this.database.pruneDaemonRetention({
-      cutoffMs: this.now() - this.retentionDays * DAY_MS,
-    });
+    this.database.pruneDaemonRetention(this.now() - this.retentionDays * DAY_MS);
   }
 
   private mintScheduledSession(schedule: ScheduleRecord): SessionState | undefined {
@@ -218,6 +216,12 @@ export class Scheduler {
 
     const startedAt = new Date(this.now()).toISOString();
     const runId = randomUUID();
+    this.database.beginScheduleFire({
+      id: runId,
+      scheduleId: schedule.id,
+      sessionId: session.id,
+      startedAt,
+    });
     const commit = (status: string, response: string | null, error: string | null): void => {
       this.database.commitScheduleFire(
         {

@@ -91,7 +91,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       ageSession("stale-fire", NOW_MS - 31 * DAY_MS);
       ageSession("fresh-fire", NOW_MS - DAY_MS);
 
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual(["stale-fire"]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stale-fire"]);
       expect(database.loadSession("stale-fire")).toBeUndefined();
       expect(database.loadSession("fresh-fire")?.id).toBe("fresh-fire");
       expect(database.listScheduleRuns("sched").map((row) => row.id)).toEqual(["run-fresh"]);
@@ -112,7 +112,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       database.saveSession(session("tui", [{ role: "user", content: "interactive transcript" }]));
       ageSession("tui", NOW_MS - 90 * DAY_MS);
 
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual([]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual([]);
       expect(database.loadSession("tui")?.messages).toEqual([
         { role: "user", content: "interactive transcript" },
       ]);
@@ -131,7 +131,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       database.finishTurn("turn-old", new Date(NOW_MS - 40 * DAY_MS).toISOString());
       ageSession("http-old", NOW_MS - 40 * DAY_MS);
 
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual(["http-old"]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["http-old"]);
       expect(database.loadSession("http-old")).toBeUndefined();
       expect(database.hasTurn("turn-old")).toBe(false);
       expect(database.listDaemonEventsAfter("turn-old", 0)).toEqual([]);
@@ -151,7 +151,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       markScheduleRunning("sched");
       expect(database.getSchedule("sched")?.running).toBe(true);
 
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual(["stale-fire"]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stale-fire"]);
       expect(database.loadSession("stale-fire")).toBeUndefined();
       expect(database.listScheduleRuns("sched")).toEqual([]);
       expect(database.getSchedule("sched")?.running).toBe(true);
@@ -160,30 +160,56 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
     }
   });
 
-  test("keepSessionId and a running turn survive even when aged out", () => {
+  test("a stuck running turn older than the cutoff is pruned", () => {
+    openDir();
+    const database = new SessionDatabase(configDir);
+    try {
+      database.saveSession(session("stuck"));
+      database.insertTurn("turn-stuck", "stuck", new Date(NOW_MS - 40 * DAY_MS).toISOString());
+      ageSession("stuck", NOW_MS - 40 * DAY_MS);
+
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stuck"]);
+      expect(database.loadSession("stuck")).toBeUndefined();
+      expect(database.hasTurn("turn-stuck")).toBe(false);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("a running turn started after the cutoff keeps an aged session", () => {
+    openDir();
+    const database = new SessionDatabase(configDir);
+    try {
+      database.saveSession(session("live-turn"));
+      database.insertTurn("turn-running", "live-turn", new Date(NOW_MS).toISOString());
+      ageSession("live-turn", NOW_MS - 40 * DAY_MS);
+
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual([]);
+      expect(database.loadSession("live-turn")?.id).toBe("live-turn");
+      expect(database.hasTurn("turn-running")).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("an interrupted fire with a running schedule_run is pruned", () => {
     openDir();
     const database = new SessionDatabase(configDir);
     try {
       insertSchedule(database);
-      database.saveSession(session("kept-fire"));
-      fireRun(database, { runId: "run-kept", sessionId: "kept-fire" });
-      ageSession("kept-fire", NOW_MS - 31 * DAY_MS);
+      database.saveSession(session("abandoned"));
+      database.beginScheduleFire({
+        id: "run-abandoned",
+        scheduleId: "sched",
+        sessionId: "abandoned",
+        startedAt: new Date(NOW_MS - 31 * DAY_MS).toISOString(),
+      });
+      ageSession("abandoned", NOW_MS - 31 * DAY_MS);
 
-      database.saveSession(session("live-turn"));
-      database.insertTurn(
-        "turn-running",
-        "live-turn",
-        new Date(NOW_MS - 40 * DAY_MS).toISOString(),
-      );
-      ageSession("live-turn", NOW_MS - 40 * DAY_MS);
-
-      expect(
-        database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS, keepSessionId: "kept-fire" }),
-      ).toEqual([]);
-      expect(database.loadSession("kept-fire")?.id).toBe("kept-fire");
-      expect(database.listScheduleRuns("sched").map((row) => row.id)).toEqual(["run-kept"]);
-      expect(database.loadSession("live-turn")?.id).toBe("live-turn");
-      expect(database.hasTurn("turn-running")).toBe(true);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["abandoned"]);
+      expect(database.loadSession("abandoned")).toBeUndefined();
+      expect(database.listScheduleRuns("sched")).toEqual([]);
+      expect(database.getSchedule("sched")?.id).toBe("sched");
     } finally {
       database.close();
     }
@@ -197,8 +223,8 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       database.saveSession(session("gone"));
       fireRun(database, { runId: "run-gone", sessionId: "gone" });
       ageSession("gone", NOW_MS - 31 * DAY_MS);
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual(["gone"]);
-      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual([]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["gone"]);
+      expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual([]);
     } finally {
       database.close();
     }
