@@ -42,8 +42,11 @@ repository; general assistant work is a planned direction.
   messages so the conversation fits the context window. Local trajectory recording
   (`/trajectory`) is on by default — the research substrate, not an evolution loop.
 - **A local daemon.** `seri serve` starts a loopback daemon for the profile; `seri exec <task>`
-  runs one task through it. `seri doctor` prints a local health report. `seri update` replaces an
-  installed binary from GitHub Releases.
+  runs one task through it. Scheduled fires and `seri exec` sessions age out of `seri.db` after
+  `SERI_TRAJECTORY_RETENTION_DAYS` (default 30). The schedule row stays; TUI transcripts are not
+  pruned. `GET /v1/schedules/:id/runs` then shows only that window. Hosted portal `/sessions` is
+  WorkOS login sessions, not this file. `seri doctor` prints a local health report. `seri update`
+  replaces an installed binary from GitHub Releases.
 
 ## Providers and how you pay
 

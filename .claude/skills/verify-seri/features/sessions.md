@@ -46,5 +46,6 @@ Preconditions:
 - The second drive's question must not contain the token itself, or the `wait=` match proves nothing — it would match the echo of your own input.
 - The echo-wait after `type=` must be a **mid-text** fragment. `"wait=Remember this"` against a task starting with "Remember this token:" does not match — cursor redraw splits the head of a line in the byte stream. Anchor on something several words in.
 - `--continue` picks the most recent session in the profile; a stray extra session from a failed earlier attempt changes which one loads. A drive that dies before its turn still leaves an empty session row that `--continue` will then pick. Clean up failed attempts before re-driving, or resume by explicit id.
+- Scheduled fires and `seri exec` sessions in `seri.db` age out after `SERI_TRAJECTORY_RETENTION_DAYS` (default 30). TUI rows do not. `--resume` of a pruned scheduled id is not found. `GET /v1/schedules/:id/runs` lists only remaining runs. Hosted portal `/sessions` is WorkOS, not this table.
 - A resumed drive needs a longer settle after the splash Esc (`sleep=1500`) before typing: `--continue`/`--resume` suppress the `created.` banner, so there is no wait to anchor readiness on.
 - `/clear` keeps the process running in a new session — it is not an exit; the old session id stays valid for `--resume`.

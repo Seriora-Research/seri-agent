@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import type { DaemonDescriptor, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
 import type { CliDeps } from "../cli";
+import { loadTrajectoryConfig } from "../config/config";
 import { SessionDatabase } from "../session/database";
 import {
   type AcquiredDaemonLock,
@@ -162,7 +163,13 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
       idleMs: opts.idleMs,
       onIdleFlush,
     });
-    scheduler = new Scheduler(database, runScheduled, opts.now, opts.tickMs);
+    scheduler = new Scheduler(
+      database,
+      runScheduled,
+      opts.now,
+      opts.tickMs,
+      loadTrajectoryConfig(opts.configDir).retentionDays,
+    );
     server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,

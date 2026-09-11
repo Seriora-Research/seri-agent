@@ -1,15 +1,27 @@
 import { randomUUID } from "node:crypto";
 import type { ScheduleRequest, ScheduleTiming } from "@seri/daemon-client";
+import { DEFAULT_TRAJECTORY_RETENTION_DAYS } from "../config/config";
 import {
   createScheduledToolDefinitions,
   DISPATCH_TOOL_NAME,
   READ_ONLY_TOOL_NAMES,
   WRITE_TOOL_NAMES,
 } from "../provider/tools";
-import { TODO_TOOL_NAME } from "../todo/tool";
 import type { RunPolicy } from "../runtime/types";
 import type { ScheduleRecord, SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
+import { TODO_TOOL_NAME } from "../todo/tool";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function sqliteBusy(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    ((error as { code?: string }).code === "SQLITE_BUSY" ||
+      (error as { code?: string }).code === "SQLITE_BUSY_SNAPSHOT" ||
+      /locked/i.test(error.message))
+  );
+}
 
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -129,10 +141,12 @@ export class Scheduler {
     private readonly runScheduled: RunScheduled,
     private readonly now: () => number = () => Date.now(),
     private readonly tickMs = 60_000,
+    private readonly retentionDays: number = DEFAULT_TRAJECTORY_RETENTION_DAYS,
   ) {}
 
   start(): void {
     this.database.skipMissedSchedules(this.now());
+    this.pruneExpired();
     this.timer = setInterval(() => {
       void this.tick();
     }, this.tickMs);
@@ -168,6 +182,7 @@ export class Scheduler {
     this.ticking = true;
     try {
       const now = this.now();
+      this.pruneExpired();
       for (const due of this.database.listDueSchedules(now)) {
         const claimed = this.database.claimSchedule(due.id, now);
         if (claimed === undefined) continue;
@@ -179,6 +194,14 @@ export class Scheduler {
       }
     } finally {
       this.ticking = false;
+    }
+  }
+
+  private pruneExpired(): void {
+    try {
+      this.database.pruneDaemonRetention(this.now() - this.retentionDays * DAY_MS);
+    } catch (error) {
+      if (!sqliteBusy(error)) throw error;
     }
   }
 
@@ -206,6 +229,12 @@ export class Scheduler {
 
     const startedAt = new Date(this.now()).toISOString();
     const runId = randomUUID();
+    this.database.beginScheduleFire({
+      id: runId,
+      scheduleId: schedule.id,
+      sessionId: session.id,
+      startedAt,
+    });
     const commit = (status: string, response: string | null, error: string | null): void => {
       this.database.commitScheduleFire(
         {

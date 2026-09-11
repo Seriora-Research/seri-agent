@@ -612,6 +612,43 @@ export class SessionDatabase {
     ).map((row) => JSON.parse(row.json));
   }
 
+  pruneDaemonRetention(cutoffMs: number): string[] {
+    return this.database
+      .transaction(() => {
+        const cutoffIso = new Date(cutoffMs).toISOString();
+        const ids = (
+          this.database
+            .query(
+              `SELECT id FROM sessions
+              WHERE updated_at_ms < ?
+                AND (
+                  EXISTS (SELECT 1 FROM schedule_runs WHERE session_id = sessions.id)
+                  OR EXISTS (SELECT 1 FROM turns WHERE session_id = sessions.id)
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM turns
+                   WHERE session_id = sessions.id
+                     AND status = 'running'
+                     AND started_at >= ?
+                )
+              ORDER BY id`,
+            )
+            .all(cutoffMs, cutoffIso) as { id: string }[]
+        ).map((row) => row.id);
+        if (ids.length === 0) return ids;
+        const deleteRuns = this.database.query("DELETE FROM schedule_runs WHERE session_id = ?");
+        const deleteTurns = this.database.query("DELETE FROM turns WHERE session_id = ?");
+        const deleteSession = this.database.query("DELETE FROM sessions WHERE id = ?");
+        for (const id of ids) {
+          deleteRuns.run(id);
+          deleteTurns.run(id);
+          deleteSession.run(id);
+        }
+        return ids;
+      })
+      .immediate();
+  }
+
   pruneTrajectories(opts: { cutoff: string; keepSessionId?: string }): string[] {
     return this.database.transaction(() => {
       const stale = (
@@ -778,6 +815,20 @@ export class SessionDatabase {
     this.database.query("UPDATE schedules SET running = 0 WHERE id = ?").run(id);
   }
 
+  beginScheduleFire(row: {
+    id: string;
+    scheduleId: string;
+    sessionId: string;
+    startedAt: string;
+  }): void {
+    this.database
+      .query(
+        `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
+         VALUES (?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
+      )
+      .run(row.id, row.scheduleId, row.sessionId, row.startedAt);
+  }
+
   commitScheduleFire(
     row: {
       id: string;
@@ -792,21 +843,30 @@ export class SessionDatabase {
     nowMs: number,
   ): void {
     this.database.transaction(() => {
-      this.database
+      const updated = this.database
         .query(
-          `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `UPDATE schedule_runs
+              SET status = ?, response = ?, error = ?, finished_at = ?
+            WHERE id = ?`,
         )
-        .run(
-          row.id,
-          row.scheduleId,
-          row.sessionId,
-          row.status,
-          row.response,
-          row.error,
-          row.startedAt,
-          row.finishedAt,
-        );
+        .run(row.status, row.response, row.error, row.finishedAt, row.id);
+      if (updated.changes === 0) {
+        this.database
+          .query(
+            `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            row.id,
+            row.scheduleId,
+            row.sessionId,
+            row.status,
+            row.response,
+            row.error,
+            row.startedAt,
+            row.finishedAt,
+          );
+      }
       const schedule = this.getSchedule(row.scheduleId);
       if (schedule === undefined) return;
       if (schedule.timing.kind === "once") {
