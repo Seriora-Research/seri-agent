@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { capToolResult, MAX_TOOL_RESULT_CHARS } from "../../src/capToolResult";
 import { getCachedEol } from "../../src/tools/eolCache";
-import { readFile } from "../../src/tools/readFile";
+import { readFile, WINDOW_BYTES } from "../../src/tools/readFile";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 
 let tmpRoot: string;
@@ -72,8 +72,7 @@ describe("readFile", () => {
   });
 
   test("a file well over the window budget matches capToolResult of a full decode", async () => {
-    const windowBytes = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
-    const n = windowBytes + 50_000;
+    const n = WINDOW_BYTES + 50_000;
     const filePath = join(tmpRoot, "windowed.txt");
     const body = `${"A".repeat(n)}${"B".repeat(n)}`;
     writeFileSync(filePath, body);
@@ -84,9 +83,8 @@ describe("readFile", () => {
   });
 
   test("CRLF only in the skipped middle still caches CRLF", async () => {
-    const windowBytes = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
     const filePath = join(tmpRoot, "middle-eol.txt");
-    const pad = "x".repeat(windowBytes + 100);
+    const pad = "x".repeat(WINDOW_BYTES + 100);
     writeFileSync(filePath, `${pad}\r\n${pad}`);
     await readFile(filePath);
     expect(getCachedEol(filePath)).toBe("CRLF");
@@ -103,6 +101,39 @@ describe("readFile", () => {
     expect(result).not.toContain("�");
     expect(result).toBe(capToolResult(readFileSync(filePath, "utf8").replace(/\r\n/g, "\n")));
   });
+
+  test("a 3-byte-only file over the window budget still matches a full decode", async () => {
+    const filePath = join(tmpRoot, "cjk.txt");
+    const body = "中".repeat(WINDOW_BYTES);
+    writeFileSync(filePath, body);
+    const result = await readFile(filePath);
+    expect(result).toBe(capToolResult(readFileSync(filePath, "utf8").replace(/\r\n/g, "\n")));
+  });
+
+  test("a continuation-only tail window still matches a full decode", async () => {
+    const filePath = join(tmpRoot, "cont-tail.bin");
+    writeFileSync(
+      filePath,
+      Buffer.concat([
+        Buffer.from("A".repeat(WINDOW_BYTES + 100)),
+        Buffer.alloc(WINDOW_BYTES, 0x80),
+      ]),
+    );
+    const result = await readFile(filePath);
+    expect(result).toBe(
+      capToolResult(readFileSync(filePath).toString("utf8").replace(/\r\n/g, "\n")),
+    );
+  });
+
+  test.skipIf(!existsSync("/sys/class/net/lo/mtu"))(
+    "a sysfs file whose stat.size exceeds readable bytes is not NUL-padded",
+    async () => {
+      const result = await readFile("/sys/class/net/lo/mtu");
+      if (typeof result !== "string") throw new Error("expected text");
+      expect(result).not.toContain("\0");
+      expect(result).toBe(readFileSync("/sys/class/net/lo/mtu", "utf8"));
+    },
+  );
 
   test("attended PNG returns an image read, not utf8 garbage", async () => {
     const filePath = join(tmpRoot, "tiny.png");

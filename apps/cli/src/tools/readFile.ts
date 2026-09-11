@@ -11,8 +11,9 @@ import {
 import { eolEpoch, setCachedEol } from "./eolCache";
 
 const PREFIX_BYTES = 12;
-const WINDOW_BYTES = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
+export const WINDOW_BYTES = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
 const MIDDLE_CHUNK = 64 * 1024;
+const MAX_UTF8_CONT = 3;
 
 type Utf16CrlfState = {
   carry: Buffer;
@@ -48,25 +49,23 @@ export async function readFile(
 
     const prefixLen = Math.min(PREFIX_BYTES, stat.size);
     const prefix = Buffer.alloc(prefixLen);
-    await readAt(handle, prefix, 0, signal);
-    const mime = sniffImageMime(prefix);
+    const prefixGot = await readAt(handle, prefix, 0, signal);
+    const prefixBytes = prefix.subarray(0, prefixGot);
+    const mime = sniffImageMime(prefixBytes);
     if (mime !== undefined) {
       if (opts?.images !== true) return SCHEDULED_IMAGE_REFUSAL;
       if (stat.size > MAX_IMAGE_BYTES) return IMAGE_TOO_LARGE;
-      if (stat.size === prefixLen) return toImageRead({ mime, bytes: prefix });
-      const bytes = Buffer.alloc(stat.size);
-      prefix.copy(bytes);
-      await readAt(handle, bytes.subarray(prefixLen), prefixLen, signal);
-      return toImageRead({ mime, bytes });
+      if (prefixGot < prefixLen) return toImageRead({ mime, bytes: prefixBytes });
+      const rest = Buffer.alloc(stat.size - prefixLen);
+      const restGot = await readAt(handle, rest, prefixLen, signal);
+      return toImageRead({ mime, bytes: Buffer.concat([prefixBytes, rest.subarray(0, restGot)]) });
     }
 
-    if (stat.size <= 2 * WINDOW_BYTES) {
-      const bytes = Buffer.alloc(stat.size);
-      prefix.copy(bytes);
-      if (stat.size > prefixLen) {
-        await readAt(handle, bytes.subarray(prefixLen), prefixLen, signal);
-      }
-      return finishText(path, bytes, observedAt);
+    if (stat.size <= 2 * WINDOW_BYTES || prefixGot < prefixLen) {
+      if (prefixGot < prefixLen) return finishText(path, prefixBytes, observedAt);
+      const rest = Buffer.alloc(stat.size - prefixLen);
+      const restGot = await readAt(handle, rest, prefixLen, signal);
+      return finishText(path, Buffer.concat([prefixBytes, rest.subarray(0, restGot)]), observedAt);
     }
 
     return await readWindowedText(handle, path, stat.size, observedAt, signal);
@@ -89,14 +88,17 @@ async function readWindowedText(
   signal: AbortSignal | undefined,
 ): Promise<string> {
   const headRaw = Buffer.alloc(WINDOW_BYTES);
+  const headGot = await readAt(handle, headRaw, 0, signal);
+  if (headGot < WINDOW_BYTES) return finishText(path, headRaw.subarray(0, headGot), observedAt);
+
   const tailRaw = Buffer.alloc(WINDOW_BYTES);
-  await readAt(handle, headRaw, 0, signal);
-  await readAt(handle, tailRaw, size - WINDOW_BYTES, signal);
+  const tailGot = await readAt(handle, tailRaw, size - WINDOW_BYTES, signal);
+  const tailSlice = tailRaw.subarray(0, tailGot);
 
   const headDrop = utf8TrailingIncomplete(headRaw);
-  const tailSkip = utf8LeadingContinuation(tailRaw);
+  const tailSkip = utf8LeadingContinuation(tailSlice);
   const headComplete = headRaw.subarray(0, headRaw.length - headDrop);
-  const tailComplete = tailRaw.subarray(tailSkip);
+  const tailComplete = tailSlice.subarray(tailSkip);
   const headLf = Buffer.from(headComplete).toString("utf8").replace(/\r\n/g, "\n");
   const tailLf = Buffer.from(tailComplete).toString("utf8").replace(/\r\n/g, "\n");
 
@@ -110,13 +112,14 @@ async function readWindowedText(
 
   const middleStart = WINDOW_BYTES - headDrop;
   const middleEnd = size - WINDOW_BYTES + tailSkip;
-  const chunk = Buffer.alloc(Math.min(MIDDLE_CHUNK, middleEnd - middleStart));
+  const chunk = Buffer.alloc(Math.min(MIDDLE_CHUNK, Math.max(0, middleEnd - middleStart)));
   for (let pos = middleStart; pos < middleEnd; ) {
     const n = Math.min(MIDDLE_CHUNK, middleEnd - pos);
     const slice = n === chunk.length ? chunk : chunk.subarray(0, n);
-    await readAt(handle, slice, pos, signal);
-    feedUtf16Crlf(state, slice, false);
-    pos += n;
+    const got = await readAt(handle, slice, pos, signal);
+    if (got === 0) break;
+    feedUtf16Crlf(state, slice.subarray(0, got), false);
+    pos += got;
   }
   feedUtf16Crlf(state, tailComplete, true);
 
@@ -129,7 +132,7 @@ async function readAt(
   buffer: Uint8Array,
   position: number,
   signal: AbortSignal | undefined,
-): Promise<void> {
+): Promise<number> {
   let offset = 0;
   while (offset < buffer.length) {
     throwIfAborted(signal);
@@ -142,6 +145,7 @@ async function readAt(
     if (bytesRead === 0) break;
     offset += bytesRead;
   }
+  return offset;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -169,7 +173,7 @@ function utf8TrailingIncomplete(bytes: Uint8Array): number {
   while (i >= 0 && (bytes[i] & 0xc0) === 0x80) {
     cont++;
     i--;
-    if (cont === 3) break;
+    if (cont === MAX_UTF8_CONT) break;
   }
   if (i < 0) return n;
   const lead = bytes[i];
@@ -182,7 +186,7 @@ function utf8TrailingIncomplete(bytes: Uint8Array): number {
 
 function utf8LeadingContinuation(bytes: Uint8Array): number {
   let i = 0;
-  while (i < bytes.length && (bytes[i] & 0xc0) === 0x80) i++;
+  while (i < bytes.length && i < MAX_UTF8_CONT && (bytes[i] & 0xc0) === 0x80) i++;
   return i;
 }
 
