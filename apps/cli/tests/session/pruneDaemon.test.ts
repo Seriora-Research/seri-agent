@@ -37,6 +37,12 @@ function ageSession(id: string, updatedAtMs: number): void {
   raw.close();
 }
 
+function markScheduleRunning(id: string): void {
+  const raw = new Database(join(configDir, DATABASE_FILENAME));
+  raw.query("UPDATE schedules SET running = 1 WHERE id = ?").run(id);
+  raw.close();
+}
+
 function insertSchedule(database: SessionDatabase, id = "sched"): void {
   database.insertSchedule({
     id,
@@ -129,6 +135,26 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       expect(database.loadSession("http-old")).toBeUndefined();
       expect(database.hasTurn("turn-old")).toBe(false);
       expect(database.listDaemonEventsAfter("turn-old", 0)).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  test("a live schedule does not pin its stale prior fires", () => {
+    openDir();
+    const database = new SessionDatabase(configDir);
+    try {
+      insertSchedule(database);
+      database.saveSession(session("stale-fire"));
+      fireRun(database, { runId: "run-stale", sessionId: "stale-fire" });
+      ageSession("stale-fire", NOW_MS - 31 * DAY_MS);
+      markScheduleRunning("sched");
+      expect(database.getSchedule("sched")?.running).toBe(true);
+
+      expect(database.pruneDaemonRetention({ cutoffMs: CUTOFF_MS })).toEqual(["stale-fire"]);
+      expect(database.loadSession("stale-fire")).toBeUndefined();
+      expect(database.listScheduleRuns("sched")).toEqual([]);
+      expect(database.getSchedule("sched")?.running).toBe(true);
     } finally {
       database.close();
     }

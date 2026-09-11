@@ -613,13 +613,12 @@ export class SessionDatabase {
 
   pruneDaemonRetention(opts: { cutoffMs: number; keepSessionId?: string }): string[] {
     return this.database.transaction(() => {
-      const keep = opts.keepSessionId ?? "";
       const ids = (
         this.database
           .query(
             `SELECT id FROM sessions
               WHERE updated_at_ms < ?
-                AND id != ?
+                AND id IS NOT ?
                 AND (
                   EXISTS (SELECT 1 FROM schedule_runs WHERE session_id = sessions.id)
                   OR EXISTS (SELECT 1 FROM turns WHERE session_id = sessions.id)
@@ -627,14 +626,9 @@ export class SessionDatabase {
                 AND NOT EXISTS (
                   SELECT 1 FROM turns WHERE session_id = sessions.id AND status = 'running'
                 )
-                AND NOT EXISTS (
-                  SELECT 1 FROM schedule_runs sr
-                  JOIN schedules s ON s.id = sr.schedule_id
-                  WHERE sr.session_id = sessions.id AND s.running = 1
-                )
               ORDER BY id`,
           )
-          .all(opts.cutoffMs, keep) as { id: string }[]
+          .all(opts.cutoffMs, opts.keepSessionId ?? null) as { id: string }[]
       ).map((row) => row.id);
       if (ids.length === 0) return ids;
       const deleteRuns = this.database.query("DELETE FROM schedule_runs WHERE session_id = ?");
