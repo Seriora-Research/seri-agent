@@ -366,13 +366,13 @@ function filterMcpGrants(
   return result;
 }
 
-export function bindSession(
+export async function bindSession(
   prepared: PreparedRun,
   session: RunSession,
   configDir: string,
   permissionsDir: string,
   onWarning: (message: string) => void,
-): ArchivistState {
+): Promise<ArchivistState> {
   const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database, {
     contextFiles: () =>
       collectContextFiles({
@@ -406,7 +406,7 @@ export function bindSession(
     onWarning,
   });
   warnOnNameCollisions(prepared.skills, prepared.agents, onWarning);
-  closeMcpClients(prepared.mcpClients, onWarning);
+  await closeMcpClients(prepared.mcpClients, onWarning);
   prepared.mcp = loadMcpRegistry({ worktree: prepared.worktree, configDir, onWarning });
   prepared.mcpClients = createMcpClients(createSessionDial(configDir));
   const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);

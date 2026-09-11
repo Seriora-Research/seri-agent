@@ -87,7 +87,7 @@ export function createAttendedExecuteTurn(opts: {
       void drainArchivist(archivistState).then(persistCursor);
       return { exitCode: exitCodeFromDriveResult(result) };
     } finally {
-      closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
+      await closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
     }
   };
 }

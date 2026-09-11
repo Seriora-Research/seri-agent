@@ -297,27 +297,25 @@ describe("fetchCatalog", () => {
 });
 
 describe("closeMcpClients", () => {
-  test("is synchronous, closes every dialled handle, and is idempotent", async () => {
-    let closeCalls = 0;
+  test("awaits every dialled handle's close before resolving, and is idempotent", async () => {
+    let closed = false;
     const handle = fakeHandle({
       close: async () => {
-        closeCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        closed = true;
       },
     });
     const clients = createMcpClients(async () => handle);
     await callMcpTool(clients, spec(), "web_search", {});
 
     const warnings: string[] = [];
-    closeMcpClients(clients, (m) => warnings.push(m));
+    await closeMcpClients(clients, (m) => warnings.push(m));
+    expect(closed).toBe(true);
     expect(clients.handles.size).toBe(0);
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(closeCalls).toBe(1);
     expect(warnings).toEqual([]);
 
-    closeMcpClients(clients, (m) => warnings.push(m));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(closeCalls).toBe(1);
+    await closeMcpClients(clients, (m) => warnings.push(m));
+    expect(closed).toBe(true);
   });
 
   test("a close failure is reported via onWarning, naming the server, rather than thrown", async () => {
@@ -330,8 +328,22 @@ describe("closeMcpClients", () => {
     await callMcpTool(clients, spec("exa"), "web_search", {});
 
     const warnings: string[] = [];
-    expect(() => closeMcpClients(clients, (m) => warnings.push(m))).not.toThrow();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await closeMcpClients(clients, (m) => warnings.push(m));
     expect(warnings.some((w) => w.includes("exa") && w.includes("stuck"))).toBe(true);
+  });
+
+  test("a hung close warns and resolves rather than waiting forever", async () => {
+    const handle = fakeHandle({
+      close: () => new Promise(() => {}),
+    });
+    const clients = createMcpClients(async () => handle);
+    await callMcpTool(clients, spec("exa"), "web_search", {});
+
+    const warnings: string[] = [];
+    const started = Date.now();
+    await closeMcpClients(clients, (m) => warnings.push(m), 40);
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(warnings.some((w) => w.includes("exa") && w.includes("timed out"))).toBe(true);
+    expect(clients.handles.size).toBe(0);
   });
 });

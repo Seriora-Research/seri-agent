@@ -397,13 +397,15 @@ describe("bindSession + mcp", () => {
 
   test("bindSession closes the previous mcp clients before installing a fresh pool", async () => {
     const prepared = await freshPrepared();
-    let closeCalls = 0;
+    let closed = false;
+    let newPoolWhileClosing = false;
     const dial: DialFn = async () => {
       const handle: McpClientHandle = {
         listTools: async () => [],
         callTool: async () => "",
         close: async () => {
-          closeCalls++;
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          closed = true;
         },
       };
       return handle;
@@ -423,17 +425,18 @@ describe("bindSession + mcp", () => {
     );
     prepared.mcpClients = warmClients;
 
-    bindSession(
+    const rebound = bindSession(
       prepared,
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
       permissionsDir,
       () => {},
     );
+    if (prepared.mcpClients !== warmClients && !closed) newPoolWhileClosing = true;
+    await rebound;
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(closeCalls).toBe(1);
+    expect(closed).toBe(true);
+    expect(newPoolWhileClosing).toBe(false);
     expect(prepared.mcpClients).not.toBe(warmClients);
     expect(prepared.mcpClients.handles.size).toBe(0);
   });
@@ -466,7 +469,13 @@ describe("bindSession + mcp", () => {
       `global:\n  - ${mcpGrantKey(tool.toolName, toolFingerprint(tool))}\nprojects: {}\n`,
     );
 
-    bindSession(prepared, { ...prepared.session, id: "next" }, configDir, permissionsDir, () => {});
+    await bindSession(
+      prepared,
+      { ...prepared.session, id: "next" },
+      configDir,
+      permissionsDir,
+      () => {},
+    );
 
     expect(prepared.mcp.get("exa")).toBeDefined();
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
@@ -480,7 +489,7 @@ describe("bindSession + mcp", () => {
       permissionsPath(permissionsDir),
       "global: []\nprojects: {}\ndeny:\n  - grep(/hidden/**)\n",
     );
-    bindSession(
+    await bindSession(
       prepared,
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
@@ -498,7 +507,7 @@ describe("bindSession + mcp", () => {
       permissionsPath(permissionsDir),
       "global: []\nprojects: {}\nautoModeOnBlock: ask\n",
     );
-    bindSession(
+    await bindSession(
       prepared,
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
