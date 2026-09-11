@@ -125,7 +125,6 @@ export function mapRawCatalog(raw: unknown): ModelCatalogEntry[] {
 
 let cachedPromise: Promise<ModelCatalog> | undefined;
 let snapshot: ModelCatalog | undefined;
-// resetCatalogCache can run while a fetch is still in flight (tests). Ignore that result so it cannot overwrite a newer snapshot.
 let cacheGeneration = 0;
 
 export function resetCatalogCache(): void {
