@@ -1665,7 +1665,10 @@ async function runTui(
     },
     "/model": async () => {
       try {
-        prepared.catalog = await catalogForModelPicker(prepared.catalog, configDir);
+        prepared.catalog = await catalogForModelPicker(
+          await getModelCatalog(undefined, undefined, configDir),
+          configDir,
+        );
         dispatch({
           type: "model-picker-requested",
           entries: decideModelPickerOpen(
@@ -1689,9 +1692,11 @@ async function runTui(
     },
     "/effort": async (args) => {
       try {
+        const catalog = await getModelCatalog(undefined, undefined, configDir);
+        prepared.catalog = catalog;
         if (args.length === 0) {
           const opened = decideEffortOpen(
-            prepared.catalog,
+            catalog,
             configDir,
             liveState.session,
             prepared.plan,

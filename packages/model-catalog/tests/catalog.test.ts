@@ -4,6 +4,7 @@ import {
   isZeroPriceEntry,
   loadCatalog,
   mapRawCatalog,
+  peekCatalog,
   resetCatalogCache,
 } from "../src/catalog";
 import type { ModelCatalog, ModelCatalogEntry } from "../src/types";
@@ -243,6 +244,92 @@ describe("loadCatalog", () => {
     const catalog = await loadCatalog(fallbackManifest, fakeFetch({}));
 
     expect(catalog).toBe(fallbackManifest);
+  });
+});
+
+describe("peekCatalog", () => {
+  const originalDisableFlag = process.env.SERI_DISABLE_MODELS_FETCH;
+
+  beforeEach(() => {
+    resetCatalogCache();
+    delete process.env.SERI_DISABLE_MODELS_FETCH;
+  });
+
+  afterEach(() => {
+    if (originalDisableFlag === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+    else process.env.SERI_DISABLE_MODELS_FETCH = originalDisableFlag;
+  });
+
+  test("returns the manifest while fetch hangs, and loadCatalog on that fetch is still pending", async () => {
+    let resolveFetch!: (json: unknown) => void;
+    const fetchFn: typeof fetch = (async () =>
+      new Promise((resolve) => {
+        resolveFetch = (json) =>
+          resolve({ ok: true, status: 200, json: async () => json } as unknown as Response);
+      })) as unknown as typeof fetch;
+
+    const peeked = peekCatalog(fallbackManifest, fetchFn);
+    expect(peeked).toBe(fallbackManifest);
+
+    const livePromise = loadCatalog(fallbackManifest, fetchFn);
+    let liveSettled = false;
+    void livePromise.then(() => {
+      liveSettled = true;
+    });
+    await Promise.resolve();
+    expect(liveSettled).toBe(false);
+
+    resolveFetch(rawApiResponse());
+    const live = await livePromise;
+    expect(live.entries.some((entry) => entry.id === "live-model")).toBe(true);
+    expect(peekCatalog(fallbackManifest, fetchFn)).toEqual(live);
+  });
+
+  test("a second peek after live settles does not start another fetch", async () => {
+    let calls = 0;
+    const fetchFn: typeof fetch = (async () => {
+      calls += 1;
+      return { ok: true, status: 200, json: async () => rawApiResponse() } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    peekCatalog(fallbackManifest, fetchFn);
+    const live = await loadCatalog(fallbackManifest, fetchFn);
+    expect(peekCatalog(fallbackManifest, fetchFn)).toEqual(live);
+    expect(calls).toBe(1);
+  });
+
+  test("SERI_DISABLE_MODELS_FETCH: peekCatalog does not call fetch and returns the manifest", () => {
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    let called = false;
+    const fetchFn: typeof fetch = (async () => {
+      called = true;
+      throw new Error("should not be called");
+    }) as unknown as typeof fetch;
+
+    expect(peekCatalog(fallbackManifest, fetchFn)).toBe(fallbackManifest);
+    expect(called).toBe(false);
+  });
+
+  test("resetCatalogCache ignores a later settle from a fetch started before the reset", async () => {
+    let resolveFetch!: (json: unknown) => void;
+    const fetchFn: typeof fetch = (async () =>
+      new Promise((resolve) => {
+        resolveFetch = (json) =>
+          resolve({ ok: true, status: 200, json: async () => json } as unknown as Response);
+      })) as unknown as typeof fetch;
+
+    const inFlight = loadCatalog(fallbackManifest, fetchFn);
+    resetCatalogCache();
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    expect(peekCatalog(fallbackManifest, fetchFn)).toBe(fallbackManifest);
+
+    resolveFetch(rawApiResponse());
+    const live = await inFlight;
+    expect(live.entries.some((entry) => entry.id === "live-model")).toBe(true);
+    expect(peekCatalog(fallbackManifest, fetchFn)).toBe(fallbackManifest);
+    expect(
+      peekCatalog(fallbackManifest, fetchFn).entries.some((entry) => entry.id === "live-model"),
+    ).toBe(false);
   });
 });
 

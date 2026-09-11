@@ -3,6 +3,7 @@ import {
   type ModelCatalog,
   type ModelCatalogEntry,
   type ModelProvider,
+  peekCatalog,
 } from "@seri/model-catalog";
 import { type CodexListedModel, listCodexModels } from "../auth/codexRefresh";
 import { hasXaiSubscription, loadXaiSubscription } from "../auth/xaiAuthStore";
@@ -52,23 +53,12 @@ export function prewarmModelCatalog(): void {
   void loadCatalog(FALLBACK_MANIFEST, fetch);
 }
 
-export async function getModelCatalog(
-  fetchFn: typeof fetch = fetch,
-
-  sink?: (line: string) => void,
-  configDir?: string,
+async function withCliOverlays(
+  catalog: ModelCatalog,
+  fetchFn: typeof fetch,
+  sink: ((line: string) => void) | undefined,
+  configDir: string | undefined,
 ): Promise<ModelCatalog> {
-  const catalog = await loadCatalog(FALLBACK_MANIFEST, fetchFn);
-  if (catalog === FALLBACK_MANIFEST && !warnedFallback) {
-    warnedFallback = true;
-
-    printWarning(
-      process.env.SERI_DISABLE_MODELS_FETCH
-        ? "models.dev fetch disabled by SERI_DISABLE_MODELS_FETCH; using the bundled model catalog"
-        : "live models.dev catalog unavailable; using the bundled model catalog",
-      sink,
-    );
-  }
   let merged = catalog;
   if (configDir !== undefined && hasXaiSubscription(configDir)) {
     merged = await mergeGrokSubscriptionModels(merged, configDir, fetchFn);
@@ -79,6 +69,37 @@ export async function getModelCatalog(
     () => listCodexModels({ configDir, fetchFn }),
     configDir,
   );
+}
+
+function warnFallbackOnce(catalog: ModelCatalog, sink?: (line: string) => void): void {
+  if (catalog !== FALLBACK_MANIFEST || warnedFallback) return;
+  warnedFallback = true;
+  printWarning(
+    process.env.SERI_DISABLE_MODELS_FETCH
+      ? "models.dev fetch disabled by SERI_DISABLE_MODELS_FETCH; using the bundled model catalog"
+      : "live models.dev catalog unavailable; using the bundled model catalog",
+    sink,
+  );
+}
+
+export async function snapshotModelCatalog(
+  fetchFn: typeof fetch = fetch,
+  sink?: (line: string) => void,
+  configDir?: string,
+): Promise<ModelCatalog> {
+  const catalog = peekCatalog(FALLBACK_MANIFEST, fetchFn);
+  if (process.env.SERI_DISABLE_MODELS_FETCH) warnFallbackOnce(catalog, sink);
+  return withCliOverlays(catalog, fetchFn, sink, configDir);
+}
+
+export async function getModelCatalog(
+  fetchFn: typeof fetch = fetch,
+  sink?: (line: string) => void,
+  configDir?: string,
+): Promise<ModelCatalog> {
+  const catalog = await loadCatalog(FALLBACK_MANIFEST, fetchFn);
+  warnFallbackOnce(catalog, sink);
+  return withCliOverlays(catalog, fetchFn, sink, configDir);
 }
 
 const CODEX_DEFAULT_CONTEXT = 272_000;
