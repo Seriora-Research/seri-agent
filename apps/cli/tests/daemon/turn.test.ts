@@ -71,15 +71,21 @@ function openDatabase(configDir: string): SessionDatabase {
   return database;
 }
 
-function instrumentPools() {
+function instrumentPools(closeDelayMs = 0) {
   const pools: McpClients[] = [];
   let closeCalls = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
   const realCreate = mcpClient.createMcpClients;
   const createSpy = spyOn(mcpClient, "createMcpClients").mockImplementation(() => {
     const handle: McpClientHandle = {
       listTools: async () => [{ name: "web_search", description: "", inputSchema: {} }],
       callTool: async () => "",
       close: async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (closeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, closeDelayMs));
+        inFlight--;
         closeCalls++;
       },
     };
@@ -91,6 +97,7 @@ function instrumentPools() {
   return {
     pools,
     closeCount: () => closeCalls,
+    maxInFlight: () => maxInFlight,
   };
 }
 
@@ -166,14 +173,12 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     const { execute, sessionId, cwd } = setupExecute(dialThenDone);
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
     expect(closesSeenWhileRunning).toBe(0);
-
-    await macrotick();
     expect(closeCount()).toBe(1);
     expect(pools[0]?.handles.size).toBe(0);
   });
 
   test("closes a dialled handle on every attended turn", async () => {
-    const { pools, closeCount } = instrumentPools();
+    const { pools, closeCount, maxInFlight } = instrumentPools(40);
     const { fake } = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
     async function* dialThenDone(opts: Parameters<typeof fake>[0]) {
       const pool = pools.at(-1);
@@ -184,10 +189,10 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     const { execute, sessionId, cwd } = setupExecute(dialThenDone);
     expect((await startTurn(execute, sessionId, cwd, "turn-1")).exitCode).toBe(0);
     expect((await startTurn(execute, sessionId, cwd, "turn-2")).exitCode).toBe(0);
-    await macrotick();
     expect(pools).toHaveLength(2);
     expect(pools[0]).not.toBe(pools[1]);
     expect(closeCount()).toBe(2);
+    expect(maxInFlight()).toBe(1);
     expect(pools[0]?.handles.size).toBe(0);
     expect(pools[1]?.handles.size).toBe(0);
   });
@@ -203,7 +208,6 @@ describe("createAttendedExecuteTurn mcp clients", () => {
     }
     const { execute, sessionId, cwd } = setupExecute(dialThenThrow);
     await expect(startTurn(execute, sessionId, cwd, "turn-1")).rejects.toThrow("boom");
-    await macrotick();
     expect(closeCount()).toBe(1);
     expect(pools[0]?.handles.size).toBe(0);
   });
