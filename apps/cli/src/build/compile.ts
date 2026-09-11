@@ -23,10 +23,27 @@ export function opentuiLibcForCompile(
   return undefined;
 }
 
-function linuxOpentuiNativeArch(target: string | undefined, hostArch: string): "x64" | "arm64" {
-  if (target !== undefined && target.includes("arm64")) return "arm64";
-  if (target !== undefined && target.includes("x64")) return "x64";
-  return hostArch === "arm64" ? "arm64" : "x64";
+const LINUX_OPENTUI_NATIVE = {
+  glibc: {
+    x64: "@opentui/core-linux-x64",
+    arm64: "@opentui/core-linux-arm64",
+  },
+  musl: {
+    x64: "@opentui/core-linux-x64-musl",
+    arm64: "@opentui/core-linux-arm64-musl",
+  },
+} as const;
+
+function linuxOpentuiNativeArch(
+  target: string | undefined,
+  arch: string,
+): "x64" | "arm64" | undefined {
+  if (target !== undefined && target.length > 0) {
+    if (target.includes("arm64")) return "arm64";
+    if (target.includes("x64")) return "x64";
+  }
+  if (arch === "arm64" || arch === "x64") return arch;
+  return undefined;
 }
 
 export function linuxOpentuiNativePackage(
@@ -37,7 +54,8 @@ export function linuxOpentuiNativePackage(
   const libc = opentuiLibcForCompile(target, platform);
   if (libc === undefined) return undefined;
   const cpu = linuxOpentuiNativeArch(target, arch);
-  return `@opentui/core-linux-${cpu}${libc === "musl" ? "-musl" : ""}`;
+  if (cpu === undefined) return undefined;
+  return LINUX_OPENTUI_NATIVE[libc][cpu];
 }
 
 export function stripPackedLinuxOpentuiNative(
@@ -45,20 +63,19 @@ export function stripPackedLinuxOpentuiNative(
     target?: string;
     platform?: NodeJS.Platform;
     arch?: string;
-    resolveNative?: (packageName: string) => string | undefined;
-    stripFile?: (soPath: string) => void;
   } = {},
-): string | undefined {
-  const platform = opts.platform ?? process.platform;
-  const arch = opts.arch ?? process.arch;
-  const pkg = linuxOpentuiNativePackage(opts.target, platform, arch);
-  if (pkg === undefined) return undefined;
-  const so = (opts.resolveNative ?? defaultResolveNative)(pkg);
-  if (so === undefined) return undefined;
-  // bun --compile embeds the on-disk .so bytes. Strip before that spawn.
-  // strip on the outer compiled ELF does not touch the packed payload.
-  (opts.stripFile ?? defaultStripFile)(so);
-  return so;
+  resolveNative: (packageName: string) => string | undefined = defaultResolveNative,
+  stripFile: (soPath: string) => void = defaultStripFile,
+): void {
+  const pkg = linuxOpentuiNativePackage(
+    opts.target,
+    opts.platform ?? process.platform,
+    opts.arch ?? process.arch,
+  );
+  if (pkg === undefined) return;
+  const so = resolveNative(pkg);
+  if (so === undefined) return;
+  stripFile(so);
 }
 
 function defaultResolveNative(packageName: string): string | undefined {

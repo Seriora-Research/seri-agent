@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { copyFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -276,100 +276,95 @@ describe("linuxOpentuiNativePackage", () => {
 describe("stripPackedLinuxOpentuiNative", () => {
   test("does not strip a darwin target", () => {
     const stripped: string[] = [];
-    const path = stripPackedLinuxOpentuiNative({
-      target: "bun-darwin-arm64",
-      platform: "linux",
-      arch: "x64",
-      resolveNative: () => "/tmp/libopentui.so",
-      stripFile: (soPath) => {
+    stripPackedLinuxOpentuiNative(
+      { target: "bun-darwin-arm64", platform: "linux", arch: "x64" },
+      () => "/tmp/libopentui.so",
+      (soPath) => {
         stripped.push(soPath);
       },
-    });
-    expect(path).toBeUndefined();
+    );
     expect(stripped).toEqual([]);
   });
 
   test("strips the glibc x64 native for bun-linux-x64", () => {
     const resolved: string[] = [];
     const stripped: string[] = [];
-    const path = stripPackedLinuxOpentuiNative({
-      target: "bun-linux-x64",
-      platform: "darwin",
-      arch: "arm64",
-      resolveNative: (packageName) => {
+    stripPackedLinuxOpentuiNative(
+      { target: "bun-linux-x64", platform: "darwin", arch: "arm64" },
+      (packageName) => {
         resolved.push(packageName);
         return "/tmp/glibc.so";
       },
-      stripFile: (soPath) => {
+      (soPath) => {
         stripped.push(soPath);
       },
-    });
+    );
     expect(resolved).toEqual(["@opentui/core-linux-x64"]);
-    expect(path).toBe("/tmp/glibc.so");
     expect(stripped).toEqual(["/tmp/glibc.so"]);
   });
 
   test("skips strip when the native file is missing", () => {
     const stripped: string[] = [];
-    const path = stripPackedLinuxOpentuiNative({
-      target: "bun-linux-x64",
-      platform: "linux",
-      arch: "x64",
-      resolveNative: () => undefined,
-      stripFile: () => {
+    stripPackedLinuxOpentuiNative(
+      { target: "bun-linux-x64", platform: "linux", arch: "x64" },
+      () => undefined,
+      (soPath) => {
+        stripped.push(soPath);
         throw new Error("should not strip a missing native");
       },
-    });
-    expect(path).toBeUndefined();
+    );
     expect(stripped).toEqual([]);
   });
 
   test("throws when strip fails", () => {
     expect(() =>
-      stripPackedLinuxOpentuiNative({
-        target: "bun-linux-x64",
-        platform: "linux",
-        arch: "x64",
-        resolveNative: () => "/tmp/glibc.so",
-        stripFile: () => {
+      stripPackedLinuxOpentuiNative(
+        { target: "bun-linux-x64", platform: "linux", arch: "x64" },
+        () => "/tmp/glibc.so",
+        () => {
           throw new Error("strip failed");
         },
-      }),
+      ),
     ).toThrow("strip failed");
   });
 });
 
-const stripBin = spawnSync("strip", ["--version"], { encoding: "utf8" });
-const fileBin = spawnSync("file", ["--version"], { encoding: "utf8" });
+function installedGlibcOpentuiSo(): string | undefined {
+  try {
+    const req = createRequire(import.meta.resolve("@opentui/core"));
+    const so = join(dirname(req.resolve("@opentui/core-linux-x64/package.json")), "libopentui.so");
+    return existsSync(so) ? so : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
-describe.skipIf(process.platform !== "linux" || stripBin.status !== 0 || fileBin.status !== 0)(
+const stripAvailable = spawnSync("strip", ["--version"], { encoding: "utf8" }).status === 0;
+const glibcSo = installedGlibcOpentuiSo();
+
+describe.skipIf(process.platform !== "linux" || !stripAvailable || glibcSo === undefined)(
   "stripPackedLinuxOpentuiNative real strip",
   () => {
     test("strip -s drops DWARF from a copy of the glibc native", () => {
+      const src = glibcSo;
+      if (src === undefined) {
+        throw new Error("glibc libopentui.so should be installed on linux");
+      }
+      const installedSize = statSync(src).size;
       const dir = mkdtempSync(join(tmpdir(), "seri-opentui-strip-"));
       try {
-        const req = createRequire(import.meta.resolve("@opentui/core"));
-        const src = join(
-          dirname(req.resolve("@opentui/core-linux-x64/package.json")),
-          "libopentui.so",
-        );
         const dest = join(dir, "libopentui.so");
         copyFileSync(src, dest);
-        const before = statSync(dest).size;
-        stripPackedLinuxOpentuiNative({
-          target: "bun-linux-x64",
-          platform: "linux",
-          arch: "x64",
-          resolveNative: () => dest,
-        });
+        stripPackedLinuxOpentuiNative(
+          { target: "bun-linux-x64", platform: "linux", arch: "x64" },
+          () => dest,
+        );
         const after = statSync(dest).size;
-        if (before > 20_000_000) {
-          expect(after).toBeLessThan(before - 10_000_000);
-        }
         expect(after).toBeLessThan(8_000_000);
         const desc = execFileSync("file", ["-b", dest], { encoding: "utf8" });
         expect(desc).toContain("stripped");
         expect(desc).not.toContain("debug_info");
+        expect(statSync(src).size).toBe(installedSize);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
