@@ -14,6 +14,7 @@ const PREFIX_BYTES = 12;
 export const WINDOW_BYTES = (MAX_TOOL_RESULT_CHARS / 2) * 3 + 4;
 const MIDDLE_CHUNK = 64 * 1024;
 const MAX_UTF8_CONT = 3;
+const MAX_WINDOWED_BYTES = 64 * 1024 * 1024 * 1024;
 
 type Utf16CrlfState = {
   carry: Buffer;
@@ -68,6 +69,10 @@ export async function readFile(
       return finishText(path, Buffer.concat([prefixBytes, rest.subarray(0, restGot)]), observedAt);
     }
 
+    if (stat.size > MAX_WINDOWED_BYTES) {
+      throw new RangeError(`File size ${stat.size} exceeds the windowed-read limit`);
+    }
+
     return await readWindowedText(handle, path, stat.size, observedAt, signal);
   } finally {
     await handle.close();
@@ -93,6 +98,10 @@ async function readWindowedText(
 
   const tailRaw = Buffer.alloc(WINDOW_BYTES);
   const tailGot = await readAt(handle, tailRaw, size - WINDOW_BYTES, signal);
+  if (tailGot < WINDOW_BYTES) {
+    const rest = await readUntilEof(handle, headGot, signal);
+    return finishText(path, Buffer.concat([headRaw.subarray(0, headGot), rest]), observedAt);
+  }
   const tailSlice = tailRaw.subarray(0, tailGot);
 
   const headDrop = utf8TrailingIncomplete(headRaw);
@@ -125,6 +134,23 @@ async function readWindowedText(
 
   setCachedEol(path, state.sawCrLf ? "CRLF" : "LF", observedAt);
   return capFromBoundedWindows(headLf, tailLf, state.units);
+}
+
+async function readUntilEof(
+  handle: FileHandle,
+  position: number,
+  signal: AbortSignal | undefined,
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const buf = Buffer.alloc(MIDDLE_CHUNK);
+  let pos = position;
+  for (;;) {
+    const got = await readAt(handle, buf, pos, signal);
+    if (got === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, got)));
+    pos += got;
+  }
+  return chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks);
 }
 
 async function readAt(

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +19,25 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+async function withClaimedSize<T>(claimedSize: number, fn: () => Promise<T>): Promise<T> {
+  const realOpen = fsp.open.bind(fsp);
+  const spy = spyOn(fsp, "open").mockImplementation(async (path, flags, mode) => {
+    const fh = await realOpen(path, flags, mode);
+    const realStat = fh.stat.bind(fh);
+    fh.stat = (async () => {
+      const s = await realStat();
+      Object.defineProperty(s, "size", { value: claimedSize, configurable: true });
+      return s;
+    }) as typeof fh.stat;
+    return fh;
+  });
+  try {
+    return await fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
 
 describe("readFile", () => {
   test("normalizes CRLF line endings to LF", async () => {
@@ -134,6 +154,20 @@ describe("readFile", () => {
       expect(result).toBe(readFileSync("/sys/class/net/lo/mtu", "utf8"));
     },
   );
+
+  test("a windowed size-liar with a short tail slurps the readable bytes", async () => {
+    const filePath = join(tmpRoot, "short-tail.txt");
+    const body = "A".repeat(WINDOW_BYTES + 250);
+    writeFileSync(filePath, body);
+    const result = await withClaimedSize(2 * WINDOW_BYTES + 50_000, () => readFile(filePath));
+    expect(result).toBe(capToolResult(body));
+  });
+
+  test("a regular file whose stat.size is beyond the windowed limit fails fast", async () => {
+    const filePath = join(tmpRoot, "absurd-size.txt");
+    writeFileSync(filePath, "A".repeat(100));
+    await expect(withClaimedSize(2 ** 47, () => readFile(filePath))).rejects.toThrow(RangeError);
+  });
 
   test("attended PNG returns an image read, not utf8 garbage", async () => {
     const filePath = join(tmpRoot, "tiny.png");
