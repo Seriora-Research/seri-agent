@@ -1095,97 +1095,107 @@ describe("run (task invocation)", () => {
     }
   });
 
-  test("a resumed session is run with the rebuilt prompt, not the one frozen into its file", async () => {
-    process.env.GROQ_API_KEY = "fake-test-key";
-    const sessionCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-cwd-"));
-    extraTmpDirs.push(sessionCwd);
-    const stale: SessionState = {
-      id: "stale-prompt",
-      cwd: sessionCwd,
-      systemPrompt: "You are seri, a coding agent.",
-      permissionMode: "read-only",
-      model: "model-on-session",
-      messages: [],
-    };
-    saveSession(stale, sessionsDir);
+  // Windows CI measured ~9s for this in-process run() vs bun's 5s default.
+  test(
+    "a resumed session is run with the rebuilt prompt, not the one frozen into its file",
+    async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const sessionCwd = mkdtempSync(join(tmpdir(), "seri-cli-test-cwd-"));
+      extraTmpDirs.push(sessionCwd);
+      const stale: SessionState = {
+        id: "stale-prompt",
+        cwd: sessionCwd,
+        systemPrompt: "You are seri, a coding agent.",
+        permissionMode: "read-only",
+        model: "model-on-session",
+        messages: [],
+      };
+      saveSession(stale, sessionsDir);
 
-    const askedFor: string[] = [];
-    const { fake, capture } = fakeRunLoop();
-    const { code } = await captureLogs(() =>
-      run(["--resume", "stale-prompt", "another", "task"], {
-        runLoop: fake,
-        loadAgentsFile: (dir: string) => {
-          askedFor.push(dir);
-          return "";
-        },
-        sessionsDir,
-      }),
-    );
-
-    expect(code).toBe(0);
-    expect(
-      capture()?.system?.startsWith(
-        buildSystemPrompt({ agentsContent: "", skills: [], rules: [] }),
-      ),
-    ).toBe(true);
-    expect(capture()?.system).toContain("model-on-session");
-    expect(askedFor).toEqual([sessionCwd]);
-  });
-
-  test("a brand-new session starts on the persisted model/provider, or the built-in default when none was picked", async () => {
-    process.env.GROQ_API_KEY = "fake-test-key";
-    const askedOpenRouter: string[] = [];
-    const { code: firstCode } = await captureLogs(() =>
-      run(["a", "task"], {
-        runLoop: fakeRunLoop(answeredTurn).fake,
-        loadAgentsFile: () => "",
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map() },
+      const askedFor: string[] = [];
+      const { fake, capture } = fakeRunLoop();
+      const { code } = await captureLogs(() =>
+        run(["--resume", "stale-prompt", "another", "task"], {
+          runLoop: fake,
+          loadAgentsFile: (dir: string) => {
+            askedFor.push(dir);
+            return "";
+          },
+          sessionsDir,
         }),
-        sessionsDir,
-        getOpenRouterModel: (id: string) => {
-          askedOpenRouter.push(id);
-          return getGroqModel("openai/gpt-oss-120b");
-        },
-      }),
-    );
-    expect(firstCode).toBe(0);
-    expect(askedOpenRouter).toEqual([]);
-    const firstId = listSessionIds(sessionsDir)[0]!;
-    const firstSession = loadSession(firstId, sessionsDir);
-    expect(firstSession.model).toBe("openai/gpt-oss-120b");
-    expect(firstSession.provider).toBeUndefined();
-    expect(existsSync(join(tmpConfigRoot, ".seri", "config.json"))).toBe(false);
+      );
 
-    setConfigValue("SERI_MODEL", "picked-model");
-    setConfigValue("SERI_PROVIDER", "openrouter");
+      expect(code).toBe(0);
+      expect(
+        capture()?.system?.startsWith(
+          buildSystemPrompt({ agentsContent: "", skills: [], rules: [] }),
+        ),
+      ).toBe(true);
+      expect(capture()?.system).toContain("model-on-session");
+      expect(askedFor).toEqual([sessionCwd]);
+    },
+    { timeout: 15_000 },
+  );
 
-    const { code: secondCode } = await captureLogs(() =>
-      run(["another", "task"], {
-        runLoop: fakeRunLoop(answeredTurn).fake,
-        loadAgentsFile: () => "",
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map() },
+  // Two in-process run() calls; Windows CI exceeded bun's 5s default at ~5.3s.
+  test(
+    "a brand-new session starts on the persisted model/provider, or the built-in default when none was picked",
+    async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const askedOpenRouter: string[] = [];
+      const { code: firstCode } = await captureLogs(() =>
+        run(["a", "task"], {
+          runLoop: fakeRunLoop(answeredTurn).fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
+          getOpenRouterModel: (id: string) => {
+            askedOpenRouter.push(id);
+            return getGroqModel("openai/gpt-oss-120b");
+          },
         }),
-        sessionsDir,
-        getOpenRouterModel: (id: string) => {
-          askedOpenRouter.push(id);
-          return getGroqModel("openai/gpt-oss-120b");
-        },
-      }),
-    );
-    expect(secondCode).toBe(0);
-    expect(askedOpenRouter).toEqual(["picked-model"]);
-    const secondId = listSessionIds(sessionsDir).find((id) => id !== firstId);
-    if (secondId === undefined) throw new Error("second session not found");
-    const secondSession = loadSession(secondId, sessionsDir);
-    expect(secondSession.model).toBe("picked-model");
-    expect(secondSession.provider).toBe("openrouter");
-  });
+      );
+      expect(firstCode).toBe(0);
+      expect(askedOpenRouter).toEqual([]);
+      const firstId = listSessionIds(sessionsDir)[0]!;
+      const firstSession = loadSession(firstId, sessionsDir);
+      expect(firstSession.model).toBe("openai/gpt-oss-120b");
+      expect(firstSession.provider).toBeUndefined();
+      expect(existsSync(join(tmpConfigRoot, ".seri", "config.json"))).toBe(false);
+
+      setConfigValue("SERI_MODEL", "picked-model");
+      setConfigValue("SERI_PROVIDER", "openrouter");
+
+      const { code: secondCode } = await captureLogs(() =>
+        run(["another", "task"], {
+          runLoop: fakeRunLoop(answeredTurn).fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
+          getOpenRouterModel: (id: string) => {
+            askedOpenRouter.push(id);
+            return getGroqModel("openai/gpt-oss-120b");
+          },
+        }),
+      );
+      expect(secondCode).toBe(0);
+      expect(askedOpenRouter).toEqual(["picked-model"]);
+      const secondId = listSessionIds(sessionsDir).find((id) => id !== firstId);
+      if (secondId === undefined) throw new Error("second session not found");
+      const secondSession = loadSession(secondId, sessionsDir);
+      expect(secondSession.model).toBe("picked-model");
+      expect(secondSession.provider).toBe("openrouter");
+    },
+    { timeout: 15_000 },
+  );
 
   test("a native provider (anthropic) dispatches through its own injected CliDeps fn", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
