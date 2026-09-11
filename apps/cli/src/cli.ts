@@ -1695,12 +1695,7 @@ async function runTui(
         const catalog = await getModelCatalog(undefined, undefined, configDir);
         prepared.catalog = catalog;
         if (args.length === 0) {
-          const opened = decideEffortOpen(
-            catalog,
-            configDir,
-            liveState.session,
-            prepared.plan,
-          );
+          const opened = decideEffortOpen(catalog, configDir, liveState.session, prepared.plan);
           if (opened === null) {
             dispatch({
               type: "command-error",
