@@ -98,11 +98,7 @@ export function spawnCollect(
     };
     const stdin = typeof io === "string" ? io : io?.stdin;
     const fd3 = typeof io === "string" ? undefined : io?.fd3;
-    const stdio: ("pipe" | "ignore")[] = [
-      stdin !== undefined ? "pipe" : "ignore",
-      "pipe",
-      "pipe",
-    ];
+    const stdio: ("pipe" | "ignore")[] = [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"];
     if (fd3 !== undefined) stdio.push("pipe");
     const child: ChildProcess = spawn(executable, args, { stdio, ...spawnOptions });
     if (stdin !== undefined) {
