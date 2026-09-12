@@ -185,6 +185,12 @@ describe("formatDoneLine", () => {
       expected: `done: repeated-denials · ${formatTokenProgress(exact)}`,
     },
     {
+      name: "destructive-denied + totals",
+      reason: "destructive-denied",
+      tokens: exact,
+      expected: `done: destructive-denied · ${formatTokenProgress(exact)}`,
+    },
+    {
       name: "happy missing tokens",
       reason: "no-tool-call",
       expected: "done",

@@ -1266,6 +1266,10 @@ describe("exitCodeFromDriveResult", () => {
     expect(exitCodeFromDriveResult({ ...base, doneReason: "plan-submitted" })).toBe(0);
   });
 
+  test("destructive-denied is failure", () => {
+    expect(exitCodeFromDriveResult({ ...base, doneReason: "destructive-denied" })).toBe(1);
+  });
+
   test("no-tool-call is success unless every write was declined", () => {
     expect(exitCodeFromDriveResult({ ...base, doneReason: "no-tool-call" })).toBe(0);
     expect(

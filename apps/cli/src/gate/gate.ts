@@ -30,6 +30,13 @@ function resolveForMatch(path: string, cwd: string | undefined): string {
   return resolveAgainstCwd(cwd ?? ".", path);
 }
 
+export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
+  const candidate = matchPath(resolveForMatch(path, cwd));
+  const resolved = matchPath(resolveForMatch(pattern, cwd));
+  if (new Bun.Glob(resolved).match(candidate)) return true;
+  return resolved.endsWith("/**") && candidate === resolved.slice(0, -3);
+}
+
 export function denialBlocks(
   denials: readonly PathDenial[] | undefined,
   toolName: string,
@@ -39,14 +46,9 @@ export function denialBlocks(
   if (denials === undefined || denials.length === 0) return false;
   const path = pathFromToolInput(input);
   if (path === undefined) return false;
-  const candidate = matchPath(resolveForMatch(path, cwd));
-  return denials.some((denial) => {
-    if (denial.tool !== toolName) return false;
-    const pattern = matchPath(resolveForMatch(denial.pattern, cwd));
-    if (new Bun.Glob(pattern).match(candidate)) return true;
-
-    return pattern.endsWith("/**") && candidate === pattern.slice(0, -3);
-  });
+  return denials.some(
+    (denial) => denial.tool === toolName && pathMatchesDenial(denial.pattern, path, cwd),
+  );
 }
 
 export function checkPermission(

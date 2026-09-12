@@ -207,6 +207,11 @@ export function printEvent(event: LoopEvent): void {
           "switch to auto, or answer 'a' at the next write_file/edit prompt to allow it.",
         );
       }
+      if (event.reason === "destructive-denied") {
+        console.log(
+          "A destructive remove or move was refused, so the run stopped instead of trying an equivalent command.",
+        );
+      }
       break;
     case "error":
       console.error(event.error);
