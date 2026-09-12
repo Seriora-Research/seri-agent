@@ -71,7 +71,8 @@ export async function runBash(
   }
 
   try {
-    return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal, cwd);
+    // pkill -f matches -c argv on Linux procps-ng, so the command is passed as stdin to bash -s.
+    return await spawnCollect(resolveBashCommand(), ["-s"], timeoutMs, signal, cwd, command);
   } finally {
     clearEolCache();
   }
