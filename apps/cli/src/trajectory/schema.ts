@@ -53,7 +53,13 @@ export type TrajectoryKind =
     }
   | {
       kind: "done";
-      reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted";
+      reason:
+        | "no-tool-call"
+        | "max-iterations"
+        | "aborted"
+        | "repeated-denials"
+        | "destructive-denied"
+        | "plan-submitted";
     }
   | { kind: "error"; error: string; errorElided?: Elision }
   | { kind: "retry"; attempt: number }
