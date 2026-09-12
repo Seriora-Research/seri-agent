@@ -1,5 +1,4 @@
-import { type ChildProcessByStdio, spawn, spawnSync } from "node:child_process";
-import type { Readable, Writable } from "node:stream";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
 
@@ -89,7 +88,7 @@ export function spawnCollect(
   timeoutMs?: number,
   signal?: AbortSignal,
   cwd?: string,
-  stdin?: string,
+  io?: string | { stdin?: string; fd3?: string },
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     // Windows detached: true opens a new console window.
@@ -97,15 +96,23 @@ export function spawnCollect(
       detached: process.platform !== "win32",
       ...(cwd !== undefined ? { cwd } : {}),
     };
-    let child:
-      | ChildProcessByStdio<Writable, Readable, Readable>
-      | ChildProcessByStdio<null, Readable, Readable>;
+    const stdin = typeof io === "string" ? io : io?.stdin;
+    const fd3 = typeof io === "string" ? undefined : io?.fd3;
+    const stdio: ("pipe" | "ignore")[] = [
+      stdin !== undefined ? "pipe" : "ignore",
+      "pipe",
+      "pipe",
+    ];
+    if (fd3 !== undefined) stdio.push("pipe");
+    const child: ChildProcess = spawn(executable, args, { stdio, ...spawnOptions });
     if (stdin !== undefined) {
-      child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"], ...spawnOptions });
-      child.stdin.on("error", () => {});
-      child.stdin.end(stdin);
-    } else {
-      child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"], ...spawnOptions });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(stdin);
+    }
+    const extra = child.stdio[3];
+    if (fd3 !== undefined && extra && typeof extra !== "number" && "end" in extra) {
+      extra.on("error", () => {});
+      extra.end(fd3);
     }
     const untrack = killOnFatalSignal(() => {
       if (child.pid !== undefined) killTree(child.pid);
@@ -114,10 +121,10 @@ export function spawnCollect(
     const out = createBoundedSink();
     const err = createBoundedSink();
 
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => out.write(chunk));
-    child.stderr.on("data", (chunk: string) => err.write(chunk));
+    child.stdout!.setEncoding("utf8");
+    child.stderr!.setEncoding("utf8");
+    child.stdout!.on("data", (chunk: string) => out.write(chunk));
+    child.stderr!.on("data", (chunk: string) => err.write(chunk));
 
     let timedOut = false;
     const timer = setTimeout(

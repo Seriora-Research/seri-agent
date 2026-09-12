@@ -71,13 +71,20 @@ export async function runBash(
   }
 
   try {
-    // pkill -f matches -c argv on Linux procps-ng, so POSIX passes the command on stdin to bash -s.
+    // pkill -f matches -c argv on Linux procps-ng, so POSIX evals the script from fd 3 with stdin ignored.
     // win32 Git Bash + bash -s hung the tree-kill timeout path, so win32 keeps -c.
     if (process.platform === "win32") {
       return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal, cwd);
     }
     const script = command.endsWith("\n") ? command : `${command}\n`;
-    return await spawnCollect(resolveBashCommand(), ["-s"], timeoutMs, signal, cwd, script);
+    return await spawnCollect(
+      resolveBashCommand(),
+      ["-c", 'eval "$(cat <&3)"'],
+      timeoutMs,
+      signal,
+      cwd,
+      { fd3: script },
+    );
   } finally {
     clearEolCache();
   }

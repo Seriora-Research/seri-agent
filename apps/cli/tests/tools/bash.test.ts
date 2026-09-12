@@ -47,6 +47,12 @@ describe("runBash", () => {
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 30_000);
 
+  test("a command that reads stdin does not consume later script lines", async () => {
+    const result = await runBash("cat\necho AFTER_CAT");
+    expect(result.stdout.trim()).toBe("AFTER_CAT");
+    expect(result.exitCode).toBe(0);
+  }, 15000);
+
   test("a PATH change after the first resolution is not observed by a later call", async () => {
     const warm = await runBash("echo hi");
     expect(warm.stdout.trim()).toBe("hi");
