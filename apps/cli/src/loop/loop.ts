@@ -11,6 +11,11 @@ import type {
 import { streamText } from "ai";
 import { type ScreenResult, screenCall } from "../containment/escape";
 import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
+import {
+  destructiveIntentOf,
+  followUpBlocked,
+  writeFileDenialCovers,
+} from "../gate/destructiveIntent";
 import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
 import { checkPermission, denialBlocks, type PathDenial, type PermissionMode } from "../gate/gate";
 import {
@@ -83,7 +88,13 @@ export type LoopEvent =
   // "aborted" is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
-      reason: "no-tool-call" | "max-iterations" | "aborted" | "repeated-denials" | "plan-submitted";
+      reason:
+        | "no-tool-call"
+        | "max-iterations"
+        | "aborted"
+        | "repeated-denials"
+        | "destructive-denied"
+        | "plan-submitted";
     }
   | { type: "error"; error: string };
 
@@ -411,6 +422,8 @@ export async function* runLoop(opts: {
   const allowedTools = new Set<string>(opts.allowedTools ?? []);
   const fsConsent = opts.outsideConsent ?? { current: "unasked" as Consent };
   let consecutiveDenials = 0;
+  const deniedTargets: string[] = [];
+  let stopAfterDestructive = false;
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.signal?.aborted) {
@@ -705,22 +718,45 @@ export async function* runLoop(opts: {
       }
 
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
-      const pathDenied = denialBlocks(opts.pathDenials, subject, call.input, opts.cwd);
-
-      if (pathDenied) {
-        if ((yield* flushReadBatch()) === "aborted") break;
-        yield { type: "permission-denied", name: subject, reason: "blocked" };
+      const intent = destructiveIntentOf(call.toolName, call.input, opts.cwd ?? ".");
+      const recordDestructiveDeny = (): void => {
+        if (intent === undefined) return;
+        deniedTargets.push(...intent.targets);
+        stopAfterDestructive = true;
+      };
+      const pushDenied = (reason: string): void => {
         toolResults.push({
           type: "tool-result",
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: {
-            type: "execution-denied",
-            reason:
-              `Tool "${subject}" was not permitted to run because the path matched a deny rule. ` +
-              `Do not retry this call, including with another read tool on the same path.`,
-          },
+          output: { type: "execution-denied", reason },
         });
+      };
+
+      if (intent !== undefined && followUpBlocked(deniedTargets, intent)) {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        recordDestructiveDeny();
+        yield { type: "permission-denied", name: subject, reason: "blocked" };
+        pushDenied(
+          `Tool "${subject}" was not permitted to run because a destructive remove or move on the ` +
+            `same tree was already refused this turn. Do not retry this call or an equivalent ` +
+            `command (rmdir, del, robocopy /MOVE). The turn has stopped.`,
+        );
+        continue;
+      }
+
+      const pathDenied =
+        denialBlocks(opts.pathDenials, subject, call.input, opts.cwd) ||
+        writeFileDenialCovers(opts.pathDenials, intent, opts.cwd);
+
+      if (pathDenied) {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        recordDestructiveDeny();
+        yield { type: "permission-denied", name: subject, reason: "blocked" };
+        pushDenied(
+          `Tool "${subject}" was not permitted to run because the path matched a deny rule. ` +
+            `Do not retry this call, including with another read tool on the same path.`,
+        );
         continue;
       }
 
@@ -735,6 +771,7 @@ export async function* runLoop(opts: {
       }
       if (containment.outcome === "block") {
         if ((yield* flushReadBatch()) === "aborted") break;
+        recordDestructiveDeny();
         yield { type: "permission-denied", name: subject, reason: "containment" };
         const named =
           containment.reason.kind === "escape"
@@ -768,6 +805,7 @@ export async function* runLoop(opts: {
         if (opts.signal?.aborted) break;
         if (hook.block !== undefined) {
           if ((yield* flushReadBatch()) === "aborted") break;
+          recordDestructiveDeny();
           yield { type: "permission-denied", name: subject, reason: "hook" };
           toolResults.push({
             type: "tool-result",
@@ -810,17 +848,13 @@ export async function* runLoop(opts: {
       if (verdict.kind === "deny-blocked" || verdict.kind === "deny-declined") {
         if ((yield* flushReadBatch()) === "aborted") break;
         if (verdict.kind === "deny-declined") consecutiveDenials++;
+        recordDestructiveDeny();
         yield {
           type: "permission-denied",
           name: subject,
           reason: verdict.kind === "deny-blocked" ? "blocked" : "declined",
         };
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: { type: "execution-denied", reason: verdict.reason },
-        });
+        pushDenied(verdict.reason);
         continue;
       }
 
@@ -923,6 +957,11 @@ export async function* runLoop(opts: {
 
     if (terminalHit) {
       yield { type: "done", reason: "plan-submitted" };
+      return;
+    }
+
+    if (stopAfterDestructive) {
+      yield { type: "done", reason: "destructive-denied" };
       return;
     }
 
