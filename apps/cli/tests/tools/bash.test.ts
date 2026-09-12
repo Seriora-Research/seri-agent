@@ -105,3 +105,36 @@ describe.skipIf(process.platform !== "win32" || !isBashAvailable())(
     }, 30_000);
   },
 );
+
+// Linux procps-ng pkill -f matches bash -c argv. BSD pgrep excludes ancestors, so darwin would
+// pass on a bash -c spawn and would not prove the Linux bug. Scripts are command lists so bash
+// cannot exec-replace itself with pgrep/pkill, which would then exclude "itself" and hide the
+// wrapper.
+describe.skipIf(process.platform !== "linux" || !isBashAvailable())(
+  "runBash (pkill -f does not match the wrapper argv)",
+  () => {
+    test("pkill -f with a marker only in the command string leaves the shell alive", async () => {
+      const result = await runBash("pkill -f seri-pkill-argv-ce2b-no-target; echo STILL_ALIVE");
+      expect(result.stdout.trim()).toBe("STILL_ALIVE");
+      expect(result.exitCode).toBe(0);
+    }, 15000);
+
+    test("pgrep -af with a marker only in the command string does not print the wrapper", async () => {
+      const result = await runBash("pgrep -af seri-pkill-argv-ce2b-pgrep; echo DONE");
+      expect(result.stdout.trim()).toBe("DONE");
+      expect(result.exitCode).toBe(0);
+    }, 15000);
+
+    test("a chained echo still runs after pkill -f kills a real sleep target", async () => {
+      try {
+        const result = await runBash(
+          'sleep 3847 >/dev/null 2>&1 & pkill -f "sleep 3847"; echo STILL_ALIVE_AFTER_REAL_PKILL',
+        );
+        expect(result.stdout).toContain("STILL_ALIVE_AFTER_REAL_PKILL");
+        expect(result.exitCode).toBe(0);
+      } finally {
+        spawnSync("pkill", ["-f", "sleep 3847"], { stdio: "ignore" });
+      }
+    }, 15000);
+  },
+);
