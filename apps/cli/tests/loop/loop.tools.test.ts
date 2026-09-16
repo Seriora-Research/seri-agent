@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -7,6 +10,7 @@ import { createAskUserPark } from "../../src/ask-user/park";
 import { withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import type { ToolCallClassifier } from "../../src/gate/classifier";
+import { createHookRunner } from "../../src/hooks/gate";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { toolDefinitions } from "../../src/provider/tools";
@@ -1208,6 +1212,71 @@ describe("runLoop", () => {
       expect(events.filter((e) => e.type === "permission-denied")).toHaveLength(5);
       expect(model.doStreamCalls).toHaveLength(5);
     });
+
+    test.skipIf(!isBashAvailable() || process.platform === "win32")(
+      "a PreToolUse spawn miss denies write_file and does not execute it",
+      async () => {
+        const session = mkdtempSync(join(tmpdir(), "seri-hooks-loop-cwd-"));
+        const hooks = mkdtempSync(join(tmpdir(), "seri-hooks-loop-bin-"));
+        const path = join(hooks, "deny-all.sh");
+        writeFileSync(path, "#!/usr/bin/env bash\necho DENIED >&2\nexit 2\n");
+        chmodSync(path, 0o755);
+        rmSync(session, { recursive: true, force: true });
+
+        try {
+          const runner = createHookRunner({
+            registry: new Map([
+              [
+                "PreToolUse",
+                [
+                  {
+                    event: "PreToolUse",
+                    script: "deny-all",
+                    path,
+                    matcher: undefined,
+                    timeoutMs: 10_000,
+                    source: "project",
+                    filePath: join(hooks, "hooks.yaml"),
+                  },
+                ],
+              ],
+            ]),
+            cwd: session,
+          });
+          if (runner === undefined) throw new Error("expected a runner");
+
+          const executed: unknown[] = [];
+          const events = await collect(
+            runLoop({
+              model: oneWriteThenText(),
+              tools: makeTools(async (input) => {
+                executed.push(input);
+                return "ok";
+              }),
+              messages: baseMessages,
+              permissionMode: "auto",
+              onBeforeTool: runner.onBeforeTool,
+            }),
+          );
+
+          expect(executed).toEqual([]);
+          expect(events).toContainEqual({
+            type: "permission-denied",
+            name: "write_file",
+            reason: "hook",
+          });
+          expect(events.filter((e) => e.type === "error")).toEqual([
+            {
+              type: "error",
+              error: expect.stringMatching(/deny-all could not be run:.*ENOENT/s),
+            },
+          ]);
+        } finally {
+          rmSync(hooks, { recursive: true, force: true });
+        }
+      },
+      15_000,
+    );
 
     test("PreToolUse errors are reported and the call still runs", async () => {
       const executed: unknown[] = [];

@@ -37,7 +37,10 @@ export function createHookRunner(opts: {
         );
 
         if (outcome.kind === "block") return { block: outcome.reason, errors };
-        if (outcome.kind === "failed") errors.push(outcome.message);
+        if (outcome.kind === "failed") {
+          errors.push(outcome.message);
+          return { block: outcome.message, errors };
+        }
       }
       return { errors };
     },
