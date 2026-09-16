@@ -210,6 +210,23 @@ describeSh("runHook (real bash subprocess)", () => {
     expect(outcome.kind).toBe("failed");
     expect(outcome.kind === "failed" && outcome.message).toContain("broken");
   }, 15_000);
+
+  test("a missing session directory fails instead of blocking", async () => {
+    const hooks = makeTempDir();
+    const session = makeTempDir();
+    const path = writeShScript(hooks, "deny-all", 'echo "denied by test hook" >&2\nexit 2');
+    const spec = makeSpec({ script: "deny-all", path, timeoutMs: 10_000 });
+    rmSync(session, { recursive: true, force: true });
+    tempDirs = tempDirs.filter((dir) => dir !== session);
+
+    const outcome = await runHook(spec, makePayload({ cwd: session }));
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.kind === "failed" && outcome.message).toContain("deny-all");
+    expect(outcome.kind === "failed" && outcome.message).toMatch(
+      /ENOENT|no such file|posix_spawn|spawn/i,
+    );
+  }, 15_000);
 });
 
 describePs1("runHook (real powershell subprocess)", () => {

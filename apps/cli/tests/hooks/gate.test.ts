@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createHookRunner, type HookRunner } from "../../src/hooks/gate";
 import type {
   HookEvent,
@@ -106,7 +109,7 @@ describe("createHookRunner", () => {
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["guard"]);
   });
 
-  test("a failure from a hook ahead of the blocker travels with the block", async () => {
+  test("a failed PreToolUse hook denies and the hooks behind it never run", async () => {
     const fake = fakeRun([
       { kind: "failed", message: "lint could not be run" },
       { kind: "block", reason: "do not touch main" },
@@ -118,12 +121,13 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
-      block: "do not touch main",
+      block: "lint could not be run",
       errors: ["lint could not be run"],
     });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint"]);
   });
 
-  test("onBeforeTool reports every failure and blocks nothing when no hook blocked", async () => {
+  test("onBeforeTool denies on the first failure instead of collecting later ones", async () => {
     const fake = fakeRun([
       { kind: "failed", message: "lint could not be run" },
       { kind: "ok" },
@@ -140,10 +144,21 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({
-      block: undefined,
-      errors: ["lint could not be run", "audit timed out"],
+      block: "lint could not be run",
+      errors: ["lint could not be run"],
     });
-    expect(fake.calls).toHaveLength(3);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("an ok PreToolUse hook still admits", async () => {
+    const fake = fakeRun([{ kind: "ok" }]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "fine" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({ errors: [] });
   });
 
   test("onAfterTool runs every matching hook and returns each failure message", async () => {
@@ -215,4 +230,85 @@ describe("createHookRunner", () => {
       },
     ]);
   });
+});
+
+const describeSh = process.platform === "win32" ? describe.skip : describe;
+
+let tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+  tempDirs = [];
+});
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "seri-hooks-gate-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeDenyAll(dir: string): string {
+  const path = join(dir, "deny-all.sh");
+  writeFileSync(path, '#!/usr/bin/env bash\necho "denied by test hook" >&2\nexit 2\n');
+  chmodSync(path, 0o755);
+  return path;
+}
+
+function expectFailClosed(
+  result: { readonly block?: string; readonly errors?: readonly string[] },
+  script: string,
+  detail: RegExp,
+): void {
+  const block = result.block;
+  if (block === undefined) throw new Error(`expected ${script} to deny the call`);
+  expect(block).toContain(script);
+  expect(block).toMatch(detail);
+  expect(result.errors).toEqual([block]);
+}
+
+describeSh("createHookRunner (real bash subprocess)", () => {
+  test("a deny-all hook still blocks while the session directory exists", async () => {
+    const session = makeTempDir();
+    const hooks = makeTempDir();
+    const path = writeDenyAll(hooks);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "deny-all", path, timeoutMs: 10_000 })]),
+      cwd: session,
+    });
+
+    const result = await runner.onBeforeTool("write_file", { path: "/tmp/bypass.txt" });
+    expect(result.block).toBe("denied by test hook");
+  }, 15_000);
+
+  test("a missing session directory denies instead of skipping the hook", async () => {
+    const session = makeTempDir();
+    const hooks = makeTempDir();
+    const path = writeDenyAll(hooks);
+    rmSync(session, { recursive: true, force: true });
+    tempDirs = tempDirs.filter((dir) => dir !== session);
+
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "deny-all", path, timeoutMs: 10_000 })]),
+      cwd: session,
+    });
+
+    const result = await runner.onBeforeTool("write_file", { path: "/tmp/bypass.txt" });
+    expectFailClosed(result, "deny-all", /ENOENT|no such file|posix_spawn|spawn/i);
+  }, 15_000);
+
+  test("a missing hook script denies instead of allowing", async () => {
+    const session = makeTempDir();
+    const runner = builtRunner({
+      registry: registryOf([
+        makeSpec({
+          script: "ghost",
+          path: join(session, "does-not-exist.sh"),
+          timeoutMs: 10_000,
+        }),
+      ]),
+      cwd: session,
+    });
+
+    const result = await runner.onBeforeTool("write_file", { path: "/tmp/bypass.txt" });
+    expectFailClosed(result, "ghost", /exited 127|no such file|enoent|could not be run/i);
+  }, 15_000);
 });
