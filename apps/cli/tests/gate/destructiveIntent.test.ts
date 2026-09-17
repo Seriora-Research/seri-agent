@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import {
+  catastrophicOf,
   destructiveIntentOf,
   followUpBlocked,
   treesOverlap,
@@ -111,5 +113,76 @@ describe("treesOverlap", () => {
     expect(treesOverlap("/tmp/parent", "/tmp/parent/sub")).toBe(true);
     expect(treesOverlap("/tmp/parent/sub", "/tmp/parent")).toBe(true);
     expect(treesOverlap("/tmp/a", "/tmp/b")).toBe(false);
+  });
+});
+
+describe("catastrophicOf", () => {
+  test("rm -rf of a volume root is a volume-root hit in auto-equivalent parsing", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf /" }, cwd);
+    expect(intent?.recursive).toBe(true);
+    expect(catastrophicOf(intent, cwd)).toEqual({ reason: "volume-root", target: "/" });
+  });
+
+  test("a Windows drive root is a volume-root hit even on POSIX resolve", () => {
+    const quoted = destructiveIntentOf("bash", { command: 'rmdir /s /q "C:\\"' }, cwd);
+    expect(quoted?.recursive).toBe(true);
+    expect(catastrophicOf(quoted, cwd)?.reason).toBe("volume-root");
+    const bare = destructiveIntentOf("bash", { command: "rmdir /s /q C:" }, cwd);
+    expect(catastrophicOf(bare, cwd)?.reason).toBe("volume-root");
+  });
+
+  test("recursive delete outside the working directory is a workspace-escape", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf /tmp/unrelated-tree" }, cwd);
+    expect(catastrophicOf(intent, cwd)).toEqual({
+      reason: "workspace-escape",
+      target: resolve("/tmp/unrelated-tree"),
+    });
+  });
+
+  test("Remove-Item -Recurse of an absolute outside path is a workspace-escape", () => {
+    const intent = destructiveIntentOf(
+      "powershell",
+      { command: 'Remove-Item "/tmp/unrelated-tree" -Recurse -Force' },
+      cwd,
+    );
+    expect(intent?.recursive).toBe(true);
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-escape");
+  });
+
+  test("rm -rf of the working directory itself is a workspace-root hit", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf ." }, cwd);
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-root");
+  });
+
+  test("rm -rf of a small in-project tree is not catastrophic", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf src" }, cwd);
+    expect(intent?.targets).toEqual([resolve(cwd, "src")]);
+    expect(catastrophicOf(intent, cwd)).toBeUndefined();
+  });
+
+  test("tilde home is a workspace-escape when the project is not the home directory", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf ~" }, cwd);
+    expect(catastrophicOf(intent, cwd)).toEqual({
+      reason: "workspace-escape",
+      target: homedir(),
+    });
+  });
+
+  test("recursive remove with no resolved target fails closed", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf $EMPTY" }, cwd);
+    expect(intent?.recursive).toBe(true);
+    expect(intent?.targets).toEqual([]);
+    expect(catastrophicOf(intent, cwd)).toEqual({ reason: "unresolved-recursive" });
+  });
+
+  test("a parent of the working directory is a workspace-escape", () => {
+    const intent = destructiveIntentOf("bash", { command: "rm -rf .." }, cwd);
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-escape");
+  });
+
+  test("echo is not catastrophic", () => {
+    expect(catastrophicOf(destructiveIntentOf("bash", { command: "echo hi" }, cwd), cwd)).toBe(
+      undefined,
+    );
   });
 });

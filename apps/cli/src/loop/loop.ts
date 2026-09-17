@@ -12,6 +12,8 @@ import { streamText } from "ai";
 import { type ScreenResult, screenCall } from "../containment/escape";
 import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
 import {
+  catastrophicDenyReason,
+  catastrophicOf,
   destructiveIntentOf,
   followUpBlocked,
   writeFileDenialCovers,
@@ -742,6 +744,15 @@ export async function* runLoop(opts: {
             `same tree was already refused this turn. Do not retry this call or an equivalent ` +
             `command (rmdir, del, robocopy /MOVE). The turn has stopped.`,
         );
+        continue;
+      }
+
+      const catastrophic = catastrophicOf(intent, opts.workingDirectory ?? opts.cwd);
+      if (catastrophic !== undefined) {
+        if ((yield* flushReadBatch()) === "aborted") break;
+        recordDestructiveDeny();
+        yield { type: "permission-denied", name: subject, reason: "blocked" };
+        pushDenied(catastrophicDenyReason(subject, catastrophic));
         continue;
       }
 

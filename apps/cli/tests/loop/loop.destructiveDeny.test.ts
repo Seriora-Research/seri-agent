@@ -366,4 +366,72 @@ describe("runLoop destructive deny", () => {
     expect(executed).toEqual([]);
     expect(events.at(-1)).toEqual({ type: "done", reason: "destructive-denied" });
   });
+
+  test("auto mode still blocks a recursive delete outside the working directory", async () => {
+    const executed: string[] = [];
+    const events = await collect(
+      runLoop({
+        model: new MockLanguageModelV4({
+          doStream: [
+            streamResult(
+              toolCallChunks("call-1", "bash", { command: "rm -rf /tmp/unrelated-tree" }),
+            ),
+            streamResult(textOnlyChunks("Done")),
+          ],
+        }),
+        tools: shellTools(async (toolName, command) => {
+          executed.push(`${toolName}:${command}`);
+          return "ok";
+        }),
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: "/tmp/project",
+        workingDirectory: "/tmp/project",
+        outsideConsent: { current: "allowed-this-run" },
+      }),
+    );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "bash",
+      reason: "blocked",
+    });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "destructive-denied" });
+    const toolMessage = events
+      .filter((event) => event.type === "messages-updated")
+      .map((event) => event.messages.at(-1))
+      .find((message) => message?.role === "tool");
+    const content = (toolMessage?.content ?? []) as {
+      output: { type: string; reason?: string };
+    }[];
+    expect(content[0]?.output.type).toBe("execution-denied");
+    expect(content[0]?.output.reason).toContain("path outside the working directory");
+    expect(content[0]?.output.reason).toContain("--dangerously-skip-permissions do not lift it");
+  });
+
+  test("auto mode still runs rm -rf of a small in-project tree", async () => {
+    const executed: string[] = [];
+    const events = await collect(
+      runLoop({
+        model: new MockLanguageModelV4({
+          doStream: [
+            streamResult(toolCallChunks("call-1", "bash", { command: "rm -rf src" })),
+            streamResult(textOnlyChunks("Done")),
+          ],
+        }),
+        tools: shellTools(async (toolName, command) => {
+          executed.push(`${toolName}:${command}`);
+          return "ok";
+        }),
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: "/tmp/project",
+        workingDirectory: "/tmp/project",
+        outsideConsent: { current: "allowed-this-run" },
+      }),
+    );
+    expect(executed).toEqual(["bash:rm -rf src"]);
+    expect(events.find((event) => event.type === "permission-denied")).toBeUndefined();
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+  });
 });
