@@ -5,7 +5,13 @@ import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
 import { isGitAvailable } from "../checkpoint/shadowGit";
 import { inspectConfig, loadSandboxConfig } from "../config/config";
-import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
+import {
+  currentProfile,
+  DATABASE_FILENAME,
+  getConfigDir,
+  getDaemonLockPath,
+  resolveUserHome,
+} from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
 import { loadDenials, loadGrants } from "../permissions/store";
@@ -15,6 +21,7 @@ import { probeConfinement } from "../sandbox/confine";
 import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
 import { SessionDatabase } from "../session/database";
+import { formatSecretTally } from "../session/redact";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
 import { probeRipgrep } from "../tools/selftest";
@@ -31,6 +38,7 @@ export type DoctorDeps = {
   cwd: string;
   configDir?: string;
   probeIoUring?: () => IoUringProbe;
+  scrub?: boolean;
 };
 
 export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> {
@@ -48,6 +56,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     bashCheck(),
     sandboxCheck(configDir, deps.cwd, deps.platform),
     sessionStoreCheck(configDir),
+    secretsCheck(configDir, deps.scrub === true),
     await daemonCheck(configDir, deps.fetch),
     ioUringDoctorCheck((deps.probeIoUring ?? probeIoUringSetup)(), deps.platform),
   ];
@@ -236,6 +245,51 @@ function sessionStoreCheck(configDir: string): CheckResult {
   } catch (error) {
     return {
       name: "sessions",
+      status: "fail",
+      detail: error instanceof Error ? error.message : String(error),
+      fix: "move seri.db aside if it is corrupt",
+    };
+  } finally {
+    database?.close();
+  }
+}
+
+function secretsCheck(configDir: string, scrub: boolean): CheckResult {
+  const path = join(configDir, DATABASE_FILENAME);
+  if (!existsSync(path)) {
+    return { name: "secrets", status: "info", detail: "seri.db is absent" };
+  }
+  if (scrub && existsSync(getDaemonLockPath(configDir))) {
+    return {
+      name: "secrets",
+      status: "fail",
+      detail: "daemon lock is held",
+      fix: "stop seri serve, then run seri doctor --scrub",
+    };
+  }
+  let database: SessionDatabase | undefined;
+  try {
+    database = new SessionDatabase(configDir);
+    const scan = scrub ? database.scrubSecrets() : database.scanSecrets();
+    if (scan.replacements === 0) {
+      const unread =
+        scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;
+      return { name: "secrets", status: "ok", detail: `0 residual matches${unread}` };
+    }
+    const kinds = formatSecretTally(scan.byKind);
+    const summary = `${scan.replacements} values in ${scan.records} records${kinds === "" ? "" : ` (${kinds})`}`;
+    if (scrub) {
+      return { name: "secrets", status: "ok", detail: `replaced ${summary}` };
+    }
+    return {
+      name: "secrets",
+      status: "warn",
+      detail: `${summary} need redaction`,
+      fix: "run seri doctor --scrub",
+    };
+  } catch (error) {
+    return {
+      name: "secrets",
       status: "fail",
       detail: error instanceof Error ? error.message : String(error),
       fix: "move seri.db aside if it is corrupt",

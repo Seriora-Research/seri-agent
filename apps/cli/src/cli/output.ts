@@ -17,6 +17,7 @@ export const USAGE = `Usage:
   seri serve                      start the foreground loopback daemon for this profile
   seri exec <task>                run one task through an already-running daemon
   seri doctor                     print a local install and config report
+  seri doctor --scrub             rewrite stored transcripts, replacing secret-shaped values
   seri update                     replace this binary from GitHub Releases
   seri --version | --help
 
@@ -24,6 +25,7 @@ Options:
   --max-turns <n>                 stop after n model turns (default 500)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
+  --scrub                         with seri doctor, rewrite residual secret-shaped values
   --dangerously-skip-permissions  run every tool with no approval prompt (attended use only)
   --permission-prompts <mode>     none denies anything that would prompt; the permission mode still decides
   --                              everything after this is the task, flags included:
