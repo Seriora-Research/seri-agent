@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stampDarwinCompileOutput } from "../../src/build/compile";
+import { finalizeDarwinCompileOutput, stampDarwinCompileOutput } from "../../src/build/compile";
 import {
   BUN_COMPILE_UUID_DARWIN_ARM64,
   BUN_COMPILE_UUID_DARWIN_X64,
@@ -123,28 +123,85 @@ describe("rewriteMachOUuidFile", () => {
   });
 });
 
-describe("bun compile stub (real darwin target)", () => {
-  test("bun stamps the arm64 stub, then compile.ts rewrite diverges", () => {
-    const dir = mkdtempSync(join(tmpdir(), "seri-bun-darwin-"));
+describe("finalizeDarwinCompileOutput", () => {
+  test("rewrites a darwin target on linux without signing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-macho-sign-"));
     try {
-      const entry = join(dir, "main.ts");
-      const outfile = join(dir, "seri");
-      writeFileSync(entry, 'console.log("uuid-probe");\n');
-      const build = spawnSync(
-        process.execPath,
-        ["build", "--compile", "--target", "bun-darwin-arm64", entry, "--outfile", outfile],
-        { encoding: "utf8" },
-      );
-      expect(build.status, build.stderr).toBe(0);
-      const before = readMachOUuid(new Uint8Array(readFileSync(outfile)));
-      expect(before?.uuid).toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
-      const stamped = stampDarwinCompileOutput(outfile, "bun-darwin-arm64", "linux");
-      expect(stamped?.kind).toBe("rewritten");
-      if (stamped?.kind !== "rewritten") return;
-      expect(stamped.after).not.toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
-      expect(readMachOUuidFromFile(outfile)?.uuid).toBe(stamped.after);
+      const path = join(dir, "seri");
+      writeFileSync(path, thinMachO(BUN_COMPILE_UUID_DARWIN_ARM64, Buffer.from("sign-linux")));
+      const signed: string[] = [];
+      const result = finalizeDarwinCompileOutput(path, "bun-darwin-arm64", "linux", (binPath) => {
+        signed.push(binPath);
+      });
+      expect(result?.kind).toBe("rewritten");
+      expect(signed).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("signs after a darwin-host rewrite because LC_UUID is covered by the signature", () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-macho-sign-"));
+    try {
+      const path = join(dir, "seri");
+      writeFileSync(path, thinMachO(BUN_COMPILE_UUID_DARWIN_ARM64, Buffer.from("sign-darwin")));
+      const signed: string[] = [];
+      const result = finalizeDarwinCompileOutput(path, "bun-darwin-arm64", "darwin", (binPath) => {
+        signed.push(binPath);
+      });
+      expect(result?.kind).toBe("rewritten");
+      expect(signed).toEqual([path]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not sign a skipped darwin output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-macho-sign-"));
+    try {
+      const path = join(dir, "seri");
+      const header = Buffer.alloc(32);
+      header.writeUInt32LE(MH_MAGIC_64, 0);
+      writeFileSync(path, header);
+      const signed: string[] = [];
+      expect(
+        finalizeDarwinCompileOutput(path, "bun-darwin-arm64", "darwin", (binPath) => {
+          signed.push(binPath);
+        }),
+      ).toEqual({ kind: "skipped", reason: "no-uuid" });
+      expect(signed).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("bun compile stub (real darwin target)", () => {
+  test(
+    "bun stamps the arm64 stub, then compile.ts rewrite diverges",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "seri-bun-darwin-"));
+      try {
+        const entry = join(dir, "main.ts");
+        const outfile = join(dir, "seri");
+        writeFileSync(entry, 'console.log("uuid-probe");\n');
+        const build = spawnSync(
+          process.execPath,
+          ["build", "--compile", "--target", "bun-darwin-arm64", entry, "--outfile", outfile],
+          { encoding: "utf8", timeout: 15_000 },
+        );
+        expect(build.status, build.stderr).toBe(0);
+        const before = readMachOUuid(new Uint8Array(readFileSync(outfile)));
+        expect(before?.uuid).toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+        const stamped = stampDarwinCompileOutput(outfile, "bun-darwin-arm64", "linux");
+        expect(stamped?.kind).toBe("rewritten");
+        if (stamped?.kind !== "rewritten") return;
+        expect(stamped.after).not.toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+        expect(readMachOUuidFromFile(outfile)?.uuid).toBe(stamped.after);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    { timeout: 20_000 },
+  );
 });

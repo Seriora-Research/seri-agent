@@ -143,6 +143,40 @@ export function stampDarwinCompileOutput(
   return rewriteMachOUuidFile(outfile);
 }
 
+function defaultAdHocSign(binPath: string): void {
+  const result = spawnSync("codesign", ["--force", "--sign", "-", binPath], { encoding: "utf8" });
+  if (result.error !== undefined) {
+    throw new Error(`compile.ts: codesign ${binPath} failed: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`compile.ts: codesign ${binPath} exited ${result.status}: ${result.stderr}`);
+  }
+}
+
+export function adHocSignDarwinBinary(
+  path: string,
+  platform: NodeJS.Platform,
+  sign: (binPath: string) => void = defaultAdHocSign,
+): void {
+  // bun's ad-hoc signature covers LC_UUID; rewriting that field invalidates it.
+  if (platform !== "darwin") return;
+  sign(path);
+}
+
+export function finalizeDarwinCompileOutput(
+  outfile: string,
+  target: string | undefined,
+  platform: NodeJS.Platform,
+  sign: (binPath: string) => void = defaultAdHocSign,
+): StampResult | undefined {
+  const stamped = stampDarwinCompileOutput(outfile, target, platform);
+  if (stamped === undefined) return undefined;
+  if (stamped.kind !== "skipped") {
+    adHocSignDarwinBinary(outfile, platform, sign);
+  }
+  return stamped;
+}
+
 function main(): void {
   const { values } = parseArgs({
     args: process.argv.slice(2),
@@ -168,7 +202,7 @@ function main(): void {
     { stdio: "inherit" },
   );
   if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
-  const stamped = stampDarwinCompileOutput(values.outfile, values.target, process.platform);
+  const stamped = finalizeDarwinCompileOutput(values.outfile, values.target, process.platform);
   if (stamped?.kind === "skipped") {
     console.error(`compile.ts: ${stamped.reason} for ${values.outfile}`);
     process.exit(1);
