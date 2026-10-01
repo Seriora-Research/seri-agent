@@ -173,7 +173,7 @@ describe("session save/load and JSONL export", () => {
   });
 
   test("binary payloads persist as artifact refs while tool-channel secrets redact", () => {
-    const png = pngBytes(12_000, 0x55);
+    const png = pngBytes(12_000, 0x11);
     const ghp = `ghp_${"A".repeat(20)}B9Qx`;
     const sk = "sk-abcdefghijklmnopqrstuvwxyz012345";
     const messages = [
