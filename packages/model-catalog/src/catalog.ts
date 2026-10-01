@@ -14,6 +14,7 @@ export const CATALOG_PROVIDERS: readonly ModelProvider[] = [
   "google",
 
   "xai",
+  "vercel",
 ];
 
 export const GATEWAY_PROVIDER: ModelProvider = "openrouter";

@@ -50,6 +50,27 @@ function rawApiResponse() {
       },
     },
     openrouter: { models: {} },
+    vercel: {
+      models: {
+        "anthropic/claude-sonnet-5": {
+          id: "anthropic/claude-sonnet-5",
+          name: "Claude Sonnet 5",
+          family: "claude-sonnet",
+          tool_call: true,
+          reasoning: true,
+          limit: { context: 200000, output: 64000 },
+          cost: { input: 3, output: 15 },
+        },
+        "voyage/rerank-3": {
+          id: "voyage/rerank-3",
+          name: "Rerank 3",
+          family: "voyage",
+          tool_call: false,
+          reasoning: false,
+          limit: { context: 32000, output: 32000 },
+        },
+      },
+    },
     anthropic: {
       models: {
         "claude-model": {
@@ -145,6 +166,17 @@ describe("loadCatalog", () => {
         maxOutputTokens: 300,
         toolCall: true,
         reasoning: false,
+        pricing: { inputPerMTok: 3, outputPerMTok: 15 },
+      },
+      {
+        id: "anthropic/claude-sonnet-5",
+        provider: "vercel",
+        displayName: "Claude Sonnet 5",
+        family: "claude-sonnet",
+        contextWindow: 200000,
+        maxOutputTokens: 64000,
+        toolCall: true,
+        reasoning: true,
         pricing: { inputPerMTok: 3, outputPerMTok: 15 },
       },
     ]);
