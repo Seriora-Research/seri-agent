@@ -31,8 +31,7 @@ const MOVE_VERB = /\b(?:Move-Item|Rename-Item|rename|ren|mv|move)\b/i;
 const ROBOCOPY = /\brobocopy\b/i;
 const ROBOCOPY_MOVE = /(?:^|\s)\/MOVE\b/i;
 
-const RECURSIVE_FLAG =
-  /(?:^|\s)(?:-[rR]f\b|-[fF][rR]\b|-[rR]\b|--recursive\b|\/[sS]\b|-Recurse\b)/;
+const RECURSIVE_FLAG = /(?:^|\s)(?:-[rR]f\b|-[fF][rR]\b|-[rR]\b|--recursive\b|\/[sS]\b|-Recurse\b)/;
 
 const SHELL_WORDS = /^(?:cmd|bash|sh|zsh|fish|pwsh|powershell|sudo|env)$/i;
 
