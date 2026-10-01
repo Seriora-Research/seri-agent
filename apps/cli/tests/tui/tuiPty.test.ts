@@ -481,7 +481,7 @@ function childScriptModelSwitch(dir: string): string {
 }
 
 // Delete SERI_DISABLE_MODELS_FETCH; the suite npm script sets it to 1 for the whole bun test process.
-function childScriptEffortPersist(dir: string): string {
+function childScriptEffortPersist(dir: string, startIdle = false): string {
   return [
     `process.env.HOME = ${JSON.stringify(dir)};`,
     `process.env.GROQ_API_KEY = "fake-test-key";`,
@@ -508,7 +508,7 @@ function childScriptEffortPersist(dir: string): string {
     `  yield { type: "done", reason: "no-tool-call" };`,
     `  return opts.messages;`,
     `}`,
-    `await cli.run(["do", "a", "task"], {`,
+    `await cli.run(${startIdle ? "[]" : '["do", "a", "task"]'}, {`,
     `  runLoop: runLoopFake,`,
     `  getGroqModel: (id) => ({ id }),`,
     `  loadAgentsFile: () => "",`,
@@ -2221,12 +2221,19 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
     seedConfig(dir, { SERI_REASONING_EFFORT: "low" });
 
     const scriptPath = join(dir, "child-effort-persist-header.mjs");
-    writeFileSync(scriptPath, childScriptEffortPersist(dir));
+    writeFileSync(scriptPath, childScriptEffortPersist(dir, true));
 
     const { child, sawLine, sawInFrameTimes, lastFrame } = await startChild(scriptPath, dir, {
-      terminalSize: { cols: 100, rows: 30 },
+      // Idle splash lets prewarmModelCatalog finish; a queued task peeks the bundled catalog
+      // and formatModeDetail drops the effort suffix. 140 cols keeps leftover after the turn.
+      dismissSplash: true,
+      terminalSize: { cols: 140, rows: 30 },
     });
     try {
+      await sawLine("approve-each mode on");
+      child.stdin?.write("do a task");
+      await sawLine("do a task");
+      child.stdin?.write("\r");
       await sawLine("RUNLOOP_CALL 1 reasoningEffort=low");
       await sawLine("RUNLOOP_DONE 1");
       await sawLine("reasoning-model · groq · low");

@@ -41,3 +41,22 @@ describe("the xai vendor alias against the real bundled manifest", () => {
     expect(xai.every((entry) => entry.pricing !== undefined)).toBe(true);
   });
 });
+
+describe("the vercel catalog slice against the real bundled manifest", () => {
+  const entries = bundledManifest.entries as ModelCatalogEntry[];
+
+  test("at least one route group holds both a vercel row and an openrouter row", () => {
+    const groups = groupRoutes(entries);
+    const merged = [...groups.values()].filter((group) => {
+      const providers = new Set(group.map((entry) => entry.provider));
+      return providers.has("vercel") && providers.has("openrouter");
+    });
+    expect(merged.length).toBeGreaterThan(0);
+  });
+
+  test("every vercel row still carries pricing, so a BYOK key path can be costed", () => {
+    const vercel = entries.filter((entry) => entry.provider === "vercel");
+    expect(vercel.length).toBeGreaterThan(0);
+    expect(vercel.every((entry) => entry.pricing !== undefined)).toBe(true);
+  });
+});

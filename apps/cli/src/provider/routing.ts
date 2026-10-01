@@ -20,6 +20,7 @@ export const NATIVE_PROVIDERS: Record<ModelProvider, boolean> = {
   google: true,
   groq: false,
   openrouter: false,
+  vercel: false,
 
   xai: true,
 };

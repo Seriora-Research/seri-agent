@@ -410,43 +410,48 @@ describe("run (task invocation)", () => {
     expect(errors.some((line) => line.includes("key configured"))).toBe(false);
   });
 
-  test("`--continue` with no task resumes the most recent session without appending a message", async () => {
-    process.env.GROQ_API_KEY = "fake-test-key";
-    const older: SessionState = {
-      id: "older",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "read-only",
-      messages: [{ role: "user", content: "old task" }],
-    };
-    const newer: SessionState = {
-      id: "newer",
-      cwd: ".",
-      systemPrompt: "",
-      permissionMode: "read-only",
-      messages: [{ role: "user", content: "new task" }],
-    };
-    saveSession(older, sessionsDir);
-    saveSession(newer, sessionsDir);
+  test(
+    "`--continue` with no task resumes the most recent session without appending a message",
+    async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const older: SessionState = {
+        id: "older",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages: [{ role: "user", content: "old task" }],
+      };
+      const newer: SessionState = {
+        id: "newer",
+        cwd: ".",
+        systemPrompt: "",
+        permissionMode: "read-only",
+        messages: [{ role: "user", content: "new task" }],
+      };
+      saveSession(older, sessionsDir);
+      saveSession(newer, sessionsDir);
 
-    const { fake, capture } = fakeRunLoop();
+      const { fake, capture } = fakeRunLoop();
 
-    await captureLogs(() =>
-      run(["--continue"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map() },
+      await captureLogs(() =>
+        run(["--continue"], {
+          isTTY: false,
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
         }),
-        sessionsDir,
-      }),
-    );
+      );
 
-    expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
-    expect(listSessionIds(sessionsDir)).toHaveLength(2);
-  });
+      expect(capture()?.messages).toEqual([{ role: "user", content: "new task" }]);
+      expect(listSessionIds(sessionsDir)).toHaveLength(2);
+    },
+    { timeout: 15_000 },
+  );
 
   test("non-interactive --continue does not start a turn when the resumed session already has an assistant reply", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";

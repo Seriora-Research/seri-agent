@@ -1,3 +1,5 @@
+import { isArtifactRef } from "./artifacts";
+
 export type SecretKind =
   | "github-pat"
   | "github-token"
@@ -223,7 +225,7 @@ function mapLeaves(
     });
     return { value: next, found };
   }
-  if (isImagePart(value)) return { value, found: {} };
+  if (isImagePart(value) || isArtifactRef(value)) return { value, found: {} };
   if (isRecord(value)) {
     let found: SecretTally = {};
     const next: Record<string, unknown> = {};

@@ -6,6 +6,7 @@ import { type ArchivistReport, createArchivistState, runArchivist } from "../mem
 import type { MemoryContext } from "../memory/store";
 import { resolveDefaultModel } from "../provider/defaults";
 import { resolveModelRoute } from "../runtime/prepare";
+import { hydrateBinaryArtifacts } from "../session/artifacts";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
@@ -22,7 +23,10 @@ export async function flushIdleArchivist(args: {
   onWarning: (message: string) => void;
   runLoop?: Parameters<typeof runArchivist>[0]["runLoop"];
 }): Promise<ArchivistReport | undefined> {
-  const session = args.database.loadSession<ModelMessage>(args.sessionId);
+  const session = hydrateLoadedSession(
+    args.database.loadSession<ModelMessage>(args.sessionId),
+    args.database.configDir,
+  );
   if (session === undefined) return undefined;
   const cursor = args.database.getArchivistCursor(args.sessionId);
   const state = createArchivistState(session, cursor);
@@ -55,7 +59,10 @@ export async function flushIdleSession(
   deps: CliDeps,
   signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
-  const session = database.loadSession<ModelMessage>(sessionId);
+  const session = hydrateLoadedSession(
+    database.loadSession<ModelMessage>(sessionId),
+    database.configDir,
+  );
   if (session === undefined) return;
   const requested =
     session.model === undefined
@@ -76,4 +83,15 @@ export async function flushIdleSession(
     onWarning: (message) => printWarning(message),
     runLoop: deps.runLoop,
   });
+}
+
+function hydrateLoadedSession<T>(
+  session: SessionState<T> | undefined,
+  configDir: string,
+): SessionState<T> | undefined {
+  if (session === undefined) return undefined;
+  return {
+    ...session,
+    messages: hydrateBinaryArtifacts(session.messages, configDir, session.id) as T[],
+  };
 }

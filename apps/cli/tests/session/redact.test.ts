@@ -253,6 +253,49 @@ describe("encodeMessageJson", () => {
     expect(encoded.json).toContain(GHP);
     expect(encoded.found).toEqual({});
   });
+
+  test("artifact refs and image payloads are left intact next to a redacted sibling token", () => {
+    const ref = {
+      type: "artifact",
+      id: "abc",
+      bytes: 12,
+      path: "artifacts/s/abc.png",
+      mime: "image/png",
+    };
+    const payload = `AAA+${SK}`;
+    const encoded = encodeMessageJson(
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            output: {
+              type: "json",
+              value: { stdout: GHP, file: ref },
+            },
+          },
+          {
+            type: "tool-result",
+            toolCallId: "c2",
+            output: {
+              type: "content",
+              value: [
+                { type: "file", mediaType: "image/png", data: { type: "data", data: payload } },
+              ],
+            },
+          },
+        ],
+      },
+      new Set(),
+    );
+    expect(encoded.json).toContain("[redacted:github-pat:B9Qx]");
+    expect(encoded.json).not.toContain(GHP);
+    expect(encoded.json).toContain('"type":"artifact"');
+    expect(encoded.json).toContain('"path":"artifacts/s/abc.png"');
+    expect(encoded.json).toContain(payload);
+    expect(encoded.found).toEqual({ "github-pat": 1 });
+  });
 });
 
 describe("encodeBlobJson", () => {

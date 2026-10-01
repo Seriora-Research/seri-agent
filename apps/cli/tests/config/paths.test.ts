@@ -10,6 +10,7 @@ import {
   DAEMON_LOCK_FILENAME,
   DATABASE_FILENAME,
   DEFAULT_PROFILE,
+  getArtifactsDir,
   getBaseConfigDir,
   getConfigDir,
   getDaemonDescriptorPath,
@@ -220,6 +221,7 @@ describe("profileNameError", () => {
       "pending",
       "trajectories",
       "plans",
+      "artifacts",
       DATABASE_FILENAME,
       DAEMON_DESCRIPTOR_FILENAME,
       DAEMON_LOCK_FILENAME,
@@ -237,6 +239,7 @@ describe("profileNameError", () => {
     "pending",
     "trajectories",
     "plans",
+    "artifacts",
   ])("%s is reserved", (name) => {
     expect(profileNameError(name)).toBeDefined();
   });
@@ -304,7 +307,7 @@ describe("resolveProfile precedence (D1)", () => {
   });
 });
 
-describe("getMemoriesDir / getPendingDir / getTrajectoriesDir / getPlansDir", () => {
+describe("getMemoriesDir / getPendingDir / getTrajectoriesDir / getPlansDir / getArtifactsDir", () => {
   test("join under getConfigDir() by default", () => {
     setPlatform("linux");
     process.env.HOME = "/home/test";
@@ -312,6 +315,7 @@ describe("getMemoriesDir / getPendingDir / getTrajectoriesDir / getPlansDir", ()
     expect(getPendingDir()).toBe(join(getConfigDir(), "pending"));
     expect(getTrajectoriesDir()).toBe(join(getConfigDir(), "trajectories"));
     expect(getPlansDir()).toBe(join(getConfigDir(), "plans"));
+    expect(getArtifactsDir()).toBe(join(getConfigDir(), "artifacts"));
     expect(getDatabasePath()).toBe(join(getConfigDir(), DATABASE_FILENAME));
     expect(getDaemonDescriptorPath()).toBe(join(getConfigDir(), DAEMON_DESCRIPTOR_FILENAME));
     expect(getDaemonLockPath()).toBe(join(getConfigDir(), DAEMON_LOCK_FILENAME));
@@ -322,6 +326,7 @@ describe("getMemoriesDir / getPendingDir / getTrajectoriesDir / getPlansDir", ()
     expect(getPendingDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "pending"));
     expect(getTrajectoriesDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "trajectories"));
     expect(getPlansDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "plans"));
+    expect(getArtifactsDir("/tmp/some-dir")).toBe(join("/tmp/some-dir", "artifacts"));
     expect(getDatabasePath("/tmp/some-dir")).toBe(join("/tmp/some-dir", DATABASE_FILENAME));
     expect(getDaemonDescriptorPath("/tmp/some-dir")).toBe(
       join("/tmp/some-dir", DAEMON_DESCRIPTOR_FILENAME),

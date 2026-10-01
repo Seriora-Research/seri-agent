@@ -3,11 +3,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { BUN_COMPILE_UUID_DARWIN_ARM64, stampMachOUuid } from "../../src/build/machoUuid";
 import { inspectConfig } from "../../src/config/config";
 import { getConfigDir, getDaemonLockPath, setProfileOverride } from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
+import { thinMachO } from "../build/thinMachO";
 
 function asFetch(fn: () => Promise<never>): typeof fetch {
   return fn as unknown as typeof fetch;
@@ -413,5 +415,149 @@ describe("runDoctorChecks", () => {
     } finally {
       loaded.close();
     }
+  });
+
+  test("omits macho_uuid on linux", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/seri",
+      env: process.env,
+      platform: "linux",
+      arch: "x64",
+      cwd: process.cwd(),
+    });
+    expect(checks.find((check) => check.name === "macho_uuid")).toBeUndefined();
+  });
+
+  test("omits macho_uuid for a source bun path on darwin", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath: "/usr/bin/bun",
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    expect(checks.find((check) => check.name === "macho_uuid")).toBeUndefined();
+  });
+
+  test("fails macho_uuid when a compiled darwin seri still has the bun stub", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const dir = mkdtempSync(join(tmpdir(), "seri-doctor-bin-"));
+    dirs.push(dir);
+    const execPath = join(dir, "seri");
+    writeFileSync(execPath, thinMachO(BUN_COMPILE_UUID_DARWIN_ARM64, Buffer.from("stub")));
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath,
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    const uuid = checks.find((check) => check.name === "macho_uuid");
+    expect(uuid?.status).toBe("fail");
+    expect(uuid?.detail).toContain(BUN_COMPILE_UUID_DARWIN_ARM64);
+    expect(uuid?.detail).toContain("shared by bun-compiled binaries");
+    if (uuid === undefined) return;
+    expect(doctorExitCode([uuid])).toBe(1);
+  });
+
+  test("fails macho_uuid for a bun 1.3 stub UUID that is not in the 1.4.0 denylist", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const dir = mkdtempSync(join(tmpdir(), "seri-doctor-bin-"));
+    dirs.push(dir);
+    const execPath = join(dir, "seri");
+    const olderBun = "c7e7a979-f99b-3466-9ad6-e56a63373a35";
+    writeFileSync(execPath, thinMachO(olderBun, Buffer.from("older-bun")));
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath,
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    const uuid = checks.find((check) => check.name === "macho_uuid");
+    expect(uuid?.status).toBe("fail");
+    expect(uuid?.detail).toContain(olderBun);
+    expect(uuid?.detail).toContain("not a content-derived UUID");
+    if (uuid === undefined) return;
+    expect(doctorExitCode([uuid])).toBe(1);
+  });
+
+  test("reports macho_uuid ok after the stub is stamped", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const dir = mkdtempSync(join(tmpdir(), "seri-doctor-bin-"));
+    dirs.push(dir);
+    const execPath = join(dir, "seri");
+    const bytes = thinMachO(BUN_COMPILE_UUID_DARWIN_ARM64, Buffer.from("stub"));
+    const stamped = stampMachOUuid(bytes);
+    expect(stamped.kind).toBe("rewritten");
+    writeFileSync(execPath, bytes);
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath,
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    const uuid = checks.find((check) => check.name === "macho_uuid");
+    expect(uuid?.status).toBe("ok");
+    if (stamped.kind === "rewritten") expect(uuid?.detail).toBe(stamped.after);
+    if (uuid === undefined) return;
+    expect(doctorExitCode([uuid])).toBe(0);
   });
 });

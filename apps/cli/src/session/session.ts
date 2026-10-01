@@ -3,6 +3,7 @@ import type { ModelProvider } from "@seri/model-catalog";
 import { foldsCase } from "../caseFold";
 import type { PermissionMode } from "../gate/gate";
 import type { CompactCursor } from "../loop/conversation";
+import { hydrateBinaryArtifacts } from "./artifacts";
 import {
   configDirForStore,
   SessionDatabase,
@@ -64,7 +65,10 @@ export function loadSession<TMessage = unknown>(
       if (imported.truncatedSessionIds.includes(id)) onTruncated();
       const state = db.loadSession<TMessage>(id);
       if (state === undefined) throw new Error(`Session "${id}" not found in ${sessionsDir}`);
-      return state;
+      return {
+        ...state,
+        messages: hydrateBinaryArtifacts(state.messages, db.configDir, state.id) as TMessage[],
+      };
     },
     database,
   );

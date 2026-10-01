@@ -6,6 +6,7 @@ import { getGoogleModel } from "./google";
 import { getGroqModel } from "./groq";
 import { getOpenAIModel } from "./openai";
 import { getOpenRouterModel } from "./openrouter";
+import { getVercelModel } from "./vercel";
 import { getXaiModel } from "./xai";
 
 export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
@@ -16,6 +17,7 @@ export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
   google: "gemini-2.5-flash",
 
   xai: "grok-4.3",
+  vercel: "openai/gpt-4.1-mini",
 };
 
 const VALIDATION_SESSION_ID = "seri-setup-key-validation";
@@ -29,9 +31,11 @@ export type ValidateKeyResult =
   | { ok: false; reason: "auth"; message: string };
 
 // AI SDK errors surface as APICallError with statusCode; read structurally.
+// generateText's wrapGatewayError strips that field and leaves only the name.
 function isAuthFailure(err: unknown): boolean {
-  const statusCode = (err as { statusCode?: unknown } | null)?.statusCode;
-  return statusCode === 401 || statusCode === 403;
+  const rec = err as { statusCode?: unknown; name?: unknown } | null;
+  if (rec?.statusCode === 401 || rec?.statusCode === 403) return true;
+  return rec?.name === "GatewayAuthenticationError" || rec?.name === "GatewayError";
 }
 
 export async function validateProviderKey(
@@ -69,6 +73,9 @@ export async function validateProviderKey(
         break;
       case "xai":
         model = getXaiModel(modelId, apiKey);
+        break;
+      case "vercel":
+        model = getVercelModel(modelId, apiKey);
         break;
       default:
         return {

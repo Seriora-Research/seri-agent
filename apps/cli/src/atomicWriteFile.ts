@@ -19,7 +19,7 @@ export function ensureOwnerOnlyDir(dir: string): boolean {
   return created;
 }
 
-export function atomicWriteFile(path: string, content: string): void {
+export function atomicWriteFile(path: string, content: string | Uint8Array): void {
   const dir = dirname(path);
 
   if (existsSync(dir)) {
