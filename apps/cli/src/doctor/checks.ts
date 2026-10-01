@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
+import {
+  isBunCompileStubUuid,
+  isContentDerivedMachOUuid,
+  readMachOUuidFromFile,
+} from "../build/machoUuid";
 import { isGitAvailable } from "../checkpoint/shadowGit";
 import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
@@ -35,8 +40,10 @@ export type DoctorDeps = {
 
 export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> {
   const configDir = deps.configDir ?? getConfigDir();
+  const machoUuid = machOUuidCheck(deps);
   return [
     binaryCheck(deps),
+    ...(machoUuid !== undefined ? [machoUuid] : []),
     await ripgrepCheck(deps),
     profileCheck(configDir),
     homeCheck(deps),
@@ -62,6 +69,40 @@ function binaryCheck(deps: DoctorDeps): CheckResult {
     status: "ok",
     detail: `seri ${id.version}${commit} ${deps.platform} ${deps.arch} ${kind} ${deps.execPath}`,
   };
+}
+
+function machOUuidCheck(deps: DoctorDeps): CheckResult | undefined {
+  if (deps.platform !== "darwin") return undefined;
+  if (!looksLikeSeriBinary(deps.execPath)) return undefined;
+  try {
+    const found = readMachOUuidFromFile(deps.execPath);
+    if (found === undefined) {
+      return {
+        name: "macho_uuid",
+        status: "fail",
+        detail: `${deps.execPath} is not a thin 64-bit Mach-O with LC_UUID`,
+        fix: "rebuild with bun run build; compile.ts refuses darwin output that has no LC_UUID",
+      };
+    }
+    if (isBunCompileStubUuid(found.uuid) || !isContentDerivedMachOUuid(found.uuid)) {
+      return {
+        name: "macho_uuid",
+        status: "fail",
+        detail: isBunCompileStubUuid(found.uuid)
+          ? `${found.uuid} is shared by bun-compiled binaries`
+          : `${found.uuid} is not a content-derived UUID`,
+        fix: "rebuild with bun run build so compile.ts stamps a content-derived UUID",
+      };
+    }
+    return { name: "macho_uuid", status: "ok", detail: found.uuid };
+  } catch (error) {
+    return {
+      name: "macho_uuid",
+      status: "fail",
+      detail: error instanceof Error ? error.message : String(error),
+      fix: "rebuild the seri binary",
+    };
+  }
 }
 
 async function ripgrepCheck(deps: DoctorDeps): Promise<CheckResult> {

@@ -1,4 +1,11 @@
-export type ModelProvider = "groq" | "openrouter" | "anthropic" | "openai" | "google" | "xai";
+export type ModelProvider =
+  | "groq"
+  | "openrouter"
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "xai"
+  | "vercel";
 
 export type ReasoningOption =
   | { type: "effort"; values: string[] }

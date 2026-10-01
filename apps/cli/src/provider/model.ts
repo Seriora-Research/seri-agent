@@ -10,6 +10,7 @@ import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 import type { ResolvedRoute } from "./routing";
+import { getVercelModel as getVercelModelReal } from "./vercel";
 import {
   getXaiModel as getXaiModelReal,
   getXaiSubscriptionModel as getXaiSubscriptionModelReal,
@@ -22,6 +23,7 @@ type ModelDeps = {
   getOpenAIModel?: typeof getOpenAIModelReal;
   getGoogleModel?: typeof getGoogleModelReal;
   getXaiModel?: typeof getXaiModelReal;
+  getVercelModel?: typeof getVercelModelReal;
 };
 
 export function getModel(
@@ -37,6 +39,7 @@ export function getModel(
   const getOpenAIModelFn = deps.getOpenAIModel ?? getOpenAIModelReal;
   const getGoogleModelFn = deps.getGoogleModel ?? getGoogleModelReal;
   const getXaiModelFn = deps.getXaiModel ?? getXaiModelReal;
+  const getVercelModelFn = deps.getVercelModel ?? getVercelModelReal;
   switch (provider) {
     case "groq": {
       const apiKey = getApiKey(PROVIDER_API_KEY_NAMES.groq, configDir);
@@ -79,6 +82,13 @@ export function getModel(
         throw missingKeyError("xai");
       }
       return getXaiModelFn(id, apiKey, configDir);
+    }
+    case "vercel": {
+      const apiKey = getApiKey(PROVIDER_API_KEY_NAMES.vercel, configDir);
+      if (getVercelModelFn === getVercelModelReal && apiKey === undefined) {
+        throw missingKeyError("vercel");
+      }
+      return getVercelModelFn(id, apiKey);
     }
     default:
       throw new Error(`Unknown model provider: ${JSON.stringify(provider)}`);

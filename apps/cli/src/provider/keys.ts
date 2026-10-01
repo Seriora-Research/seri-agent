@@ -13,6 +13,9 @@ export const PROVIDER_API_KEY_NAMES: Record<ModelProvider, string> = {
 
   // XAI_API_KEY is xAI's console key; SuperGrok is a second credential on the route.
   xai: "XAI_API_KEY",
+
+  // AI_GATEWAY_API_KEY matches @ai-sdk/gateway's implicit env-var default.
+  vercel: "AI_GATEWAY_API_KEY",
 };
 
 export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
@@ -22,6 +25,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ModelProvider, string> = {
   openai: "OpenAI",
   google: "Google",
   xai: "xAI",
+  vercel: "Vercel",
 };
 
 export type MissingKeyError = Error & { missingKeyProvider: ModelProvider };

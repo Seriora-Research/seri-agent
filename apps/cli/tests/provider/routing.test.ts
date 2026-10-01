@@ -381,6 +381,86 @@ describe("resolveRoute", () => {
       expect(route.credential).toBe("key");
     });
   });
+
+  describe("Vercel AI Gateway as an OpenRouter peer", () => {
+    const peer: ModelCatalog = {
+      ...catalog,
+      entries: [...catalog.entries, entry({ id: "anthropic/claude-sonnet-5", provider: "vercel" })],
+    };
+
+    test("with both aggregator keys, an explicit Vercel pick stays on vercel", () => {
+      const route = resolveRoute(
+        peer,
+        { model: "anthropic/claude-sonnet-5", provider: "vercel" },
+        new Set(["openrouter", "vercel"]),
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "vercel",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+
+    test("with both aggregator keys, an explicit OpenRouter pick stays on openrouter", () => {
+      const route = resolveRoute(
+        peer,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["openrouter", "vercel"]),
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+
+    test("with only a Vercel key, an OpenRouter sibling reroutes to vercel", () => {
+      const route = resolveRoute(
+        peer,
+        { model: "anthropic/claude-sonnet-5", provider: "openrouter" },
+        new Set(["vercel"]),
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "vercel",
+        rerouted: true,
+        reason: "OPENROUTER_API_KEY",
+        credential: "key",
+      });
+    });
+
+    test("with only an OpenRouter key, a Vercel sibling reroutes to openrouter", () => {
+      const route = resolveRoute(
+        peer,
+        { model: "anthropic/claude-sonnet-5", provider: "vercel" },
+        new Set(["openrouter"]),
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "openrouter",
+        rerouted: true,
+        reason: "AI_GATEWAY_API_KEY",
+        credential: "key",
+      });
+    });
+
+    test("a Vercel key stays a key route under a seri plan that unused-marks OpenRouter", () => {
+      const route = resolveRoute(
+        peer,
+        { model: "anthropic/claude-sonnet-5", provider: "vercel" },
+        new Set(["openrouter", "vercel"]),
+        "pro",
+      );
+      expect(route).toEqual({
+        model: "anthropic/claude-sonnet-5",
+        provider: "vercel",
+        rerouted: false,
+        credential: "key",
+      });
+    });
+  });
 });
 
 describe("resolveLegalReasoningTiers", () => {

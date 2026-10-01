@@ -63,6 +63,15 @@ test.skipIf(!process.env.OPENROUTER_API_KEY || process.env.SERI_LIVE_PROVIDER_CH
   30000,
 );
 
+test.skipIf(!process.env.AI_GATEWAY_API_KEY || process.env.SERI_LIVE_PROVIDER_CHECK !== "1")(
+  "validateProviderKey round-trips a real probe against the Vercel AI Gateway API",
+  async () => {
+    const result = await validateProviderKey("vercel", process.env.AI_GATEWAY_API_KEY ?? "");
+    expect(result).toEqual({ ok: true, checked: true });
+  },
+  30000,
+);
+
 test.skipIf(!process.env.ANTHROPIC_API_KEY || process.env.SERI_LIVE_PROVIDER_CHECK !== "1")(
   "validateProviderKey round-trips a real probe against the Anthropic API",
   async () => {

@@ -28,8 +28,8 @@ repository; general assistant work is a planned direction.
   the TUI plan-mode overlay, not a subagent.
 - **Persistent memory.** After a turn, an archivist can stage facts to `MEMORY.md`/`USER.md`
   outside the repo. `/memory` reviews them; nothing is applied silently.
-- **Six providers in one harness.** Groq, OpenRouter, Anthropic, OpenAI, Google, and xAI.
-  Switch with `/model` mid-session without losing context.
+- **Seven providers in one harness.** Groq, OpenRouter, Vercel AI Gateway, Anthropic, OpenAI,
+  Google, and xAI. Switch with `/model` mid-session without losing context.
 - **Three ways to pay, including consumer subscriptions.** A BYOK API key, a hosted seri
   account (`/login`), or a **Grok** or **ChatGPT** subscription from `/setup`. Keys and
   subscriptions live side by side in the same session.
@@ -57,6 +57,7 @@ purpose: the same model can be reached by a key, a subscription, or a hosted acc
 | --- | --- | --- |
 | Groq | `groq` | `GROQ_API_KEY` |
 | OpenRouter | `openrouter` | `OPENROUTER_API_KEY` |
+| Vercel AI Gateway | `vercel` | `AI_GATEWAY_API_KEY` |
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` |
 | OpenAI | `openai` | `OPENAI_API_KEY` |
 | Google | `google` | `GOOGLE_GENERATIVE_AI_API_KEY` |
@@ -64,6 +65,11 @@ purpose: the same model can be reached by a key, a subscription, or a hosted acc
 
 The provider is spelled `xai`, not `grok`. Grok is the model family; xAI is the company that
 serves it.
+
+OpenRouter and Vercel AI Gateway are peer aggregators. Configure either key, or both; neither
+is required for the other, and installing one does not replace the other. A hosted seri account
+still routes through OpenRouter — that is separate from a Vercel AI Gateway key you bring
+yourself.
 
 | How you pay | What it is |
 | --- | --- |
@@ -86,7 +92,7 @@ A pick whose next turn succeeds becomes the default for future sessions. If the 
 has no credential, seri reroutes to a configured provider that reaches the same model — native
 providers preferred over an aggregator — and says so once in the transcript.
 
-`SERI_PROVIDER` names which of the six `SERI_MODEL` is read against.
+`SERI_PROVIDER` names which of the seven `SERI_MODEL` is read against.
 
 ## Install
 
@@ -139,7 +145,7 @@ seri plan covers OpenRouter without a local key, and `/setup` lists it under Sub
 with the plan name (free / pro / max / ultra). OpenRouter stays a normal API-key row for a
 key you bring yourself. Disconnecting the seri plan (without `/logout`) switches this
 profile back to your keys. Setting a key in the environment before you launch
-(`GROQ_API_KEY` or `XAI_API_KEY`, say) also skips setup.
+(`GROQ_API_KEY`, `OPENROUTER_API_KEY`, or `AI_GATEWAY_API_KEY`, say) also skips setup.
 
 ```text
 seri <task>                   one-shot, non-interactive
@@ -175,7 +181,7 @@ Everything below is a slash command inside the session.
 | `/trajectory` | show or turn local trajectory recording on or off |
 | `/usage` | hosted allowance used |
 | `/exit` | end the session (or Ctrl-D) |
-| `/model` | open the model picker across all six providers and subscription routes |
+| `/model` | open the model picker across all seven providers and subscription routes |
 | `/setup` | add or replace a provider API key; connect or ignore seri, Grok, or ChatGPT plans |
 | `/login` | sign in to a hosted seri account |
 | `/signup` | create a hosted seri account |

@@ -47,6 +47,11 @@ describe("PROVIDER_API_KEY_NAMES", () => {
     expect(PROVIDER_API_KEY_NAMES.google).toBe("GOOGLE_GENERATIVE_AI_API_KEY");
     expect(PROVIDER_API_KEY_NAMES.google).not.toBe("GOOGLE_API_KEY");
   });
+
+  test("vercel's key name is AI_GATEWAY_API_KEY, not VERCEL_API_KEY", () => {
+    expect(PROVIDER_API_KEY_NAMES.vercel).toBe("AI_GATEWAY_API_KEY");
+    expect(PROVIDER_API_KEY_NAMES.vercel).not.toBe("VERCEL_API_KEY");
+  });
 });
 
 describe("PROVIDER_DISPLAY_NAMES", () => {
@@ -76,6 +81,9 @@ describe("missingKeyError", () => {
     );
     expect(missingKeyError("google").message).toBe(
       "GOOGLE_GENERATIVE_AI_API_KEY is not set. Set it as an environment variable and re-run.",
+    );
+    expect(missingKeyError("vercel").message).toBe(
+      "AI_GATEWAY_API_KEY is not set. Set it as an environment variable and re-run.",
     );
   });
 });

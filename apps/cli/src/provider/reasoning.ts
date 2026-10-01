@@ -106,6 +106,9 @@ export function buildReasoningProviderOptions(
         return { openai: { reasoningEffort: "none" } };
       case "openrouter":
         return { openrouter: { reasoning: { enabled: false } } };
+      case "vercel":
+        // GatewayLanguageModel.provider is "gateway"; a { vercel: ... } key is ignored.
+        return { gateway: { reasoningEffort: "none" } };
 
       default:
         return assertNever(provider);
@@ -134,5 +137,7 @@ export function buildReasoningProviderOptions(
       return tier === "on"
         ? { openrouter: { reasoning: { enabled: true } } }
         : { openrouter: { reasoning: { effort: tier } } };
+    case "vercel":
+      return { gateway: { reasoningEffort: tier === "on" ? "medium" : tier } };
   }
 }
