@@ -6,6 +6,7 @@ const LC_UUID = 0x1b;
 const HEADER_SIZE = 32;
 const UUID_SIZE = 16;
 const UUID_COMMAND_MIN = 24;
+const MAX_LOAD_COMMANDS_SIZE = 1024 * 1024;
 
 export const BUN_COMPILE_UUID_DARWIN_ARM64 = "4c4c440c-5555-3144-a11d-99d1ccbeae57";
 export const BUN_COMPILE_UUID_DARWIN_X64 = "4c4c448c-5555-3144-a18a-c2ee866ddf43";
@@ -49,6 +50,7 @@ export function readMachOUuid(bytes: Uint8Array): MachOUuid | undefined {
   if (readU32(bytes, 0) !== MH_MAGIC_64) return undefined;
   const ncmds = readU32(bytes, 16);
   const sizeofcmds = readU32(bytes, 20);
+  if (sizeofcmds > MAX_LOAD_COMMANDS_SIZE) return undefined;
   let off = HEADER_SIZE;
   const end = Math.min(bytes.length, HEADER_SIZE + sizeofcmds);
   for (let i = 0; i < ncmds && off + 8 <= end; i++) {
@@ -73,6 +75,7 @@ export function readMachOUuidFromFile(path: string): MachOUuid | undefined {
     const header = Buffer.alloc(HEADER_SIZE);
     if (readSync(fd, header, 0, HEADER_SIZE, 0) < HEADER_SIZE) return undefined;
     const sizeofcmds = readU32(header, 20);
+    if (sizeofcmds > MAX_LOAD_COMMANDS_SIZE) return undefined;
     const total = HEADER_SIZE + sizeofcmds;
     const buf = Buffer.alloc(total);
     header.copy(buf);
