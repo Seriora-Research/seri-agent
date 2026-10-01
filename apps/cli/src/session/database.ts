@@ -7,6 +7,7 @@ import { DATABASE_FILENAME } from "../config/paths";
 import type { PermissionMode } from "../gate/gate";
 import { type CompactCursor, parseCompactCursor } from "../loop/conversation";
 import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
+import { persistBinaryArtifacts, removeSessionArtifacts } from "./artifacts";
 import type { SessionState } from "./session";
 
 export { DATABASE_FILENAME };
@@ -643,6 +644,7 @@ export class SessionDatabase {
           deleteRuns.run(id);
           deleteTurns.run(id);
           deleteSession.run(id);
+          removeSessionArtifacts(this.configDir, id);
         }
         return ids;
       })
@@ -932,7 +934,8 @@ export class SessionDatabase {
     const messages = this.database
       .query("SELECT id, seq, json FROM messages WHERE session_id = ? ORDER BY seq")
       .all(state.id) as MessageRow[];
-    const encoded = state.messages.map((message) => {
+    const storedMessages = persistBinaryArtifacts(state.messages, this.configDir, state.id);
+    const encoded = storedMessages.map((message) => {
       const json = JSON.stringify(message);
       if (json === undefined) throw new Error("Session messages must be JSON-serializable");
       return json;

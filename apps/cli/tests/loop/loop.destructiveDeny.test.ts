@@ -303,13 +303,15 @@ describe("runLoop destructive deny", () => {
   test("autoModeOnBlock ask prompts on a protected Remove-Item instead of a silent tool error", async () => {
     const executed: string[] = [];
     let prompted = 0;
+    // Stay inside cwd: E:\SS is a workspace-escape, so catastrophicOf denies before ask can prompt.
+    const innerTree = "/tmp/project/protected-tree";
     const events = await collect(
       runLoop({
         model: new MockLanguageModelV4({
           doStream: [
             streamResult(
               toolCallChunks("call-1", "powershell", {
-                command: `Remove-Item "${tree}" -Recurse -Force`,
+                command: `Remove-Item "${innerTree}" -Recurse -Force`,
               }),
             ),
             streamResult(textOnlyChunks("Done")),
@@ -322,7 +324,7 @@ describe("runLoop destructive deny", () => {
         messages: baseMessages,
         permissionMode: "auto",
         cwd: "/tmp/project",
-        classifyToolCall: protectRemoveItem(tree),
+        classifyToolCall: protectRemoveItem(innerTree),
         autoModeOnBlock: "ask",
         approvalPrompt: async () => {
           prompted += 1;
@@ -337,17 +339,19 @@ describe("runLoop destructive deny", () => {
 
   test("declining a protected Remove-Item at the ask prompt still stops the turn", async () => {
     const executed: string[] = [];
+    // Same in-workspace target as the ask-prompt test so this is a decline, not a rail deny.
+    const innerTree = "/tmp/project/protected-tree";
     const events = await collect(
       runLoop({
         model: new MockLanguageModelV4({
           doStream: [
             streamResult(
               toolCallChunks("call-1", "powershell", {
-                command: `Remove-Item "${tree}" -Recurse -Force`,
+                command: `Remove-Item "${innerTree}" -Recurse -Force`,
               }),
             ),
             streamResult(
-              toolCallChunks("call-2", "bash", { command: `cmd /c rmdir /s /q "${tree}"` }),
+              toolCallChunks("call-2", "bash", { command: `cmd /c rmdir /s /q "${innerTree}"` }),
             ),
           ],
         }),
@@ -358,7 +362,7 @@ describe("runLoop destructive deny", () => {
         messages: baseMessages,
         permissionMode: "auto",
         cwd: "/tmp/project",
-        classifyToolCall: protectRemoveItem(tree),
+        classifyToolCall: protectRemoveItem(innerTree),
         autoModeOnBlock: "ask",
         approvalPrompt: async () => "no",
       }),
