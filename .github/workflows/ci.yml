@@ -41,12 +41,16 @@ jobs:
       - name: Test
         if: matrix.os != 'ubuntu-latest'
         run: bun test
-      # Ubuntu: Bun 1.4.0 SIGSEGV (exit 139) when the next file loads after a heavy
-      # OpenTUI/PTY run in the same process. Split so each group exits instead.
+      # Ubuntu: Bun 1.4.0 SIGSEGV (exit 139) when the next file loads after ~40s of
+      # spawn/FFI in one process. Shard and isolate the heavy files so each process exits.
       - name: Test
         if: matrix.os == 'ubuntu-latest'
         run: |
-          bun test --path-ignore-patterns='apps/cli/tests/tui/**'
+          bun test --path-ignore-patterns='apps/cli/tests/tui/**' --path-ignore-patterns='**/cli.test.ts' --shard=1/4
+          bun test --path-ignore-patterns='apps/cli/tests/tui/**' --path-ignore-patterns='**/cli.test.ts' --shard=2/4
+          bun test --path-ignore-patterns='apps/cli/tests/tui/**' --path-ignore-patterns='**/cli.test.ts' --shard=3/4
+          bun test --path-ignore-patterns='apps/cli/tests/tui/**' --path-ignore-patterns='**/cli.test.ts' --shard=4/4
+          bun test apps/cli/tests/cli/cli.test.ts
           bun test apps/cli/tests/tui/*.tsx
           bun test apps/cli/tests/tui --path-ignore-patterns='apps/cli/tests/tui/*.tsx' --path-ignore-patterns='**/tuiPty.test.ts'
           bun test apps/cli/tests/tui/tuiPty.test.ts
