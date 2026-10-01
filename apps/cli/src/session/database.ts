@@ -2,14 +2,44 @@ import { Database } from "bun:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ModelProvider } from "@seri/model-catalog";
-import { ensureOwnerOnlyDir } from "../atomicWriteFile";
-import { DATABASE_FILENAME } from "../config/paths";
+import { atomicWriteFile, ensureOwnerOnlyDir } from "../atomicWriteFile";
+import { DATABASE_FILENAME, TRAJECTORIES_DIRNAME } from "../config/paths";
 import type { PermissionMode } from "../gate/gate";
 import { type CompactCursor, parseCompactCursor } from "../loop/conversation";
 import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
+import {
+  encodeBlobJson,
+  encodeMessageJson,
+  encodeRecapJson,
+  encodeSessionMessages,
+  mergeTally,
+  type SecretTally,
+  withheldToolCallIds,
+} from "./redact";
 import type { SessionState } from "./session";
 
 export { DATABASE_FILENAME };
+
+export type SecretScan = {
+  records: number;
+  replacements: number;
+  unreadable: number;
+  byKind: SecretTally;
+};
+
+function emptyScan(): SecretScan {
+  return { records: 0, replacements: 0, unreadable: 0, byKind: {} };
+}
+
+function addScan(target: SecretScan, found: SecretTally, changed: boolean): void {
+  if (!changed) return;
+  target.records += 1;
+  for (const [kind, count] of Object.entries(found)) {
+    if (count === undefined || count === 0) continue;
+    target.replacements += count;
+    target.byKind = mergeTally(target.byKind, { [kind]: count });
+  }
+}
 
 const CURRENT_SCHEMA_VERSION = 5;
 const BUSY_TIMEOUT_MS = 5_000;
@@ -171,7 +201,7 @@ function compactFields(compact: CompactCursor | undefined): {
   if (compact === undefined || compact.status === "full") {
     return { windowStart: null, recapJson: null };
   }
-  return { windowStart: compact.windowStart, recapJson: JSON.stringify(compact.recap) };
+  return { windowStart: compact.windowStart, recapJson: encodeRecapJson(compact.recap).json };
 }
 
 function compactFromRow(header: SessionRow, archiveLength: number): CompactCursor | undefined {
@@ -447,6 +477,19 @@ export class SessionDatabase {
     this.database.transaction(() => this.writeSession(state))();
   }
 
+  scanSecrets(): SecretScan {
+    return this.scanOrScrub(false);
+  }
+
+  scrubSecrets(): SecretScan {
+    const scan = this.database.transaction(() => this.scanOrScrub(true))();
+    if (scan.records > 0) {
+      this.database.exec("VACUUM");
+      this.database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    }
+    return scan;
+  }
+
   loadSession<TMessage = unknown>(id: string): SessionState<TMessage> | undefined {
     const header = this.database
       .query("SELECT * FROM sessions WHERE id = ?")
@@ -575,7 +618,9 @@ export class SessionDatabase {
         const insert = this.database.query(
           "INSERT INTO trajectory_records(session_id, seq, json) VALUES (?, ?, ?)",
         );
-        for (const row of parsed.rows) insert.run(parsed.sessionId, row.seq, row.json);
+        for (const row of parsed.rows) {
+          insert.run(parsed.sessionId, row.seq, encodeBlobJson(JSON.parse(row.json)).json);
+        }
         this.recordLegacyImport(path, size, mtimeMs, null);
       })();
     }
@@ -589,7 +634,7 @@ export class SessionDatabase {
     return this.database.transaction(() => {
       this.database
         .query("INSERT OR IGNORE INTO trajectory_records(session_id, seq, json) VALUES (?, 0, ?)")
-        .run(header.sessionId, JSON.stringify(header));
+        .run(header.sessionId, encodeBlobJson(header).json);
       const nextSeq =
         (
           this.database
@@ -599,7 +644,7 @@ export class SessionDatabase {
       const sequenced = { ...record, seq: nextSeq } as TrajectoryRecord;
       this.database
         .query("INSERT INTO trajectory_records(session_id, seq, json) VALUES (?, ?, ?)")
-        .run(header.sessionId, nextSeq, JSON.stringify(sequenced));
+        .run(header.sessionId, nextSeq, encodeBlobJson(sequenced).json);
       return sequenced;
     })();
   }
@@ -695,7 +740,7 @@ export class SessionDatabase {
   appendDaemonEvent(turnId: string, seq: number, event: unknown): void {
     this.database
       .query("INSERT INTO daemon_events(turn_id, seq, json) VALUES (?, ?, ?)")
-      .run(turnId, seq, JSON.stringify(event));
+      .run(turnId, seq, encodeBlobJson(event).json);
   }
 
   listDaemonEventsAfter(turnId: string, afterSeq: number): unknown[] {
@@ -925,6 +970,198 @@ export class SessionDatabase {
     }
   }
 
+  private scanOrScrub(write: boolean): SecretScan {
+    const scan = emptyScan();
+    this.scanMessageRows(scan, write);
+    this.scanRecapRows(scan, write);
+    this.scanEncodedTable("trajectory_records", scan, write);
+    this.scanEncodedTable("daemon_events", scan, write);
+    this.scanLegacyJsonl(join(this.configDir, "sessions"), "session", scan, write);
+    this.scanLegacyJsonl(join(this.configDir, TRAJECTORIES_DIRNAME), "trajectory", scan, write);
+    return scan;
+  }
+
+  private scanMessageRows(scan: SecretScan, write: boolean): void {
+    const ids = this.listSessionIds();
+    const update = write
+      ? this.database.query("UPDATE messages SET json = ? WHERE id = ?")
+      : undefined;
+    for (const id of ids) {
+      const rows = this.database
+        .query("SELECT id, json FROM messages WHERE session_id = ? ORDER BY seq")
+        .all(id) as { id: number; json: string }[];
+      const parsed: unknown[] = [];
+      for (const row of rows) {
+        try {
+          parsed.push(JSON.parse(row.json));
+        } catch {
+          scan.unreadable += 1;
+          parsed.push(undefined);
+        }
+      }
+      const withheld = withheldToolCallIds(parsed.filter((value) => value !== undefined));
+      for (const [index, row] of rows.entries()) {
+        const value = parsed[index];
+        if (value === undefined) continue;
+        const encoded = encodeMessageJson(value, withheld);
+        if (encoded.json === row.json) continue;
+        addScan(scan, encoded.found, true);
+        update?.run(encoded.json, row.id);
+      }
+    }
+  }
+
+  private scanRecapRows(scan: SecretScan, write: boolean): void {
+    const rows = this.database
+      .query(
+        "SELECT id, compact_recap_json AS json FROM sessions WHERE compact_recap_json IS NOT NULL",
+      )
+      .all() as { id: string; json: string }[];
+    const update = write
+      ? this.database.query("UPDATE sessions SET compact_recap_json = ? WHERE id = ?")
+      : undefined;
+    for (const row of rows) {
+      let value: unknown;
+      try {
+        value = JSON.parse(row.json);
+      } catch {
+        scan.unreadable += 1;
+        continue;
+      }
+      const encoded = encodeRecapJson(value);
+      if (encoded.json === row.json) continue;
+      addScan(scan, encoded.found, true);
+      update?.run(encoded.json, row.id);
+    }
+  }
+
+  private scanEncodedTable(
+    table: "trajectory_records" | "daemon_events",
+    scan: SecretScan,
+    write: boolean,
+  ): void {
+    const rows = this.database.query(`SELECT rowid AS id, json FROM ${table}`).all() as {
+      id: number;
+      json: string;
+    }[];
+    const update = write
+      ? this.database.query(`UPDATE ${table} SET json = ? WHERE rowid = ?`)
+      : undefined;
+    for (const row of rows) {
+      let value: unknown;
+      try {
+        value = JSON.parse(row.json);
+      } catch {
+        scan.unreadable += 1;
+        continue;
+      }
+      const encoded = encodeBlobJson(value);
+      if (encoded.json === row.json) continue;
+      addScan(scan, encoded.found, true);
+      update?.run(encoded.json, row.id);
+    }
+  }
+
+  private scanLegacyJsonl(
+    dir: string,
+    kind: "session" | "trajectory",
+    scan: SecretScan,
+    write: boolean,
+  ): void {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".jsonl"))) {
+      const path = join(dir, name);
+      let raw: string;
+      try {
+        raw = readFileSync(path, "utf8");
+      } catch {
+        scan.unreadable += 1;
+        continue;
+      }
+      const endedWithNewline = raw.endsWith("\n");
+      const lines = raw.split("\n");
+      if (lines.at(-1) === "") lines.pop();
+      if (kind === "session") {
+        const parsed: unknown[] = [];
+        const jsonOut: string[] = [];
+        let dirty = false;
+        for (const line of lines) {
+          let value: unknown;
+          try {
+            value = JSON.parse(line);
+          } catch {
+            scan.unreadable += 1;
+            jsonOut.push(line);
+            parsed.push(undefined);
+            continue;
+          }
+          parsed.push(value);
+          jsonOut.push(line);
+        }
+        const messages = parsed.slice(1).filter((value) => value !== undefined);
+        const withheld = withheldToolCallIds(messages);
+        for (let index = 0; index < jsonOut.length; index++) {
+          const value = parsed[index];
+          if (value === undefined) continue;
+          const encoded =
+            index === 0 ? this.encodeSessionHeader(value) : encodeMessageJson(value, withheld);
+          if (encoded.json === jsonOut[index]) continue;
+          addScan(scan, encoded.found, true);
+          jsonOut[index] = encoded.json;
+          dirty = true;
+        }
+        if (write && dirty) {
+          atomicWriteFile(
+            path,
+            `${jsonOut.join("\n")}${endedWithNewline || jsonOut.length > 0 ? "\n" : ""}`,
+          );
+        }
+        continue;
+      }
+      let dirty = false;
+      const jsonOut: string[] = [];
+      for (const line of lines) {
+        let value: unknown;
+        try {
+          value = JSON.parse(line);
+        } catch {
+          scan.unreadable += 1;
+          jsonOut.push(line);
+          continue;
+        }
+        const encoded = encodeBlobJson(value);
+        if (encoded.json !== line) {
+          addScan(scan, encoded.found, true);
+          dirty = true;
+        }
+        jsonOut.push(encoded.json);
+      }
+      if (write && dirty) {
+        atomicWriteFile(
+          path,
+          `${jsonOut.join("\n")}${endedWithNewline || jsonOut.length > 0 ? "\n" : ""}`,
+        );
+      }
+    }
+  }
+
+  private encodeSessionHeader(value: unknown): { json: string; found: SecretTally } {
+    if (typeof value !== "object" || value === null) return encodeBlobJson(value);
+    const record = value as SessionState;
+    if (record.compact === undefined || record.compact.status !== "compacted") {
+      return { json: JSON.stringify(value) ?? "null", found: {} };
+    }
+    const recap = encodeRecapJson(record.compact.recap);
+    return {
+      json:
+        JSON.stringify({
+          ...record,
+          compact: { ...record.compact, recap: JSON.parse(recap.json) },
+        }) ?? "null",
+      found: recap.found,
+    };
+  }
+
   private writeSession(state: SessionState, importedAtMs?: number): void {
     const existing = this.database
       .query("SELECT * FROM sessions WHERE id = ?")
@@ -932,11 +1169,7 @@ export class SessionDatabase {
     const messages = this.database
       .query("SELECT id, seq, json FROM messages WHERE session_id = ? ORDER BY seq")
       .all(state.id) as MessageRow[];
-    const encoded = state.messages.map((message) => {
-      const json = JSON.stringify(message);
-      if (json === undefined) throw new Error("Session messages must be JSON-serializable");
-      return json;
-    });
+    const encoded = encodeSessionMessages(state.messages).json;
     let commonPrefix = 0;
     while (
       commonPrefix < messages.length &&

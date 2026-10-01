@@ -11,6 +11,7 @@ import {
 } from "../../src/session/database";
 import { exportSessionsToJsonl } from "../../src/session/export";
 import type { SessionState } from "../../src/session/session";
+import { TRAJECTORY_SCHEMA_VERSION, type TrajectoryRecord } from "../../src/trajectory/schema";
 
 let configDir: string;
 let sessionsDir: string;
@@ -410,6 +411,98 @@ test("SQLite sessions export as legacy JSONL without changing the database", () 
   expect(withDatabase((database) => database.loadSession("exported"))).toEqual(
     state("exported", [{ role: "user", content: "hi" }]),
   );
+});
+
+const GHP = `ghp_${"A".repeat(20)}B9Qx`;
+
+test("saveSession writes a redaction marker instead of a tool-result token", () => {
+  const live = {
+    role: "tool",
+    content: [
+      {
+        type: "tool-result",
+        toolCallId: "c1",
+        toolName: "bash",
+        output: { type: "json", value: { stdout: GHP, exitCode: 0 } },
+      },
+    ],
+  };
+  withDatabase((database) => {
+    database.saveSession(state("leak", [live]));
+    const loaded = database.loadSession("leak");
+    const json = JSON.stringify(loaded?.messages);
+    expect(json).toContain("[redacted:github-pat:B9Qx]");
+    expect(json).not.toContain(GHP);
+    expect(live.content[0]?.output.value.stdout).toBe(GHP);
+  });
+});
+
+test("scanSecrets counts a residual token and scrubSecrets removes it", () => {
+  withDatabase((database) => {
+    database.saveSession(state("historic", [{ role: "user", content: "hi" }]));
+  });
+  const raw = new Database(join(configDir, DATABASE_FILENAME));
+  raw.query("UPDATE messages SET json = ? WHERE session_id = 'historic'").run(
+    JSON.stringify({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "c1",
+          toolName: "bash",
+          output: { type: "json", value: { stdout: GHP } },
+        },
+      ],
+    }),
+  );
+  raw.close();
+
+  const before = withDatabase((database) => database.scanSecrets());
+  expect(before.replacements).toBe(1);
+  expect(before.byKind).toEqual({ "github-pat": 1 });
+  expect(JSON.stringify(withDatabase((database) => database.loadSession("historic")))).toContain(
+    GHP,
+  );
+
+  const scrubbed = withDatabase((database) => database.scrubSecrets());
+  expect(scrubbed.replacements).toBe(1);
+  const json = JSON.stringify(withDatabase((database) => database.loadSession("historic")));
+  expect(json).toContain("[redacted:github-pat:B9Qx]");
+  expect(json).not.toContain(GHP);
+  expect(withDatabase((database) => database.scanSecrets())).toEqual({
+    records: 0,
+    replacements: 0,
+    unreadable: 0,
+    byKind: {},
+  });
+});
+
+test("appendTrajectory stores a redacted bash command, not the live token", () => {
+  withDatabase((database) => {
+    const live = { command: `echo ${GHP}` };
+    database.appendTrajectory(
+      {
+        v: TRAJECTORY_SCHEMA_VERSION,
+        kind: "header",
+        sessionId: "traj",
+        cwd: "/repo",
+        startedAt: "2026-10-01T00:00:00.000Z",
+      },
+      {
+        v: TRAJECTORY_SCHEMA_VERSION,
+        ts: "2026-10-01T00:00:00.000Z",
+        sessionId: "traj",
+        actor: { type: "parent" },
+        kind: "tool_call",
+        name: "bash",
+        args: live,
+      } as Omit<TrajectoryRecord, "seq">,
+    );
+    const json = JSON.stringify(database.readTrajectory("traj"));
+    expect(json).toContain("[redacted:github-pat:B9Qx]");
+    expect(json).not.toContain(GHP);
+    expect(live.command).toContain(GHP);
+  });
 });
 
 test("a trajectory whose only line is truncated is a failed import", () => {
