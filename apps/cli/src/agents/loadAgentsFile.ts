@@ -4,7 +4,7 @@ import { getBaseConfigDir } from "../config/paths";
 
 const AGENTS_FILENAME = "AGENTS.md";
 
-// Repo-local is the git root's AGENTS.md, or startDir itself when there is no repo.
+// Local search stops at the git root (or startDir when there is no repo).
 // Walking past that boundary would load $HOME/AGENTS.md — another tool's file — as if it
 // belonged to this project. The only fallback is ~/.seri/AGENTS.md, next to config.json.
 function findGitRoot(startDir: string): string | undefined {
@@ -17,16 +17,23 @@ function findGitRoot(startDir: string): string | undefined {
   }
 }
 
-function localRoot(startDir: string): string {
+function localCeiling(startDir: string): string {
   return findGitRoot(startDir) ?? resolve(startDir);
 }
 
 export function findAgentsFile(startDir: string): string | undefined {
-  const local = join(localRoot(startDir), AGENTS_FILENAME);
-  if (existsSync(local)) return local;
+  const ceiling = localCeiling(startDir);
+  let dir = resolve(startDir);
+  for (;;) {
+    const candidate = join(dir, AGENTS_FILENAME);
+    if (existsSync(candidate)) return candidate;
+    if (dir === ceiling) break;
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
   const global = join(getBaseConfigDir(), AGENTS_FILENAME);
-  if (existsSync(global)) return global;
-  return undefined;
+  return existsSync(global) ? global : undefined;
 }
 
 export function loadAgentsFile(startDir: string): string {

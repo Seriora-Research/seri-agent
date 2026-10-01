@@ -113,15 +113,34 @@ describe.skipIf(!isGitAvailable())("findAgentsFile", () => {
   );
 
   test(
-    "ignores a nested AGENTS.md when the git root has none",
+    "loads the nearest AGENTS.md between startDir and the git root",
+    () => {
+      const repo = join(home, "repo");
+      initRepo(repo);
+      writeFileSync(join(repo, "AGENTS.md"), "git root");
+      const nested = join(repo, "nested");
+      mkdirSync(nested);
+      const nestedAgents = join(nested, "AGENTS.md");
+      writeFileSync(nestedAgents, "nested");
+
+      expect(findAgentsFile(nested)).toBe(nestedAgents);
+      expect(findAgentsFile(repo)).toBe(join(repo, "AGENTS.md"));
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "loads a nested AGENTS.md when the git root has none",
     () => {
       const repo = join(home, "repo");
       initRepo(repo);
       const nested = join(repo, "nested");
       mkdirSync(nested);
-      writeFileSync(join(nested, "AGENTS.md"), "nested only");
+      const nestedAgents = join(nested, "AGENTS.md");
+      writeFileSync(nestedAgents, "nested only");
 
-      expect(findAgentsFile(nested)).toBeUndefined();
+      expect(findAgentsFile(nested)).toBe(nestedAgents);
+      expect(findAgentsFile(repo)).toBeUndefined();
     },
     GIT_TEST_TIMEOUT_MS,
   );
