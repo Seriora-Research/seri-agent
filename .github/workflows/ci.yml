@@ -38,7 +38,17 @@ jobs:
           bun-version: 1.4.0
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
-      - run: bun test
+      # Ubuntu: Bun 1.4.0 SIGSEGV (exit 139) in createTestRenderer after the rest of
+      # the suite has spawned/FFI'd in the same process. Fresh process for the tsx files.
+      - name: Test
+        if: matrix.os != 'ubuntu-latest'
+        run: bun test
+      - name: Test
+        if: matrix.os == 'ubuntu-latest'
+        run: bun test --path-ignore-patterns='apps/cli/tests/tui/*.tsx'
+      - name: Test OpenTUI renderers
+        if: matrix.os == 'ubuntu-latest'
+        run: bun test apps/cli/tests/tui/*.tsx
       - run: bun run build
       - name: Run compiled binary
         shell: bash
