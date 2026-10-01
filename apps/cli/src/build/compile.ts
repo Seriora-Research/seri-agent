@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
+import { isDarwinCompileTarget, rewriteMachOUuidFile, type StampResult } from "./machoUuid";
 
 export function resolveBuildCommit(
   env: NodeJS.ProcessEnv = process.env,
@@ -133,6 +134,15 @@ function readGitHead(): string | undefined {
   }
 }
 
+export function stampDarwinCompileOutput(
+  outfile: string,
+  target: string | undefined,
+  platform: NodeJS.Platform,
+): StampResult | undefined {
+  if (!isDarwinCompileTarget(target, platform)) return undefined;
+  return rewriteMachOUuidFile(outfile);
+}
+
 function main(): void {
   const { values } = parseArgs({
     args: process.argv.slice(2),
@@ -157,7 +167,13 @@ function main(): void {
     }),
     { stdio: "inherit" },
   );
-  process.exit(result.status ?? 1);
+  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+  const stamped = stampDarwinCompileOutput(values.outfile, values.target, process.platform);
+  if (stamped?.kind === "skipped") {
+    console.error(`compile.ts: ${stamped.reason} for ${values.outfile}`);
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 if (import.meta.main) {
