@@ -81,8 +81,8 @@ describe("capability matrix", () => {
     expect(seedSupport("openai", "key")).toBe("unsupported");
   });
 
-  test("Groq, OpenRouter, Google, xAI key, and gateway accept both", () => {
-    for (const provider of ["groq", "openrouter", "google", "xai"] as const) {
+  test("Groq, OpenRouter, Google, xAI key, Vercel, and gateway accept both", () => {
+    for (const provider of ["groq", "openrouter", "google", "xai", "vercel"] as const) {
       expect(temperatureSupport(provider, "key")).toBe("supported");
       expect(seedSupport(provider, "key")).toBe("supported");
     }

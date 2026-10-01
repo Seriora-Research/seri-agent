@@ -7170,6 +7170,5090 @@
         "outputPerMTok": 2.5,
         "cacheReadPerMTok": 0.2
       }
+    },
+    {
+      "id": "zai/glm-4.5",
+      "provider": "vercel",
+      "displayName": "GLM 4.5",
+      "family": "glm",
+      "contextWindow": 128000,
+      "maxOutputTokens": 96000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.2,
+        "cacheReadPerMTok": 0.11
+      }
+    },
+    {
+      "id": "zai/glm-5v-turbo",
+      "provider": "vercel",
+      "displayName": "GLM 5V Turbo",
+      "family": "glm",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.2,
+        "outputPerMTok": 4,
+        "cacheReadPerMTok": 0.24
+      }
+    },
+    {
+      "id": "zai/glm-5.3-flash",
+      "provider": "vercel",
+      "displayName": "GLM 5.3 Flash",
+      "family": "glm-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.5,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "zai/glm-4.6",
+      "provider": "vercel",
+      "displayName": "GLM 4.6",
+      "family": "glm",
+      "contextWindow": 200000,
+      "maxOutputTokens": 96000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.2,
+        "cacheReadPerMTok": 0.11
+      }
+    },
+    {
+      "id": "zai/glm-5.2-fast",
+      "provider": "vercel",
+      "displayName": "GLM 5.2 Fast",
+      "family": "glm",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 2.8,
+        "outputPerMTok": 8.8,
+        "cacheReadPerMTok": 0.56
+      }
+    },
+    {
+      "id": "zai/glm-5",
+      "provider": "vercel",
+      "displayName": "GLM-5",
+      "family": "glm",
+      "contextWindow": 202800,
+      "maxOutputTokens": 131100,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 3.2
+      }
+    },
+    {
+      "id": "zai/glm-4.5v",
+      "provider": "vercel",
+      "displayName": "GLM 4.5V",
+      "family": "glm",
+      "contextWindow": 66000,
+      "maxOutputTokens": 16000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 1.8,
+        "cacheReadPerMTok": 0.11
+      }
+    },
+    {
+      "id": "zai/glm-5.3-flashx",
+      "provider": "vercel",
+      "displayName": "GLM 5.3 FlashX",
+      "family": "glm-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.37,
+        "outputPerMTok": 1.25,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "zai/glm-4.7-flash",
+      "provider": "vercel",
+      "displayName": "GLM 4.7 Flash",
+      "family": "glm-flash",
+      "contextWindow": 200000,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.07,
+        "outputPerMTok": 0.4
+      }
+    },
+    {
+      "id": "zai/glm-4.7",
+      "provider": "vercel",
+      "displayName": "GLM 4.7",
+      "family": "glm",
+      "contextWindow": 200000,
+      "maxOutputTokens": 120000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.2
+      }
+    },
+    {
+      "id": "zai/glm-5.2",
+      "provider": "vercel",
+      "displayName": "GLM 5.2",
+      "family": "glm",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high", "max"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.8,
+        "outputPerMTok": 2.55,
+        "cacheReadPerMTok": 0.16
+      }
+    },
+    {
+      "id": "zai/glm-5.1",
+      "provider": "vercel",
+      "displayName": "GLM 5.1",
+      "family": "glm",
+      "contextWindow": 202800,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.4,
+        "outputPerMTok": 4.4,
+        "cacheReadPerMTok": 0.26
+      }
+    },
+    {
+      "id": "zai/glm-4.7-flashx",
+      "provider": "vercel",
+      "displayName": "GLM 4.7 FlashX",
+      "family": "glm-flash",
+      "contextWindow": 200000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.06,
+        "outputPerMTok": 0.4,
+        "cacheReadPerMTok": 0.01
+      }
+    },
+    {
+      "id": "zai/glm-5-turbo",
+      "provider": "vercel",
+      "displayName": "GLM 5 Turbo",
+      "family": "glm",
+      "contextWindow": 202800,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.2,
+        "outputPerMTok": 4,
+        "cacheReadPerMTok": 0.24
+      }
+    },
+    {
+      "id": "zai/glm-4.5-air",
+      "provider": "vercel",
+      "displayName": "GLM 4.5 Air",
+      "family": "glm-air",
+      "contextWindow": 128000,
+      "maxOutputTokens": 96000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 1.1,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "zai/glm-5.3",
+      "provider": "vercel",
+      "displayName": "GLM 5.3",
+      "family": "glm",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high", "max"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.4,
+        "outputPerMTok": 4.4,
+        "cacheReadPerMTok": 0.14
+      }
+    },
+    {
+      "id": "zai/glm-5.3-fast",
+      "provider": "vercel",
+      "displayName": "GLM 5.3 Fast",
+      "family": "glm",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 262144,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 2.1,
+        "outputPerMTok": 6.6,
+        "cacheReadPerMTok": 0.21
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-multi-agent",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Multi-Agent",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-reasoning",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Reasoning",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.7",
+      "provider": "vercel",
+      "displayName": "Grok 4.7",
+      "family": "grok",
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-non-reasoning",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Non-Reasoning",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.1-fast-reasoning",
+      "provider": "vercel",
+      "displayName": "Grok 4.1 Fast Reasoning",
+      "family": "grok",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 0.5,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "spacexai/grok-4.3",
+      "provider": "vercel",
+      "displayName": "Grok 4.3",
+      "family": "grok",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.5",
+      "provider": "vercel",
+      "displayName": "Grok 4.5",
+      "family": "grok",
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.3
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-multi-agent-beta",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Multi Agent Beta",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-non-reasoning-beta",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Beta Non-Reasoning",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.4
+      }
+    },
+    {
+      "id": "spacexai/grok-build-0.1",
+      "provider": "vercel",
+      "displayName": "Grok Build 0.1",
+      "family": "grok-build",
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.1-fast-non-reasoning",
+      "provider": "vercel",
+      "displayName": "Grok 4.1 Fast Non-Reasoning",
+      "family": "grok",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 0.5,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "spacexai/grok-4.20-reasoning-beta",
+      "provider": "vercel",
+      "displayName": "Grok 4.20 Beta Reasoning",
+      "family": "grok",
+      "contextWindow": 2000000,
+      "maxOutputTokens": 2000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "spacexai/grok-4.6",
+      "provider": "vercel",
+      "displayName": "Grok 4.6",
+      "family": "grok",
+      "contextWindow": 500000,
+      "maxOutputTokens": 500000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "poolside/laguna-s-2.1-free",
+      "provider": "vercel",
+      "displayName": "Laguna S 2.1 Free",
+      "family": "laguna",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "poolside/laguna-s-2.1",
+      "provider": "vercel",
+      "displayName": "Laguna S 2.1",
+      "family": "laguna",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.2,
+        "cacheReadPerMTok": 0.01
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.5",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4.5",
+      "family": "claude-opus",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 6.25
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.6",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4.6",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 6.25
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.7",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4.7",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 6.25
+      }
+    },
+    {
+      "id": "anthropic/claude-3-haiku",
+      "provider": "vercel",
+      "displayName": "Claude Haiku 3",
+      "family": "claude-haiku",
+      "contextWindow": 200000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 1.25,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.3
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.8",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4.8",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 6.25
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5-fast",
+      "provider": "vercel",
+      "displayName": "Claude Opus 5.5 (Fast)",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 8,
+        "outputPerMTok": 40,
+        "cacheReadPerMTok": 0.4,
+        "cacheWritePerMTok": 10
+      }
+    },
+    {
+      "id": "anthropic/claude-haiku-4.5",
+      "provider": "vercel",
+      "displayName": "Claude Haiku 4.5",
+      "family": "claude-haiku",
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 5,
+        "cacheReadPerMTok": 0.1,
+        "cacheWritePerMTok": 1.25
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5",
+      "provider": "vercel",
+      "displayName": "Claude Opus 5",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 25,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 6.25
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5.5",
+      "provider": "vercel",
+      "displayName": "Claude Sonnet 5.5",
+      "family": "claude-sonnet",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5.1",
+      "provider": "vercel",
+      "displayName": "Claude Fable 5.1",
+      "family": "claude-fable",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheReadPerMTok": 0.25,
+        "cacheWritePerMTok": 12.5
+      }
+    },
+    {
+      "id": "anthropic/claude-fable-5",
+      "provider": "vercel",
+      "displayName": "Claude Fable 5",
+      "family": "claude-fable",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheReadPerMTok": 1,
+        "cacheWritePerMTok": 12.5
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4.8-fast",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4.8 (Fast)",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheReadPerMTok": 1,
+        "cacheWritePerMTok": 12.5
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4",
+      "provider": "vercel",
+      "displayName": "Claude Sonnet 4",
+      "family": "claude-sonnet",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.3,
+        "cacheWritePerMTok": 3.75
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-5",
+      "provider": "vercel",
+      "displayName": "Claude Sonnet 5",
+      "family": "claude-sonnet",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.6",
+      "provider": "vercel",
+      "displayName": "Claude Sonnet 4.6",
+      "family": "claude-sonnet",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.3,
+        "cacheWritePerMTok": 3.75
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5.5",
+      "provider": "vercel",
+      "displayName": "Claude Opus 5.5",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-5-fast",
+      "provider": "vercel",
+      "displayName": "Claude Opus 5 (Fast)",
+      "family": "claude-opus",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheReadPerMTok": 1,
+        "cacheWritePerMTok": 12.5
+      }
+    },
+    {
+      "id": "anthropic/claude-opus-4",
+      "provider": "vercel",
+      "displayName": "Claude Opus 4",
+      "family": "claude-opus",
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 15,
+        "outputPerMTok": 75,
+        "cacheReadPerMTok": 1.5,
+        "cacheWritePerMTok": 18.75
+      }
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "provider": "vercel",
+      "displayName": "Claude Sonnet 4.5",
+      "family": "claude-sonnet",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.3,
+        "cacheWritePerMTok": 3.75
+      }
+    },
+    {
+      "id": "cohere/command-a",
+      "provider": "vercel",
+      "displayName": "Command A",
+      "family": "command",
+      "contextWindow": 256000,
+      "maxOutputTokens": 8000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 10
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-0731",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4 Flash 0731",
+      "family": "deepseek-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.076,
+        "outputPerMTok": 0.153,
+        "cacheReadPerMTok": 0.014
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4.1 Flash",
+      "family": "deepseek-flash",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.007
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-vision-exp",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4 Flash Vision Exp",
+      "family": "deepseek-flash",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2156,
+        "outputPerMTok": 0.6468,
+        "cacheReadPerMTok": 0.0068
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v3.1-terminus",
+      "provider": "vercel",
+      "displayName": "DeepSeek V3.1 Terminus",
+      "family": "deepseek",
+      "contextWindow": 131072,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.27,
+        "outputPerMTok": 1,
+        "cacheReadPerMTok": 0.135
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro-0813",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4 Pro 0813",
+      "family": "deepseek-thinking",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high", "max"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.66,
+        "outputPerMTok": 1.98,
+        "cacheReadPerMTok": 0.066
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v3.2-thinking",
+      "provider": "vercel",
+      "displayName": "DeepSeek V3.2 Thinking",
+      "family": "deepseek-thinking",
+      "contextWindow": 128000,
+      "maxOutputTokens": 8000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.62,
+        "outputPerMTok": 1.85
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v3.1",
+      "provider": "vercel",
+      "displayName": "DeepSeek-V3.1",
+      "family": "deepseek",
+      "contextWindow": 163840,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 0.95,
+        "cacheReadPerMTok": 0.13
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-pro",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high", "max"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.66,
+        "outputPerMTok": 1.98,
+        "cacheReadPerMTok": 0.022
+      }
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash",
+      "provider": "vercel",
+      "displayName": "DeepSeek V4 Flash",
+      "family": "deepseek-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 384000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.13,
+        "outputPerMTok": 0.26,
+        "cacheReadPerMTok": 0.028
+      }
+    },
+    {
+      "id": "quiverai/arrow-2",
+      "provider": "vercel",
+      "displayName": "Arrow 2",
+      "family": null,
+      "contextWindow": 131072,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.4,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "quiverai/arrow-2-telos",
+      "provider": "vercel",
+      "displayName": "Arrow 2 Telos",
+      "family": null,
+      "contextWindow": 131072,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 6,
+        "outputPerMTok": 30,
+        "cacheReadPerMTok": 0.6,
+        "cacheWritePerMTok": 7.5
+      }
+    },
+    {
+      "id": "tencent/hy3",
+      "provider": "vercel",
+      "displayName": "Hy3",
+      "family": "Hy",
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.14,
+        "outputPerMTok": 0.58,
+        "cacheReadPerMTok": 0.035
+      }
+    },
+    {
+      "id": "tencent/hy4-preview",
+      "provider": "vercel",
+      "displayName": "Tencent Hy4 Preview",
+      "family": "Hy",
+      "contextWindow": 1024000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.834,
+        "outputPerMTok": 2.501,
+        "cacheReadPerMTok": 0.042
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling-small",
+      "provider": "vercel",
+      "displayName": "Inkling Small",
+      "family": "ling",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.45,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.1
+      }
+    },
+    {
+      "id": "thinkingmachines/inkling",
+      "provider": "vercel",
+      "displayName": "Inkling",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 4.05,
+        "cacheReadPerMTok": 0.17
+      }
+    },
+    {
+      "id": "meituan/longcat-2.5-preview",
+      "provider": "vercel",
+      "displayName": "LongCat 2.5 Preview",
+      "family": "longcat",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.006
+      }
+    },
+    {
+      "id": "perplexity/sonar",
+      "provider": "vercel",
+      "displayName": "Sonar",
+      "family": "sonar",
+      "contextWindow": 127000,
+      "maxOutputTokens": 8000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 2.5,
+        "cacheWritePerMTok": 0.0625
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.3",
+      "provider": "vercel",
+      "displayName": "Muse Spark 1.3",
+      "family": "muse",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 4.25,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "meta/muse-glimmer-30b",
+      "provider": "vercel",
+      "displayName": "Muse Glimmer 30B",
+      "family": "muse",
+      "contextWindow": 131072,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.35,
+        "outputPerMTok": 1.5,
+        "cacheReadPerMTok": 0.04
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.1",
+      "provider": "vercel",
+      "displayName": "Muse Spark 1.1",
+      "family": "muse",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 4.25,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "meta/llama-3.1-8b",
+      "provider": "vercel",
+      "displayName": "Llama 3.1 8B Instruct",
+      "family": "llama",
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.22,
+        "outputPerMTok": 0.22
+      }
+    },
+    {
+      "id": "meta/llama-3.1-70b",
+      "provider": "vercel",
+      "displayName": "Llama 3.1 70B Instruct",
+      "family": "llama",
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.72,
+        "outputPerMTok": 0.72
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.2",
+      "provider": "vercel",
+      "displayName": "Muse Spark 1.2",
+      "family": "muse",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 4.25,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.2-contributor",
+      "provider": "vercel",
+      "displayName": "Muse Spark 1.2 Contributor",
+      "family": "muse",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.2,
+        "cacheReadPerMTok": 0.002
+      }
+    },
+    {
+      "id": "meta/muse-spark-1.3-contributor",
+      "provider": "vercel",
+      "displayName": "Muse Spark 1.3 Contributor",
+      "family": "muse",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.2,
+        "cacheReadPerMTok": 0.002
+      }
+    },
+    {
+      "id": "meta/llama-3.3-70b",
+      "provider": "vercel",
+      "displayName": "Llama-3.3-70B-Instruct",
+      "family": "llama",
+      "contextWindow": 128000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "meta/llama-4-maverick",
+      "provider": "vercel",
+      "displayName": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+      "family": "llama",
+      "contextWindow": 128000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "meta/llama-4-scout",
+      "provider": "vercel",
+      "displayName": "Llama-4-Scout-17B-16E-Instruct-FP8",
+      "family": "llama",
+      "contextWindow": 128000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "arcee-ai/trinity-large-thinking",
+      "provider": "vercel",
+      "displayName": "Trinity Large Thinking",
+      "family": "trinity",
+      "contextWindow": 262100,
+      "maxOutputTokens": 80000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 0.9
+      }
+    },
+    {
+      "id": "alibaba/qwen3.5-flash",
+      "provider": "vercel",
+      "displayName": "Qwen 3.5 Flash",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.4,
+        "cacheReadPerMTok": 0.01,
+        "cacheWritePerMTok": 0.125
+      }
+    },
+    {
+      "id": "alibaba/qwen-3-32b",
+      "provider": "vercel",
+      "displayName": "Qwen 3.32B",
+      "family": "qwen",
+      "contextWindow": 128000,
+      "maxOutputTokens": 8192,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.16,
+        "outputPerMTok": 0.64
+      }
+    },
+    {
+      "id": "alibaba/qwen3.7-max",
+      "provider": "vercel",
+      "displayName": "Qwen 3.7 Max",
+      "family": "qwen",
+      "contextWindow": 991000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 7.5,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 3.125
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-27b",
+      "provider": "vercel",
+      "displayName": "Qwen3.8 27B",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.5,
+        "outputPerMTok": 3,
+        "cacheReadPerMTok": 0.1,
+        "cacheWritePerMTok": 0.625
+      }
+    },
+    {
+      "id": "alibaba/qwen3-vl-thinking",
+      "provider": "vercel",
+      "displayName": "Qwen3 VL Thinking",
+      "family": "qwen",
+      "contextWindow": 131072,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 4
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-2.4t-a95b",
+      "provider": "vercel",
+      "displayName": "Qwen3.8 2.4T A95B",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "alibaba/qwen3-next-80b-a3b-thinking",
+      "provider": "vercel",
+      "displayName": "Qwen3 Next 80B A3B Thinking",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 1.2
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-max",
+      "provider": "vercel",
+      "displayName": "Qwen 3.8 Max",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["low", "medium", "xhigh"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "alibaba/qwen3-coder-next",
+      "provider": "vercel",
+      "displayName": "Qwen3 Coder Next",
+      "family": "qwen",
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "pricing": {
+        "inputPerMTok": 0.5,
+        "outputPerMTok": 1.2
+      }
+    },
+    {
+      "id": "alibaba/qwen3-vl-instruct",
+      "provider": "vercel",
+      "displayName": "Qwen3 VL Instruct",
+      "family": "qwen",
+      "contextWindow": 131072,
+      "maxOutputTokens": 129024,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 1.6
+      }
+    },
+    {
+      "id": "alibaba/qwen3-coder",
+      "provider": "vercel",
+      "displayName": "Qwen3 Coder 480B A35B Instruct",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "pricing": {
+        "inputPerMTok": 1.5,
+        "outputPerMTok": 7.5,
+        "cacheReadPerMTok": 0.3
+      }
+    },
+    {
+      "id": "alibaba/qwen3.5-plus",
+      "provider": "vercel",
+      "displayName": "Qwen 3.5 Plus",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.04,
+        "cacheWritePerMTok": 0.5
+      }
+    },
+    {
+      "id": "alibaba/qwen-3.6-max-preview",
+      "provider": "vercel",
+      "displayName": "Qwen 3.6 Max Preview",
+      "family": "qwen",
+      "contextWindow": 240000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.3,
+        "outputPerMTok": 7.8,
+        "cacheReadPerMTok": 0.13,
+        "cacheWritePerMTok": 1.625
+      }
+    },
+    {
+      "id": "alibaba/qwen-3-14b",
+      "provider": "vercel",
+      "displayName": "Qwen3-14B",
+      "family": "qwen",
+      "contextWindow": 40960,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.12,
+        "outputPerMTok": 0.24
+      }
+    },
+    {
+      "id": "alibaba/qwen3.7-flash",
+      "provider": "vercel",
+      "displayName": "Qwen 3.7 Flash",
+      "family": "qwen",
+      "contextWindow": 991000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.03,
+        "outputPerMTok": 0.13,
+        "cacheReadPerMTok": 0.006,
+        "cacheWritePerMTok": 0.038
+      }
+    },
+    {
+      "id": "alibaba/qwen3-max",
+      "provider": "vercel",
+      "displayName": "Qwen3 Max",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 1.2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.24
+      }
+    },
+    {
+      "id": "alibaba/qwen-3-30b",
+      "provider": "vercel",
+      "displayName": "Qwen3-30B-A3B",
+      "family": "qwen",
+      "contextWindow": 40960,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.12,
+        "outputPerMTok": 0.5
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-omni-flash",
+      "provider": "vercel",
+      "displayName": "Qwen 3.8 Omni Flash",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.47,
+        "cacheReadPerMTok": 0.016
+      }
+    },
+    {
+      "id": "alibaba/qwen3-coder-30b-a3b",
+      "provider": "vercel",
+      "displayName": "Qwen 3 Coder 30B A3B Instruct",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 8192,
+      "toolCall": true,
+      "reasoning": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.6
+      }
+    },
+    {
+      "id": "alibaba/qwen3-max-preview",
+      "provider": "vercel",
+      "displayName": "Qwen3 Max Preview",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 1.2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.24
+      }
+    },
+    {
+      "id": "alibaba/qwen3-next-80b-a3b-instruct",
+      "provider": "vercel",
+      "displayName": "Qwen3 Next 80B A3B Instruct",
+      "family": "qwen",
+      "contextWindow": 262114,
+      "maxOutputTokens": 262114,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 1.2
+      }
+    },
+    {
+      "id": "alibaba/qwen3-max-thinking",
+      "provider": "vercel",
+      "displayName": "Qwen 3 Max Thinking",
+      "family": "qwen",
+      "contextWindow": 256000,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.24
+      }
+    },
+    {
+      "id": "alibaba/qwen3-coder-plus",
+      "provider": "vercel",
+      "displayName": "Qwen3 Coder Plus",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 1,
+        "outputPerMTok": 5,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-max-prime",
+      "provider": "vercel",
+      "displayName": "Qwen 3.8 Max Prime",
+      "family": "qwen3.8-max",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["low", "medium", "xhigh"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 12,
+        "cacheReadPerMTok": 0.5,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "alibaba/qwen3-235b-a22b-thinking",
+      "provider": "vercel",
+      "displayName": "Qwen3 235B A22B Thinking 2507",
+      "family": "qwen",
+      "contextWindow": 131072,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 4
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-flash",
+      "provider": "vercel",
+      "displayName": "Qwen 3.8 Flash",
+      "family": "qwen",
+      "contextWindow": 991000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["low", "medium", "xhigh"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.47,
+        "cacheReadPerMTok": 0.016,
+        "cacheWritePerMTok": 0.2
+      }
+    },
+    {
+      "id": "alibaba/qwen3.6-27b",
+      "provider": "vercel",
+      "displayName": "Qwen 3.6 27B",
+      "family": "qwen",
+      "contextWindow": 256000,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 3.6
+      }
+    },
+    {
+      "id": "alibaba/qwen-3-235b",
+      "provider": "vercel",
+      "displayName": "Qwen3 235B A22B Instruct 2507",
+      "family": "qwen",
+      "contextWindow": 262144,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.22,
+        "outputPerMTok": 0.88
+      }
+    },
+    {
+      "id": "alibaba/qwen3.6-plus",
+      "provider": "vercel",
+      "displayName": "Qwen 3.6 Plus",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.5,
+        "outputPerMTok": 3,
+        "cacheReadPerMTok": 0.05,
+        "cacheWritePerMTok": 0.625
+      }
+    },
+    {
+      "id": "alibaba/qwen3.7-plus",
+      "provider": "vercel",
+      "displayName": "Qwen 3.7 Plus",
+      "family": "qwen",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 1.6,
+        "cacheReadPerMTok": 0.08,
+        "cacheWritePerMTok": 0.5
+      }
+    },
+    {
+      "id": "alibaba/qwen3.8-max-0902",
+      "provider": "vercel",
+      "displayName": "Qwen3.8 Max 0902",
+      "family": "qwen",
+      "contextWindow": 991000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["low", "medium", "xhigh"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.25,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "mixedbread/toast-1",
+      "provider": "vercel",
+      "displayName": "Toast 1",
+      "family": null,
+      "contextWindow": 131000,
+      "maxOutputTokens": 4000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 0.72,
+        "cacheReadPerMTok": 0.036
+      }
+    },
+    {
+      "id": "bytedance/seed-1.8",
+      "provider": "vercel",
+      "displayName": "Seed 1.8",
+      "family": "seed",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "bytedance/seed-2.1-turbo",
+      "provider": "vercel",
+      "displayName": "Seed 2.1 Turbo",
+      "family": "seed",
+      "contextWindow": 262144,
+      "maxOutputTokens": 262144,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.5,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.1
+      }
+    },
+    {
+      "id": "bytedance/seed-1.6",
+      "provider": "vercel",
+      "displayName": "Seed 1.6",
+      "family": "seed",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "google/gemma-4-31b-it",
+      "provider": "vercel",
+      "displayName": "Gemma 4 31B IT",
+      "family": "gemma",
+      "contextWindow": 262144,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.14,
+        "outputPerMTok": 0.4
+      }
+    },
+    {
+      "id": "google/gemini-3.6-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 3.6 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.75,
+        "outputPerMTok": 3.75,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "google/gemma-4-26b-a4b-it",
+      "provider": "vercel",
+      "displayName": "Gemma 4 26B A4B IT",
+      "family": "gemma",
+      "contextWindow": 262144,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.6,
+        "cacheReadPerMTok": 0.015
+      }
+    },
+    {
+      "id": "google/gemini-3.5-flash-lite",
+      "provider": "vercel",
+      "displayName": "Gemini 3.5 Flash Lite",
+      "family": "gemini-flash-lite",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "google/gemini-3.1-pro-preview",
+      "provider": "vercel",
+      "displayName": "Gemini 3.1 Pro Preview",
+      "family": "gemini-pro",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 12,
+        "cacheReadPerMTok": 0.2
+      }
+    },
+    {
+      "id": "google/gemini-3-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 3 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.5,
+        "outputPerMTok": 3,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "google/gemini-3.5-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 3.5 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.5,
+        "outputPerMTok": 9,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "google/gemini-3.7-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 3.7 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65535,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.75,
+        "outputPerMTok": 3.75,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "google/gemini-3.8-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 3.8 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65535,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.75,
+        "outputPerMTok": 3.75,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "google/gemini-2.5-flash-lite",
+      "provider": "vercel",
+      "displayName": "Gemini 2.5 Flash Lite",
+      "family": "gemini-flash-lite",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65535,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.4,
+        "cacheReadPerMTok": 0.01
+      }
+    },
+    {
+      "id": "google/gemini-3.1-flash-lite",
+      "provider": "vercel",
+      "displayName": "Gemini 3.1 Flash Lite",
+      "family": "gemini-flash-lite",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 1.5,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "google/gemini-2.5-flash",
+      "provider": "vercel",
+      "displayName": "Gemini 2.5 Flash",
+      "family": "gemini-flash",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 2.5,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "provider": "vercel",
+      "displayName": "Gemini 2.5 Pro",
+      "family": "gemini-pro",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.125
+      }
+    },
+    {
+      "id": "fireworks/ember-1",
+      "provider": "vercel",
+      "displayName": "Ember-1",
+      "family": null,
+      "contextWindow": 1048576,
+      "maxOutputTokens": 1048576,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.3
+      }
+    },
+    {
+      "id": "sakana/fugu-max",
+      "provider": "vercel",
+      "displayName": "Fugu Max",
+      "family": "fugu",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 6,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "sakana/fugu-ultra-v2",
+      "provider": "vercel",
+      "displayName": "Fugu Ultra v2",
+      "family": "fugu",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 30,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "sakana/namazu",
+      "provider": "vercel",
+      "displayName": "Sakana Namazu",
+      "family": null,
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.95,
+        "outputPerMTok": 4,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "sakana/fugu-ultra",
+      "provider": "vercel",
+      "displayName": "Fugu Ultra",
+      "family": "fugu",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 1000000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 30,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.1-flash-free",
+      "provider": "vercel",
+      "displayName": "Ling 3.1 Flash (Free)",
+      "family": "ling",
+      "contextWindow": 262144,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash",
+      "provider": "vercel",
+      "displayName": "Ling 3.0 Flash",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.021,
+        "outputPerMTok": 0.063,
+        "cacheReadPerMTok": 0.0042
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.1-flash",
+      "provider": "vercel",
+      "displayName": "Ling 3.1 Flash",
+      "family": "ling",
+      "contextWindow": 262144,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-sante",
+      "provider": "vercel",
+      "displayName": "Ling 3.0 Flash Sante",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-vl",
+      "provider": "vercel",
+      "displayName": "Ling 3.0 Flash VL",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.075,
+        "outputPerMTok": 0.22,
+        "cacheReadPerMTok": 0.015
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-fin",
+      "provider": "vercel",
+      "displayName": "Ling 3.0 Flash Fin",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.075,
+        "outputPerMTok": 0.22,
+        "cacheReadPerMTok": 0.015
+      }
+    },
+    {
+      "id": "inclusionai/ling-3.0-flash-sante-free",
+      "provider": "vercel",
+      "displayName": "Ling 3.0 Flash Sante (Free)",
+      "family": "ling",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0,
+        "outputPerMTok": 0
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3",
+      "provider": "vercel",
+      "displayName": "Kimi K3",
+      "family": "kimi-k3",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "high", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.3
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k3-fast",
+      "provider": "vercel",
+      "displayName": "Kimi K3 Fast",
+      "family": "kimi-k3",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4.5,
+        "outputPerMTok": 22.5,
+        "cacheReadPerMTok": 0.45
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code-highspeed",
+      "provider": "vercel",
+      "displayName": "Kimi K2.7 Code High Speed",
+      "family": "kimi-k2",
+      "contextWindow": 262144,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.9,
+        "outputPerMTok": 8,
+        "cacheReadPerMTok": 0.38
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.6",
+      "provider": "vercel",
+      "displayName": "Kimi K2.6",
+      "family": "kimi-k2",
+      "contextWindow": 262000,
+      "maxOutputTokens": 262000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.95,
+        "outputPerMTok": 4,
+        "cacheReadPerMTok": 0.16
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2-thinking",
+      "provider": "vercel",
+      "displayName": "Kimi K2 Thinking",
+      "family": "kimi-thinking",
+      "contextWindow": 216144,
+      "maxOutputTokens": 216144,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.47,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.141
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.5",
+      "provider": "vercel",
+      "displayName": "Kimi K2.5",
+      "family": "kimi-k2",
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 3
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2",
+      "provider": "vercel",
+      "displayName": "Kimi K2 Instruct",
+      "family": "kimi-k2",
+      "contextWindow": 131072,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.57,
+        "outputPerMTok": 2.3
+      }
+    },
+    {
+      "id": "moonshotai/kimi-k2.7-code",
+      "provider": "vercel",
+      "displayName": "Kimi K2.7 Code",
+      "family": "kimi-k2",
+      "contextWindow": 256000,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.95,
+        "outputPerMTok": 4,
+        "cacheReadPerMTok": 0.19
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3.5-lightning",
+      "provider": "vercel",
+      "displayName": "Nemotron 3.5 Lightning 30B",
+      "family": "nemotron",
+      "contextWindow": 262144,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        },
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.05,
+        "outputPerMTok": 0.2,
+        "cacheReadPerMTok": 0.01
+      }
+    },
+    {
+      "id": "nvidia/nemotron-nano-9b-v2",
+      "provider": "vercel",
+      "displayName": "Nvidia Nemotron Nano 9B V2",
+      "family": "nemotron",
+      "contextWindow": 131072,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.06,
+        "outputPerMTok": 0.23
+      }
+    },
+    {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "provider": "vercel",
+      "displayName": "Nemotron 3 Ultra",
+      "family": "nemotron",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 65000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.12
+      }
+    },
+    {
+      "id": "nvidia/nemotron-nano-12b-v2-vl",
+      "provider": "vercel",
+      "displayName": "Nvidia Nemotron Nano 12B V2 VL",
+      "family": "nemotron",
+      "contextWindow": 131072,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 0.6
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro",
+      "provider": "vercel",
+      "displayName": "MiMo V2.6 Pro",
+      "family": "mimo",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.435,
+        "outputPerMTok": 0.87,
+        "cacheReadPerMTok": 0.0036
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.5",
+      "provider": "vercel",
+      "displayName": "MiMo M2.5",
+      "family": "mimo",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 131100,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.14,
+        "outputPerMTok": 0.28,
+        "cacheReadPerMTok": 0.0028
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+      "provider": "vercel",
+      "displayName": "MiMo V2.6 Pro UltraSpeed",
+      "family": "mimo",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4.35,
+        "outputPerMTok": 8.7,
+        "cacheReadPerMTok": 0.036
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.5-pro",
+      "provider": "vercel",
+      "displayName": "MiMo V2.5 Pro",
+      "family": "mimo",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "toggle"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.435,
+        "outputPerMTok": 0.87,
+        "cacheReadPerMTok": 0.0036
+      }
+    },
+    {
+      "id": "xiaomi/mimo-v2.6-flash",
+      "provider": "vercel",
+      "displayName": "MiMo V2.6 Flash",
+      "family": "mimo",
+      "contextWindow": 1048576,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.14,
+        "outputPerMTok": 0.28,
+        "cacheReadPerMTok": 0.0028
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.5",
+      "provider": "vercel",
+      "displayName": "MiniMax M2.5",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.1-lightning",
+      "provider": "vercel",
+      "displayName": "MiniMax M2.1 Lightning",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.7",
+      "provider": "vercel",
+      "displayName": "Minimax M2.7",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.06,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m3",
+      "provider": "vercel",
+      "displayName": "MiniMax M3",
+      "family": "minimax",
+      "contextWindow": 512000,
+      "maxOutputTokens": 512000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.06
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.7-highspeed",
+      "provider": "vercel",
+      "displayName": "MiniMax M2.7 High Speed",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131100,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.06,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.5-highspeed",
+      "provider": "vercel",
+      "displayName": "MiniMax M2.5 High Speed",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.6,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m2.1",
+      "provider": "vercel",
+      "displayName": "MiniMax M2.1",
+      "family": "minimax",
+      "contextWindow": 204800,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "minimax/minimax-m2",
+      "provider": "vercel",
+      "displayName": "MiniMax M2",
+      "family": "minimax",
+      "contextWindow": 205000,
+      "maxOutputTokens": 196608,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "budget_tokens"
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.03,
+        "cacheWritePerMTok": 0.375
+      }
+    },
+    {
+      "id": "stepfun/step-3.5-flash",
+      "provider": "vercel",
+      "displayName": "StepFun 3.5 Flash",
+      "family": null,
+      "contextWindow": 262114,
+      "maxOutputTokens": 262114,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.09,
+        "outputPerMTok": 0.3,
+        "cacheReadPerMTok": 0.02
+      }
+    },
+    {
+      "id": "stepfun/step-3.7-flash",
+      "provider": "vercel",
+      "displayName": "Step 3.7 Flash",
+      "family": null,
+      "contextWindow": 256000,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 1.15,
+        "cacheReadPerMTok": 0.04
+      }
+    },
+    {
+      "id": "inception/mercury-coder-small",
+      "provider": "vercel",
+      "displayName": "Mercury Coder Small Beta",
+      "family": "mercury",
+      "contextWindow": 32000,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 1
+      }
+    },
+    {
+      "id": "inception/mercury-2.5",
+      "provider": "vercel",
+      "displayName": "Mercury 2.5",
+      "family": "mercury",
+      "contextWindow": 260000,
+      "maxOutputTokens": 65536,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.04,
+        "outputPerMTok": 0.15,
+        "cacheReadPerMTok": 0.004
+      }
+    },
+    {
+      "id": "inception/mercury-2",
+      "provider": "vercel",
+      "displayName": "Mercury 2",
+      "family": "mercury",
+      "contextWindow": 128000,
+      "maxOutputTokens": 50000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 0.75,
+        "cacheReadPerMTok": 0.024999999999999998
+      }
+    },
+    {
+      "id": "amazon/nova-lite",
+      "provider": "vercel",
+      "displayName": "Nova Lite",
+      "family": "nova-lite",
+      "contextWindow": 300000,
+      "maxOutputTokens": 10000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.06,
+        "outputPerMTok": 0.24,
+        "cacheReadPerMTok": 0.015,
+        "cacheWritePerMTok": 0.06
+      }
+    },
+    {
+      "id": "amazon/nova-pro",
+      "provider": "vercel",
+      "displayName": "Nova Pro",
+      "family": "nova-pro",
+      "contextWindow": 300000,
+      "maxOutputTokens": 10000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.8,
+        "outputPerMTok": 3.2,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 0.8
+      }
+    },
+    {
+      "id": "amazon/nova-micro",
+      "provider": "vercel",
+      "displayName": "Nova Micro",
+      "family": "nova-micro",
+      "contextWindow": 128000,
+      "maxOutputTokens": 10000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.035,
+        "outputPerMTok": 0.14,
+        "cacheReadPerMTok": 0.00875,
+        "cacheWritePerMTok": 0.035
+      }
+    },
+    {
+      "id": "mistral/mistral-nemo",
+      "provider": "vercel",
+      "displayName": "Mistral Nemo",
+      "family": "mistral-nemo",
+      "contextWindow": 60288,
+      "maxOutputTokens": 16000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.04,
+        "outputPerMTok": 0.17
+      }
+    },
+    {
+      "id": "mistral/mistral-medium-3.5",
+      "provider": "vercel",
+      "displayName": "Mistral Medium Latest",
+      "family": "mistral-medium",
+      "contextWindow": 262144,
+      "maxOutputTokens": 256000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.5,
+        "outputPerMTok": 7.5,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "mistral/mistral-small",
+      "provider": "vercel",
+      "displayName": "Mistral Small (latest)",
+      "family": "mistral-small",
+      "contextWindow": 262144,
+      "maxOutputTokens": 4000,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.6,
+        "cacheReadPerMTok": 0.015
+      }
+    },
+    {
+      "id": "mistral/codestral",
+      "provider": "vercel",
+      "displayName": "Codestral (latest)",
+      "family": "codestral",
+      "contextWindow": 256000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.3,
+        "outputPerMTok": 0.9,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "mistral/ministral-8b",
+      "provider": "vercel",
+      "displayName": "Ministral 8B (latest)",
+      "family": "ministral",
+      "contextWindow": 128000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.1
+      }
+    },
+    {
+      "id": "mistral/ministral-3b",
+      "provider": "vercel",
+      "displayName": "Ministral 3B (latest)",
+      "family": "ministral",
+      "contextWindow": 128000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": false,
+      "pricing": {
+        "inputPerMTok": 0.04,
+        "outputPerMTok": 0.04
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-mini-fast",
+      "provider": "vercel",
+      "displayName": "GPT-4.1 mini (Fast)",
+      "family": "gpt-mini",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.7,
+        "outputPerMTok": 2.8,
+        "cacheReadPerMTok": 0.175
+      }
+    },
+    {
+      "id": "openai/o3-fast",
+      "provider": "vercel",
+      "displayName": "o3 (Fast)",
+      "family": "o",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3.5,
+        "outputPerMTok": 14,
+        "cacheReadPerMTok": 0.875
+      }
+    },
+    {
+      "id": "openai/gpt-5.4",
+      "provider": "vercel",
+      "displayName": "GPT 5.4",
+      "family": "gpt",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 15,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-pro",
+      "provider": "vercel",
+      "displayName": "GPT 5.4 Pro",
+      "family": "gpt-pro",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 30,
+        "outputPerMTok": 180
+      }
+    },
+    {
+      "id": "openai/gpt-oss-safeguard-120b",
+      "provider": "vercel",
+      "displayName": "GPT OSS Safeguard 120B",
+      "family": "gpt-oss",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.6
+      }
+    },
+    {
+      "id": "openai/gpt-5.2-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.2 (Fast)",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3.5,
+        "outputPerMTok": 28,
+        "cacheReadPerMTok": 0.35
+      }
+    },
+    {
+      "id": "openai/gpt-5.5-pro",
+      "provider": "vercel",
+      "displayName": "GPT 5.5 Pro",
+      "family": "gpt-pro",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 30,
+        "outputPerMTok": 180
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-nano",
+      "provider": "vercel",
+      "displayName": "GPT 5.4 Nano",
+      "family": "gpt-nano",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 1.25,
+        "cacheReadPerMTok": 0.02
+      }
+    },
+    {
+      "id": "openai/gpt-5.2-codex",
+      "provider": "vercel",
+      "displayName": "GPT-5.2-Codex",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.75,
+        "outputPerMTok": 14,
+        "cacheReadPerMTok": 0.175
+      }
+    },
+    {
+      "id": "openai/gpt-4o-fast",
+      "provider": "vercel",
+      "displayName": "GPT-4o (Fast)",
+      "family": "gpt",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4.25,
+        "outputPerMTok": 17,
+        "cacheReadPerMTok": 2.125
+      }
+    },
+    {
+      "id": "openai/gpt-5.1-codex",
+      "provider": "vercel",
+      "displayName": "GPT-5.1-Codex",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.13
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol-fast",
+      "provider": "vercel",
+      "displayName": "GPT-6.1 Sol (Fast)",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-nano-fast",
+      "provider": "vercel",
+      "displayName": "GPT-4.1 nano (Fast)",
+      "family": "gpt-nano",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 0.8,
+        "cacheReadPerMTok": 0.05
+      }
+    },
+    {
+      "id": "openai/gpt-5-codex",
+      "provider": "vercel",
+      "displayName": "GPT-5-Codex",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.13
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-luna-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Luna (Fast)",
+      "family": "gpt-luna",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 2.4,
+        "cacheReadPerMTok": 0.04,
+        "cacheWritePerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-6-astra-fast",
+      "provider": "vercel",
+      "displayName": "GPT-6 Astra (Fast)",
+      "family": "gpt-astra",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 20,
+        "outputPerMTok": 100,
+        "cacheReadPerMTok": 2,
+        "cacheWritePerMTok": 25
+      }
+    },
+    {
+      "id": "openai/gpt-5.2-pro",
+      "provider": "vercel",
+      "displayName": "GPT 5.2 ",
+      "family": "gpt-pro",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 21,
+        "outputPerMTok": 168
+      }
+    },
+    {
+      "id": "openai/gpt-5.1-thinking-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.1 Thinking (Fast)",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "openai/gpt-5.3-codex",
+      "provider": "vercel",
+      "displayName": "GPT 5.3 Codex",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.75,
+        "outputPerMTok": 14,
+        "cacheReadPerMTok": 0.175
+      }
+    },
+    {
+      "id": "openai/gpt-5.3-codex-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.3 Codex (Fast)",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3.5,
+        "outputPerMTok": 28,
+        "cacheReadPerMTok": 0.35
+      }
+    },
+    {
+      "id": "openai/gpt-5.5-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.5 (Fast)",
+      "family": "gpt",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 12.5,
+        "outputPerMTok": 75,
+        "cacheReadPerMTok": 1.25
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.4 (Fast)",
+      "family": "gpt",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 30,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-sol-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Sol (Fast)",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 8,
+        "outputPerMTok": 40,
+        "cacheReadPerMTok": 0.8,
+        "cacheWritePerMTok": 10
+      }
+    },
+    {
+      "id": "openai/o4-mini-fast",
+      "provider": "vercel",
+      "displayName": "o4-mini (Fast)",
+      "family": "o-mini",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 8,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-5-pro",
+      "provider": "vercel",
+      "displayName": "GPT-5 pro",
+      "family": "gpt-pro",
+      "contextWindow": 400000,
+      "maxOutputTokens": 272000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 15,
+        "outputPerMTok": 120
+      }
+    },
+    {
+      "id": "openai/gpt-6.1-sol",
+      "provider": "vercel",
+      "displayName": "GPT-6.1 Sol",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.1,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "openai/gpt-5.1-thinking",
+      "provider": "vercel",
+      "displayName": "GPT 5.1 Thinking",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.125
+      }
+    },
+    {
+      "id": "openai/gpt-6-astra",
+      "provider": "vercel",
+      "displayName": "GPT-6 Astra",
+      "family": "gpt-astra",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 50,
+        "cacheReadPerMTok": 1,
+        "cacheWritePerMTok": 12.5
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-mini-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.4 Mini (Fast)",
+      "family": "gpt-mini",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.5,
+        "outputPerMTok": 9,
+        "cacheReadPerMTok": 0.15
+      }
+    },
+    {
+      "id": "openai/gpt-5-mini-fast",
+      "provider": "vercel",
+      "displayName": "GPT-5 mini (Fast)",
+      "family": "gpt-mini",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.45,
+        "outputPerMTok": 3.6,
+        "cacheReadPerMTok": 0.045
+      }
+    },
+    {
+      "id": "openai/o3-pro",
+      "provider": "vercel",
+      "displayName": "o3 Pro",
+      "family": "o-pro",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 20,
+        "outputPerMTok": 80
+      }
+    },
+    {
+      "id": "openai/gpt-oss-20b",
+      "provider": "vercel",
+      "displayName": "GPT OSS 20B",
+      "family": "gpt-oss",
+      "contextWindow": 131072,
+      "maxOutputTokens": 8192,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.03,
+        "outputPerMTok": 0.14
+      }
+    },
+    {
+      "id": "openai/gpt-oss-safeguard-20b",
+      "provider": "vercel",
+      "displayName": "gpt-oss-safeguard-20b",
+      "family": "gpt-oss",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.07,
+        "outputPerMTok": 0.2
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-terra-fast",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Terra (Fast)",
+      "family": "gpt-terra",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 24,
+        "cacheReadPerMTok": 0.4,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "openai/gpt-5.4-mini",
+      "provider": "vercel",
+      "displayName": "GPT 5.4 Mini",
+      "family": "gpt-mini",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.75,
+        "outputPerMTok": 4.5,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-luna",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Luna",
+      "family": "gpt-luna",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 1.2,
+        "cacheReadPerMTok": 0.02,
+        "cacheWritePerMTok": 0.25
+      }
+    },
+    {
+      "id": "openai/gpt-5.1-codex-max",
+      "provider": "vercel",
+      "displayName": "GPT 5.1 Codex Max",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.125
+      }
+    },
+    {
+      "id": "openai/gpt-5.2",
+      "provider": "vercel",
+      "displayName": "GPT-5.2",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.75,
+        "outputPerMTok": 14,
+        "cacheReadPerMTok": 0.175
+      }
+    },
+    {
+      "id": "openai/gpt-5.5",
+      "provider": "vercel",
+      "displayName": "GPT 5.5",
+      "family": "gpt",
+      "contextWindow": 1000000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 5,
+        "outputPerMTok": 30,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol-fast",
+      "provider": "vercel",
+      "displayName": "GPT-6 Sol (Fast)",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.4,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna-fast",
+      "provider": "vercel",
+      "displayName": "GPT-6 Luna (Fast)",
+      "family": "gpt-luna",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.2,
+        "outputPerMTok": 1,
+        "cacheReadPerMTok": 0.02,
+        "cacheWritePerMTok": 0.25
+      }
+    },
+    {
+      "id": "openai/gpt-5-fast",
+      "provider": "vercel",
+      "displayName": "GPT-5 (Fast)",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.25
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-fast",
+      "provider": "vercel",
+      "displayName": "GPT-4.1 (Fast)",
+      "family": "gpt",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 3.5,
+        "outputPerMTok": 14,
+        "cacheReadPerMTok": 0.875
+      }
+    },
+    {
+      "id": "openai/gpt-6-luna",
+      "provider": "vercel",
+      "displayName": "GPT-6 Luna",
+      "family": "gpt-luna",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.5,
+        "cacheReadPerMTok": 0.01,
+        "cacheWritePerMTok": 0.125
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-terra",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Terra",
+      "family": "gpt-terra",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 12,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "openai/gpt-oss-120b",
+      "provider": "vercel",
+      "displayName": "GPT OSS 120B",
+      "family": "gpt-oss",
+      "contextWindow": 131072,
+      "maxOutputTokens": 131072,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.5,
+        "cacheReadPerMTok": 0.1
+      }
+    },
+    {
+      "id": "openai/gpt-5.1-codex-mini",
+      "provider": "vercel",
+      "displayName": "GPT-5.1 Codex mini",
+      "family": "gpt-codex",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.03
+      }
+    },
+    {
+      "id": "openai/gpt-5.6-sol",
+      "provider": "vercel",
+      "displayName": "GPT 5.6 Sol",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 4,
+        "outputPerMTok": 20,
+        "cacheReadPerMTok": 0.4,
+        "cacheWritePerMTok": 5
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini-fast",
+      "provider": "vercel",
+      "displayName": "GPT-4o mini (Fast)",
+      "family": "gpt-mini",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 1,
+        "cacheReadPerMTok": 0.125
+      }
+    },
+    {
+      "id": "openai/gpt-6-sol",
+      "provider": "vercel",
+      "displayName": "GPT-6 Sol",
+      "family": "gpt-sol",
+      "contextWindow": 1050000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["none", "low", "medium", "high", "xhigh", "max"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.2,
+        "cacheWritePerMTok": 2.5
+      }
+    },
+    {
+      "id": "openai/gpt-5",
+      "provider": "vercel",
+      "displayName": "GPT-5",
+      "family": "gpt",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.25,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 0.125
+      }
+    },
+    {
+      "id": "openai/o3",
+      "provider": "vercel",
+      "displayName": "o3",
+      "family": "o",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 8,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-4-turbo",
+      "provider": "vercel",
+      "displayName": "GPT-4 Turbo",
+      "family": "gpt",
+      "contextWindow": 128000,
+      "maxOutputTokens": 4096,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 10,
+        "outputPerMTok": 30
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-mini",
+      "provider": "vercel",
+      "displayName": "GPT-4.1 mini",
+      "family": "gpt-mini",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.4,
+        "outputPerMTok": 1.6,
+        "cacheReadPerMTok": 0.1
+      }
+    },
+    {
+      "id": "openai/gpt-4.1",
+      "provider": "vercel",
+      "displayName": "GPT-4.1",
+      "family": "gpt",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2,
+        "outputPerMTok": 8,
+        "cacheReadPerMTok": 0.5
+      }
+    },
+    {
+      "id": "openai/gpt-4o-mini",
+      "provider": "vercel",
+      "displayName": "GPT-4o mini",
+      "family": "gpt-mini",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.15,
+        "outputPerMTok": 0.6,
+        "cacheReadPerMTok": 0.075
+      }
+    },
+    {
+      "id": "openai/o1",
+      "provider": "vercel",
+      "displayName": "o1",
+      "family": "o",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 15,
+        "outputPerMTok": 60,
+        "cacheReadPerMTok": 7.5
+      }
+    },
+    {
+      "id": "openai/gpt-5-nano",
+      "provider": "vercel",
+      "displayName": "GPT-5 Nano",
+      "family": "gpt-nano",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.05,
+        "outputPerMTok": 0.4,
+        "cacheReadPerMTok": 0.005
+      }
+    },
+    {
+      "id": "openai/gpt-4.1-nano",
+      "provider": "vercel",
+      "displayName": "GPT-4.1 nano",
+      "family": "gpt-nano",
+      "contextWindow": 1047576,
+      "maxOutputTokens": 32768,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.1,
+        "outputPerMTok": 0.4,
+        "cacheReadPerMTok": 0.025
+      }
+    },
+    {
+      "id": "openai/o3-mini",
+      "provider": "vercel",
+      "displayName": "o3-mini",
+      "family": "o-mini",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "pricing": {
+        "inputPerMTok": 1.1,
+        "outputPerMTok": 4.4,
+        "cacheReadPerMTok": 0.55
+      }
+    },
+    {
+      "id": "openai/o4-mini",
+      "provider": "vercel",
+      "displayName": "o4-mini",
+      "family": "o-mini",
+      "contextWindow": 200000,
+      "maxOutputTokens": 100000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 1.1,
+        "outputPerMTok": 4.4,
+        "cacheReadPerMTok": 0.275
+      }
+    },
+    {
+      "id": "openai/gpt-5-mini",
+      "provider": "vercel",
+      "displayName": "GPT-5 Mini",
+      "family": "gpt-mini",
+      "contextWindow": 400000,
+      "maxOutputTokens": 128000,
+      "toolCall": true,
+      "reasoning": true,
+      "reasoningOptions": [
+        {
+          "type": "effort",
+          "values": ["minimal", "low", "medium", "high"]
+        }
+      ],
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 0.25,
+        "outputPerMTok": 2,
+        "cacheReadPerMTok": 0.025
+      }
+    },
+    {
+      "id": "openai/gpt-4o",
+      "provider": "vercel",
+      "displayName": "GPT-4o",
+      "family": "gpt",
+      "contextWindow": 128000,
+      "maxOutputTokens": 16384,
+      "toolCall": true,
+      "reasoning": false,
+      "acceptsImageInput": true,
+      "pricing": {
+        "inputPerMTok": 2.5,
+        "outputPerMTok": 10,
+        "cacheReadPerMTok": 1.25
+      }
     }
   ]
 }

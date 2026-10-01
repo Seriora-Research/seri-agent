@@ -293,3 +293,26 @@ describe("buildReasoningProviderOptions for xai", () => {
     });
   });
 });
+
+describe("buildReasoningProviderOptions for vercel", () => {
+  test("keys the enabled shape on gateway, not vercel", () => {
+    expect(buildReasoningProviderOptions("vercel", "high")).toEqual({
+      gateway: { reasoningEffort: "high" },
+    });
+  });
+
+  test("maps the generic on tier to medium", () => {
+    expect(buildReasoningProviderOptions("vercel", "on")).toEqual({
+      gateway: { reasoningEffort: "medium" },
+    });
+  });
+
+  test("keys the disabled shape on gateway too", () => {
+    expect(buildReasoningProviderOptions("vercel", "off")).toEqual({
+      gateway: { reasoningEffort: "none" },
+    });
+    expect(buildReasoningProviderOptions("vercel", "none")).toEqual({
+      gateway: { reasoningEffort: "none" },
+    });
+  });
+});

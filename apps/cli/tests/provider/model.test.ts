@@ -205,3 +205,35 @@ describe("getModel for provider: xai", () => {
     }
   });
 });
+
+describe("getModel for provider: vercel", () => {
+  test("dispatches to getVercelModel", () => {
+    const calls: string[] = [];
+    const fakeVercelModel = {} as ReturnType<typeof getModel>;
+    const model = getModel("openai/gpt-4.1-mini", "vercel", "test-session-id", {
+      getVercelModel: (id) => {
+        calls.push(id);
+        return fakeVercelModel;
+      },
+      getGroqModel: () => {
+        throw new Error("should not be called");
+      },
+      getOpenRouterModel: () => {
+        throw new Error("should not be called");
+      },
+    });
+    expect(model).toBe(fakeVercelModel);
+    expect(calls).toEqual(["openai/gpt-4.1-mini"]);
+  });
+
+  test("throws missingKeyError when AI_GATEWAY_API_KEY is absent and the real constructor would run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "seri-vercel-"));
+    try {
+      expect(() => getModel("openai/gpt-4.1-mini", "vercel", "test-session-id", {}, dir)).toThrow(
+        /AI_GATEWAY_API_KEY/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

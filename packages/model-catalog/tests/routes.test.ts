@@ -130,3 +130,12 @@ describe("routeKey vendor aliases", () => {
     );
   });
 });
+
+describe("routeKey across Vercel AI Gateway ids", () => {
+  test("a vercel vendor-prefixed id groups with native and OpenRouter siblings", () => {
+    const native = entry({ id: "claude-sonnet-5", provider: "anthropic" });
+    const viaOpenRouter = entry({ id: "anthropic/claude-sonnet-5", provider: "openrouter" });
+    const viaVercel = entry({ id: "anthropic/claude-sonnet-5", provider: "vercel" });
+    expect(groupRoutes([native, viaOpenRouter, viaVercel]).size).toBe(1);
+  });
+});
