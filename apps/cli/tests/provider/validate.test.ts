@@ -48,6 +48,35 @@ describe("validateProviderKey", () => {
     expect(result).toMatchObject({ reason: "auth" });
   });
 
+  test("a wrapped gateway 401 with no statusCode rejects the key", async () => {
+    const result = await validateProviderKey("vercel", "fake-key", {
+      generate: (async () => {
+        throw Object.assign(new Error("Unauthenticated request to AI Gateway."), {
+          name: "GatewayAuthenticationError",
+        });
+      }) as never,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "auth",
+      message: "Unauthenticated request to AI Gateway.",
+    });
+  });
+
+  test("a production-wrapped gateway 401 with no statusCode rejects the key", async () => {
+    const result = await validateProviderKey("vercel", "fake-key", {
+      generate: (async () => {
+        throw Object.assign(new Error("Unauthenticated. Configure AI_GATEWAY_API_KEY"), {
+          name: "GatewayError",
+        });
+      }) as never,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result).toMatchObject({ reason: "auth" });
+  });
+
   test("a 429 stores the key anyway, with a warning", async () => {
     const result = await validateProviderKey("anthropic", "fake-key", {
       generate: (async () => {
