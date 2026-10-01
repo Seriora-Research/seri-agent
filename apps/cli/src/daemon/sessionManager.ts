@@ -8,6 +8,7 @@ import {
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
 import type { PromptChannel } from "../permissions/promptChannel";
+import { hydrateBinaryArtifacts } from "../session/artifacts";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
 
@@ -212,7 +213,10 @@ export class DaemonSessionManager {
     if (request.sessionId !== undefined) {
       const loaded = this.database.loadSession(request.sessionId);
       if (loaded === undefined) throw new SessionNotFoundError(request.sessionId);
-      return loaded;
+      return {
+        ...loaded,
+        messages: hydrateBinaryArtifacts(loaded.messages, this.database.configDir, loaded.id),
+      };
     }
     const session: SessionState = {
       id: randomUUID(),

@@ -24,6 +24,7 @@ export const MEMORIES_DIRNAME = "memories";
 export const PENDING_DIRNAME = "pending";
 export const TRAJECTORIES_DIRNAME = "trajectories";
 export const PLANS_DIRNAME = "plans";
+export const ARTIFACTS_DIRNAME = "artifacts";
 export const DATABASE_FILENAME = "seri.db";
 export const DAEMON_DESCRIPTOR_FILENAME = "daemon.json";
 export const DAEMON_LOCK_FILENAME = "daemon.lock";
@@ -48,6 +49,7 @@ const RESERVED_PROFILE_NAMES: ReadonlySet<string> = new Set([
   PENDING_DIRNAME,
   TRAJECTORIES_DIRNAME,
   PLANS_DIRNAME,
+  ARTIFACTS_DIRNAME,
   DATABASE_FILENAME,
   DAEMON_DESCRIPTOR_FILENAME,
   DAEMON_LOCK_FILENAME,
@@ -143,6 +145,10 @@ export function getTrajectoriesDir(configDir: string = getConfigDir()): string {
 
 export function getPlansDir(configDir: string = getConfigDir()): string {
   return join(configDir, PLANS_DIRNAME);
+}
+
+export function getArtifactsDir(configDir: string = getConfigDir()): string {
+  return join(configDir, ARTIFACTS_DIRNAME);
 }
 
 export function getDatabasePath(configDir: string = getConfigDir()): string {
