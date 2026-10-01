@@ -1,12 +1,14 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_COMPILE_UUID_DARWIN_ARM64, stampMachOUuid } from "../../src/build/machoUuid";
 import { inspectConfig } from "../../src/config/config";
-import { getConfigDir, setProfileOverride } from "../../src/config/paths";
+import { getConfigDir, getDaemonLockPath, setProfileOverride } from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
+import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
 import { thinMachO } from "../build/thinMachO";
 
 function asFetch(fn: () => Promise<never>): typeof fetch {
@@ -39,6 +41,55 @@ function tempHome(): string {
   process.env.HOME = dir;
   setProfileOverride(undefined);
   return dir;
+}
+
+function plantToolStdout(configDir: string, sessionId: string, cwd: string, token: string): void {
+  mkdirSync(configDir, { recursive: true });
+  const database = new SessionDatabase(configDir);
+  try {
+    database.saveSession({
+      id: sessionId,
+      cwd,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [{ role: "user", content: "hi" }],
+    });
+  } finally {
+    database.close();
+  }
+  const raw = new Database(join(configDir, DATABASE_FILENAME));
+  raw.query("UPDATE messages SET json = ?").run(
+    JSON.stringify({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "c1",
+          output: { type: "json", value: { stdout: token } },
+        },
+      ],
+    }),
+  );
+  raw.close();
+}
+
+function quietDoctorDeps(configDir: string) {
+  return {
+    grep: async () => ({
+      mode: "content" as const,
+      matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+      truncated: false,
+    }),
+    fetch: asFetch(async () => {
+      throw new Error("doctor must not fetch");
+    }),
+    execPath: "/usr/bin/bun",
+    env: process.env,
+    platform: process.platform,
+    arch: process.arch,
+    cwd: process.cwd(),
+    configDir,
+  };
 }
 
 describe("formatDoctorReport", () => {
@@ -96,6 +147,7 @@ describe("runDoctorChecks", () => {
     const credentials = checks.find((check) => check.name === "credentials");
     expect(credentials?.status).toBe("fail");
     expect(checks.find((check) => check.name === "sessions")?.detail).toContain("absent");
+    expect(checks.find((check) => check.name === "secrets")?.detail).toContain("absent");
     expect(checks.find((check) => check.name === "catalog")?.detail).toContain("disabled");
     expect(doctorExitCode(checks)).toBe(1);
   });
@@ -312,6 +364,57 @@ describe("runDoctorChecks", () => {
     expect(sandbox).toBeDefined();
     expect(sandbox?.detail).toMatch(/base|os|unsandboxed/);
     expect(sandbox?.detail).toContain("bang");
+  });
+
+  test("warns about a residual tool-result token and --scrub replaces it without echoing the value", async () => {
+    const home = tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    plantToolStdout(configDir, "historic", home, token);
+    const deps = quietDoctorDeps(configDir);
+
+    const warned = await runDoctorChecks(deps);
+    const secrets = warned.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("warn");
+    expect(secrets?.detail).toContain("github-pat");
+    expect(secrets?.detail).not.toContain(token);
+    expect(JSON.stringify(warned)).not.toContain(token);
+
+    const scrubbed = await runDoctorChecks({ ...deps, scrub: true });
+    const after = scrubbed.find((check) => check.name === "secrets");
+    expect(after?.status).toBe("ok");
+    expect(after?.detail).toContain("replaced");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    const loaded = new SessionDatabase(configDir);
+    try {
+      expect(JSON.stringify(loaded.loadSession("historic"))).not.toContain(token);
+    } finally {
+      loaded.close();
+    }
+  });
+
+  test("refuses --scrub while the daemon lock is held and does not rewrite", async () => {
+    const home = tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    plantToolStdout(configDir, "locked", home, token);
+    writeFileSync(getDaemonLockPath(configDir), "1\n");
+
+    const checks = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+    const secrets = checks.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("fail");
+    expect(secrets?.detail).toContain("daemon lock");
+    expect(JSON.stringify(checks)).not.toContain(token);
+    const loaded = new SessionDatabase(configDir);
+    try {
+      expect(JSON.stringify(loaded.loadSession("locked"))).toContain(token);
+    } finally {
+      loaded.close();
+    }
   });
 
   test("omits macho_uuid on linux", async () => {

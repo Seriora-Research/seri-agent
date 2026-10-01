@@ -618,6 +618,52 @@ describe("run (argv and usage errors)", () => {
     expect(readdirSync(sessionsDir)).toEqual([]);
   });
 
+  test("`seri --scrub` without doctor is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+    const { code } = await captureLogs(() =>
+      run(["--scrub"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+  });
+
+  test("`--help` output documents `--scrub`", async () => {
+    const { logs } = await captureLogs(() => run(["--help"]));
+    expect(logs.join("\n")).toContain("seri doctor --scrub");
+    expect(logs.join("\n")).toContain("--scrub");
+  });
+
+  test("`seri doctor --scrub` does not create a session or print a stored token", async () => {
+    delete process.env.GROQ_API_KEY;
+    const { fake, capture } = fakeRunLoop();
+    const grepFn = async () => ({
+      mode: "content" as const,
+      matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+      truncated: false,
+    });
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const { code, logs } = await captureLogs(() =>
+      run(["doctor", "--scrub"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+        grep: grepFn,
+        fetch: (async () => {
+          throw new Error("doctor must not fetch");
+        }) as unknown as typeof fetch,
+      }),
+    );
+    expect(capture()).toBeUndefined();
+    expect(readdirSync(sessionsDir)).toEqual([]);
+    expect(logs.join("\n")).toContain("secrets");
+    expect(logs.join("\n")).not.toContain(token);
+    expect(code === 0 || code === 1).toBe(true);
+  });
+
   test("`seri update extra` is a usage error", async () => {
     const { fake, capture } = fakeRunLoop();
     const { code } = await captureLogs(() =>

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { SessionDatabase } from "./database";
+import { encodeRecapJson, encodeSessionMessages } from "./redact";
 import type { SessionState } from "./session";
 
 function headerOf(state: SessionState): Omit<SessionState, "messages"> {
@@ -16,14 +17,19 @@ function headerOf(state: SessionState): Omit<SessionState, "messages"> {
   };
 }
 
+function headerJson(state: SessionState): string {
+  const header = headerOf(state);
+  if (header.compact?.status !== "compacted") return JSON.stringify(header) ?? "null";
+  const recap = JSON.parse(encodeRecapJson(header.compact.recap).json) as unknown;
+  return JSON.stringify({ ...header, compact: { ...header.compact, recap } }) ?? "null";
+}
+
 export function exportSessionsToJsonl(configDir: string, outputDir: string): string[] {
   const database = new SessionDatabase(configDir);
   try {
     return database.listSessionIds().map((id) => {
       const state = database.loadSession(id) as SessionState;
-      const content = `${[headerOf(state), ...state.messages]
-        .map((value) => JSON.stringify(value))
-        .join("\n")}\n`;
+      const content = `${[headerJson(state), ...encodeSessionMessages(state.messages).json].join("\n")}\n`;
       const path = join(outputDir, `${id}.jsonl`);
       atomicWriteFile(path, content);
       return path;

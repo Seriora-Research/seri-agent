@@ -171,4 +171,67 @@ describe("session save/load and JSONL export", () => {
     expect(storedJson("pix").join("\n")).toContain(PNG_PREFIX);
     expect(loadSession("pix", sessionsDir).messages).toEqual(messages);
   });
+
+  test("binary payloads persist as artifact refs while tool-channel secrets redact", () => {
+    const png = pngBytes(12_000, 0x11);
+    const ghp = `ghp_${"A".repeat(20)}B9Qx`;
+    const sk = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    const messages = [
+      fileMessage("shot", png),
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "c1",
+            toolName: "bash",
+            input: { command: `echo ${ghp}` },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "bash",
+            output: { type: "json", value: { stdout: `${ghp}\n${sk}`, exitCode: 0 } },
+          },
+        ],
+      },
+      toolImageMessage(png),
+    ];
+    const state = sessionWith("both", messages);
+    const liveBefore = JSON.stringify(state.messages);
+    saveSession(state, sessionsDir);
+
+    expect(JSON.stringify(state.messages)).toBe(liveBefore);
+    expect(liveBefore).toContain(ghp);
+    expect(liveBefore).toContain(sk);
+    expect(liveBefore).toContain(PNG_PREFIX);
+
+    const json = storedJson("both").join("\n");
+    expect(json).toContain('"type":"artifact"');
+    expect(json).not.toContain(PNG_PREFIX);
+    expect(json).toContain("[redacted:github-pat:B9Qx]");
+    expect(json).toContain("[redacted:sk-key:2345]");
+    expect(json).not.toContain(ghp);
+    expect(json).not.toContain(sk);
+
+    const loadedJson = JSON.stringify(loadSession("both", sessionsDir).messages);
+    expect(loadedJson).toContain(PNG_PREFIX);
+    expect(loadedJson).toContain("[redacted:github-pat:B9Qx]");
+    expect(loadedJson).not.toContain(ghp);
+
+    const exported = exportSessionsToJsonl(configDir, join(configDir, "out-both"));
+    expect(exported).toHaveLength(1);
+    const exportPath = exported[0];
+    if (exportPath === undefined) throw new Error("expected an exported jsonl path");
+    const jsonl = readFileSync(exportPath, "utf8");
+    expect(jsonl).toContain('"type":"artifact"');
+    expect(jsonl).not.toContain(PNG_PREFIX);
+    expect(jsonl).not.toContain(ghp);
+    expect(jsonl).toContain("[redacted:github-pat:B9Qx]");
+  });
 });

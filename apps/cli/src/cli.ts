@@ -668,6 +668,7 @@ const PARSE_OPTIONS = {
   "dangerously-skip-permissions": { type: "boolean" },
   "permission-prompts": { type: "string" },
   profile: { type: "string" },
+  scrub: { type: "boolean" },
 } as const;
 
 type ParsedArgs = {
@@ -681,6 +682,7 @@ type ParsedArgs = {
     "dangerously-skip-permissions"?: boolean;
     "permission-prompts"?: string;
     profile?: string;
+    scrub?: boolean;
   };
   positionals: string[];
   maxTurns: number | undefined;
@@ -879,6 +881,7 @@ async function handleExecCommand(
 async function handleDoctorCommand(
   positionals: string[],
   deps: CliDeps,
+  scrub: boolean,
 ): Promise<number | undefined> {
   if (positionals[0] !== "doctor") return undefined;
   if (positionals.length !== 1) {
@@ -893,6 +896,7 @@ async function handleDoctorCommand(
     arch: process.arch,
     cwd: process.cwd(),
     configDir: deps.authConfigDir ?? getConfigDir(),
+    scrub,
   });
   printDoctorReport(checks);
   return doctorExitCode(checks);
@@ -2276,6 +2280,10 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
 
   if (values.selftest === true) return runSelftest(deps);
 
+  if (values.scrub === true && (verbEscaped || positionals[0] !== "doctor")) {
+    return usageError("--scrub is only valid with seri doctor");
+  }
+
   const isTTY = deps.isTTY ?? false;
 
   const ctx: RunContext = {
@@ -2303,7 +2311,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps, promptChannel);
   if (exec !== undefined) return exec;
 
-  const doctor = verbEscaped ? undefined : await handleDoctorCommand(positionals, deps);
+  const doctor = verbEscaped
+    ? undefined
+    : await handleDoctorCommand(positionals, deps, values.scrub === true);
   if (doctor !== undefined) return doctor;
 
   const updated = verbEscaped ? undefined : await handleUpdateCommand(positionals, deps);
