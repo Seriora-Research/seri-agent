@@ -152,6 +152,11 @@ seri exec <task>              run one task through an already-running daemon
 `--profile <name>` (or `SERI_PROFILE`) puts config, auth, permissions, sessions, and checkpoints
 under an isolated root.
 
+seri loads one `AGENTS.md` into the system prompt. A file at the git root of the working
+directory wins (or in the working directory itself if it is not a git repo). If that file
+is missing, seri loads `~/.seri/AGENTS.md` when it exists. The two are never merged. An
+`AGENTS.md` in a parent directory — including `~` — is ignored.
+
 ## Commands
 
 Everything below is a slash command inside the session.
