@@ -31,15 +31,20 @@ async function mount(setup: TestRendererSetup, node: ReactNode): Promise<void> {
   await settle(setup);
 }
 
-describe("@opentui/react mock-input / useKeyboard wiring spike", () => {
-  test("a keypress registers once the standard two-settle mount() pattern has let useKeyboard's effect subscribe", async () => {
-    const setup = await createTestRenderer({ width: 30, height: 3 });
-    mountedRenderers.push(setup);
-    await mount(setup, <Probe />);
+// Bun 1.4.0 on ubuntu-latest SIGSEGV's in this file's createTestRenderer (process exit 139).
+// Local linux and the macOS/Windows runners complete it.
+describe.skipIf(process.platform === "linux" && process.env.GITHUB_ACTIONS === "true")(
+  "@opentui/react mock-input / useKeyboard wiring spike",
+  () => {
+    test("a keypress registers once the standard two-settle mount() pattern has let useKeyboard's effect subscribe", async () => {
+      const setup = await createTestRenderer({ width: 30, height: 3 });
+      mountedRenderers.push(setup);
+      await mount(setup, <Probe />);
 
-    setup.mockInput.pressKey("a");
-    await settle(setup);
+      setup.mockInput.pressKey("a");
+      await settle(setup);
 
-    expect(setup.captureCharFrame()).toContain("last: a");
-  });
-});
+      expect(setup.captureCharFrame()).toContain("last: a");
+    });
+  },
+);
