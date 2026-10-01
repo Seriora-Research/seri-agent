@@ -151,6 +151,15 @@ function defaultAdHocSign(binPath: string): void {
   if (result.status !== 0) {
     throw new Error(`compile.ts: codesign ${binPath} exited ${result.status}: ${result.stderr}`);
   }
+  const verify = spawnSync("codesign", ["--verify", "--strict", binPath], { encoding: "utf8" });
+  if (verify.error !== undefined) {
+    throw new Error(`compile.ts: codesign --verify ${binPath} failed: ${verify.error.message}`);
+  }
+  if (verify.status !== 0) {
+    throw new Error(
+      `compile.ts: codesign --verify ${binPath} exited ${verify.status}: ${verify.stderr}`,
+    );
+  }
 }
 
 export function adHocSignDarwinBinary(
@@ -158,7 +167,7 @@ export function adHocSignDarwinBinary(
   platform: NodeJS.Platform,
   sign: (binPath: string) => void = defaultAdHocSign,
 ): void {
-  // bun's ad-hoc signature covers LC_UUID; rewriting that field invalidates it.
+  // darwin-host only. linux/windows rewriteMachOUuidFile repairs the CodeDirectory page-0 hash.
   if (platform !== "darwin") return;
   sign(path);
 }

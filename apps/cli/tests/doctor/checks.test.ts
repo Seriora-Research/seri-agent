@@ -391,6 +391,39 @@ describe("runDoctorChecks", () => {
     expect(doctorExitCode([uuid])).toBe(1);
   });
 
+  test("fails macho_uuid for a bun 1.3 stub UUID that is not in the 1.4.0 denylist", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const dir = mkdtempSync(join(tmpdir(), "seri-doctor-bin-"));
+    dirs.push(dir);
+    const execPath = join(dir, "seri");
+    const olderBun = "c7e7a979-f99b-3466-9ad6-e56a63373a35";
+    writeFileSync(execPath, thinMachO(olderBun, Buffer.from("older-bun")));
+    const checks = await runDoctorChecks({
+      grep: async () => ({
+        mode: "content",
+        matches: [{ file: "probe.txt", line: 1, text: "seri selftest probe" }],
+        truncated: false,
+      }),
+      fetch: asFetch(async () => {
+        throw new Error("doctor must not fetch");
+      }),
+      execPath,
+      env: process.env,
+      platform: "darwin",
+      arch: "arm64",
+      cwd: process.cwd(),
+      probeIoUring: () => ({ status: "allow" }),
+    });
+    const uuid = checks.find((check) => check.name === "macho_uuid");
+    expect(uuid?.status).toBe("fail");
+    expect(uuid?.detail).toContain(olderBun);
+    expect(uuid?.detail).toContain("not a content-derived UUID");
+    if (uuid === undefined) return;
+    expect(doctorExitCode([uuid])).toBe(1);
+  });
+
   test("reports macho_uuid ok after the stub is stamped", async () => {
     tempHome();
     process.env.GROQ_API_KEY = "fake-test-key";

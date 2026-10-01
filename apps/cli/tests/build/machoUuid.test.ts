@@ -7,10 +7,13 @@ import { finalizeDarwinCompileOutput, stampDarwinCompileOutput } from "../../src
 import {
   BUN_COMPILE_UUID_DARWIN_ARM64,
   BUN_COMPILE_UUID_DARWIN_X64,
+  codeDirectoryPage0Matches,
   isBunCompileStubUuid,
+  isContentDerivedMachOUuid,
   isDarwinCompileTarget,
   readMachOUuid,
   readMachOUuidFromFile,
+  repairCodeDirectoryPage0,
   rewriteMachOUuidFile,
   stampMachOUuid,
 } from "../../src/build/machoUuid";
@@ -32,11 +35,14 @@ describe("isDarwinCompileTarget", () => {
 });
 
 describe("stampMachOUuid", () => {
-  test("negative control: a bun stub UUID stays a collision until stamped", () => {
+  test("negative control: an unstamped bun stub is not content-derived and stamp rewrites it", () => {
     const bytes = thinMachO(BUN_COMPILE_UUID_DARWIN_ARM64, Buffer.from("payload-a"));
     expect(readMachOUuid(bytes)?.uuid).toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+    expect(isContentDerivedMachOUuid(BUN_COMPILE_UUID_DARWIN_ARM64)).toBe(false);
+    expect(isContentDerivedMachOUuid(BUN_COMPILE_UUID_DARWIN_X64)).toBe(false);
     expect(isBunCompileStubUuid(BUN_COMPILE_UUID_DARWIN_ARM64)).toBe(true);
-    expect(isBunCompileStubUuid(BUN_COMPILE_UUID_DARWIN_X64)).toBe(true);
+    const result = stampMachOUuid(bytes);
+    expect(result.kind).toBe("rewritten");
   });
 
   test("replaces the bun stub with a content-derived UUID", () => {
@@ -50,6 +56,7 @@ describe("stampMachOUuid", () => {
     expect(stamped.uuid).toBe(result.after);
     expect(result.after).not.toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
     expect(isBunCompileStubUuid(result.after)).toBe(false);
+    expect(isContentDerivedMachOUuid(result.after)).toBe(true);
     expect(result.after).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -191,13 +198,22 @@ describe("bun compile stub (real darwin target)", () => {
           { encoding: "utf8", timeout: 15_000 },
         );
         expect(build.status, build.stderr).toBe(0);
-        const before = readMachOUuid(new Uint8Array(readFileSync(outfile)));
-        expect(before?.uuid).toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+        const raw = new Uint8Array(readFileSync(outfile));
+        expect(readMachOUuid(raw)?.uuid).toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+        expect(codeDirectoryPage0Matches(raw)).toBe(true);
+        const poked = Uint8Array.from(raw);
+        const uuidOnly = stampMachOUuid(poked);
+        expect(uuidOnly.kind).toBe("rewritten");
+        expect(codeDirectoryPage0Matches(poked)).toBe(false);
+        expect(repairCodeDirectoryPage0(poked).kind).toBe("repaired");
+        expect(codeDirectoryPage0Matches(poked)).toBe(true);
         const stamped = stampDarwinCompileOutput(outfile, "bun-darwin-arm64", "linux");
         expect(stamped?.kind).toBe("rewritten");
         if (stamped?.kind !== "rewritten") return;
         expect(stamped.after).not.toBe(BUN_COMPILE_UUID_DARWIN_ARM64);
+        expect(isContentDerivedMachOUuid(stamped.after)).toBe(true);
         expect(readMachOUuidFromFile(outfile)?.uuid).toBe(stamped.after);
+        expect(codeDirectoryPage0Matches(new Uint8Array(readFileSync(outfile)))).toBe(true);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

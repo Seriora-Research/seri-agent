@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient } from "@seri/daemon-client";
 import { hostedPlanUsable } from "../auth/seriIgnore";
-import { isBunCompileStubUuid, readMachOUuidFromFile } from "../build/machoUuid";
+import {
+  isBunCompileStubUuid,
+  isContentDerivedMachOUuid,
+  readMachOUuidFromFile,
+} from "../build/machoUuid";
 import { isGitAvailable } from "../checkpoint/shadowGit";
 import { inspectConfig, loadSandboxConfig } from "../config/config";
 import { DATABASE_FILENAME, getConfigDir, currentProfile, resolveUserHome } from "../config/paths";
@@ -76,15 +80,17 @@ function machOUuidCheck(deps: DoctorDeps): CheckResult | undefined {
       return {
         name: "macho_uuid",
         status: "fail",
-        detail: `${deps.execPath} has no Mach-O UUID`,
-        fix: "rebuild with bun run build so compile.ts stamps LC_UUID",
+        detail: `${deps.execPath} is not a thin 64-bit Mach-O with LC_UUID`,
+        fix: "rebuild with bun run build; compile.ts refuses darwin output that has no LC_UUID",
       };
     }
-    if (isBunCompileStubUuid(found.uuid)) {
+    if (isBunCompileStubUuid(found.uuid) || !isContentDerivedMachOUuid(found.uuid)) {
       return {
         name: "macho_uuid",
         status: "fail",
-        detail: `${found.uuid} is shared by bun-compiled binaries`,
+        detail: isBunCompileStubUuid(found.uuid)
+          ? `${found.uuid} is shared by bun-compiled binaries`
+          : `${found.uuid} is not a content-derived UUID`,
         fix: "rebuild with bun run build so compile.ts stamps a content-derived UUID",
       };
     }
