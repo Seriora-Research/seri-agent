@@ -6,6 +6,7 @@ import { getGoogleModel } from "./google";
 import { getGroqModel } from "./groq";
 import { getOpenAIModel } from "./openai";
 import { getOpenRouterModel } from "./openrouter";
+import { getVercelModel } from "./vercel";
 import { getXaiModel } from "./xai";
 
 export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
@@ -16,6 +17,7 @@ export const VALIDATION_MODEL_IDS: Record<ModelProvider, string> = {
   google: "gemini-2.5-flash",
 
   xai: "grok-4.3",
+  vercel: "openai/gpt-4.1-mini",
 };
 
 const VALIDATION_SESSION_ID = "seri-setup-key-validation";
@@ -69,6 +71,9 @@ export async function validateProviderKey(
         break;
       case "xai":
         model = getXaiModel(modelId, apiKey);
+        break;
+      case "vercel":
+        model = getVercelModel(modelId, apiKey);
         break;
       default:
         return {
