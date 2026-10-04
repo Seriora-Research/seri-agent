@@ -334,12 +334,16 @@ describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
       { command: `Remove-Item "${short}" -Recurse -Force` },
       project,
     );
-    expect(
-      writeFileDenialCovers(
-        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
-        intent,
-        project,
-      ),
-    ).toBe(true);
+    const covered = writeFileDenialCovers(
+      [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+      intent,
+      project,
+    );
+    if (covered !== true) {
+      throw new Error(
+        `8.3 Remove-Item was not covered: short=${short} protected=${protectedDir} targets=${JSON.stringify(intent?.targets)}`,
+      );
+    }
+    expect(covered).toBe(true);
   });
 });
