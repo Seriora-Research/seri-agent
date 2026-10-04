@@ -168,11 +168,7 @@ export function destructiveIntentOf(
     ...new Set(
       tokens
         .filter((token) => looksLikePath(token.raw) || token.quotingWidened)
-        .flatMap((token) => {
-          const resolved = resolveTarget(cwd, token.raw, toolName);
-          if (process.platform !== "win32") return [resolved];
-          return [expandUser(token.raw), resolved];
-        }),
+        .map((token) => resolveTarget(cwd, token.raw, toolName)),
     ),
   ];
   return { kind, targets, quotingWidened, recursive: isRecursive(command) };

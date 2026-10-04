@@ -305,7 +305,10 @@ function volumeHasShortNames(): boolean {
   try {
     const short = windowsShortPath(probe);
     if (short === undefined) return false;
-    return basename(short).toLowerCase() !== basename(probe).toLowerCase();
+    return (
+      /~[0-9]/i.test(basename(short)) &&
+      basename(short).toLowerCase() !== basename(probe).toLowerCase()
+    );
   } finally {
     rmSync(probe, { recursive: true, force: true });
   }
@@ -317,6 +320,7 @@ describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
     const short = windowsShortPath(protectedDir);
     if (
       short === undefined ||
+      !/~[0-9]/i.test(basename(short)) ||
       basename(short).toLowerCase() === basename(protectedDir).toLowerCase()
     ) {
       throw new Error("volumeHasShortNames() passed but the fixture has no 8.3 name");
@@ -334,16 +338,12 @@ describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
       { command: `Remove-Item "${short}" -Recurse -Force` },
       project,
     );
-    const covered = writeFileDenialCovers(
-      [{ tool: "write_file", pattern: `${protectedDir}/**` }],
-      intent,
-      project,
-    );
-    if (covered !== true) {
-      throw new Error(
-        `8.3 Remove-Item was not covered: short=${short} protected=${protectedDir} targets=${JSON.stringify(intent?.targets)}`,
-      );
-    }
-    expect(covered).toBe(true);
+    expect(
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        intent,
+        project,
+      ),
+    ).toBe(true);
   });
 });
