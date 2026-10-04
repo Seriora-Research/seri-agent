@@ -28,48 +28,40 @@ function matchPath(path: string): string {
   return foldsCase() ? posix.toLowerCase() : posix;
 }
 
-function escapeGlobLiteral(path: string): string {
-  return path.replaceAll(/[\\*?[\]{}]/g, "\\$&");
-}
-
 function hasUserGlob(path: string): boolean {
   return /[*?]/.test(path);
 }
 
-function pushDenialForm(path: string, tree: boolean, globs: Bun.Glob[], dirExacts: string[]): void {
-  const folded = matchPath(path);
-  const source = tree ? `${escapeGlobLiteral(folded)}/**` : escapeGlobLiteral(folded);
-  globs.push(new Bun.Glob(source));
-  if (tree) dirExacts.push(folded);
+function covers(base: string, tree: boolean, path: string): boolean {
+  if (path === base) return true;
+  return tree && path.startsWith(`${base}/`);
 }
 
-function denialMatchers(pattern: string, cwd: string): { globs: Bun.Glob[]; dirExacts: string[] } {
+function denialBases(pattern: string, cwd: string): string[] {
   const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
-  const base = tree ? pattern.slice(0, -3) : pattern;
-  if (hasUserGlob(base)) {
-    return {
-      globs: [new Bun.Glob(matchPath(resolveAgainstCwd(cwd, pattern)))],
-      dirExacts: [],
-    };
+  const raw = tree ? pattern.slice(0, -3) : pattern;
+  const lexical = resolveAgainstCwd(cwd, raw);
+  const canonical = canonicalizeAgainstCwd(cwd, lexical);
+  const bases = [canonical, lexical];
+  for (const form of [canonical, lexical]) {
+    const short = windowsShortPath(form);
+    if (short !== undefined) bases.push(short);
   }
-  const resolved = canonicalizeAgainstCwd(cwd, resolveAgainstCwd(cwd, base));
-  const globs: Bun.Glob[] = [];
-  const dirExacts: string[] = [];
-  pushDenialForm(resolved, tree, globs, dirExacts);
-  const short = windowsShortPath(resolved);
-  if (short !== undefined && matchPath(short) !== matchPath(resolved)) {
-    pushDenialForm(short, tree, globs, dirExacts);
-  }
-  return { globs, dirExacts };
+  return [...new Set(bases.map(matchPath))];
 }
 
 export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
   const root = cwd ?? ".";
-  const { globs, dirExacts } = denialMatchers(pattern, root);
+  const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
+  const base = tree ? pattern.slice(0, -3) : pattern;
+  const glob = hasUserGlob(base)
+    ? new Bun.Glob(matchPath(resolveAgainstCwd(root, pattern)))
+    : undefined;
+  const bases = glob === undefined ? denialBases(pattern, root) : [];
   for (const candidate of matchCandidatesAgainstCwd(root, path)) {
     const folded = matchPath(candidate);
-    if (globs.some((glob) => glob.match(folded))) return true;
-    if (dirExacts.includes(folded)) return true;
+    if (glob?.match(folded) === true) return true;
+    if (bases.some((denialBase) => covers(denialBase, tree, folded))) return true;
   }
   return false;
 }

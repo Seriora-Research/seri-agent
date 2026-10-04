@@ -1,6 +1,7 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
+import { windowsShortPath } from "./win32LongPath";
 
 const MAX_SYMLINKS = 64;
 
@@ -168,7 +169,12 @@ export function isEntryInsideWorkingDir(cwd: string, path: string): boolean {
 export function matchCandidatesAgainstCwd(cwd: string, path: string): readonly string[] {
   const lexical = resolveAgainstCwd(cwd, path);
   const { target, namespace } = formsAgainstCwd(cwd, path);
-  return [...new Set([lexical, target, namespace])];
+  const forms = [lexical, target, namespace];
+  for (const form of [lexical, target, namespace]) {
+    const short = windowsShortPath(form);
+    if (short !== undefined) forms.push(short);
+  }
+  return [...new Set(forms)];
 }
 
 export type PathLocation = "inside" | "outside";
