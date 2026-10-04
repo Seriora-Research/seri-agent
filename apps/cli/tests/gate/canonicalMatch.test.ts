@@ -131,7 +131,11 @@ describe("path rules match the canonical target", () => {
       project,
     );
     expect(
-      writeFileDenialCovers([{ tool: "write_file", pattern: `${protectedDir}/**` }], intent, project),
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        intent,
+        project,
+      ),
     ).toBe(true);
   });
 
@@ -161,7 +165,11 @@ describe.skipIf(process.platform !== "win32")("Windows 8.3 short names", () => {
       project,
     );
     expect(
-      writeFileDenialCovers([{ tool: "write_file", pattern: `${protectedDir}/**` }], intent, project),
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        intent,
+        project,
+      ),
     ).toBe(true);
   });
 });

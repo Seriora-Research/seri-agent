@@ -42,9 +42,7 @@ function realpathExisting(path: string): string {
   if (typeof nativeRealpath === "function") {
     try {
       return stripWindowsLongPath(nativeRealpath(path));
-    } catch {
-      // Some prefixes exist for lstat but not for the native realpath.
-    }
+    } catch {}
   }
   return stripWindowsLongPath(realpathSync(path));
 }
@@ -61,9 +59,7 @@ function walk(path: string, depth: number): string {
   let current = root.length > 0 ? root : sep;
   try {
     current = realpathExisting(current);
-  } catch {
-    // C: on POSIX tests, or a volume root the kernel will not resolve.
-  }
+  } catch {}
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     if (part === undefined || part === ".") continue;
@@ -76,9 +72,7 @@ function walk(path: string, depth: number): string {
     try {
       current = realpathExisting(next);
       continue;
-    } catch {
-      // Missing, or a dangling symlink whose target still has to be followed.
-    }
+    } catch {}
     try {
       if (lstatSync(next).isSymbolicLink()) {
         const target = readlinkSync(next);
@@ -86,9 +80,7 @@ function walk(path: string, depth: number): string {
         const resolved = isAbsolute(target) ? target : concatRaw(current, target);
         return walk(joinRaw(resolved, rest), depth + 1);
       }
-    } catch {
-      // Not a dangling link. Append the missing suffix lexically.
-    }
+    } catch {}
     return join(current, ...parts.slice(i));
   }
   return stripWindowsLongPath(current);
