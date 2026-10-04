@@ -156,6 +156,31 @@ describe("path rules match the canonical target", () => {
     ).toBe("block");
   });
 
+  test("a pnpm-style deep symlink plus .. is classified as the path resolve opens", () => {
+    const { protectedDir, project } = fixture();
+    const real = join(project, "node_modules", ".pnpm", "foo@1.0.0", "node_modules", "foo");
+    mkdirSync(real, { recursive: true });
+    mkdirSync(join(project, "node_modules"), { recursive: true });
+    linkDir(real, join(project, "node_modules", "foo"));
+    const via = [
+      "node_modules",
+      "foo",
+      "..",
+      "..",
+      "..",
+      basename(protectedDir),
+      "secret.txt",
+    ].join(sep);
+    expect(isInsideWorkingDir(project, via)).toBe(false);
+    expect(
+      checkPermission("read_file", "read-only", undefined, {
+        input: { path: via },
+        denials: [{ tool: "read_file", pattern: `${protectedDir}/**` }],
+        cwd: project,
+      }),
+    ).toBe("block");
+  });
+
   test("a .. after a symlink in a shell command is resolved against the link target", () => {
     const { protectedDir, project } = fixture();
     const sub = join(project, "sub");
@@ -179,6 +204,19 @@ describe("path rules match the canonical target", () => {
         cwd: project,
       }),
     ).toBe("allow");
+    const powershell = destructiveIntentOf(
+      "powershell",
+      { command: `Remove-Item "${viaDotDot}" -Force` },
+      project,
+    );
+    expect(catastrophicOf(powershell, project)).toBeUndefined();
+    expect(
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        powershell,
+        project,
+      ),
+    ).toBe(false);
   });
 
   test("an outside symlink to an inside file is outside, and a deny of the target still matches", () => {

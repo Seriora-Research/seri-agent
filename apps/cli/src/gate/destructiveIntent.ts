@@ -5,6 +5,7 @@ import { type PathDenial, pathMatchesDenial } from "./gate";
 import {
   canonicalizeAgainstCwd,
   canonicalizeEntryAgainstCwd,
+  canonicalizeEntryResolvedAgainstCwd,
   isEntryInsideWorkingDir,
   isInsideWorkingDir,
 } from "./workingDir";
@@ -140,13 +141,15 @@ function isVolumeRootRaw(raw: string): boolean {
   return /^[A-Za-z]:$/.test(posix.replace(/\/+$/, ""));
 }
 
-function resolveTarget(cwd: string, raw: string): string {
+function resolveTarget(cwd: string, raw: string, toolName: string): string {
   const expanded = expandUser(raw);
   if (isVolumeRootRaw(expanded)) {
     const posix = posixify(expanded).replace(/\/+$/, "");
     return posix === "" ? "/" : posix;
   }
-  return canonicalizeEntryAgainstCwd(cwd, posixify(expanded));
+  const path = posixify(expanded);
+  if (toolName === "powershell") return canonicalizeEntryResolvedAgainstCwd(cwd, path);
+  return canonicalizeEntryAgainstCwd(cwd, path);
 }
 
 export function destructiveIntentOf(
@@ -165,7 +168,7 @@ export function destructiveIntentOf(
     ...new Set(
       tokens
         .filter((token) => looksLikePath(token.raw) || token.quotingWidened)
-        .map((token) => resolveTarget(cwd, token.raw)),
+        .map((token) => resolveTarget(cwd, token.raw, toolName)),
     ),
   ];
   return { kind, targets, quotingWidened, recursive: isRecursive(command) };

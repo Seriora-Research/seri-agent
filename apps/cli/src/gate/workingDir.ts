@@ -27,7 +27,10 @@ function joinRaw(base: string, rel: string): string {
 function splitPath(path: string): { root: string; parts: string[] } {
   const parsed = parse(path);
   const rest = path.slice(parsed.root.length);
-  const parts = rest.split(/[\\/]/).filter((part) => part.length > 0);
+  const parts =
+    process.platform === "win32"
+      ? rest.split(/[\\/]/).filter((part) => part.length > 0)
+      : rest.split("/").filter((part) => part.length > 0);
   return { root: parsed.root, parts };
 }
 
@@ -55,8 +58,7 @@ function realpathExisting(path: string): string {
 
 function absAgainstCwd(cwd: string, path: string): string {
   const absCwd = isAbsolute(cwd) ? cwd : resolve(cwd);
-  if (isAbsolute(path)) return path;
-  if (/^[A-Za-z]:/.test(path)) return resolve(absCwd, path);
+  if (isAbsolute(path) || /^[A-Za-z]:/.test(path)) return resolve(absCwd, path);
   return concatRaw(absCwd, path);
 }
 
@@ -65,16 +67,23 @@ export function canonicalizeAgainstCwd(cwd: string, path: string): string {
 }
 
 export function canonicalizeEntryAgainstCwd(cwd: string, path: string): string {
-  const absPath = absAgainstCwd(cwd, path);
-  const parent = dirname(absPath);
-  const base = basename(absPath);
-  if (base === "" || parent === absPath) return walk(absPath, 0);
+  return entryOfAbs(absAgainstCwd(cwd, path));
+}
+
+export function canonicalizeEntryResolvedAgainstCwd(cwd: string, path: string): string {
+  return entryOfAbs(resolveAgainstCwd(cwd, path));
+}
+
+function entryOfAbs(abs: string): string {
+  const parent = dirname(abs);
+  const base = basename(abs);
+  if (base === "" || parent === abs) return walk(abs, 0);
   try {
-    if (lstatSync(absPath).isSymbolicLink()) {
+    if (lstatSync(abs).isSymbolicLink()) {
       return join(walk(parent, 0), base);
     }
   } catch {}
-  return walk(absPath, 0);
+  return walk(abs, 0);
 }
 
 function formsAgainstCwd(cwd: string, path: string): { target: string; namespace: string } {

@@ -52,6 +52,13 @@ describe("isInsideWorkingDir", () => {
     expect(isInsideWorkingDir(cwd, join("src", `..foo${sep}bar`))).toBe(true);
   });
 
+  test.skipIf(process.platform === "win32")(
+    "a backslash in a relative name is not a parent traversal",
+    () => {
+      expect(isInsideWorkingDir(cwd, "a\\..\\..\\secrets")).toBe(true);
+    },
+  );
+
   test("case folding follows foldsCase: same path with different case is inside on win32/darwin", () => {
     const mixed = cwd.replace(/proj$/i, "PROJ");
     if (mixed === cwd) return;
