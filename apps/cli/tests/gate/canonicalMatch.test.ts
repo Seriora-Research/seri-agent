@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, sep } from "node:path";
@@ -9,7 +8,7 @@ import {
   writeFileDenialCovers,
 } from "../../src/gate/destructiveIntent";
 import { checkPermission } from "../../src/gate/gate";
-import { expandWindowsShortNames } from "../../src/gate/win32LongPath";
+import { windowsShortPath } from "../../src/gate/win32LongPath";
 import { isInsideWorkingDir, locationForCall } from "../../src/gate/workingDir";
 
 let dirs: string[] = [];
@@ -22,18 +21,6 @@ function makeDir(prefix: string): string {
 
 function linkDir(target: string, path: string): void {
   symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
-}
-
-function windowsShortPath(abs: string): string | undefined {
-  if (process.platform !== "win32") return undefined;
-  const result = spawnSync("cmd.exe", ["/c", `for %I in ("${abs}") do @echo %~sI`], {
-    encoding: "utf8",
-  });
-  if (result.status !== 0) return undefined;
-  const short = result.stdout.trim().split(/\r?\n/).at(-1)?.trim();
-  if (short === undefined || short.length === 0) return undefined;
-  if (!/~/.test(short)) return undefined;
-  return short;
 }
 
 afterEach(() => {
@@ -316,7 +303,9 @@ function volumeHasShortNames(): boolean {
   if (process.platform !== "win32") return false;
   const probe = mkdtempSync(join(tmpdir(), "seri-8dot3-probe-longname-"));
   try {
-    return windowsShortPath(probe) !== undefined;
+    const short = windowsShortPath(probe);
+    if (short === undefined) return false;
+    return basename(short).toLowerCase() !== basename(probe).toLowerCase();
   } finally {
     rmSync(probe, { recursive: true, force: true });
   }
@@ -326,12 +315,12 @@ describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
   test("a deny on the long path blocks a write through the 8.3 short name", () => {
     const { protectedDir, project } = fixture();
     const short = windowsShortPath(protectedDir);
-    if (short === undefined) {
+    if (
+      short === undefined ||
+      basename(short).toLowerCase() === basename(protectedDir).toLowerCase()
+    ) {
       throw new Error("volumeHasShortNames() passed but the fixture has no 8.3 name");
     }
-    expect(expandWindowsShortNames(short).replaceAll("\\", "/").toLowerCase()).toBe(
-      protectedDir.replaceAll("\\", "/").toLowerCase(),
-    );
     expect(
       checkPermission("write_file", "auto", undefined, {
         input: { path: join(short, "secret.txt"), content: "x" },

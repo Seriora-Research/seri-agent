@@ -1,7 +1,6 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
-import { expandWindowsShortNames, hasWindowsShortName } from "./win32LongPath";
 
 const MAX_SYMLINKS = 64;
 
@@ -58,7 +57,7 @@ function realpathExisting(path: string): string {
     }
   }
   if (resolved === undefined) resolved = stripWindowsLongPath(realpathSync(path));
-  return hasWindowsShortName(resolved) ? expandWindowsShortNames(resolved) : resolved;
+  return resolved;
 }
 
 function absAgainstCwd(cwd: string, path: string): string {
@@ -135,13 +134,9 @@ function walk(path: string, depth: number): string {
         return walk(joinRaw(resolved, rest), depth + 1);
       }
     } catch {}
-    return expandIfShort(join(current, ...parts.slice(i)));
+    return join(current, ...parts.slice(i));
   }
-  return expandIfShort(stripWindowsLongPath(current));
-}
-
-function expandIfShort(path: string): string {
-  return hasWindowsShortName(path) ? expandWindowsShortNames(path) : path;
+  return stripWindowsLongPath(current);
 }
 
 function normalize(path: string): string {
@@ -173,7 +168,7 @@ export function isEntryInsideWorkingDir(cwd: string, path: string): boolean {
 export function matchCandidatesAgainstCwd(cwd: string, path: string): readonly string[] {
   const lexical = resolveAgainstCwd(cwd, path);
   const { target, namespace } = formsAgainstCwd(cwd, path);
-  return [...new Set([lexical, target, namespace, expandWindowsShortNames(lexical)])];
+  return [...new Set([lexical, target, namespace])];
 }
 
 export type PathLocation = "inside" | "outside";

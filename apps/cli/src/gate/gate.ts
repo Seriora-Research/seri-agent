@@ -1,5 +1,6 @@
 import { foldsCase } from "../caseFold";
 import { classifyBuiltin, type ToolClass } from "../provider/tools";
+import { windowsShortPath } from "./win32LongPath";
 import { canonicalizeAgainstCwd, matchCandidatesAgainstCwd, resolveAgainstCwd } from "./workingDir";
 
 export type PermissionMode = "read-only" | "approve-each" | "auto";
@@ -35,27 +36,40 @@ function hasUserGlob(path: string): boolean {
   return /[*?]/.test(path);
 }
 
-function denialGlob(
-  pattern: string,
-  cwd: string,
-): { glob: Bun.Glob; dirExact: string | undefined } {
+function pushDenialForm(path: string, tree: boolean, globs: Bun.Glob[], dirExacts: string[]): void {
+  const folded = matchPath(path);
+  const source = tree ? `${escapeGlobLiteral(folded)}/**` : escapeGlobLiteral(folded);
+  globs.push(new Bun.Glob(source));
+  if (tree) dirExacts.push(folded);
+}
+
+function denialMatchers(pattern: string, cwd: string): { globs: Bun.Glob[]; dirExacts: string[] } {
   const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
   const base = tree ? pattern.slice(0, -3) : pattern;
   if (hasUserGlob(base)) {
-    return { glob: new Bun.Glob(matchPath(resolveAgainstCwd(cwd, pattern))), dirExact: undefined };
+    return {
+      globs: [new Bun.Glob(matchPath(resolveAgainstCwd(cwd, pattern)))],
+      dirExacts: [],
+    };
   }
-  const resolved = matchPath(canonicalizeAgainstCwd(cwd, resolveAgainstCwd(cwd, base)));
-  const source = tree ? `${escapeGlobLiteral(resolved)}/**` : escapeGlobLiteral(resolved);
-  return { glob: new Bun.Glob(source), dirExact: tree ? resolved : undefined };
+  const resolved = canonicalizeAgainstCwd(cwd, resolveAgainstCwd(cwd, base));
+  const globs: Bun.Glob[] = [];
+  const dirExacts: string[] = [];
+  pushDenialForm(resolved, tree, globs, dirExacts);
+  const short = windowsShortPath(resolved);
+  if (short !== undefined && matchPath(short) !== matchPath(resolved)) {
+    pushDenialForm(short, tree, globs, dirExacts);
+  }
+  return { globs, dirExacts };
 }
 
 export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
   const root = cwd ?? ".";
-  const { glob, dirExact } = denialGlob(pattern, root);
+  const { globs, dirExacts } = denialMatchers(pattern, root);
   for (const candidate of matchCandidatesAgainstCwd(root, path)) {
     const folded = matchPath(candidate);
-    if (glob.match(folded)) return true;
-    if (dirExact !== undefined && folded === dirExact) return true;
+    if (globs.some((glob) => glob.match(folded))) return true;
+    if (dirExacts.includes(folded)) return true;
   }
   return false;
 }
