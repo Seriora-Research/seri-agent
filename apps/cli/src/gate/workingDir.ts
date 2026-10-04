@@ -1,6 +1,7 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
+import { expandWindowsShortNames, hasWindowsShortName } from "./win32LongPath";
 
 const MAX_SYMLINKS = 64;
 
@@ -41,19 +42,23 @@ function popPath(path: string): string {
 }
 
 function realpathExisting(path: string): string {
+  let resolved: string | undefined;
   if (process.platform === "win32") {
     const prefixed = path.startsWith("\\\\?\\") ? path : `\\\\?\\${path}`;
     try {
-      return stripWindowsLongPath(realpathSync.native(prefixed));
+      resolved = stripWindowsLongPath(realpathSync.native(prefixed));
     } catch {}
   }
-  const nativeRealpath = realpathSync.native;
-  if (typeof nativeRealpath === "function") {
-    try {
-      return stripWindowsLongPath(nativeRealpath(path));
-    } catch {}
+  if (resolved === undefined) {
+    const nativeRealpath = realpathSync.native;
+    if (typeof nativeRealpath === "function") {
+      try {
+        resolved = stripWindowsLongPath(nativeRealpath(path));
+      } catch {}
+    }
   }
-  return stripWindowsLongPath(realpathSync(path));
+  if (resolved === undefined) resolved = stripWindowsLongPath(realpathSync(path));
+  return hasWindowsShortName(resolved) ? expandWindowsShortNames(resolved) : resolved;
 }
 
 function absAgainstCwd(cwd: string, path: string): string {
@@ -130,9 +135,13 @@ function walk(path: string, depth: number): string {
         return walk(joinRaw(resolved, rest), depth + 1);
       }
     } catch {}
-    return join(current, ...parts.slice(i));
+    return expandIfShort(join(current, ...parts.slice(i)));
   }
-  return stripWindowsLongPath(current);
+  return expandIfShort(stripWindowsLongPath(current));
+}
+
+function expandIfShort(path: string): string {
+  return hasWindowsShortName(path) ? expandWindowsShortNames(path) : path;
 }
 
 function normalize(path: string): string {
