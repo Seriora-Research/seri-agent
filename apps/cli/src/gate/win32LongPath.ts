@@ -2,9 +2,14 @@ import { spawnSync } from "node:child_process";
 
 const cache = new Map<string, string | undefined>();
 
+function stripTrailingSep(path: string): string {
+  if (/^[A-Za-z]:\\?$/.test(path) || path === "\\" || path === "/") return path;
+  return path.replace(/[\\/]+$/, "");
+}
+
 export function windowsShortPath(path: string): string | undefined {
   if (process.platform !== "win32") return undefined;
-  const native = path.replaceAll("/", "\\");
+  const native = stripTrailingSep(path.replaceAll("/", "\\"));
   if (cache.has(native)) return cache.get(native);
   if (native.includes('"')) {
     cache.set(native, undefined);
@@ -23,6 +28,7 @@ export function windowsShortPath(path: string): string | undefined {
     cache.set(native, undefined);
     return undefined;
   }
-  cache.set(native, short);
-  return short;
+  const cleaned = stripTrailingSep(short);
+  cache.set(native, cleaned);
+  return cleaned;
 }

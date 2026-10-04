@@ -147,7 +147,7 @@ function resolveTarget(cwd: string, raw: string, toolName: string): string {
     const posix = posixify(expanded).replace(/\/+$/, "");
     return posix === "" ? "/" : posix;
   }
-  const path = posixify(expanded);
+  const path = process.platform === "win32" ? expanded : posixify(expanded);
   if (toolName === "powershell") return canonicalizeEntryResolvedAgainstCwd(cwd, path);
   return canonicalizeEntryAgainstCwd(cwd, path);
 }
