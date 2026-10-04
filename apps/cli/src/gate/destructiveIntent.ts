@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { dirname, join, parse, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 import { type PathDenial, pathMatchesDenial } from "./gate";
-import { isInsideWorkingDir, resolveAgainstCwd } from "./workingDir";
+import { canonicalizeAgainstCwd, isInsideWorkingDir } from "./workingDir";
 
 export type DestructiveKind = "remove" | "move";
 
@@ -141,7 +141,7 @@ function resolveTarget(cwd: string, raw: string): string {
     const posix = posixify(expanded).replace(/\/+$/, "");
     return posix === "" ? "/" : posix;
   }
-  return resolveAgainstCwd(cwd, posixify(expanded));
+  return canonicalizeAgainstCwd(cwd, posixify(expanded));
 }
 
 export function destructiveIntentOf(
@@ -171,7 +171,7 @@ function matchKey(path: string): string {
 }
 
 function samePath(a: string, b: string): boolean {
-  return matchKey(resolve(a)) === matchKey(resolve(b));
+  return matchKey(canonicalizeAgainstCwd(".", a)) === matchKey(canonicalizeAgainstCwd(".", b));
 }
 
 function isVolumeRootTarget(path: string): boolean {
@@ -190,7 +190,7 @@ export function catastrophicOf(
   if (intent.recursive && intent.targets.length === 0) {
     return { reason: "unresolved-recursive" };
   }
-  const workspace = cwd !== undefined && cwd !== "" ? resolve(cwd) : undefined;
+  const workspace = cwd !== undefined && cwd !== "" ? canonicalizeAgainstCwd(cwd, ".") : undefined;
   for (const target of intent.targets) {
     if (isVolumeRootTarget(target)) return { reason: "volume-root", target };
     if (workspace !== undefined && samePath(target, workspace)) {

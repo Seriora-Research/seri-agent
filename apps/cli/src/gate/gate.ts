@@ -1,5 +1,6 @@
 import { foldsCase } from "../caseFold";
-import { classifyBuiltin, resolveAgainstCwd, type ToolClass } from "../provider/tools";
+import { classifyBuiltin, type ToolClass } from "../provider/tools";
+import { canonicalizeAgainstCwd } from "./workingDir";
 
 export type PermissionMode = "read-only" | "approve-each" | "auto";
 
@@ -27,7 +28,7 @@ function matchPath(path: string): string {
 }
 
 function resolveForMatch(path: string, cwd: string | undefined): string {
-  return resolveAgainstCwd(cwd ?? ".", path);
+  return canonicalizeAgainstCwd(cwd ?? ".", path);
 }
 
 export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
