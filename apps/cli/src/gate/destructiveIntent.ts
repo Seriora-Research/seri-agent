@@ -2,7 +2,12 @@ import { homedir } from "node:os";
 import { dirname, join, parse, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 import { type PathDenial, pathMatchesDenial } from "./gate";
-import { canonicalizeAgainstCwd, isInsideWorkingDir } from "./workingDir";
+import {
+  canonicalizeAgainstCwd,
+  canonicalizeEntryAgainstCwd,
+  isEntryInsideWorkingDir,
+  isInsideWorkingDir,
+} from "./workingDir";
 
 export type DestructiveKind = "remove" | "move";
 
@@ -141,7 +146,7 @@ function resolveTarget(cwd: string, raw: string): string {
     const posix = posixify(expanded).replace(/\/+$/, "");
     return posix === "" ? "/" : posix;
   }
-  return canonicalizeAgainstCwd(cwd, posixify(expanded));
+  return canonicalizeEntryAgainstCwd(cwd, posixify(expanded));
 }
 
 export function destructiveIntentOf(
@@ -196,7 +201,7 @@ export function catastrophicOf(
     if (workspace !== undefined && samePath(target, workspace)) {
       return { reason: "workspace-root", target };
     }
-    if (workspace !== undefined && !isInsideWorkingDir(workspace, target)) {
+    if (workspace !== undefined && !isEntryInsideWorkingDir(workspace, target)) {
       return { reason: "workspace-escape", target };
     }
   }

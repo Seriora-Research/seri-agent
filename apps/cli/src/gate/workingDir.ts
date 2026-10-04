@@ -1,5 +1,5 @@
 import { lstatSync, readlinkSync, realpathSync } from "node:fs";
-import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 
 const MAX_SYMLINKS = 64;
@@ -38,6 +38,12 @@ function popPath(path: string): string {
 }
 
 function realpathExisting(path: string): string {
+  if (process.platform === "win32") {
+    const prefixed = path.startsWith("\\\\?\\") ? path : `\\\\?\\${path}`;
+    try {
+      return stripWindowsLongPath(realpathSync.native(prefixed));
+    } catch {}
+  }
   const nativeRealpath = realpathSync.native;
   if (typeof nativeRealpath === "function") {
     try {
@@ -47,10 +53,44 @@ function realpathExisting(path: string): string {
   return stripWindowsLongPath(realpathSync(path));
 }
 
-export function canonicalizeAgainstCwd(cwd: string, path: string): string {
+function absAgainstCwd(cwd: string, path: string): string {
   const absCwd = isAbsolute(cwd) ? cwd : resolve(cwd);
-  const absPath = isAbsolute(path) ? path : concatRaw(absCwd, path);
+  if (isAbsolute(path)) return path;
+  if (/^[A-Za-z]:/.test(path)) return resolve(absCwd, path);
+  return concatRaw(absCwd, path);
+}
+
+export function canonicalizeAgainstCwd(cwd: string, path: string): string {
+  return walk(absAgainstCwd(cwd, path), 0);
+}
+
+export function canonicalizeEntryAgainstCwd(cwd: string, path: string): string {
+  const absPath = absAgainstCwd(cwd, path);
+  const parent = dirname(absPath);
+  const base = basename(absPath);
+  if (base === "" || parent === absPath) return walk(absPath, 0);
+  try {
+    if (lstatSync(absPath).isSymbolicLink()) {
+      return join(walk(parent, 0), base);
+    }
+  } catch {}
   return walk(absPath, 0);
+}
+
+function formsAgainstCwd(cwd: string, path: string): { target: string; namespace: string } {
+  const abs = resolveAgainstCwd(cwd, path);
+  const target = walk(abs, 0);
+  const parent = dirname(abs);
+  const base = basename(abs);
+  if (base === "" || parent === abs) return { target, namespace: target };
+  try {
+    // writeFile's rename replaces this final symlink; the target is still the
+    // path a follow would mutate, so callers must check both forms.
+    if (lstatSync(abs).isSymbolicLink()) {
+      return { target, namespace: join(walk(parent, 0), base) };
+    }
+  } catch {}
+  return { target, namespace: target };
 }
 
 function walk(path: string, depth: number): string {
@@ -90,14 +130,32 @@ function normalize(path: string): string {
   return foldsCase() ? path.toLowerCase() : path;
 }
 
-export function isInsideWorkingDir(cwd: string, path: string): boolean {
-  const root = normalize(canonicalizeAgainstCwd(cwd, "."));
-  const target = normalize(canonicalizeAgainstCwd(cwd, path));
-  const rel = relative(root, target);
+function contained(root: string, path: string): boolean {
+  const rel = relative(root, path);
   if (rel === "") return true;
   if (isAbsolute(rel)) return false;
   if (rel === "..") return false;
   return !rel.startsWith(`..${sep}`);
+}
+
+export function isInsideWorkingDir(cwd: string, path: string): boolean {
+  const root = normalize(walk(resolve(cwd), 0));
+  const { target, namespace } = formsAgainstCwd(cwd, path);
+  return contained(root, normalize(target)) && contained(root, normalize(namespace));
+}
+
+export function isEntryInsideWorkingDir(cwd: string, path: string): boolean {
+  const root = normalize(walk(resolve(cwd), 0));
+  const { target, namespace } = formsAgainstCwd(cwd, path);
+  if (namespace !== target) return contained(root, normalize(namespace));
+  const posix = canonicalizeAgainstCwd(cwd, path);
+  return contained(root, normalize(target)) && contained(root, normalize(posix));
+}
+
+export function matchCandidatesAgainstCwd(cwd: string, path: string): readonly string[] {
+  const lexical = resolveAgainstCwd(cwd, path);
+  const { target, namespace } = formsAgainstCwd(cwd, path);
+  return [...new Set([lexical, target, namespace])];
 }
 
 export type PathLocation = "inside" | "outside";

@@ -1,6 +1,6 @@
 import { foldsCase } from "../caseFold";
 import { classifyBuiltin, type ToolClass } from "../provider/tools";
-import { canonicalizeAgainstCwd } from "./workingDir";
+import { canonicalizeAgainstCwd, matchCandidatesAgainstCwd, resolveAgainstCwd } from "./workingDir";
 
 export type PermissionMode = "read-only" | "approve-each" | "auto";
 
@@ -27,15 +27,37 @@ function matchPath(path: string): string {
   return foldsCase() ? posix.toLowerCase() : posix;
 }
 
-function resolveForMatch(path: string, cwd: string | undefined): string {
-  return canonicalizeAgainstCwd(cwd ?? ".", path);
+function escapeGlobLiteral(path: string): string {
+  return path.replaceAll(/[\\*?[\]{}]/g, "\\$&");
+}
+
+function hasUserGlob(path: string): boolean {
+  return /[*?]/.test(path);
+}
+
+function denialGlob(
+  pattern: string,
+  cwd: string,
+): { glob: Bun.Glob; dirExact: string | undefined } {
+  const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
+  const base = tree ? pattern.slice(0, -3) : pattern;
+  if (hasUserGlob(base)) {
+    return { glob: new Bun.Glob(matchPath(resolveAgainstCwd(cwd, pattern))), dirExact: undefined };
+  }
+  const resolved = matchPath(canonicalizeAgainstCwd(cwd, resolveAgainstCwd(cwd, base)));
+  const source = tree ? `${escapeGlobLiteral(resolved)}/**` : escapeGlobLiteral(resolved);
+  return { glob: new Bun.Glob(source), dirExact: tree ? resolved : undefined };
 }
 
 export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
-  const candidate = matchPath(resolveForMatch(path, cwd));
-  const resolved = matchPath(resolveForMatch(pattern, cwd));
-  if (new Bun.Glob(resolved).match(candidate)) return true;
-  return resolved.endsWith("/**") && candidate === resolved.slice(0, -3);
+  const root = cwd ?? ".";
+  const { glob, dirExact } = denialGlob(pattern, root);
+  for (const candidate of matchCandidatesAgainstCwd(root, path)) {
+    const folded = matchPath(candidate);
+    if (glob.match(folded)) return true;
+    if (dirExact !== undefined && folded === dirExact) return true;
+  }
+  return false;
 }
 
 export function denialBlocks(

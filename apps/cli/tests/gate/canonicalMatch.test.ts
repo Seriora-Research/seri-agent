@@ -96,12 +96,56 @@ describe("path rules match the canonical target", () => {
     expect(isInsideWorkingDir(project, join(project, "ok.txt"))).toBe(true);
   });
 
-  test("a .. after a symlink component is resolved against the link target, not lexically", () => {
+  test("write_file of a lexical .. through a missing prefix still denies the symlink target", () => {
     const { protectedDir, project } = fixture();
-    const sub = join(project, "sub");
-    mkdirSync(sub);
-    linkDir(protectedDir, join(sub, "up"));
-    const viaDotDot = ["sub", "up", "..", basename(protectedDir), "secret.txt"].join(sep);
+    const via = ["missing-dir", "..", "homelink", "secret.txt"].join(sep);
+    expect(isInsideWorkingDir(project, via)).toBe(false);
+    expect(
+      checkPermission("write_file", "auto", undefined, {
+        input: { path: via, content: "x" },
+        denials: [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        cwd: project,
+      }),
+    ).toBe("block");
+  });
+
+  test("a **/.env glob still matches a .env symlink by its namespace name", () => {
+    const project = makeDir("seri-canonical-envglob-");
+    writeFileSync(join(project, "secrets.env"), "SECRET");
+    writeFileSync(join(project, "plain.env"), "plain");
+    symlinkSync(join(project, "secrets.env"), join(project, ".env"));
+    const denials = [{ tool: "read_file", pattern: "**/.env" }];
+    expect(
+      checkPermission("read_file", "auto", undefined, {
+        input: { path: ".env" },
+        denials,
+        cwd: project,
+      }),
+    ).toBe("block");
+    mkdirSync(join(project, "subdir"));
+    writeFileSync(join(project, "subdir", ".env"), "nested");
+    expect(
+      checkPermission("read_file", "auto", undefined, {
+        input: { path: join("subdir", ".env") },
+        denials,
+        cwd: project,
+      }),
+    ).toBe("block");
+    expect(
+      checkPermission("read_file", "auto", undefined, {
+        input: { path: "secrets.env" },
+        denials,
+        cwd: project,
+      }),
+    ).toBe("allow");
+  });
+
+  test("write_file collapses .. before following a symlink, matching IO", () => {
+    const { protectedDir, project } = fixture();
+    const deep = join(project, "sub", "deep", "a");
+    mkdirSync(deep, { recursive: true });
+    linkDir(deep, join(project, "link"));
+    const viaDotDot = ["link", "..", "..", basename(protectedDir), "secret.txt"].join(sep);
     expect(isInsideWorkingDir(project, viaDotDot)).toBe(false);
     expect(
       checkPermission("write_file", "auto", undefined, {
@@ -110,6 +154,75 @@ describe("path rules match the canonical target", () => {
         cwd: project,
       }),
     ).toBe("block");
+  });
+
+  test("a .. after a symlink in a shell command is resolved against the link target", () => {
+    const { protectedDir, project } = fixture();
+    const sub = join(project, "sub");
+    mkdirSync(sub);
+    linkDir(protectedDir, join(sub, "up"));
+    const viaDotDot = ["sub", "up", "..", basename(protectedDir), "secret.txt"].join(sep);
+    const intent = destructiveIntentOf("bash", { command: `rm -f "${viaDotDot}"` }, project);
+    expect(catastrophicOf(intent, project)?.reason).toBe("workspace-escape");
+    expect(
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        intent,
+        project,
+      ),
+    ).toBe(true);
+    expect(isInsideWorkingDir(project, viaDotDot)).toBe(true);
+    expect(
+      checkPermission("write_file", "auto", undefined, {
+        input: { path: viaDotDot, content: "x" },
+        denials: [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        cwd: project,
+      }),
+    ).toBe("allow");
+  });
+
+  test("an outside symlink to an inside file is outside, and a deny of the target still matches", () => {
+    const project = makeDir("seri-canonical-ns-");
+    writeFileSync(join(project, "ok.txt"), "inside");
+    const outside = makeDir("seri-canonical-ns-out-");
+    const alias = join(outside, "alias");
+    symlinkSync(join(project, "ok.txt"), alias);
+    expect(isInsideWorkingDir(project, alias)).toBe(false);
+    expect(locationForCall(project, "write_file", { path: alias })).toBe("outside");
+    expect(
+      checkPermission("write_file", "auto", undefined, {
+        input: { path: alias, content: "x" },
+        denials: [{ tool: "write_file", pattern: join(project, "ok.txt") }],
+        cwd: project,
+      }),
+    ).toBe("block");
+  });
+
+  test("a deny whose canonical path contains glob metacharacters still matches only that tree", () => {
+    const root = makeDir("seri-canonical-glob-");
+    const protectedDir = join(root, "home-folder[1]");
+    const decoy = join(root, "home-folder1");
+    const project = join(root, "project");
+    mkdirSync(protectedDir);
+    mkdirSync(decoy);
+    mkdirSync(project);
+    writeFileSync(join(protectedDir, "secret.txt"), "secret");
+    writeFileSync(join(decoy, "secret.txt"), "decoy");
+    const denials = [{ tool: "write_file", pattern: `${protectedDir}/**` }];
+    expect(
+      checkPermission("write_file", "auto", undefined, {
+        input: { path: join(protectedDir, "secret.txt"), content: "x" },
+        denials,
+        cwd: project,
+      }),
+    ).toBe("block");
+    expect(
+      checkPermission("write_file", "auto", undefined, {
+        input: { path: join(decoy, "secret.txt"), content: "x" },
+        denials,
+        cwd: project,
+      }),
+    ).toBe("allow");
   });
 
   test("a symlink that still points inside the working directory stays inside", () => {
@@ -139,18 +252,44 @@ describe("path rules match the canonical target", () => {
     ).toBe(true);
   });
 
-  test("rm -rf of a project symlink to a tree outside the working directory is a workspace-escape", () => {
-    const { project, alias } = fixture();
+  test("rm of a project symlink is not a workspace-escape; a write_file deny still covers it", () => {
+    const { protectedDir, project, alias } = fixture();
     const intent = destructiveIntentOf("bash", { command: `rm -rf "${alias}"` }, project);
+    expect(catastrophicOf(intent, project)).toBeUndefined();
+    expect(
+      writeFileDenialCovers(
+        [{ tool: "write_file", pattern: `${protectedDir}/**` }],
+        intent,
+        project,
+      ),
+    ).toBe(true);
+  });
+
+  test("rm of a file reached through a project symlink is a workspace-escape", () => {
+    const { project, alias } = fixture();
+    const through = join(alias, "secret.txt");
+    const intent = destructiveIntentOf("bash", { command: `rm -f "${through}"` }, project);
     expect(catastrophicOf(intent, project)?.reason).toBe("workspace-escape");
   });
 });
 
-describe.skipIf(process.platform !== "win32")("Windows 8.3 short names", () => {
+function volumeHasShortNames(): boolean {
+  if (process.platform !== "win32") return false;
+  const probe = mkdtempSync(join(tmpdir(), "seri-8dot3-probe-longname-"));
+  try {
+    return windowsShortPath(probe) !== undefined;
+  } finally {
+    rmSync(probe, { recursive: true, force: true });
+  }
+}
+
+describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
   test("a deny on the long path blocks a write through the 8.3 short name", () => {
     const { protectedDir, project } = fixture();
     const short = windowsShortPath(protectedDir);
-    if (short === undefined) return;
+    if (short === undefined) {
+      throw new Error("volumeHasShortNames() passed but the fixture has no 8.3 name");
+    }
     expect(
       checkPermission("write_file", "auto", undefined, {
         input: { path: join(short, "secret.txt"), content: "x" },
