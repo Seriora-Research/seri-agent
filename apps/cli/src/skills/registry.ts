@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { commandByName } from "../cli/commandCatalog";
 import { SKILLS_DIRNAME } from "../config/paths";
 import { messageOf } from "../errors";
@@ -94,6 +94,11 @@ export function substituteSkillArgs(body: string, argumentText: string): string 
   return body.replace(SUBSTITUTION, (_match, token: string) =>
     token === "ARGUMENTS" ? argumentText : (positionals[Number(token)] ?? ""),
   );
+}
+
+export function loadSkill(spec: SkillSpec, argumentText: string): string {
+  const body = substituteSkillArgs(readSkillBody(spec), argumentText);
+  return `Base directory for this skill: ${dirname(spec.filePath)}\n\n${body}`;
 }
 
 export function modelVisibleSkills(

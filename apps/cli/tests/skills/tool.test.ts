@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ToolExecutionOptions } from "ai";
 import { checkPermission } from "../../src/gate/gate";
+import { createToolDefinitions } from "../../src/provider/tools";
 import { loadSkillRegistry, type SkillRegistry } from "../../src/skills/registry";
 import { SKILL_TOOL_NAME, withSkills } from "../../src/skills/tool";
 
@@ -39,6 +41,12 @@ description: Reviews a diff.
 Review this: $ARGUMENTS
 `;
 
+const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
+  toolCallId: "test-call",
+  messages: [],
+  context: {},
+};
+
 function run(tools: ReturnType<typeof withSkills>, args: unknown): Promise<unknown> {
   const definition = tools[SKILL_TOOL_NAME] as {
     execute: (args: unknown, options: unknown) => Promise<unknown>;
@@ -58,16 +66,18 @@ describe("withSkills", () => {
   });
 
   test("returns the skill's body with the caller's arguments substituted", async () => {
-    const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": REVIEWER });
+    const { skills, worktree } = load({ "project/.seri/skills/reviewer/SKILL.md": REVIEWER });
     const tools = withSkills({}, skills);
     expect(await run(tools, { name: "reviewer", arguments: "the auth diff" })).toBe(
-      "Review this: the auth diff",
+      `Base directory for this skill: ${join(worktree, ".seri", "skills", "reviewer")}\n\nReview this: the auth diff`,
     );
   });
 
   test("omitted arguments substitute to empty rather than leaving the token", async () => {
-    const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": REVIEWER });
-    expect(await run(withSkills({}, skills), { name: "reviewer" })).toBe("Review this: ");
+    const { skills, worktree } = load({ "project/.seri/skills/reviewer/SKILL.md": REVIEWER });
+    expect(await run(withSkills({}, skills), { name: "reviewer" })).toBe(
+      `Base directory for this skill: ${join(worktree, ".seri", "skills", "reviewer")}\n\nReview this: `,
+    );
   });
 
   test("a disable-model-invocation skill is not in the enum and is refused by name", async () => {
@@ -102,5 +112,27 @@ describe("withSkills", () => {
     for (const mode of ["read-only", "approve-each", "auto"] as const) {
       expect(checkPermission(SKILL_TOOL_NAME, mode)).toBe("allow");
     }
+  });
+
+  test("names the skill directory so a bundled reference is readable without search", async () => {
+    const { skills, worktree } = load({
+      "project/.seri/skills/probe/SKILL.md":
+        "---\nname: probe\ndescription: Probe criteria.\n---\n\nSee references/guide.md\n",
+      "project/.seri/skills/probe/references/guide.md": "GUIDE-MARKER-4471\n",
+    });
+    const text = String(await run(withSkills({}, skills), { name: "probe" }));
+    const match = /^Base directory for this skill: (.+)\n\nSee references\/guide.md$/.exec(text);
+    expect(match?.[1]).toBe(join(worktree, ".seri", "skills", "probe"));
+    const baseDir = match?.[1] ?? "";
+    const fileTools = createToolDefinitions(worktree);
+    expect(
+      await fileTools.read_file.execute?.(
+        { path: join(baseDir, "references", "guide.md") },
+        execOpts,
+      ),
+    ).toBe("GUIDE-MARKER-4471\n");
+    expect(() => fileTools.read_file.execute?.({ path: "references/guide.md" }, execOpts)).toThrow(
+      /ENOENT/,
+    );
   });
 });

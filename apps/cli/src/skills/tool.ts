@@ -2,12 +2,7 @@ import type { ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
 import { messageOf } from "../errors";
-import {
-  modelVisibleSkills,
-  readSkillBody,
-  type SkillRegistry,
-  substituteSkillArgs,
-} from "./registry";
+import { loadSkill, modelVisibleSkills, type SkillRegistry } from "./registry";
 
 export const SKILL_TOOL_NAME = "skill";
 
@@ -38,7 +33,7 @@ export function withSkills(tools: ToolSet, skills: SkillRegistry): ToolSet {
           throw new Error(`no skill named "${args.name}" is available this session`);
         }
         try {
-          return substituteSkillArgs(readSkillBody(spec), args.arguments ?? "");
+          return loadSkill(spec, args.arguments ?? "");
         } catch (err) {
           throw new Error(`could not load the "${spec.name}" skill: ${messageOf(err)}`);
         }
