@@ -173,7 +173,7 @@ export function isEntryInsideWorkingDir(cwd: string, path: string): boolean {
 export function matchCandidatesAgainstCwd(cwd: string, path: string): readonly string[] {
   const lexical = resolveAgainstCwd(cwd, path);
   const { target, namespace } = formsAgainstCwd(cwd, path);
-  return [...new Set([lexical, target, namespace])];
+  return [...new Set([lexical, target, namespace, expandWindowsShortNames(lexical)])];
 }
 
 export type PathLocation = "inside" | "outside";

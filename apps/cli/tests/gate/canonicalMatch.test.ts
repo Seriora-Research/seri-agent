@@ -9,6 +9,7 @@ import {
   writeFileDenialCovers,
 } from "../../src/gate/destructiveIntent";
 import { checkPermission } from "../../src/gate/gate";
+import { expandWindowsShortNames } from "../../src/gate/win32LongPath";
 import { isInsideWorkingDir, locationForCall } from "../../src/gate/workingDir";
 
 let dirs: string[] = [];
@@ -328,6 +329,9 @@ describe.skipIf(!volumeHasShortNames())("Windows 8.3 short names", () => {
     if (short === undefined) {
       throw new Error("volumeHasShortNames() passed but the fixture has no 8.3 name");
     }
+    expect(expandWindowsShortNames(short).replaceAll("\\", "/").toLowerCase()).toBe(
+      protectedDir.replaceAll("\\", "/").toLowerCase(),
+    );
     expect(
       checkPermission("write_file", "auto", undefined, {
         input: { path: join(short, "secret.txt"), content: "x" },
