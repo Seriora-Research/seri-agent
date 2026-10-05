@@ -39,14 +39,15 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - name: Test
-        if: matrix.os != 'ubuntu-latest'
+        if: matrix.os == 'macos-latest'
         run: bun test
-      # Ubuntu: Bun 1.4.0 SIGSEGV (exit 139) when the next file loads after ~30s of
-      # spawn/FFI in one process. One process per test directory; PTY files alone.
-      # Do not --shard: that reorders files and leaks the doctor HOME rg cache
-      # into grep.
+      # Ubuntu and Windows: Bun 1.4.0 SIGSEGV when spawn/FFI pile up in one process
+      # (exit 139 on Linux; a post-suite segfault on Windows). One process per test
+      # directory; PTY files alone. Do not --shard: that reorders files and leaks
+      # the doctor HOME rg cache into grep.
       - name: Test
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os != 'macos-latest'
+        shell: bash
         run: |
           bun test apps/cli/tests/*.test.ts packages
           for dir in apps/cli/tests/*/; do
