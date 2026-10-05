@@ -1440,6 +1440,48 @@ describe("runLoop", () => {
       ]);
     });
 
+    test("a PreToolUse notice on an object result is a string suffix", async () => {
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async () => ({ lines: 3 }) as unknown as string),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(toolTurnOutputs(events)).toEqual([
+        [{ type: "json", value: '{"lines":3}\n\nlint exited 1: boom' }],
+      ]);
+    });
+
+    test("a PreToolUse notice on an image result is a text part beside the file", async () => {
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(
+            async () => ({ kind: "image", mime: "image/png", data: "abc" }) as unknown as string,
+          ),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(toolTurnOutputs(events)).toEqual([
+        [
+          {
+            type: "content",
+            value: [
+              { type: "file", mediaType: "image/png", data: { type: "data", data: "abc" } },
+              { type: "text", text: "lint exited 1: boom" },
+            ],
+          },
+        ],
+      ]);
+    });
+
     test("PostToolUse runs after the call and its messages become error events", async () => {
       const seen: { subject: string; input: unknown; result: unknown }[] = [];
       const events = await collect(
