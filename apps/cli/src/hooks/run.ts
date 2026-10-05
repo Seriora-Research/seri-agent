@@ -1,23 +1,43 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { messageOf } from "../errors";
 import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
-import { HOOK_BLOCK_EXIT_CODE, type HookOutcome, type HookPayload, type HookSpec } from "./types";
+import {
+  HOOK_BLOCK_EXIT_CODE,
+  HOOK_REASON_MAX_CHARS,
+  type HookOutcome,
+  type HookPayload,
+  type HookSpec,
+} from "./types";
 
-const REASON_MAX_CHARS = 300;
+function unrunnableFileReason(path: string): string | undefined {
+  try {
+    if (!statSync(path).isFile()) return "not a regular file";
+    accessSync(path, constants.R_OK);
+    return undefined;
+  } catch (err) {
+    const code = err !== null && typeof err === "object" && "code" in err ? err.code : undefined;
+    return code === "ENOENT" ? "no such file" : "not a readable file";
+  }
+}
 
 function truncate(text: string): string {
-  return text.length > REASON_MAX_CHARS ? `${text.slice(0, REASON_MAX_CHARS)}…` : text;
+  if (text.length <= HOOK_REASON_MAX_CHARS) return text;
+  // The cause is usually the last line of stderr.
+  return `…${text.slice(-(HOOK_REASON_MAX_CHARS - 1))}`;
+}
+
+function excerpt(stderr: string): string {
+  return truncate(stderr.trim());
 }
 
 function blockReason(spec: HookSpec, stderr: string): string {
-  const trimmed = stderr.trim();
-
-  return truncate(trimmed || `${spec.script} blocked the call but printed nothing on stderr`);
+  return excerpt(stderr) || `${spec.script} blocked the call but printed nothing on stderr`;
 }
 
 function failureMessage(spec: HookSpec, cause: string, stderr: string): string {
-  const trimmed = stderr.trim();
-  return truncate(trimmed ? `${spec.script} ${cause}: ${trimmed}` : `${spec.script} ${cause}`);
+  const body = excerpt(stderr);
+  return body ? `${spec.script} ${cause}: ${body}` : `${spec.script} ${cause}`;
 }
 
 function resolveInterpreter(spec: HookSpec): { executable: string; args: string[] } | undefined {
@@ -38,10 +58,20 @@ export async function runHook(
   signal?: AbortSignal,
   spawn: typeof spawnCollect = spawnCollect,
 ): Promise<HookOutcome> {
+  // A shell "not found" exit means the hook started. A missing, unreadable, or
+  // directory path never did (bash would still exec a directory and exit 126).
+  const fileReason = unrunnableFileReason(spec.path);
+  if (fileReason !== undefined) {
+    return {
+      kind: "unrunnable",
+      message: truncate(`${spec.script} could not be run: ${fileReason}`),
+    };
+  }
+
   const interpreter = resolveInterpreter(spec);
   if (interpreter === undefined) {
     return {
-      kind: "failed",
+      kind: "unrunnable",
       message: truncate(`${spec.script}: bash is not available on this system`),
     };
   }
@@ -59,7 +89,7 @@ export async function runHook(
   } catch (err) {
     if (signal?.aborted === true) throw err;
     return {
-      kind: "failed",
+      kind: "unrunnable",
       message: truncate(`${spec.script} could not be run: ${messageOf(err)}`),
     };
   }

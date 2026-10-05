@@ -24,6 +24,15 @@ export function createHookRunner(opts: {
   const afterSpecs = opts.registry.get("PostToolUse") ?? [];
   if (beforeSpecs.length === 0 && afterSpecs.length === 0) return undefined;
   const run = opts.run ?? runHook;
+  const delivered = new Set<string>();
+  const takeNotice = (message: string, into: string[]): void => {
+    if (delivered.has(message) || into.includes(message)) return;
+    into.push(message);
+  };
+  const remember = (notices: readonly string[]): readonly string[] => {
+    for (const notice of notices) delivered.add(notice);
+    return notices;
+  };
 
   return {
     onBeforeTool: async (subject, input) => {
@@ -36,13 +45,24 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind === "block") return { block: outcome.reason, errors };
-        if (outcome.kind === "failed") {
-          errors.push(outcome.message);
-          return { block: outcome.message, errors };
+        switch (outcome.kind) {
+          case "ok":
+            continue;
+          case "failed":
+            takeNotice(outcome.message, errors);
+            continue;
+          case "block":
+            return { block: outcome.reason, errors: remember(errors) };
+          case "unrunnable":
+            takeNotice(outcome.message, errors);
+            return { block: outcome.message, errors: remember(errors) };
+          default: {
+            const _never: never = outcome;
+            return _never;
+          }
         }
       }
-      return { errors };
+      return { errors: remember(errors) };
     },
     onAfterTool: async (subject, input, result) => {
       const messages: string[] = [];
@@ -60,11 +80,28 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind !== "ok") {
-          messages.push(outcome.kind === "block" ? outcome.reason : outcome.message);
+        switch (outcome.kind) {
+          case "ok":
+            continue;
+          case "failed":
+          case "unrunnable":
+            takeNotice(outcome.message, messages);
+            continue;
+          case "block":
+            takeNotice(
+              outcome.reason.startsWith(`${spec.script} `) || outcome.reason === spec.script
+                ? outcome.reason
+                : `${spec.script} blocked: ${outcome.reason}`,
+              messages,
+            );
+            continue;
+          default: {
+            const _never: never = outcome;
+            return _never;
+          }
         }
       }
-      return messages;
+      return remember(messages);
     },
   };
 }

@@ -109,9 +109,23 @@ describe("createHookRunner", () => {
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["guard"]);
   });
 
-  test("a failed PreToolUse hook denies and the hooks behind it never run", async () => {
+  test("a failed PreToolUse hook reports the notice and later matching hooks still run", async () => {
+    const fake = fakeRun([{ kind: "failed", message: "lint exited 1: boom" }, { kind: "ok" }]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "lint" }), makeSpec({ script: "guard" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
+      errors: ["lint exited 1: boom"],
+    });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "guard"]);
+  });
+
+  test("a later PreToolUse block still denies after an advisory failure", async () => {
     const fake = fakeRun([
-      { kind: "failed", message: "lint could not be run" },
+      { kind: "failed", message: "lint exited 1: boom" },
       { kind: "block", reason: "do not touch main" },
     ]);
     const runner = builtRunner({
@@ -121,15 +135,53 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
-      block: "lint could not be run",
-      errors: ["lint could not be run"],
+      block: "do not touch main",
+      errors: ["lint exited 1: boom"],
     });
-    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint"]);
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "guard"]);
   });
 
-  test("onBeforeTool denies on the first failure instead of collecting later ones", async () => {
+  test("an unrunnable PreToolUse hook denies and the hooks behind it never run", async () => {
+    const message = "deny-all could not be run: ENOENT";
     const fake = fakeRun([
-      { kind: "failed", message: "lint could not be run" },
+      { kind: "unrunnable", message },
+      { kind: "block", reason: "do not touch main" },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "deny-all" }), makeSpec({ script: "guard" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
+      block: message,
+      errors: [message],
+    });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["deny-all"]);
+  });
+
+  test("an unrunnable PreToolUse after an advisory failure still reports both", async () => {
+    const message = "deny-all could not be run: ENOENT";
+    const fake = fakeRun([
+      { kind: "failed", message: "lint exited 1: boom" },
+      { kind: "unrunnable", message },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "lint" }), makeSpec({ script: "deny-all" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
+      block: message,
+      errors: ["lint exited 1: boom", message],
+    });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "deny-all"]);
+  });
+
+  test("onBeforeTool collects every failed notice instead of stopping at the first", async () => {
+    const fake = fakeRun([
+      { kind: "failed", message: "lint exited 1: boom" },
       { kind: "ok" },
       { kind: "failed", message: "audit timed out" },
     ]);
@@ -144,10 +196,29 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({
-      block: "lint could not be run",
-      errors: ["lint could not be run"],
+      errors: ["lint exited 1: boom", "audit timed out"],
     });
-    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "fine", "audit"]);
+  });
+
+  test("a second identical failure is omitted and a distinct one is not", async () => {
+    const repeated = "lint exited 1: boom";
+    const fake = fakeRun([
+      { kind: "failed", message: repeated },
+      { kind: "failed", message: repeated },
+      { kind: "failed", message: "audit timed out" },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "lint" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({ errors: [repeated] });
+    expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({ errors: [] });
+    expect(await runner.onBeforeTool("bash", { command: "ls" })).toEqual({
+      errors: ["audit timed out"],
+    });
   });
 
   test("an ok PreToolUse hook still admits", async () => {
@@ -181,6 +252,45 @@ describe("createHookRunner", () => {
     expect(fake.calls).toHaveLength(2);
   });
 
+  test("onAfterTool omits a failure message it already returned", async () => {
+    const message = "format exited 1: boom";
+    const fake = fakeRun([
+      { kind: "failed", message },
+      { kind: "failed", message },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([], [makeSpec({ event: "PostToolUse", script: "format" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
+      message,
+    ]);
+    expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([]);
+  });
+
+  test("an identical failure is delivered once across PreToolUse and PostToolUse", async () => {
+    const message = "lint exited 1: boom";
+    const fake = fakeRun([
+      { kind: "failed", message },
+      { kind: "failed", message },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf(
+        [makeSpec({ script: "lint" })],
+        [makeSpec({ event: "PostToolUse", script: "lint" })],
+      ),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("write_file", { path: "a.txt" })).toEqual({
+      errors: [message],
+    });
+    expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([]);
+  });
+
   test("onAfterTool reports a block as a message, because exit 2 cannot un-run the tool", async () => {
     const fake = fakeRun([{ kind: "block", reason: "that file is generated" }, { kind: "ok" }]);
     const runner = builtRunner({
@@ -196,7 +306,7 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
-      "that file is generated",
+      "too-late blocked: that file is generated",
     ]);
 
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["too-late", "behind-it"]);

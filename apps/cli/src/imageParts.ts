@@ -152,10 +152,10 @@ function stripMessage(message: ModelMessage): { message: ModelMessage; dropped: 
       const stripped = stripParts(output.value);
       dropped += stripped.dropped;
       if (stripped.dropped === 0) return part;
-      const value =
-        stripped.parts.length > 0
-          ? stripped.parts
-          : [{ type: "text", text: "dropped image; this model does not accept image input" }];
+      const value = [
+        ...stripped.parts,
+        { type: "text", text: "dropped image; this model does not accept image input" },
+      ];
       return {
         ...part,
         output: { type: "content", value } as typeof output,

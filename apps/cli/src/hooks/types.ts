@@ -11,6 +11,8 @@ export function isHookEvent(value: string): value is HookEvent {
 
 export const HOOK_BLOCK_EXIT_CODE = 2;
 
+export const HOOK_REASON_MAX_CHARS = 300;
+
 export const DEFAULT_HOOK_TIMEOUT_MS = 30_000;
 
 export type HookSpec = {
@@ -44,4 +46,5 @@ export type HookPayload = {
 export type HookOutcome =
   | { readonly kind: "ok" }
   | { readonly kind: "block"; readonly reason: string }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "unrunnable"; readonly message: string };

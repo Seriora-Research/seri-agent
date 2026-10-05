@@ -1113,6 +1113,17 @@ describe("runLoop", () => {
       return content.map((part) => part.output);
     }
 
+    function toolTurnOutputs(events: LoopEvent[]): unknown[][] {
+      const turns: unknown[][] = [];
+      for (const event of events) {
+        if (event.type !== "messages-updated") continue;
+        const message = event.messages.at(-1);
+        if (message?.role !== "tool" || !Array.isArray(message.content)) continue;
+        turns.push(message.content.map((part) => ("output" in part ? part.output : part)));
+      }
+      return turns;
+    }
+
     test("a PreToolUse callback that blocks nothing lets the call through", async () => {
       const executed: unknown[] = [];
       const prompted: string[] = [];
@@ -1137,6 +1148,63 @@ describe("runLoop", () => {
       expect(prompted).toEqual(["write_file"]);
       expect(events).toContainEqual({ type: "tool-result", name: "write_file", result: "ok" });
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+    });
+
+    test("a PreToolUse notice still reaches the model when a later hook blocks", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({
+            errors: ["lint exited 1: boom"],
+            block: "do not touch main",
+          }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "hook",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("do not touch main");
+      expect(output?.reason).toContain("lint exited 1: boom");
+    });
+
+    test("a PreToolUse notice still reaches the model when the gate denies", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "read-only",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "blocked",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("read-only");
+      expect(output?.reason).toContain("lint exited 1: boom");
     });
 
     test("a PreToolUse block stops the call before the gate ever asks", async () => {
@@ -1278,6 +1346,130 @@ describe("runLoop", () => {
       15_000,
     );
 
+    test.skipIf(!isBashAvailable() || process.platform === "win32")(
+      "a PreToolUse exit 1 is attached to the tool result once and a repeat is collapsed",
+      async () => {
+        const dir = mkdtempSync(join(tmpdir(), "seri-hooks-loop-fail-"));
+        const path = join(dir, "lint.sh");
+        writeFileSync(path, "#!/usr/bin/env bash\necho boom >&2\nexit 1\n");
+        chmodSync(path, 0o755);
+        try {
+          const runner = createHookRunner({
+            registry: new Map([
+              [
+                "PreToolUse",
+                [
+                  {
+                    event: "PreToolUse" as const,
+                    script: "lint",
+                    path,
+                    matcher: undefined,
+                    timeoutMs: 10_000,
+                    source: "project" as const,
+                    filePath: join(dir, "hooks.yaml"),
+                  },
+                ],
+              ],
+            ]),
+            cwd: dir,
+          });
+          if (runner === undefined) throw new Error("expected a runner");
+
+          const executed: unknown[] = [];
+          const events = await collect(
+            runLoop({
+              model: new MockLanguageModelV4({
+                doStream: [
+                  streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+                  streamResult(toolCallChunks("call-2", "write_file", { path: "b.txt" })),
+                  streamResult(textOnlyChunks("Done")),
+                ],
+              }),
+              tools: makeTools(async (input) => {
+                executed.push(input);
+                return "ok";
+              }),
+              messages: baseMessages,
+              permissionMode: "auto",
+              onBeforeTool: runner.onBeforeTool,
+            }),
+          );
+
+          expect(executed).toEqual([{ path: "a.txt" }, { path: "b.txt" }]);
+          expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+          expect(events.filter((e) => e.type === "error")).toEqual([
+            { type: "error", error: "lint exited 1: boom" },
+          ]);
+          expect(toolTurnOutputs(events)).toEqual([
+            [{ type: "text", value: '"ok"\n\nHook notices:\n- lint exited 1: boom' }],
+            [{ type: "json", value: "ok" }],
+          ]);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+      15_000,
+    );
+
+    test.skipIf(!isBashAvailable() || process.platform === "win32")(
+      "a PostToolUse exit 1 is on that tool result, not only the error event",
+      async () => {
+        const dir = mkdtempSync(join(tmpdir(), "seri-hooks-loop-post-"));
+        const path = join(dir, "format.sh");
+        writeFileSync(path, "#!/usr/bin/env bash\necho boom >&2\nexit 1\n");
+        chmodSync(path, 0o755);
+        try {
+          const runner = createHookRunner({
+            registry: new Map([
+              [
+                "PostToolUse",
+                [
+                  {
+                    event: "PostToolUse" as const,
+                    script: "format",
+                    path,
+                    matcher: undefined,
+                    timeoutMs: 10_000,
+                    source: "project" as const,
+                    filePath: join(dir, "hooks.yaml"),
+                  },
+                ],
+              ],
+            ]),
+            cwd: dir,
+          });
+          if (runner === undefined) throw new Error("expected a runner");
+
+          const executed: unknown[] = [];
+          const events = await collect(
+            runLoop({
+              model: oneWriteThenText(),
+              tools: makeTools(async (input) => {
+                executed.push(input);
+                return "wrote 3 lines";
+              }),
+              messages: baseMessages,
+              permissionMode: "auto",
+              onAfterTool: runner.onAfterTool,
+            }),
+          );
+
+          expect(executed).toEqual([{ path: "a.txt" }]);
+          expect(events).toContainEqual({ type: "error", error: "format exited 1: boom" });
+          expect(toolTurnOutputs(events)).toEqual([
+            [{ type: "text", value: '"wrote 3 lines"\n\nHook notices:\n- format exited 1: boom' }],
+          ]);
+          const resultIndex = events.findIndex((e) => e.type === "tool-result");
+          const errorIndex = events.findIndex((e) => e.type === "error");
+          expect(resultIndex).toBeGreaterThanOrEqual(0);
+          expect(errorIndex).toBeGreaterThan(resultIndex);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+      15_000,
+    );
+
     test("PreToolUse errors are reported and the call still runs", async () => {
       const executed: unknown[] = [];
       const events = await collect(
@@ -1300,6 +1492,56 @@ describe("runLoop", () => {
 
       expect(executed).toEqual([{ path: "a.txt" }]);
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+      expect(toolTurnOutputs(events)).toEqual([
+        [
+          {
+            type: "text",
+            value: '"ok"\n\nHook notices:\n- lint could not be run\n- audit timed out',
+          },
+        ],
+      ]);
+    });
+
+    test("a PreToolUse notice on an object result is raw text, not a json string", async () => {
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async () => ({ lines: 3 }) as unknown as string),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(toolTurnOutputs(events)).toEqual([
+        [{ type: "text", value: '{"lines":3}\n\nHook notices:\n- lint exited 1: boom' }],
+      ]);
+    });
+
+    test("a PreToolUse notice on an image result is a text part beside the file", async () => {
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(
+            async () => ({ kind: "image", mime: "image/png", data: "abc" }) as unknown as string,
+          ),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(toolTurnOutputs(events)).toEqual([
+        [
+          {
+            type: "content",
+            value: [
+              { type: "file", mediaType: "image/png", data: { type: "data", data: "abc" } },
+              { type: "text", text: "Hook notices:\n- lint exited 1: boom" },
+            ],
+          },
+        ],
+      ]);
     });
 
     test("PostToolUse runs after the call and its messages become error events", async () => {
@@ -1322,7 +1564,7 @@ describe("runLoop", () => {
       ]);
       expect(events).toContainEqual({ type: "error", error: "format rewrote a.txt" });
 
-      expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["json"]);
+      expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["text"]);
       const resultIndex = events.findIndex((e) => e.type === "tool-result");
       const errorIndex = events.findIndex((e) => e.type === "error");
       expect(resultIndex).toBeGreaterThanOrEqual(0);
