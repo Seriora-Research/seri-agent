@@ -1401,7 +1401,7 @@ describe("runLoop", () => {
             { type: "error", error: "lint exited 1: boom" },
           ]);
           expect(toolTurnOutputs(events)).toEqual([
-            [{ type: "json", value: "ok\n\nlint exited 1: boom" }],
+            [{ type: "text", value: '"ok"\n\nHook notices:\n- lint exited 1: boom' }],
             [{ type: "json", value: "ok" }],
           ]);
         } finally {
@@ -1457,7 +1457,7 @@ describe("runLoop", () => {
           expect(executed).toEqual([{ path: "a.txt" }]);
           expect(events).toContainEqual({ type: "error", error: "format exited 1: boom" });
           expect(toolTurnOutputs(events)).toEqual([
-            [{ type: "json", value: "wrote 3 lines\n\nformat exited 1: boom" }],
+            [{ type: "text", value: '"wrote 3 lines"\n\nHook notices:\n- format exited 1: boom' }],
           ]);
           const resultIndex = events.findIndex((e) => e.type === "tool-result");
           const errorIndex = events.findIndex((e) => e.type === "error");
@@ -1493,11 +1493,16 @@ describe("runLoop", () => {
       expect(executed).toEqual([{ path: "a.txt" }]);
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
       expect(toolTurnOutputs(events)).toEqual([
-        [{ type: "json", value: "ok\n\nlint could not be run\naudit timed out" }],
+        [
+          {
+            type: "text",
+            value: '"ok"\n\nHook notices:\n- lint could not be run\n- audit timed out',
+          },
+        ],
       ]);
     });
 
-    test("a PreToolUse notice on an object result is a string suffix", async () => {
+    test("a PreToolUse notice on an object result is raw text, not a json string", async () => {
       const events = await collect(
         runLoop({
           model: oneWriteThenText(),
@@ -1509,7 +1514,7 @@ describe("runLoop", () => {
       );
 
       expect(toolTurnOutputs(events)).toEqual([
-        [{ type: "json", value: '{"lines":3}\n\nlint exited 1: boom' }],
+        [{ type: "text", value: '{"lines":3}\n\nHook notices:\n- lint exited 1: boom' }],
       ]);
     });
 
@@ -1532,7 +1537,7 @@ describe("runLoop", () => {
             type: "content",
             value: [
               { type: "file", mediaType: "image/png", data: { type: "data", data: "abc" } },
-              { type: "text", text: "lint exited 1: boom" },
+              { type: "text", text: "Hook notices:\n- lint exited 1: boom" },
             ],
           },
         ],
@@ -1559,7 +1564,7 @@ describe("runLoop", () => {
       ]);
       expect(events).toContainEqual({ type: "error", error: "format rewrote a.txt" });
 
-      expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["json"]);
+      expect(toolRowOutputs(events).map((output) => output.type)).toEqual(["text"]);
       const resultIndex = events.findIndex((e) => e.type === "tool-result");
       const errorIndex = events.findIndex((e) => e.type === "error");
       expect(resultIndex).toBeGreaterThanOrEqual(0);

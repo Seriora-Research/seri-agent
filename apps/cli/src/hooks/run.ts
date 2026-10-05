@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { messageOf } from "../errors";
 import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
@@ -9,6 +9,17 @@ import {
   type HookPayload,
   type HookSpec,
 } from "./types";
+
+function unrunnableFileReason(path: string): string | undefined {
+  try {
+    if (!statSync(path).isFile()) return "not a regular file";
+    accessSync(path, constants.R_OK);
+    return undefined;
+  } catch (err) {
+    const code = err !== null && typeof err === "object" && "code" in err ? err.code : undefined;
+    return code === "ENOENT" ? "no such file" : "not a readable file";
+  }
+}
 
 function truncate(text: string): string {
   if (text.length <= HOOK_REASON_MAX_CHARS) return text;
@@ -47,11 +58,13 @@ export async function runHook(
   signal?: AbortSignal,
   spawn: typeof spawnCollect = spawnCollect,
 ): Promise<HookOutcome> {
-  // A shell "not found" exit means the hook started. A missing script never did.
-  if (!existsSync(spec.path)) {
+  // A shell "not found" exit means the hook started. A missing, unreadable, or
+  // directory path never did (bash would still exec a directory and exit 126).
+  const fileReason = unrunnableFileReason(spec.path);
+  if (fileReason !== undefined) {
     return {
       kind: "unrunnable",
-      message: truncate(`${spec.script} could not be run: no such file`),
+      message: truncate(`${spec.script} could not be run: ${fileReason}`),
     };
   }
 

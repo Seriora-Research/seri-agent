@@ -137,6 +137,19 @@ describe("runHook (injected spawn)", () => {
     });
   });
 
+  test("a directory path is unrunnable before spawn", async () => {
+    const outcome = await runHook(
+      makeSpec({ script: "dirhook", path: makeTempDir() }),
+      makePayload(),
+      undefined,
+      async () => fakeResult({ exitCode: 0 }),
+    );
+    expect(outcome).toEqual({
+      kind: "unrunnable",
+      message: "dirhook could not be run: not a regular file",
+    });
+  });
+
   test.skipIf(process.platform === "win32")("a missing interpreter is unrunnable", async () => {
     const dir = makeTempDir();
     const path = join(dir, "hook.sh");

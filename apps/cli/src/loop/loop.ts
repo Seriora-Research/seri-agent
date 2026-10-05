@@ -298,6 +298,7 @@ function toolResultOutput(
 
 type NoticeableOutput =
   | { type: "json"; value: JSONValue }
+  | { type: "text"; value: string }
   | { type: "error-text"; value: string }
   | ReturnType<typeof toolOutputForImage>
   | {
@@ -308,24 +309,49 @@ type NoticeableOutput =
       >;
     };
 
+type RecordedOutput = NoticeableOutput | { type: "execution-denied"; reason: string };
+
+function hookNoticeBlock(notices: readonly string[]): string {
+  return `Hook notices:\n${notices.map((notice) => `- ${notice}`).join("\n")}`;
+}
+
 function withHookNotices(reason: string, notices: readonly string[]): string {
   const leftover = notices.filter((notice) => !reason.includes(notice));
-  return leftover.length === 0 ? reason : `${reason}\n\n${leftover.join("\n")}`;
+  return leftover.length === 0 ? reason : `${reason}\n\n${hookNoticeBlock(leftover)}`;
 }
 
 function attachHookNotices(output: NoticeableOutput, notices: readonly string[]): NoticeableOutput {
   if (notices.length === 0) return output;
-  const suffix = notices.join("\n");
+  const block = hookNoticeBlock(notices);
   if (output.type === "json") {
-    const text = typeof output.value === "string" ? output.value : JSON.stringify(output.value);
-    return { type: "json", value: `${text}\n\n${suffix}` };
+    return { type: "text", value: `${JSON.stringify(output.value)}\n\n${block}` };
   }
   if (output.type === "error-text") {
-    return { type: "error-text", value: `${output.value}\n\n${suffix}` };
+    return { type: "error-text", value: `${output.value}\n\n${block}` };
+  }
+  if (output.type === "text") {
+    return { type: "text", value: `${output.value}\n\n${block}` };
   }
   return {
     type: "content",
-    value: [...output.value, ...notices.map((text) => ({ type: "text" as const, text }))],
+    value: [...output.value, { type: "text" as const, text: block }],
+  };
+}
+
+function recordToolResult(
+  call: { toolCallId: string; toolName: string },
+  output: RecordedOutput,
+  notices: readonly string[] = [],
+): ToolContent[number] {
+  const recorded =
+    output.type === "execution-denied"
+      ? { type: "execution-denied" as const, reason: withHookNotices(output.reason, notices) }
+      : attachHookNotices(output, notices);
+  return {
+    type: "tool-result",
+    toolCallId: call.toolCallId,
+    toolName: call.toolName,
+    output: recorded,
   };
 }
 
@@ -705,12 +731,9 @@ export async function* runLoop(opts: {
         if (out.kind === "error") {
           const error = `Tool "${item.subject}" threw during execution: ${errorText(out.error)}`;
           yield { type: "error", error };
-          toolResults.push({
-            type: "tool-result",
-            toolCallId: item.call.toolCallId,
-            toolName: item.call.toolName,
-            output: attachHookNotices({ type: "error-text", value: error }, item.beforeNotices),
-          });
+          toolResults.push(
+            recordToolResult(item.call, { type: "error-text", value: error }, item.beforeNotices),
+          );
           continue;
         }
         yield { type: "tool-result", name: item.subject, result: out.value };
@@ -721,27 +744,21 @@ export async function* runLoop(opts: {
             afterMessages = await opts.onAfterTool(item.subject, item.call.input, out.value);
           } catch (err) {
             if (opts.signal?.aborted) {
-              toolResults.push({
-                type: "tool-result",
-                toolCallId: item.call.toolCallId,
-                toolName: item.call.toolName,
-                output: attachHookNotices(toolResultOutput(out.value), item.beforeNotices),
-              });
+              toolResults.push(
+                recordToolResult(item.call, toolResultOutput(out.value), item.beforeNotices),
+              );
               return "aborted";
             }
             throw err;
           }
         }
         for (const error of afterMessages) yield { type: "error", error };
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: item.call.toolCallId,
-          toolName: item.call.toolName,
-          output: attachHookNotices(toolResultOutput(out.value), [
+        toolResults.push(
+          recordToolResult(item.call, toolResultOutput(out.value), [
             ...item.beforeNotices,
             ...afterMessages,
           ]),
-        });
+        );
       }
       return aborted || opts.signal?.aborted === true ? "aborted" : "ok";
     }
@@ -755,12 +772,7 @@ export async function* runLoop(opts: {
         if ((yield* flushReadBatch()) === "aborted") break;
         const error = `Unknown tool "${call.toolName}": no matching tool definition.`;
         yield { type: "error", error };
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: { type: "error-text", value: error },
-        });
+        toolResults.push(recordToolResult(call, { type: "error-text", value: error }));
         continue;
       }
 
@@ -771,13 +783,8 @@ export async function* runLoop(opts: {
         deniedTargets.push(...intent.targets);
         stopAfterDestructive = true;
       };
-      const pushDenied = (reason: string): void => {
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: { type: "execution-denied", reason },
-        });
+      const pushDenied = (reason: string, notices: readonly string[] = []): void => {
+        toolResults.push(recordToolResult(call, { type: "execution-denied", reason }, notices));
       };
 
       if (intent !== undefined && followUpBlocked(deniedTargets, intent)) {
@@ -833,18 +840,11 @@ export async function* runLoop(opts: {
           containment.reason.kind === "escape"
             ? `${containment.reason.class} (${containment.reason.label})`
             : `unparseable (${containment.reason.detail})`;
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: {
-            type: "execution-denied",
-            reason:
-              `Tool "${subject}" was blocked as a containment escape: ${named}. ` +
-              `Do not retry this call or a variant of it. The block is a harness rail; ` +
-              `/mode and --dangerously-skip-permissions do not lift it.`,
-          },
-        });
+        pushDenied(
+          `Tool "${subject}" was blocked as a containment escape: ${named}. ` +
+            `Do not retry this call or a variant of it. The block is a harness rail; ` +
+            `/mode and --dangerously-skip-permissions do not lift it.`,
+        );
         continue;
       }
 
@@ -866,11 +866,9 @@ export async function* runLoop(opts: {
           recordDestructiveDeny();
           yield { type: "permission-denied", name: subject, reason: "hook" };
           pushDenied(
-            withHookNotices(
-              `Tool "${subject}" was blocked by a project hook: ${hook.block} ` +
-                `Do not retry this call. The block is deterministic and asking again will not change it.`,
-              beforeNotices,
-            ),
+            `Tool "${subject}" was blocked by a project hook: ${hook.block} ` +
+              `Do not retry this call. The block is deterministic and asking again will not change it.`,
+            beforeNotices,
           );
           continue;
         }
@@ -908,7 +906,7 @@ export async function* runLoop(opts: {
           name: subject,
           reason: verdict.kind === "deny-blocked" ? "blocked" : "declined",
         };
-        pushDenied(withHookNotices(verdict.reason, beforeNotices));
+        pushDenied(verdict.reason, beforeNotices);
         continue;
       }
 
@@ -953,12 +951,9 @@ export async function* runLoop(opts: {
         if (opts.signal?.aborted) break;
         const error = `Tool "${subject}" threw during execution: ${errorText(err)}`;
         yield { type: "error", error };
-        toolResults.push({
-          type: "tool-result",
-          toolCallId: call.toolCallId,
-          toolName: call.toolName,
-          output: attachHookNotices({ type: "error-text", value: error }, beforeNotices),
-        });
+        toolResults.push(
+          recordToolResult(call, { type: "error-text", value: error }, beforeNotices),
+        );
         continue;
       }
       yield { type: "tool-result", name: subject, result: toolResult };
@@ -969,27 +964,16 @@ export async function* runLoop(opts: {
           afterMessages = await opts.onAfterTool(subject, call.input, toolResult);
         } catch (err) {
           if (opts.signal?.aborted) {
-            toolResults.push({
-              type: "tool-result",
-              toolCallId: call.toolCallId,
-              toolName: call.toolName,
-              output: attachHookNotices(toolResultOutput(toolResult), beforeNotices),
-            });
+            toolResults.push(recordToolResult(call, toolResultOutput(toolResult), beforeNotices));
             break;
           }
           throw err;
         }
       }
       for (const error of afterMessages) yield { type: "error", error };
-      toolResults.push({
-        type: "tool-result",
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        output: attachHookNotices(toolResultOutput(toolResult), [
-          ...beforeNotices,
-          ...afterMessages,
-        ]),
-      });
+      toolResults.push(
+        recordToolResult(call, toolResultOutput(toolResult), [...beforeNotices, ...afterMessages]),
+      );
     }
 
     yield* flushReadBatch();
@@ -1002,15 +986,12 @@ export async function* runLoop(opts: {
     // ai throws AI_MissingToolResultsError on resume if a persisted assistant tool-call has no matching tool-result row.
     for (const call of unanswered) {
       const subject = opts.callSubject?.(call.toolName, call.input) ?? call.toolName;
-      toolResults.push({
-        type: "tool-result",
-        toolCallId: call.toolCallId,
-        toolName: call.toolName,
-        output: {
+      toolResults.push(
+        recordToolResult(call, {
           type: "execution-denied",
           reason: `Tool "${subject}" was cancelled by the user before it completed.`,
-        },
-      });
+        }),
+      );
     }
 
     appendMessage({ role: "tool", content: toolResults });

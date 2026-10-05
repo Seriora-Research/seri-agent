@@ -145,6 +145,38 @@ describe("dropUnsupportedImages", () => {
       toolOutputForImage(toImageRead(sniffed)),
     );
   });
+
+  test("keeps a sibling text part and still warns that the image was dropped", () => {
+    const sniffed = sniffImage(PNG_1X1);
+    if (sniffed === undefined) throw new Error("png");
+    const file = toolOutputForImage(toImageRead(sniffed)).value[0];
+    const messages: ModelMessage[] = [
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "c1",
+            toolName: "read_file",
+            output: {
+              type: "content",
+              value: [file, { type: "text", text: "Hook notices:\n- lint exited 1: boom" }],
+            },
+          },
+        ],
+      },
+    ];
+    const { messages: next } = dropUnsupportedImages(messages, undefined);
+    const part = (next[0] as { content: Array<{ output: { type: string; value: unknown } }> })
+      .content[0];
+    expect(part.output).toEqual({
+      type: "content",
+      value: [
+        { type: "text", text: "Hook notices:\n- lint exited 1: boom" },
+        { type: "text", text: "dropped image; this model does not accept image input" },
+      ],
+    });
+  });
 });
 
 describe("userContentFrom and tool output", () => {

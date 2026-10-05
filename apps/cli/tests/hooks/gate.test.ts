@@ -306,7 +306,7 @@ describe("createHookRunner", () => {
     });
 
     expect(await runner.onAfterTool("write_file", { path: "a.txt" }, "wrote 3 lines")).toEqual([
-      "that file is generated",
+      "too-late blocked: that file is generated",
     ]);
 
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["too-late", "behind-it"]);

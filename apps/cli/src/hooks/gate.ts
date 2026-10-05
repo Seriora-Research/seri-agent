@@ -45,14 +45,22 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind === "ok") continue;
-        if (outcome.kind === "failed") {
-          takeNotice(outcome.message, errors);
-          continue;
+        switch (outcome.kind) {
+          case "ok":
+            continue;
+          case "failed":
+            takeNotice(outcome.message, errors);
+            continue;
+          case "block":
+            return { block: outcome.reason, errors: remember(errors) };
+          case "unrunnable":
+            takeNotice(outcome.message, errors);
+            return { block: outcome.message, errors: remember(errors) };
+          default: {
+            const _never: never = outcome;
+            return _never;
+          }
         }
-        if (outcome.kind === "block") return { block: outcome.reason, errors: remember(errors) };
-        takeNotice(outcome.message, errors);
-        return { block: outcome.message, errors: remember(errors) };
       }
       return { errors: remember(errors) };
     },
@@ -72,8 +80,26 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind === "ok") continue;
-        takeNotice(outcome.kind === "block" ? outcome.reason : outcome.message, messages);
+        switch (outcome.kind) {
+          case "ok":
+            continue;
+          case "failed":
+          case "unrunnable":
+            takeNotice(outcome.message, messages);
+            continue;
+          case "block":
+            takeNotice(
+              outcome.reason.startsWith(`${spec.script} `) || outcome.reason === spec.script
+                ? outcome.reason
+                : `${spec.script} blocked: ${outcome.reason}`,
+              messages,
+            );
+            continue;
+          default: {
+            const _never: never = outcome;
+            return _never;
+          }
+        }
       }
       return remember(messages);
     },
