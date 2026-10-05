@@ -24,6 +24,15 @@ export function createHookRunner(opts: {
   const afterSpecs = opts.registry.get("PostToolUse") ?? [];
   if (beforeSpecs.length === 0 && afterSpecs.length === 0) return undefined;
   const run = opts.run ?? runHook;
+  const delivered = new Set<string>();
+  const takeNotice = (message: string, into: string[]): void => {
+    if (delivered.has(message) || into.includes(message)) return;
+    into.push(message);
+  };
+  const remember = (notices: readonly string[]): readonly string[] => {
+    for (const notice of notices) delivered.add(notice);
+    return notices;
+  };
 
   return {
     onBeforeTool: async (subject, input) => {
@@ -36,13 +45,15 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind === "block") return { block: outcome.reason, errors };
+        if (outcome.kind === "ok") continue;
         if (outcome.kind === "failed") {
-          errors.push(outcome.message);
-          return { block: outcome.message, errors };
+          takeNotice(outcome.message, errors);
+          continue;
         }
+        if (outcome.kind === "block") return { block: outcome.reason, errors: remember(errors) };
+        return { block: outcome.message, errors: [outcome.message] };
       }
-      return { errors };
+      return { errors: remember(errors) };
     },
     onAfterTool: async (subject, input, result) => {
       const messages: string[] = [];
@@ -60,11 +71,10 @@ export function createHookRunner(opts: {
           opts.signal,
         );
 
-        if (outcome.kind !== "ok") {
-          messages.push(outcome.kind === "block" ? outcome.reason : outcome.message);
-        }
+        if (outcome.kind === "ok") continue;
+        takeNotice(outcome.kind === "block" ? outcome.reason : outcome.message, messages);
       }
-      return messages;
+      return remember(messages);
     },
   };
 }

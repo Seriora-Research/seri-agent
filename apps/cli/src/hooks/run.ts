@@ -1,12 +1,19 @@
+import { existsSync } from "node:fs";
 import { messageOf } from "../errors";
 import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
-import { HOOK_BLOCK_EXIT_CODE, type HookOutcome, type HookPayload, type HookSpec } from "./types";
-
-const REASON_MAX_CHARS = 300;
+import {
+  HOOK_BLOCK_EXIT_CODE,
+  HOOK_REASON_MAX_CHARS,
+  type HookOutcome,
+  type HookPayload,
+  type HookSpec,
+} from "./types";
 
 function truncate(text: string): string {
-  return text.length > REASON_MAX_CHARS ? `${text.slice(0, REASON_MAX_CHARS)}…` : text;
+  if (text.length <= HOOK_REASON_MAX_CHARS) return text;
+  // The cause is usually the last line of stderr.
+  return `…${text.slice(-(HOOK_REASON_MAX_CHARS - 1))}`;
 }
 
 function blockReason(spec: HookSpec, stderr: string): string {
@@ -38,10 +45,18 @@ export async function runHook(
   signal?: AbortSignal,
   spawn: typeof spawnCollect = spawnCollect,
 ): Promise<HookOutcome> {
+  // A shell "not found" exit means the hook started. A missing script never did.
+  if (!existsSync(spec.path)) {
+    return {
+      kind: "unrunnable",
+      message: truncate(`${spec.script} could not be run: no such file`),
+    };
+  }
+
   const interpreter = resolveInterpreter(spec);
   if (interpreter === undefined) {
     return {
-      kind: "failed",
+      kind: "unrunnable",
       message: truncate(`${spec.script}: bash is not available on this system`),
     };
   }
@@ -59,7 +74,7 @@ export async function runHook(
   } catch (err) {
     if (signal?.aborted === true) throw err;
     return {
-      kind: "failed",
+      kind: "unrunnable",
       message: truncate(`${spec.script} could not be run: ${messageOf(err)}`),
     };
   }

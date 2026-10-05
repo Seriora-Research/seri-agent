@@ -10,7 +10,7 @@ import type {
 } from "ai";
 import { streamText } from "ai";
 import { type ScreenResult, screenCall } from "../containment/escape";
-import { type AutoModeOnBlock, type ToolCallClassifier } from "../gate/classifier";
+import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
 import {
   catastrophicDenyReason,
   catastrophicOf,
@@ -51,8 +51,8 @@ import {
   requestOutputCap,
 } from "./compaction";
 import {
-  type CompactCursor,
   applyRecap,
+  type CompactCursor,
   createConversation,
   rewindContextOf,
   snapshotOf,
@@ -296,6 +296,34 @@ function toolResultOutput(
   return { type: "json", value: (result ?? null) as JSONValue };
 }
 
+type NoticeableOutput =
+  | { type: "json"; value: JSONValue }
+  | { type: "error-text"; value: string }
+  | ReturnType<typeof toolOutputForImage>
+  | {
+      type: "content";
+      value: Array<
+        | { type: "text"; text: string }
+        | { type: "file"; mediaType: string; data: { type: "data"; data: string } }
+      >;
+    };
+
+function attachHookNotices(output: NoticeableOutput, notices: readonly string[]): NoticeableOutput {
+  if (notices.length === 0) return output;
+  const suffix = notices.join("\n");
+  if (output.type === "json") {
+    const text = typeof output.value === "string" ? output.value : JSON.stringify(output.value);
+    return { type: "json", value: `${text}\n\n${suffix}` };
+  }
+  if (output.type === "error-text") {
+    return { type: "error-text", value: `${output.value}\n\n${suffix}` };
+  }
+  return {
+    type: "content",
+    value: [...output.value, ...notices.map((text) => ({ type: "text" as const, text }))],
+  };
+}
+
 export async function* runLoop(opts: {
   model: LanguageModel;
   tools: ToolSet;
@@ -313,7 +341,7 @@ export async function* runLoop(opts: {
     subject: string,
     input: unknown,
   ) => Promise<{ readonly block?: string; readonly errors?: readonly string[] }>;
-  /** Runs after the tool result is recorded; returned strings are `error` events and cannot veto the call. */
+  /** Runs after the tool executes and before its result row is recorded. Returned strings are `error` events, attached to that row, and cannot veto the call. */
   onAfterTool?: (subject: string, input: unknown, result: unknown) => Promise<readonly string[]>;
   containmentEscapeExpected?: boolean;
   allowedTools?: readonly string[];
@@ -628,6 +656,7 @@ export async function* runLoop(opts: {
       call: ToolCall;
       subject: string;
       yieldedCall: boolean;
+      beforeNotices: readonly string[];
       outcome: Promise<ReadOutcome>;
     };
     const readBatch: ReadBatchItem[] = [];
@@ -675,28 +704,39 @@ export async function* runLoop(opts: {
             type: "tool-result",
             toolCallId: item.call.toolCallId,
             toolName: item.call.toolName,
-            output: { type: "error-text", value: error },
+            output: attachHookNotices({ type: "error-text", value: error }, item.beforeNotices),
           });
           continue;
         }
         yield { type: "tool-result", name: item.subject, result: out.value };
         executed.push({ toolName: item.call.toolName, input: item.call.input });
+        let afterMessages: readonly string[] = [];
+        if (opts.onAfterTool !== undefined) {
+          try {
+            afterMessages = await opts.onAfterTool(item.subject, item.call.input, out.value);
+          } catch (err) {
+            if (opts.signal?.aborted) {
+              toolResults.push({
+                type: "tool-result",
+                toolCallId: item.call.toolCallId,
+                toolName: item.call.toolName,
+                output: attachHookNotices(toolResultOutput(out.value), item.beforeNotices),
+              });
+              return "aborted";
+            }
+            throw err;
+          }
+        }
+        for (const error of afterMessages) yield { type: "error", error };
         toolResults.push({
           type: "tool-result",
           toolCallId: item.call.toolCallId,
           toolName: item.call.toolName,
-          output: toolResultOutput(out.value),
+          output: attachHookNotices(toolResultOutput(out.value), [
+            ...item.beforeNotices,
+            ...afterMessages,
+          ]),
         });
-        if (opts.onAfterTool !== undefined) {
-          let afterMessages: readonly string[];
-          try {
-            afterMessages = await opts.onAfterTool(item.subject, item.call.input, out.value);
-          } catch (err) {
-            if (opts.signal?.aborted) return "aborted";
-            throw err;
-          }
-          for (const error of afterMessages) yield { type: "error", error };
-        }
       }
       return aborted || opts.signal?.aborted === true ? "aborted" : "ok";
     }
@@ -803,6 +843,7 @@ export async function* runLoop(opts: {
         continue;
       }
 
+      let beforeNotices: readonly string[] = [];
       if (opts.onBeforeTool !== undefined) {
         let hook: { readonly block?: string; readonly errors?: readonly string[] };
         try {
@@ -811,8 +852,9 @@ export async function* runLoop(opts: {
           if (opts.signal?.aborted) break;
           throw err;
         }
-        if ((hook.errors?.length ?? 0) > 0 && (yield* flushReadBatch()) === "aborted") break;
-        for (const error of hook.errors ?? []) yield { type: "error", error };
+        beforeNotices = hook.errors ?? [];
+        if (beforeNotices.length > 0 && (yield* flushReadBatch()) === "aborted") break;
+        for (const error of beforeNotices) yield { type: "error", error };
         if (opts.signal?.aborted) break;
         if (hook.block !== undefined) {
           if ((yield* flushReadBatch()) === "aborted") break;
@@ -879,6 +921,7 @@ export async function* runLoop(opts: {
             call,
             subject,
             yieldedCall: true,
+            beforeNotices,
             outcome: startReadExecute(call, execute),
           });
         } else {
@@ -886,6 +929,7 @@ export async function* runLoop(opts: {
             call,
             subject,
             yieldedCall: false,
+            beforeNotices,
             outcome: startReadExecute(call, execute),
           });
         }
@@ -912,29 +956,39 @@ export async function* runLoop(opts: {
           type: "tool-result",
           toolCallId: call.toolCallId,
           toolName: call.toolName,
-          output: { type: "error-text", value: error },
+          output: attachHookNotices({ type: "error-text", value: error }, beforeNotices),
         });
         continue;
       }
       yield { type: "tool-result", name: subject, result: toolResult };
       executed.push({ toolName: call.toolName, input: call.input });
+      let afterMessages: readonly string[] = [];
+      if (opts.onAfterTool !== undefined) {
+        try {
+          afterMessages = await opts.onAfterTool(subject, call.input, toolResult);
+        } catch (err) {
+          if (opts.signal?.aborted) {
+            toolResults.push({
+              type: "tool-result",
+              toolCallId: call.toolCallId,
+              toolName: call.toolName,
+              output: attachHookNotices(toolResultOutput(toolResult), beforeNotices),
+            });
+            break;
+          }
+          throw err;
+        }
+      }
+      for (const error of afterMessages) yield { type: "error", error };
       toolResults.push({
         type: "tool-result",
         toolCallId: call.toolCallId,
         toolName: call.toolName,
-        output: toolResultOutput(toolResult),
+        output: attachHookNotices(toolResultOutput(toolResult), [
+          ...beforeNotices,
+          ...afterMessages,
+        ]),
       });
-
-      if (opts.onAfterTool !== undefined) {
-        let afterMessages: readonly string[];
-        try {
-          afterMessages = await opts.onAfterTool(subject, call.input, toolResult);
-        } catch (err) {
-          if (opts.signal?.aborted) break;
-          throw err;
-        }
-        for (const error of afterMessages) yield { type: "error", error };
-      }
     }
 
     yield* flushReadBatch();
