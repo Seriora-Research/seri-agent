@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildSystemPrompt } from "../../src/agents/systemPrompt";
 import {
+  loadSkill,
   loadSkillRegistry,
   modelVisibleSkills,
   readSkillBody,
@@ -186,6 +187,28 @@ describe("substituteSkillArgs", () => {
 
   test("a token inside the substituted text is not itself substituted", () => {
     expect(substituteSkillArgs("$ARGUMENTS", "literally $1 dollars")).toBe("literally $1 dollars");
+  });
+});
+
+describe("loadSkill", () => {
+  test("prefixes the skill directory and substitutes arguments", () => {
+    const { skills } = load({ "project/.seri/skills/reviewer/SKILL.md": SIMPLE });
+    const spec = skills.get("reviewer");
+    if (spec === undefined) throw new Error("expected reviewer skill");
+    expect(loadSkill(spec, "the wrap")).toBe(
+      `Base directory for this skill: ${dirname(spec.filePath)}\n\nReview the diff for: the wrap`,
+    );
+  });
+
+  test("a global skill names its profile directory, not the worktree", () => {
+    const { skills } = load({ "profile/skills/reviewer/SKILL.md": SIMPLE });
+    const spec = skills.get("reviewer");
+    if (spec === undefined) throw new Error("expected reviewer skill");
+    const text = loadSkill(spec, "");
+    expect(text).toBe(
+      `Base directory for this skill: ${dirname(spec.filePath)}\n\nReview the diff for: `,
+    );
+    expect(text).toContain(join("profile", "skills", "reviewer"));
   });
 });
 

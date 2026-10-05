@@ -180,7 +180,7 @@ import { configDirForStore, SessionDatabase } from "./session/database";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
-import { readSkillBody, type SkillRegistry, substituteSkillArgs } from "./skills/registry";
+import { loadSkill, type SkillRegistry } from "./skills/registry";
 import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { probeRipgrep } from "./tools/selftest";
@@ -2039,7 +2039,7 @@ async function runTui(
           }
           let prompt: string;
           try {
-            prompt = substituteSkillArgs(readSkillBody(skill), trimmed.slice(name.length).trim());
+            prompt = loadSkill(skill, trimmed.slice(name.length).trim());
           } catch (err) {
             dispatch({ type: "command-error", message: messageOf(err) });
             return;
