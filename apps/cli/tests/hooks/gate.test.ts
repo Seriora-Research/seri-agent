@@ -123,6 +123,24 @@ describe("createHookRunner", () => {
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "guard"]);
   });
 
+  test("a later PreToolUse block still denies after an advisory failure", async () => {
+    const fake = fakeRun([
+      { kind: "failed", message: "lint exited 1: boom" },
+      { kind: "block", reason: "do not touch main" },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "lint" }), makeSpec({ script: "guard" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
+      block: "do not touch main",
+      errors: ["lint exited 1: boom"],
+    });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "guard"]);
+  });
+
   test("an unrunnable PreToolUse hook denies and the hooks behind it never run", async () => {
     const message = "deny-all could not be run: ENOENT";
     const fake = fakeRun([
@@ -140,6 +158,25 @@ describe("createHookRunner", () => {
       errors: [message],
     });
     expect(fake.calls.map((call) => call.spec.script)).toEqual(["deny-all"]);
+  });
+
+  test("an unrunnable PreToolUse after an advisory failure still reports both", async () => {
+    const message = "deny-all could not be run: ENOENT";
+    const fake = fakeRun([
+      { kind: "failed", message: "lint exited 1: boom" },
+      { kind: "unrunnable", message },
+    ]);
+    const runner = builtRunner({
+      registry: registryOf([makeSpec({ script: "lint" }), makeSpec({ script: "deny-all" })]),
+      cwd: "/worktree",
+      run: fake.run,
+    });
+
+    expect(await runner.onBeforeTool("bash", { command: "git push" })).toEqual({
+      block: message,
+      errors: ["lint exited 1: boom", message],
+    });
+    expect(fake.calls.map((call) => call.spec.script)).toEqual(["lint", "deny-all"]);
   });
 
   test("onBeforeTool collects every failed notice instead of stopping at the first", async () => {

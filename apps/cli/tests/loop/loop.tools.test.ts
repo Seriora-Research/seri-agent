@@ -1150,6 +1150,63 @@ describe("runLoop", () => {
       expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
     });
 
+    test("a PreToolUse notice still reaches the model when a later hook blocks", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "auto",
+          onBeforeTool: async () => ({
+            errors: ["lint exited 1: boom"],
+            block: "do not touch main",
+          }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "hook",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("do not touch main");
+      expect(output?.reason).toContain("lint exited 1: boom");
+    });
+
+    test("a PreToolUse notice still reaches the model when the gate denies", async () => {
+      const executed: unknown[] = [];
+      const events = await collect(
+        runLoop({
+          model: oneWriteThenText(),
+          tools: makeTools(async (input) => {
+            executed.push(input);
+            return "ok";
+          }),
+          messages: baseMessages,
+          permissionMode: "read-only",
+          onBeforeTool: async () => ({ errors: ["lint exited 1: boom"] }),
+        }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events).toContainEqual({
+        type: "permission-denied",
+        name: "write_file",
+        reason: "blocked",
+      });
+      const [output] = toolRowOutputs(events);
+      expect(output?.type).toBe("execution-denied");
+      expect(output?.reason).toContain("read-only");
+      expect(output?.reason).toContain("lint exited 1: boom");
+    });
+
     test("a PreToolUse block stops the call before the gate ever asks", async () => {
       const executed: unknown[] = [];
       const prompted: string[] = [];

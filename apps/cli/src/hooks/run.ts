@@ -16,15 +16,17 @@ function truncate(text: string): string {
   return `…${text.slice(-(HOOK_REASON_MAX_CHARS - 1))}`;
 }
 
-function blockReason(spec: HookSpec, stderr: string): string {
-  const trimmed = stderr.trim();
+function excerpt(stderr: string): string {
+  return truncate(stderr.trim());
+}
 
-  return truncate(trimmed || `${spec.script} blocked the call but printed nothing on stderr`);
+function blockReason(spec: HookSpec, stderr: string): string {
+  return excerpt(stderr) || `${spec.script} blocked the call but printed nothing on stderr`;
 }
 
 function failureMessage(spec: HookSpec, cause: string, stderr: string): string {
-  const trimmed = stderr.trim();
-  return truncate(trimmed ? `${spec.script} ${cause}: ${trimmed}` : `${spec.script} ${cause}`);
+  const body = excerpt(stderr);
+  return body ? `${spec.script} ${cause}: ${body}` : `${spec.script} ${cause}`;
 }
 
 function resolveInterpreter(spec: HookSpec): { executable: string; args: string[] } | undefined {

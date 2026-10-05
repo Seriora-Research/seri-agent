@@ -51,7 +51,8 @@ export function createHookRunner(opts: {
           continue;
         }
         if (outcome.kind === "block") return { block: outcome.reason, errors: remember(errors) };
-        return { block: outcome.message, errors: [outcome.message] };
+        takeNotice(outcome.message, errors);
+        return { block: outcome.message, errors: remember(errors) };
       }
       return { errors: remember(errors) };
     },

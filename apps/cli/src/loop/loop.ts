@@ -308,6 +308,11 @@ type NoticeableOutput =
       >;
     };
 
+function withHookNotices(reason: string, notices: readonly string[]): string {
+  const leftover = notices.filter((notice) => !reason.includes(notice));
+  return leftover.length === 0 ? reason : `${reason}\n\n${leftover.join("\n")}`;
+}
+
 function attachHookNotices(output: NoticeableOutput, notices: readonly string[]): NoticeableOutput {
   if (notices.length === 0) return output;
   const suffix = notices.join("\n");
@@ -860,17 +865,13 @@ export async function* runLoop(opts: {
           if ((yield* flushReadBatch()) === "aborted") break;
           recordDestructiveDeny();
           yield { type: "permission-denied", name: subject, reason: "hook" };
-          toolResults.push({
-            type: "tool-result",
-            toolCallId: call.toolCallId,
-            toolName: call.toolName,
-            output: {
-              type: "execution-denied",
-              reason:
-                `Tool "${subject}" was blocked by a project hook: ${hook.block} ` +
+          pushDenied(
+            withHookNotices(
+              `Tool "${subject}" was blocked by a project hook: ${hook.block} ` +
                 `Do not retry this call. The block is deterministic and asking again will not change it.`,
-            },
-          });
+              beforeNotices,
+            ),
+          );
           continue;
         }
       }
@@ -907,7 +908,7 @@ export async function* runLoop(opts: {
           name: subject,
           reason: verdict.kind === "deny-blocked" ? "blocked" : "declined",
         };
-        pushDenied(verdict.reason);
+        pushDenied(withHookNotices(verdict.reason, beforeNotices));
         continue;
       }
 

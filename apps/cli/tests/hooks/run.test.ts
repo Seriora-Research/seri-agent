@@ -178,9 +178,11 @@ describe("runHook (injected spawn)", () => {
     );
     expect(outcome.kind).toBe("failed");
     if (outcome.kind !== "failed") throw new Error("expected failed");
+    expect(outcome.message.startsWith("noisy exited 1:")).toBe(true);
     expect(outcome.message.endsWith(tail)).toBe(true);
-    expect(outcome.message.startsWith("…")).toBe(true);
-    expect(outcome.message.length).toBeLessThanOrEqual(HOOK_REASON_MAX_CHARS);
+    const excerpt = outcome.message.slice("noisy exited 1: ".length);
+    expect(excerpt.startsWith("…")).toBe(true);
+    expect(excerpt.length).toBeLessThanOrEqual(HOOK_REASON_MAX_CHARS);
   });
 });
 
