@@ -8,8 +8,13 @@ import {
   treesOverlap,
   writeFileDenialCovers,
 } from "../../src/gate/destructiveIntent";
+import { canonicalizeAgainstCwd } from "../../src/gate/workingDir";
 
 const cwd = "/tmp/project";
+
+function sameResolved(a: string, b: string): boolean {
+  return canonicalizeAgainstCwd(".", a) === canonicalizeAgainstCwd(".", b);
+}
 
 describe("destructiveIntentOf", () => {
   test("parses Remove-Item as remove of the quoted path", () => {
@@ -20,7 +25,8 @@ describe("destructiveIntentOf", () => {
     );
     expect(intent?.kind).toBe("remove");
     expect(intent?.quotingWidened).toBe(false);
-    expect(intent?.targets).toEqual([resolve(cwd, "E:/SS")]);
+    expect(intent?.targets).toHaveLength(1);
+    expect(sameResolved(intent?.targets[0] ?? "", resolve(cwd, "E:/SS"))).toBe(true);
   });
 
   test("a cmd rmdir trailing-backslash quote widens to the parent", () => {
@@ -133,10 +139,10 @@ describe("catastrophicOf", () => {
 
   test("recursive delete outside the working directory is a workspace-escape", () => {
     const intent = destructiveIntentOf("bash", { command: "rm -rf /tmp/unrelated-tree" }, cwd);
-    expect(catastrophicOf(intent, cwd)).toEqual({
-      reason: "workspace-escape",
-      target: resolve("/tmp/unrelated-tree"),
-    });
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-escape");
+    expect(
+      sameResolved(catastrophicOf(intent, cwd)?.target ?? "", resolve("/tmp/unrelated-tree")),
+    ).toBe(true);
   });
 
   test("Remove-Item -Recurse of an absolute outside path is a workspace-escape", () => {
@@ -156,16 +162,15 @@ describe("catastrophicOf", () => {
 
   test("rm -rf of a small in-project tree is not catastrophic", () => {
     const intent = destructiveIntentOf("bash", { command: "rm -rf src" }, cwd);
-    expect(intent?.targets).toEqual([resolve(cwd, "src")]);
+    expect(intent?.targets).toHaveLength(1);
+    expect(sameResolved(intent?.targets[0] ?? "", resolve(cwd, "src"))).toBe(true);
     expect(catastrophicOf(intent, cwd)).toBeUndefined();
   });
 
   test("tilde home is a workspace-escape when the project is not the home directory", () => {
     const intent = destructiveIntentOf("bash", { command: "rm -rf ~" }, cwd);
-    expect(catastrophicOf(intent, cwd)).toEqual({
-      reason: "workspace-escape",
-      target: homedir(),
-    });
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-escape");
+    expect(sameResolved(catastrophicOf(intent, cwd)?.target ?? "", homedir())).toBe(true);
   });
 
   test("recursive remove with no resolved target fails closed", () => {

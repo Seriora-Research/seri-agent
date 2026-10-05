@@ -1,5 +1,7 @@
 import { foldsCase } from "../caseFold";
-import { classifyBuiltin, resolveAgainstCwd, type ToolClass } from "../provider/tools";
+import { classifyBuiltin, type ToolClass } from "../provider/tools";
+import { windowsShortPath } from "./win32LongPath";
+import { canonicalizeAgainstCwd, matchCandidatesAgainstCwd, resolveAgainstCwd } from "./workingDir";
 
 export type PermissionMode = "read-only" | "approve-each" | "auto";
 
@@ -26,15 +28,42 @@ function matchPath(path: string): string {
   return foldsCase() ? posix.toLowerCase() : posix;
 }
 
-function resolveForMatch(path: string, cwd: string | undefined): string {
-  return resolveAgainstCwd(cwd ?? ".", path);
+function hasUserGlob(path: string): boolean {
+  return /[*?]/.test(path);
+}
+
+function covers(base: string, tree: boolean, path: string): boolean {
+  if (path === base) return true;
+  return tree && path.startsWith(`${base}/`);
+}
+
+function denialBases(pattern: string, cwd: string): string[] {
+  const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
+  const raw = tree ? pattern.slice(0, -3) : pattern;
+  const lexical = resolveAgainstCwd(cwd, raw);
+  const canonical = canonicalizeAgainstCwd(cwd, lexical);
+  const bases = [canonical, lexical];
+  for (const form of [canonical, lexical]) {
+    const short = windowsShortPath(form);
+    if (short !== undefined) bases.push(short);
+  }
+  return [...new Set(bases.map(matchPath))];
 }
 
 export function pathMatchesDenial(pattern: string, path: string, cwd?: string): boolean {
-  const candidate = matchPath(resolveForMatch(path, cwd));
-  const resolved = matchPath(resolveForMatch(pattern, cwd));
-  if (new Bun.Glob(resolved).match(candidate)) return true;
-  return resolved.endsWith("/**") && candidate === resolved.slice(0, -3);
+  const root = cwd ?? ".";
+  const tree = pattern.endsWith("/**") || pattern.endsWith("\\**");
+  const base = tree ? pattern.slice(0, -3) : pattern;
+  const glob = hasUserGlob(base)
+    ? new Bun.Glob(matchPath(resolveAgainstCwd(root, pattern)))
+    : undefined;
+  const bases = glob === undefined ? denialBases(pattern, root) : [];
+  for (const candidate of matchCandidatesAgainstCwd(root, path)) {
+    const folded = matchPath(candidate);
+    if (glob?.match(folded) === true) return true;
+    if (bases.some((denialBase) => covers(denialBase, tree, folded))) return true;
+  }
+  return false;
 }
 
 export function denialBlocks(

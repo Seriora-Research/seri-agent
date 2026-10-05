@@ -2,7 +2,13 @@ import { homedir } from "node:os";
 import { dirname, join, parse, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 import { type PathDenial, pathMatchesDenial } from "./gate";
-import { isInsideWorkingDir, resolveAgainstCwd } from "./workingDir";
+import {
+  canonicalizeAgainstCwd,
+  canonicalizeEntryAgainstCwd,
+  canonicalizeEntryResolvedAgainstCwd,
+  isEntryInsideWorkingDir,
+  isInsideWorkingDir,
+} from "./workingDir";
 
 export type DestructiveKind = "remove" | "move";
 
@@ -135,13 +141,15 @@ function isVolumeRootRaw(raw: string): boolean {
   return /^[A-Za-z]:$/.test(posix.replace(/\/+$/, ""));
 }
 
-function resolveTarget(cwd: string, raw: string): string {
+function resolveTarget(cwd: string, raw: string, toolName: string): string {
   const expanded = expandUser(raw);
   if (isVolumeRootRaw(expanded)) {
     const posix = posixify(expanded).replace(/\/+$/, "");
     return posix === "" ? "/" : posix;
   }
-  return resolveAgainstCwd(cwd, posixify(expanded));
+  const path = process.platform === "win32" ? expanded : posixify(expanded);
+  if (toolName === "powershell") return canonicalizeEntryResolvedAgainstCwd(cwd, path);
+  return canonicalizeEntryAgainstCwd(cwd, path);
 }
 
 export function destructiveIntentOf(
@@ -160,7 +168,7 @@ export function destructiveIntentOf(
     ...new Set(
       tokens
         .filter((token) => looksLikePath(token.raw) || token.quotingWidened)
-        .map((token) => resolveTarget(cwd, token.raw)),
+        .map((token) => resolveTarget(cwd, token.raw, toolName)),
     ),
   ];
   return { kind, targets, quotingWidened, recursive: isRecursive(command) };
@@ -171,7 +179,7 @@ function matchKey(path: string): string {
 }
 
 function samePath(a: string, b: string): boolean {
-  return matchKey(resolve(a)) === matchKey(resolve(b));
+  return matchKey(canonicalizeAgainstCwd(".", a)) === matchKey(canonicalizeAgainstCwd(".", b));
 }
 
 function isVolumeRootTarget(path: string): boolean {
@@ -190,13 +198,13 @@ export function catastrophicOf(
   if (intent.recursive && intent.targets.length === 0) {
     return { reason: "unresolved-recursive" };
   }
-  const workspace = cwd !== undefined && cwd !== "" ? resolve(cwd) : undefined;
+  const workspace = cwd !== undefined && cwd !== "" ? canonicalizeAgainstCwd(cwd, ".") : undefined;
   for (const target of intent.targets) {
     if (isVolumeRootTarget(target)) return { reason: "volume-root", target };
     if (workspace !== undefined && samePath(target, workspace)) {
       return { reason: "workspace-root", target };
     }
-    if (workspace !== undefined && !isInsideWorkingDir(workspace, target)) {
+    if (workspace !== undefined && !isEntryInsideWorkingDir(workspace, target)) {
       return { reason: "workspace-escape", target };
     }
   }
