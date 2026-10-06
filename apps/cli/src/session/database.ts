@@ -725,6 +725,21 @@ export class SessionDatabase {
       .run(id, sessionId, startedAt);
   }
 
+  listRunningTurns(): { id: string; sessionId: string }[] {
+    return this.database
+      .query(
+        "SELECT id, session_id AS sessionId FROM turns WHERE status = 'running' ORDER BY started_at, id",
+      )
+      .all() as { id: string; sessionId: string }[];
+  }
+
+  maxDaemonEventSeq(turnId: string): number {
+    const row = this.database
+      .query("SELECT COALESCE(MAX(seq), 0) AS seq FROM daemon_events WHERE turn_id = ?")
+      .get(turnId) as { seq: number };
+    return row.seq;
+  }
+
   hasTurn(id: string): boolean {
     return (
       (this.database.query("SELECT id FROM turns WHERE id = ?").get(id) as {
@@ -733,10 +748,21 @@ export class SessionDatabase {
     );
   }
 
-  finishTurn(id: string, finishedAt: string): void {
+  finishTurn(
+    id: string,
+    finishedAt: string,
+    status: "complete" | "interrupted" = "complete",
+  ): void {
     this.database
-      .query("UPDATE turns SET status = 'complete', finished_at = ? WHERE id = ?")
-      .run(finishedAt, id);
+      .query("UPDATE turns SET status = ?, finished_at = ? WHERE id = ?")
+      .run(status, finishedAt, id);
+  }
+
+  interruptTurn(id: string, finishedAt: string, seq: number, event: unknown): void {
+    this.database.transaction(() => {
+      this.appendDaemonEvent(id, seq, event);
+      this.finishTurn(id, finishedAt, "interrupted");
+    })();
   }
 
   appendDaemonEvent(turnId: string, seq: number, event: unknown): void {

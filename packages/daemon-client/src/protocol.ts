@@ -37,6 +37,7 @@ export type DaemonEvent = {
     | { type: "approval-request"; requestId: string; toolName: string; args: unknown }
     | { type: "archivist"; trigger: string; staged: boolean }
     | { type: "turn-complete"; exitCode: 0 | 1 }
+    | { type: "turn-interrupted" }
     | { type: string; [key: string]: unknown };
 };
 
@@ -83,8 +84,15 @@ export function isKnownDaemonEvent(event: DaemonEvent["event"]): boolean {
     event.type === "loop" ||
     event.type === "approval-request" ||
     event.type === "archivist" ||
-    event.type === "turn-complete"
+    event.type === "turn-complete" ||
+    event.type === "turn-interrupted"
   );
+}
+
+export function isTerminalDaemonEvent(
+  event: DaemonEvent["event"],
+): event is { type: "turn-complete"; exitCode: 0 | 1 } | { type: "turn-interrupted" } {
+  return event.type === "turn-complete" || event.type === "turn-interrupted";
 }
 
 export function isLoopDaemonEvent(

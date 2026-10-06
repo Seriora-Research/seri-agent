@@ -83,6 +83,7 @@ export class DaemonSessionManager {
   ) {
     this.idleMs = opts.idleMs ?? DEFAULT_IDLE_MS;
     this.onIdleFlush = opts.onIdleFlush;
+    this.interruptAbandonedTurns();
   }
 
   getTurn(turnId: string): TurnHandle | undefined {
@@ -195,6 +196,23 @@ export class DaemonSessionManager {
 
   waitForIdle(): Promise<void> {
     return Promise.all([...this.sessions.values()].map((session) => session.tail)).then(() => {});
+  }
+
+  private interruptAbandonedTurns(): void {
+    const running = this.database.listRunningTurns();
+    if (running.length === 0) return;
+    const finishedAt = new Date().toISOString();
+    for (const turn of running) {
+      const seq = this.database.maxDaemonEventSeq(turn.id) + 1;
+      const envelope: DaemonEvent = {
+        v: 1,
+        sessionId: turn.sessionId,
+        turnId: turn.id,
+        seq,
+        event: { type: "turn-interrupted" },
+      };
+      this.database.interruptTurn(turn.id, finishedAt, seq, envelope);
+    }
   }
 
   private sessionHandle(sessionId: string): SessionHandle {
