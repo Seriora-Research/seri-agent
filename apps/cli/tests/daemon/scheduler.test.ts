@@ -291,6 +291,7 @@ describe("Scheduler", () => {
     expect(after?.enabled).toBe(true);
     expect(after?.running).toBe(false);
     expect(after?.nextRunAtMs).toBe(dueAt);
+    expect(after?.consecutiveFailures).toBe(0);
     expect(database.listScheduleRuns(created.id)).toHaveLength(0);
   });
 
@@ -318,6 +319,7 @@ describe("Scheduler", () => {
     const after = database.getSchedule(created.id);
     expect(after?.enabled).toBe(true);
     expect(after?.nextRunAtMs).toBe(dueAt);
+    expect(after?.consecutiveFailures).toBe(0);
     expect(database.listScheduleRuns(created.id)).toHaveLength(0);
   });
 
@@ -510,6 +512,159 @@ describe("Scheduler", () => {
   });
 });
 
+describe("scheduled consecutive failures", () => {
+  test("an always-failing interval backs off, then pauses with the reason in schedule_runs", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 100_000;
+    let fires = 0;
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        fires += 1;
+        return { error: "401 unauthorized" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "poll secret",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(fires).toBe(1);
+    expect(database.getSchedule(created.id)?.enabled).toBe(true);
+    expect(database.getSchedule(created.id)?.nextRunAtMs).toBe(now + 60_000);
+    expect(database.getSchedule(created.id)?.consecutiveFailures).toBe(1);
+
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(fires).toBe(2);
+    expect(database.getSchedule(created.id)?.enabled).toBe(true);
+    expect(database.getSchedule(created.id)?.nextRunAtMs).toBe(now + 120_000);
+    expect(database.getSchedule(created.id)?.consecutiveFailures).toBe(2);
+
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(fires).toBe(3);
+    const paused = database.getSchedule(created.id);
+    expect(paused?.enabled).toBe(false);
+    expect(paused?.nextRunAtMs).toBeNull();
+    expect(paused?.pauseReason).toBe("401 unauthorized");
+    expect(paused?.consecutiveFailures).toBe(3);
+    expect(database.listScheduleRuns(created.id).map((row) => row.status)).toEqual([
+      "error",
+      "error",
+      "paused",
+    ]);
+    expect(database.listScheduleRuns(created.id)[2]?.error).toBe("401 unauthorized");
+
+    now = 10_000_000;
+    await scheduler.tick();
+    await scheduler.tick();
+    expect(fires).toBe(3);
+  });
+
+  test("a later success resets the consecutive failure count before pause", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 200_000;
+    let fires = 0;
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        fires += 1;
+        return fires === 3 ? { response: "ok" } : { error: "401 unauthorized" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "poll secret",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    for (let i = 0; i < 3; i++) {
+      now = database.getSchedule(created.id)!.nextRunAtMs!;
+      await scheduler.tick();
+    }
+    const afterSuccess = database.getSchedule(created.id);
+    expect(afterSuccess?.enabled).toBe(true);
+    expect(afterSuccess?.pauseReason).toBeNull();
+    expect(afterSuccess?.consecutiveFailures).toBe(0);
+    expect(afterSuccess?.nextRunAtMs).toBe(now + 60_000);
+    expect(database.listScheduleRuns(created.id).map((row) => row.status)).toEqual([
+      "error",
+      "error",
+      "complete",
+    ]);
+  });
+
+  test("resume of an auto-paused schedule is explicit and starts firing again", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 300_000;
+    let fires = 0;
+    const scheduler = new Scheduler(
+      database,
+      async () => {
+        fires += 1;
+        return { error: "401 unauthorized" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "poll secret",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    for (let i = 0; i < 3; i++) {
+      now = database.getSchedule(created.id)!.nextRunAtMs!;
+      await scheduler.tick();
+    }
+    expect(database.getSchedule(created.id)?.enabled).toBe(false);
+    now = 400_000;
+    await scheduler.tick();
+    expect(fires).toBe(3);
+
+    const resumed = scheduler.resume(created.id);
+    expect(resumed).toMatchObject({
+      id: created.id,
+      enabled: true,
+      pauseReason: null,
+      consecutiveFailures: 0,
+      nextRunAtMs: 400_000,
+    });
+    await scheduler.tick();
+    expect(fires).toBe(4);
+    expect(database.getSchedule(created.id)?.enabled).toBe(true);
+    expect(database.getSchedule(created.id)?.consecutiveFailures).toBe(1);
+  });
+
+  test("resume of a user-disabled schedule is rejected", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "ok" }),
+      () => 500_000,
+    );
+    const created = scheduler.create({
+      task: "poll secret",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    });
+    expect(database.disableSchedule(created.id)).toBe(true);
+    expect(scheduler.resume(created.id)).toBe("disabled");
+    expect(database.getSchedule(created.id)?.enabled).toBe(false);
+    expect(database.getSchedule(created.id)?.pauseReason).toBeNull();
+  });
+});
+
 describe("daemon schedule routes", () => {
   test("create, list, disable, and persisted runs", async () => {
     const configDir = makeDir();
@@ -544,5 +699,67 @@ describe("daemon schedule routes", () => {
     expect(runs.runs[0]?.response).toBe("hello");
     expect(seen[0]?.session.messages).toEqual([{ role: "user", content: "hello" }]);
     await client.disableSchedule(created.id);
+  });
+
+  test("resume after auto-pause, and 409 after a user disable", async () => {
+    const configDir = makeDir();
+    let now = Date.parse("2026-01-01T00:00:00.000Z");
+    let fires = 0;
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      now: () => now,
+      tickMs: 60_000,
+      idleMs: 0,
+      runScheduled: async () => {
+        fires += 1;
+        return { error: "401 unauthorized" };
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const created = (await client.createSchedule({
+      task: "poll secret",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+    })) as { id: string; nextRunAtMs: number };
+    for (let i = 0; i < 3; i++) {
+      const listed = (await client.listSchedules()) as {
+        schedules: { id: string; nextRunAtMs: number | null }[];
+      };
+      now = listed.schedules.find((row) => row.id === created.id)!.nextRunAtMs!;
+      await daemon.scheduler.tick();
+    }
+    const paused = (await client.listSchedules()) as {
+      schedules: { id: string; enabled: boolean; pauseReason: string | null }[];
+    };
+    expect(paused.schedules.find((row) => row.id === created.id)).toMatchObject({
+      enabled: false,
+      pauseReason: "401 unauthorized",
+    });
+    const runs = (await client.scheduleRuns(created.id)) as {
+      runs: { status: string; error: string | null }[];
+    };
+    expect(runs.runs.map((row) => row.status)).toEqual(["error", "error", "paused"]);
+    expect(runs.runs[2]?.error).toBe("401 unauthorized");
+    expect(fires).toBe(3);
+
+    now = Date.parse("2026-01-01T01:00:00.000Z");
+    const resumed = (await client.resumeSchedule(created.id)) as {
+      enabled: boolean;
+      pauseReason: string | null;
+      nextRunAtMs: number;
+    };
+    expect(resumed.enabled).toBe(true);
+    expect(resumed.pauseReason).toBeNull();
+    await daemon.scheduler.tick();
+    expect(fires).toBe(4);
+
+    await client.disableSchedule(created.id);
+    await expect(client.resumeSchedule(created.id)).rejects.toMatchObject({ status: 409 });
   });
 });

@@ -17,9 +17,10 @@ import {
   type SecretTally,
   withheldToolCallIds,
 } from "./redact";
+import { advanceInterval, cadenceAfterFire } from "./scheduleCadence";
 import type { SessionState } from "./session";
 
-export { DATABASE_FILENAME };
+export { advanceInterval, DATABASE_FILENAME };
 
 export type SecretScan = {
   records: number;
@@ -42,7 +43,7 @@ function addScan(target: SecretScan, found: SecretTally, changed: boolean): void
   }
 }
 
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 const BUSY_TIMEOUT_MS = 5_000;
 
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
@@ -180,6 +181,13 @@ const MIGRATIONS = [
       ALTER TABLE sessions ADD COLUMN compact_recap_json TEXT;
     `,
   },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE schedules ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE schedules ADD COLUMN pause_reason TEXT;
+    `,
+  },
 ] as const;
 
 type SessionRow = {
@@ -254,6 +262,8 @@ type ScheduleRow = {
   enabled: number;
   running: number;
   created_at: string;
+  consecutive_failures: number;
+  pause_reason: string | null;
 };
 
 type ScheduleRunRow = {
@@ -276,6 +286,8 @@ export type ScheduleRecord = {
   enabled: boolean;
   running: boolean;
   createdAt: string;
+  consecutiveFailures: number;
+  pauseReason: string | null;
 };
 
 export type ScheduleRunRecord = {
@@ -299,12 +311,9 @@ function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
     enabled: row.enabled === 1,
     running: row.running === 1,
     createdAt: row.created_at,
+    consecutiveFailures: row.consecutive_failures,
+    pauseReason: row.pause_reason,
   };
-}
-
-export function advanceInterval(nextRunAtMs: number, everyMs: number, nowMs: number): number {
-  if (nextRunAtMs > nowMs) return nextRunAtMs;
-  return nextRunAtMs + (Math.floor((nowMs - nextRunAtMs) / everyMs) + 1) * everyMs;
 }
 
 export type LegacySessionImportResult = {
@@ -826,9 +835,28 @@ export class SessionDatabase {
     const existing = this.getSchedule(id);
     if (existing === undefined) return false;
     this.database
-      .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
+      .query(
+        "UPDATE schedules SET enabled = 0, next_run_at_ms = NULL, pause_reason = NULL WHERE id = ?",
+      )
       .run(id);
     return true;
+  }
+
+  resumeSchedule(id: string, nowMs: number): ScheduleRecord | "not-found" | "disabled" {
+    return this.database.transaction(() => {
+      const existing = this.getSchedule(id);
+      if (existing === undefined) return "not-found";
+      if (!existing.enabled && existing.pauseReason === null) return "disabled";
+      if (existing.enabled) return existing;
+      this.database
+        .query(
+          `UPDATE schedules
+              SET enabled = 1, pause_reason = NULL, consecutive_failures = 0, next_run_at_ms = ?
+            WHERE id = ?`,
+        )
+        .run(nowMs, id);
+      return this.getSchedule(id) ?? "not-found";
+    })();
   }
 
   listDueSchedules(nowMs: number): ScheduleRecord[] {
@@ -942,17 +970,30 @@ export class SessionDatabase {
       }
       const schedule = this.getSchedule(row.scheduleId);
       if (schedule === undefined) return;
-      if (schedule.timing.kind === "once") {
+      const cadence = cadenceAfterFire({
+        timing: schedule.timing,
+        consecutiveFailures: schedule.consecutiveFailures,
+        nextRunAtMs: schedule.nextRunAtMs,
+        failed: row.status !== "complete",
+        error: row.error,
+        nowMs,
+      });
+      if (cadence.runStatus !== row.status) {
         this.database
-          .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
-          .run(row.scheduleId);
-        return;
+          .query("UPDATE schedule_runs SET status = ? WHERE id = ?")
+          .run(cadence.runStatus, row.id);
       }
-      if (schedule.nextRunAtMs === null) return;
       this.database
-        .query("UPDATE schedules SET next_run_at_ms = ? WHERE id = ?")
+        .query(
+          `UPDATE schedules
+              SET consecutive_failures = ?, pause_reason = ?, enabled = ?, next_run_at_ms = ?
+            WHERE id = ?`,
+        )
         .run(
-          advanceInterval(schedule.nextRunAtMs, schedule.timing.everySeconds * 1000, nowMs),
+          cadence.consecutiveFailures,
+          cadence.pauseReason,
+          cadence.enabled ? 1 : 0,
+          cadence.nextRunAtMs,
           row.scheduleId,
         );
     })();

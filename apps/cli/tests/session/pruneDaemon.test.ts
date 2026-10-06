@@ -278,7 +278,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
     }
     const reopened = new SessionDatabase(configDir);
     try {
-      expect(reopened.getPragmas().userVersion).toBe(5);
+      expect(reopened.getPragmas().userVersion).toBe(6);
       expect(reopened.loadSession("gone")).toBeUndefined();
     } finally {
       reopened.close();
