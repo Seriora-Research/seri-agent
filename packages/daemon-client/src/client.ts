@@ -109,6 +109,11 @@ export class DaemonClient {
     await this.request("DELETE", `/v1/schedules/${encodeURIComponent(id)}`);
   }
 
+  async resumeSchedule(id: string): Promise<unknown> {
+    const response = await this.request("POST", `/v1/schedules/${encodeURIComponent(id)}/resume`);
+    return response.json();
+  }
+
   async scheduleRuns(id: string): Promise<unknown> {
     const response = await this.request("GET", `/v1/schedules/${encodeURIComponent(id)}/runs`);
     return response.json();

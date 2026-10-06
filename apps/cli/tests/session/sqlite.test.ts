@@ -53,7 +53,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
-    expect(pragmas.userVersion).toBe(5);
+    expect(pragmas.userVersion).toBe(6);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
       .user_version;
@@ -249,10 +249,12 @@ describe("SessionDatabase", () => {
     setup.exec("UPDATE messages SET seq = 0");
     setup.exec("ALTER TABLE sessions DROP COLUMN compact_window_start");
     setup.exec("ALTER TABLE sessions DROP COLUMN compact_recap_json");
+    setup.exec("ALTER TABLE schedules DROP COLUMN consecutive_failures");
+    setup.exec("ALTER TABLE schedules DROP COLUMN pause_reason");
     setup.exec("PRAGMA user_version = 3");
     setup.close();
 
-    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(5);
+    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(6);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const seqOnly = changeDelta(raw, "UPDATE messages SET seq = seq + 1");
     const searchText = changeDelta(raw, "UPDATE messages SET search_text = 'goodbye'");
@@ -264,6 +266,34 @@ describe("SessionDatabase", () => {
     expect(withDatabase((database) => database.searchSessions("goodbye"))).toMatchObject([
       { sessionId: "v3", messageIndex: 1 },
     ]);
+  });
+
+  test("schema 6 adds consecutive failure columns on a v5 database", () => {
+    withDatabase((database) => {
+      database.insertSchedule({
+        id: "sched",
+        task: "poll",
+        cwd: "/repo",
+        timingJson: JSON.stringify({ kind: "interval", everySeconds: 60 }),
+        nextRunAtMs: 1,
+        enabled: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+    });
+    const setup = new Database(join(configDir, DATABASE_FILENAME));
+    setup.exec("ALTER TABLE schedules DROP COLUMN consecutive_failures");
+    setup.exec("ALTER TABLE schedules DROP COLUMN pause_reason");
+    setup.exec("PRAGMA user_version = 5");
+    setup.close();
+
+    withDatabase((database) => {
+      expect(database.getPragmas().userVersion).toBe(6);
+      expect(database.getSchedule("sched")).toMatchObject({
+        consecutiveFailures: 0,
+        pauseReason: null,
+        enabled: true,
+      });
+    });
   });
 
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {

@@ -275,6 +275,15 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
           return json(200, { schedules: database.listSchedules() });
         }
 
+        const scheduleResumeMatch = path.match(/^\/v1\/schedules\/([^/]+)\/resume$/);
+        if (req.method === "POST" && scheduleResumeMatch !== null) {
+          const id = decodeURIComponent(scheduleResumeMatch[1]!);
+          const result = scheduler.resume(id);
+          if (result === "not-found") return json(404, { error: "schedule not found" });
+          if (result === "disabled") return json(409, { error: "schedule is disabled" });
+          return json(200, result);
+        }
+
         const scheduleRunsMatch = path.match(/^\/v1\/schedules\/([^/]+)\/runs$/);
         if (req.method === "GET" && scheduleRunsMatch !== null) {
           const id = decodeURIComponent(scheduleRunsMatch[1]!);

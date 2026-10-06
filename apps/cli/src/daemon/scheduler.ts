@@ -177,6 +177,10 @@ export class Scheduler {
     return this.database.getSchedule(id)!;
   }
 
+  resume(id: string): ScheduleRecord | "not-found" | "disabled" {
+    return this.database.resumeSchedule(id, this.now());
+  }
+
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
