@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-
 import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
-import { SessionDatabase } from "../../src/session/database";
+import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
@@ -393,5 +394,88 @@ describe("daemon turns", () => {
       await manager.waitForIdle();
       database.close();
     }
+  });
+
+  test("a previous process's running turn is interrupted on daemon start and the session keeps its permission mode", async () => {
+    const configDir = makeDir();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-auto",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    setup.insertTurn("turn-crash", "sess-auto", "2026-10-06T13:00:00.000Z");
+    setup.appendDaemonEvent("turn-crash", 1, {
+      v: 1,
+      sessionId: "sess-auto",
+      turnId: "turn-crash",
+      seq: 1,
+      event: {
+        type: "loop",
+        value: { type: "tool-call", name: "bash", args: { command: "sleep 60" } },
+      },
+    });
+    setup.insertTurn("turn-done", "sess-auto", "2026-10-06T12:00:00.000Z");
+    setup.appendDaemonEvent("turn-done", 1, {
+      v: 1,
+      sessionId: "sess-auto",
+      turnId: "turn-done",
+      seq: 1,
+      event: { type: "turn-complete", exitCode: 0 },
+    });
+    setup.finishTurn("turn-done", "2026-10-06T12:00:01.000Z");
+    setup.close();
+
+    const modes: string[] = [];
+    const executeTurn: ExecuteTurn = async (input) => {
+      modes.push(input.permissionMode);
+      input.emitLoop({ type: "done", reason: "no-tool-call" });
+      return { exitCode: 0 };
+    };
+    const daemon = await startDaemon({ configDir, executeTurn, idleMs: 0 });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const crashed = await collect(client.events("turn-crash"));
+    expect(crashed.at(-1)?.event).toEqual({ type: "turn-interrupted" });
+    expect(crashed.filter((event) => event.event.type === "turn-interrupted")).toHaveLength(1);
+
+    const finished = await collect(client.events("turn-done"));
+    expect(finished.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+
+    const probe = new SessionDatabase(configDir);
+    try {
+      expect(probe.loadSession("sess-auto")?.permissionMode).toBe("auto");
+    } finally {
+      probe.close();
+    }
+
+    const raw = new Database(join(configDir, DATABASE_FILENAME));
+    try {
+      const crashRow = raw
+        .query("SELECT status, finished_at FROM turns WHERE id = ?")
+        .get("turn-crash") as { status: string; finished_at: string | null };
+      expect(crashRow.status).toBe("interrupted");
+      expect(crashRow.finished_at).not.toBeNull();
+      const doneRow = raw.query("SELECT status FROM turns WHERE id = ?").get("turn-done") as {
+        status: string;
+      };
+      expect(doneRow.status).toBe("complete");
+    } finally {
+      raw.close();
+    }
+
+    await collect(client.startTurn({ task: "next", sessionId: "sess-auto" }));
+    expect(modes).toEqual(["auto"]);
+
+    await daemon.stop();
+    stop = undefined;
+    const again = await startDaemon({ configDir, executeTurn, idleMs: 0 });
+    stop = again.stop;
+    const client2 = new DaemonClient({ endpoint: again.endpoint, token: again.token });
+    const replayed = await collect(client2.events("turn-crash"));
+    expect(replayed.filter((event) => event.event.type === "turn-interrupted")).toHaveLength(1);
+    expect(replayed.at(-1)?.event).toEqual({ type: "turn-interrupted" });
   });
 });

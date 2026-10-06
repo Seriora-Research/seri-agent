@@ -1,6 +1,11 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
-import type { DaemonDescriptor, DaemonEvent, PublicLoopEvent } from "@seri/daemon-client";
+import {
+  type DaemonDescriptor,
+  type DaemonEvent,
+  isTerminalDaemonEvent,
+  type PublicLoopEvent,
+} from "@seri/daemon-client";
 import type { CliDeps } from "../cli";
 import { loadTrajectoryConfig } from "../config/config";
 import { SessionDatabase } from "../session/database";
@@ -78,7 +83,7 @@ function sseResponse(
         } catch {
           return;
         }
-        if (event.event.type === "turn-complete") closeOnce();
+        if (isTerminalDaemonEvent(event.event)) closeOnce();
       };
       const unsubscribe = subscribe(send);
       if (unsubscribe === undefined) {

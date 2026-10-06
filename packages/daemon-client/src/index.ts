@@ -29,4 +29,5 @@ export {
   isDaemonEnvelope,
   isKnownDaemonEvent,
   isLoopDaemonEvent,
+  isTerminalDaemonEvent,
 } from "./protocol";
