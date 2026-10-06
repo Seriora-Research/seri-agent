@@ -478,4 +478,112 @@ describe("daemon turns", () => {
     expect(replayed.filter((event) => event.event.type === "turn-interrupted")).toHaveLength(1);
     expect(replayed.at(-1)?.event).toEqual({ type: "turn-interrupted" });
   });
+
+  test("restart interrupt seq is after live deltas that were never persisted", async () => {
+    const configDir = makeDir();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-live",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    setup.insertTurn("turn-live", "sess-live", "2026-10-06T13:00:00.000Z");
+    setup.appendDaemonEvent("turn-live", 1, {
+      v: 1,
+      sessionId: "sess-live",
+      turnId: "turn-live",
+      seq: 1,
+      event: {
+        type: "loop",
+        value: { type: "tool-call", name: "bash", args: { command: "sleep 60" } },
+      },
+    });
+    setup.setTurnLastSeq("turn-live", 4);
+    setup.close();
+
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async () => ({ exitCode: 0 }),
+      idleMs: 0,
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const fromLiveWatermark = await collect(client.events("turn-live", 4));
+    expect(fromLiveWatermark).toHaveLength(1);
+    expect(fromLiveWatermark[0]?.seq).toBe(5);
+    expect(fromLiveWatermark[0]?.event).toEqual({ type: "turn-interrupted" });
+  });
+
+  test("a running turn that already persisted turn-complete is finished complete, not interrupted", async () => {
+    const configDir = makeDir();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-done",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    setup.insertTurn("turn-half", "sess-done", "2026-10-06T13:00:00.000Z");
+    setup.appendDaemonEvent("turn-half", 1, {
+      v: 1,
+      sessionId: "sess-done",
+      turnId: "turn-half",
+      seq: 1,
+      event: { type: "turn-complete", exitCode: 0 },
+    });
+    setup.close();
+
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async () => ({ exitCode: 0 }),
+      idleMs: 0,
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const events = await collect(client.events("turn-half"));
+    expect(events.map((event) => event.event)).toEqual([{ type: "turn-complete", exitCode: 0 }]);
+
+    const raw = new Database(join(configDir, DATABASE_FILENAME));
+    try {
+      const row = raw.query("SELECT status FROM turns WHERE id = ?").get("turn-half") as {
+        status: string;
+      };
+      expect(row.status).toBe("complete");
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("live text-deltas advance last_seq even though they are not stored as daemon_events", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const released = Promise.withResolvers<void>();
+    const emitted = Promise.withResolvers<void>();
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        input.emitLoop({ type: "text-delta", text: "a" });
+        input.emitLoop({ type: "text-delta", text: "b" });
+        emitted.resolve();
+        await released.promise;
+        return { exitCode: 0 };
+      },
+      { idleMs: 0 },
+    );
+    try {
+      const started = await manager.startTurn({ task: "stream" });
+      started.subscribe(() => {});
+      await emitted.promise;
+      expect(database.turnLastSeq(started.turnId)).toBe(2);
+      expect(database.maxDaemonEventSeq(started.turnId)).toBe(0);
+    } finally {
+      released.resolve();
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
+  });
 });

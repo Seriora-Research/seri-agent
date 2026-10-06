@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
   type ApprovalAnswer,
   type DaemonEvent,
+  isDaemonEnvelope,
   isLoopDaemonEvent,
+  isTerminalDaemonEvent,
   type PublicLoopEvent,
 } from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
@@ -203,7 +205,17 @@ export class DaemonSessionManager {
     if (running.length === 0) return;
     const finishedAt = new Date().toISOString();
     for (const turn of running) {
-      const seq = this.database.maxDaemonEventSeq(turn.id) + 1;
+      const last = this.database.lastPersistedDaemonEvent(turn.id);
+      if (isDaemonEnvelope(last) && isTerminalDaemonEvent(last.event)) {
+        this.database.finishTurn(
+          turn.id,
+          finishedAt,
+          last.event.type === "turn-interrupted" ? "interrupted" : "complete",
+        );
+        continue;
+      }
+      const seq =
+        Math.max(this.database.turnLastSeq(turn.id), this.database.maxDaemonEventSeq(turn.id)) + 1;
       const envelope: DaemonEvent = {
         v: 1,
         sessionId: turn.sessionId,
@@ -269,6 +281,7 @@ export class DaemonSessionManager {
         !isLoopDaemonEvent(event) ||
         (event.value.type !== "text-delta" && event.value.type !== "reasoning-delta");
       if (persist) this.database.appendDaemonEvent(turnId, handle.seq, envelope);
+      else this.database.setTurnLastSeq(turnId, handle.seq);
       for (const subscriber of handle.subscribers) subscriber(envelope);
     };
 

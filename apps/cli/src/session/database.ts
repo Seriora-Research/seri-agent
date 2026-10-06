@@ -43,7 +43,7 @@ function addScan(target: SecretScan, found: SecretTally, changed: boolean): void
   }
 }
 
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 7;
 const BUSY_TIMEOUT_MS = 5_000;
 
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
@@ -186,6 +186,16 @@ const MIGRATIONS = [
     sql: `
       ALTER TABLE schedules ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE schedules ADD COLUMN pause_reason TEXT;
+    `,
+  },
+  {
+    version: 7,
+    sql: `
+      ALTER TABLE turns ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0;
+      UPDATE turns SET last_seq = COALESCE(
+        (SELECT MAX(seq) FROM daemon_events WHERE turn_id = turns.id),
+        0
+      );
     `,
   },
 ] as const;
@@ -749,6 +759,26 @@ export class SessionDatabase {
     return row.seq;
   }
 
+  turnLastSeq(turnId: string): number {
+    const row = this.database
+      .query("SELECT last_seq AS seq FROM turns WHERE id = ?")
+      .get(turnId) as { seq: number } | null;
+    return row?.seq ?? 0;
+  }
+
+  setTurnLastSeq(turnId: string, seq: number): void {
+    this.database
+      .query("UPDATE turns SET last_seq = MAX(last_seq, ?) WHERE id = ?")
+      .run(seq, turnId);
+  }
+
+  lastPersistedDaemonEvent(turnId: string): unknown {
+    const row = this.database
+      .query("SELECT json FROM daemon_events WHERE turn_id = ? ORDER BY seq DESC LIMIT 1")
+      .get(turnId) as { json: string } | null;
+    return row === null ? undefined : JSON.parse(row.json);
+  }
+
   hasTurn(id: string): boolean {
     return (
       (this.database.query("SELECT id FROM turns WHERE id = ?").get(id) as {
@@ -778,6 +808,7 @@ export class SessionDatabase {
     this.database
       .query("INSERT INTO daemon_events(turn_id, seq, json) VALUES (?, ?, ?)")
       .run(turnId, seq, encodeBlobJson(event).json);
+    this.setTurnLastSeq(turnId, seq);
   }
 
   listDaemonEventsAfter(turnId: string, afterSeq: number): unknown[] {
