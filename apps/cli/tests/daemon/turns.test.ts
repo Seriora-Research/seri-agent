@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-client";
+import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
@@ -584,6 +585,84 @@ describe("daemon turns", () => {
       manager.cancelAll();
       await manager.waitForIdle();
       database.close();
+    }
+  });
+
+  test("a follow-up turn after a crash mid-tool closes the unanswered call on the production path", async () => {
+    const configDir = makeDir();
+    const originalHome = process.env.HOME;
+    const originalKey = process.env.GROQ_API_KEY;
+    const originalDisable = process.env.SERI_DISABLE_MODELS_FETCH;
+    process.env.HOME = configDir;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    resetCatalogCache();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-tool",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [
+        { role: "user", content: "sleep" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "bash",
+              input: { command: "sleep 60" },
+            },
+          ],
+        },
+      ],
+    });
+    setup.insertTurn("turn-crash", "sess-tool", "2026-10-06T13:00:00.000Z");
+    setup.close();
+    try {
+      const daemon = await startDaemon({
+        configDir,
+        idleMs: 0,
+        deps: {
+          getGroqModel: () =>
+            new MockLanguageModelV4({
+              doStream: async () => streamResult(textOnlyChunks("ok")),
+            }),
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+        },
+      });
+      stop = daemon.stop;
+      const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+      const events = await collect(
+        client.startTurn({ task: "continue", sessionId: "sess-tool", permissionPrompts: "none" }),
+      );
+      expect(events.some((event) => JSON.stringify(event).includes("MissingToolResults"))).toBe(
+        false,
+      );
+      expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+      const probe = new SessionDatabase(configDir);
+      try {
+        const loaded = probe.loadSession("sess-tool");
+        const serialized = JSON.stringify(loaded?.messages);
+        expect(serialized).toContain("execution-denied");
+        expect(serialized).toContain("call-1");
+      } finally {
+        probe.close();
+      }
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+      if (originalDisable === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+      else process.env.SERI_DISABLE_MODELS_FETCH = originalDisable;
+      resetCatalogCache();
     }
   });
 });
