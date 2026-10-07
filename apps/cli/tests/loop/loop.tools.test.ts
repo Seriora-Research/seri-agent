@@ -56,6 +56,71 @@ describe("runLoop", () => {
     expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok");
   });
 
+  test("a resumed transcript with an unanswered tool-call is closed before the next model call", async () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "sleep" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-1",
+            toolName: "bash",
+            input: { command: "sleep 60" },
+          },
+        ],
+      },
+      { role: "user", content: "continue" },
+    ];
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: makeTools(async () => "ok"),
+        messages,
+        permissionMode: "auto",
+      }),
+    );
+    expect(events.find((event) => event.type === "error")).toBeUndefined();
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    const firstUpdate = events.find((event) => event.type === "messages-updated");
+    expect(firstUpdate).toMatchObject({
+      type: "messages-updated",
+      messages: [
+        { role: "user", content: "sleep" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "bash",
+              input: { command: "sleep 60" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              toolName: "bash",
+              output: {
+                type: "execution-denied",
+                reason: 'Tool "bash" was cancelled by the user before it completed.',
+              },
+            },
+          ],
+        },
+        { role: "user", content: "continue" },
+      ],
+    });
+    expect(model.doStreamCalls).toHaveLength(1);
+  });
+
   test("the last message when a tool executes is the assistant message carrying that tool call", async () => {
     let captured: ModelMessage[] = [];
     const tools: ToolSet = {

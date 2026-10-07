@@ -39,6 +39,7 @@ import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provid
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
+import { closeUnansweredToolCalls } from "../session/closeUnansweredToolCalls";
 import { affordableOutputTokens, streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
@@ -422,6 +423,7 @@ export async function* runLoop(opts: {
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
+  const closedUnanswered = closeUnansweredToolCalls(messages);
   let estimatedTokens = estimateTokens(windowOf(conversation));
   function appendMessage(message: ModelMessage): void {
     messages.push(message);
@@ -485,6 +487,8 @@ export async function* runLoop(opts: {
   let consecutiveDenials = 0;
   const deniedTargets: string[] = [];
   let stopAfterDestructive = false;
+
+  if (closedUnanswered) yield messagesUpdated();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.signal?.aborted) {

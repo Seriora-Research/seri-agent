@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type DaemonEvent, isLoopDaemonEvent } from "@seri/daemon-client";
+import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
@@ -477,5 +478,191 @@ describe("daemon turns", () => {
     const replayed = await collect(client2.events("turn-crash"));
     expect(replayed.filter((event) => event.event.type === "turn-interrupted")).toHaveLength(1);
     expect(replayed.at(-1)?.event).toEqual({ type: "turn-interrupted" });
+  });
+
+  test("restart interrupt seq is after live deltas that were never persisted", async () => {
+    const configDir = makeDir();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-live",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    setup.insertTurn("turn-live", "sess-live", "2026-10-06T13:00:00.000Z");
+    setup.appendDaemonEvent("turn-live", 1, {
+      v: 1,
+      sessionId: "sess-live",
+      turnId: "turn-live",
+      seq: 1,
+      event: {
+        type: "loop",
+        value: { type: "tool-call", name: "bash", args: { command: "sleep 60" } },
+      },
+    });
+    setup.setTurnLastSeq("turn-live", 4);
+    setup.close();
+
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async () => ({ exitCode: 0 }),
+      idleMs: 0,
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const fromLiveWatermark = await collect(client.events("turn-live", 4));
+    expect(fromLiveWatermark).toHaveLength(1);
+    expect(fromLiveWatermark[0]?.seq).toBe(5);
+    expect(fromLiveWatermark[0]?.event).toEqual({ type: "turn-interrupted" });
+  });
+
+  test("a running turn that already persisted turn-complete is finished complete, not interrupted", async () => {
+    const configDir = makeDir();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-done",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [],
+    });
+    setup.insertTurn("turn-half", "sess-done", "2026-10-06T13:00:00.000Z");
+    setup.appendDaemonEvent("turn-half", 1, {
+      v: 1,
+      sessionId: "sess-done",
+      turnId: "turn-half",
+      seq: 1,
+      event: { type: "turn-complete", exitCode: 0 },
+    });
+    setup.close();
+
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async () => ({ exitCode: 0 }),
+      idleMs: 0,
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const events = await collect(client.events("turn-half"));
+    expect(events.map((event) => event.event)).toEqual([{ type: "turn-complete", exitCode: 0 }]);
+
+    const raw = new Database(join(configDir, DATABASE_FILENAME));
+    try {
+      const row = raw.query("SELECT status FROM turns WHERE id = ?").get("turn-half") as {
+        status: string;
+      };
+      expect(row.status).toBe("complete");
+    } finally {
+      raw.close();
+    }
+  });
+
+  test("live text-deltas advance last_seq even though they are not stored as daemon_events", async () => {
+    const configDir = makeDir();
+    const database = new SessionDatabase(configDir);
+    const released = Promise.withResolvers<void>();
+    const emitted = Promise.withResolvers<void>();
+    const manager = new DaemonSessionManager(
+      database,
+      async (input) => {
+        input.emitLoop({ type: "text-delta", text: "a" });
+        input.emitLoop({ type: "text-delta", text: "b" });
+        emitted.resolve();
+        await released.promise;
+        return { exitCode: 0 };
+      },
+      { idleMs: 0 },
+    );
+    try {
+      const started = await manager.startTurn({ task: "stream" });
+      started.subscribe(() => {});
+      await emitted.promise;
+      expect(database.turnLastSeq(started.turnId)).toBe(2);
+      expect(database.maxDaemonEventSeq(started.turnId)).toBe(0);
+    } finally {
+      released.resolve();
+      manager.cancelAll();
+      await manager.waitForIdle();
+      database.close();
+    }
+  });
+
+  test("a follow-up turn after a crash mid-tool closes the unanswered call on the production path", async () => {
+    const configDir = makeDir();
+    const originalHome = process.env.HOME;
+    const originalKey = process.env.GROQ_API_KEY;
+    const originalDisable = process.env.SERI_DISABLE_MODELS_FETCH;
+    process.env.HOME = configDir;
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    resetCatalogCache();
+    const setup = new SessionDatabase(configDir);
+    setup.saveSession({
+      id: "sess-tool",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "approve-each",
+      messages: [
+        { role: "user", content: "sleep" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "bash",
+              input: { command: "sleep 60" },
+            },
+          ],
+        },
+      ],
+    });
+    setup.insertTurn("turn-crash", "sess-tool", "2026-10-06T13:00:00.000Z");
+    setup.close();
+    try {
+      const daemon = await startDaemon({
+        configDir,
+        idleMs: 0,
+        deps: {
+          getGroqModel: () =>
+            new MockLanguageModelV4({
+              doStream: async () => streamResult(textOnlyChunks("ok")),
+            }),
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+        },
+      });
+      stop = daemon.stop;
+      const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+      const events = await collect(
+        client.startTurn({ task: "continue", sessionId: "sess-tool", permissionPrompts: "none" }),
+      );
+      expect(events.some((event) => JSON.stringify(event).includes("MissingToolResults"))).toBe(
+        false,
+      );
+      expect(events.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+      const probe = new SessionDatabase(configDir);
+      try {
+        const loaded = probe.loadSession("sess-tool");
+        const serialized = JSON.stringify(loaded?.messages);
+        expect(serialized).toContain("execution-denied");
+        expect(serialized).toContain("call-1");
+      } finally {
+        probe.close();
+      }
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalKey === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = originalKey;
+      if (originalDisable === undefined) delete process.env.SERI_DISABLE_MODELS_FETCH;
+      else process.env.SERI_DISABLE_MODELS_FETCH = originalDisable;
+      resetCatalogCache();
+    }
   });
 });

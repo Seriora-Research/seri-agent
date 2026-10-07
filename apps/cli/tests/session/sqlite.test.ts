@@ -53,7 +53,7 @@ describe("SessionDatabase", () => {
     expect(pragmas.foreignKeys).toBe(1);
     expect(pragmas.journalMode).toBe("wal");
     expect(pragmas.busyTimeout).toBeGreaterThan(0);
-    expect(pragmas.userVersion).toBe(6);
+    expect(pragmas.userVersion).toBe(7);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const version = (raw.query("PRAGMA user_version").get() as { user_version: number })
       .user_version;
@@ -251,10 +251,11 @@ describe("SessionDatabase", () => {
     setup.exec("ALTER TABLE sessions DROP COLUMN compact_recap_json");
     setup.exec("ALTER TABLE schedules DROP COLUMN consecutive_failures");
     setup.exec("ALTER TABLE schedules DROP COLUMN pause_reason");
+    setup.exec("ALTER TABLE turns DROP COLUMN last_seq");
     setup.exec("PRAGMA user_version = 3");
     setup.close();
 
-    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(6);
+    expect(withDatabase((database) => database.getPragmas().userVersion)).toBe(7);
     const raw = new Database(join(configDir, DATABASE_FILENAME));
     const seqOnly = changeDelta(raw, "UPDATE messages SET seq = seq + 1");
     const searchText = changeDelta(raw, "UPDATE messages SET search_text = 'goodbye'");
@@ -283,17 +284,43 @@ describe("SessionDatabase", () => {
     const setup = new Database(join(configDir, DATABASE_FILENAME));
     setup.exec("ALTER TABLE schedules DROP COLUMN consecutive_failures");
     setup.exec("ALTER TABLE schedules DROP COLUMN pause_reason");
+    setup.exec("ALTER TABLE turns DROP COLUMN last_seq");
     setup.exec("PRAGMA user_version = 5");
     setup.close();
 
     withDatabase((database) => {
-      expect(database.getPragmas().userVersion).toBe(6);
+      expect(database.getPragmas().userVersion).toBe(7);
       expect(database.getSchedule("sched")).toMatchObject({
         consecutiveFailures: 0,
         pauseReason: null,
         enabled: true,
       });
     });
+  });
+
+  test("schema 7 backfills last_seq from daemon_events on a v6 database", () => {
+    withDatabase((database) => {
+      database.saveSession(state("v6", [{ role: "user", content: "hello" }]));
+      database.insertTurn("turn-v6", "v6", "2026-10-06T13:00:00.000Z");
+      database.appendDaemonEvent("turn-v6", 3, {
+        v: 1,
+        sessionId: "v6",
+        turnId: "turn-v6",
+        seq: 3,
+        event: { type: "loop", value: { type: "done", reason: "no-tool-call" } },
+      });
+    });
+    const setup = new Database(join(configDir, DATABASE_FILENAME));
+    setup.exec("ALTER TABLE turns DROP COLUMN last_seq");
+    setup.exec("PRAGMA user_version = 6");
+    setup.close();
+
+    expect(
+      withDatabase((database) => {
+        expect(database.getPragmas().userVersion).toBe(7);
+        return database.turnLastSeq("turn-v6");
+      }),
+    ).toBe(3);
   });
 
   test("search indexes only user and assistant text and keeps FTS triggers aligned", () => {
