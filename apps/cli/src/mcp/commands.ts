@@ -102,6 +102,11 @@ export function mcpPanelRows(
   return rows;
 }
 
+export function mcpTrustWord(entry: McpEntry, status: McpServerStatus): string {
+  if (entry.catalog === undefined && status.state === "idle") return "pending review";
+  return mcpStatusWord(status);
+}
+
 function listLines(registry: McpRegistry, clients: McpClients): string[] {
   if (registry.size === 0) {
     return ["No MCP servers configured. Add one with /mcp add <name> <url>."];
@@ -109,7 +114,7 @@ function listLines(registry: McpRegistry, clients: McpClients): string[] {
   const lines: string[] = [];
   for (const [scope, entries] of groupOrder([...registry.values()])) {
     for (const entry of entries) {
-      const word = mcpStatusWord(mcpServerStatus(clients, entry.spec.name));
+      const word = mcpTrustWord(entry, mcpServerStatus(clients, entry.spec.name));
       const toolCount = entry.catalog?.tools.length;
       const toolsPart =
         toolCount === undefined ? "" : `, ${toolCount} tool${toolCount === 1 ? "" : "s"} cached`;

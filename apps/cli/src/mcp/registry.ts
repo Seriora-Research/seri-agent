@@ -143,6 +143,7 @@ function isMcpCatalog(value: unknown): value is McpCatalog {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.server !== "string" || typeof v.fetchedAt !== "string") return false;
+  if (v.identity !== undefined && typeof v.identity !== "string") return false;
   if (!Array.isArray(v.tools)) return false;
   return v.tools.every((tool): tool is McpToolInfo => {
     if (typeof tool !== "object" || tool === null) return false;
@@ -192,6 +193,25 @@ export function readCatalogCache(
   return parsed;
 }
 
+function catalogForSpec(
+  catalog: McpCatalog | undefined,
+  spec: McpServerSpec,
+  onWarning: (message: string) => void,
+): McpCatalog | undefined {
+  if (catalog === undefined) return undefined;
+  if (catalogMatchesSpec(catalog, spec)) return catalog;
+  if (catalog.identity === undefined) {
+    onWarning(
+      `MCP server "${spec.name}" was not started: its cached catalog is not bound to a URL. /mcp to preview and trust it again.`,
+    );
+    return undefined;
+  }
+  onWarning(
+    `MCP server "${spec.name}" changed since it was trusted, so it was not started. /mcp to review it.`,
+  );
+  return undefined;
+}
+
 export function loadMcpRegistry(opts: {
   worktree: string;
   configDir: string;
@@ -222,10 +242,8 @@ export function loadMcpRegistry(opts: {
     });
     for (const warning of warnings) opts.onWarning(warning);
     for (const spec of specs) {
-      registry.set(spec.name, {
-        spec,
-        catalog: readCatalogCache(opts.configDir, spec.name, opts.onWarning),
-      });
+      const cached = readCatalogCache(opts.configDir, spec.name, opts.onWarning);
+      registry.set(spec.name, { spec, catalog: catalogForSpec(cached, spec, opts.onWarning) });
     }
   }
   return registry;
@@ -240,6 +258,37 @@ export function findMcpTool(
     if (tool !== undefined) return { entry, tool };
   }
   return undefined;
+}
+
+// url + headers, never the server name: a rename is a different registry key, but swapping
+// the URL (or an auth header) under the same name is how a committed servers.yaml inherits
+// a prior /mcp trust. Name-only cache keys were that hole.
+export function serverIdentity(spec: {
+  url: string;
+  headers: Readonly<Record<string, string>>;
+}): string {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize({ url: spec.url, headers: spec.headers })))
+    .digest("hex");
+}
+
+export function catalogMatchesSpec(
+  catalog: McpCatalog,
+  spec: { url: string; headers: Readonly<Record<string, string>> },
+): boolean {
+  return catalog.identity !== undefined && catalog.identity === serverIdentity(spec);
+}
+
+export function pendingMcpNames(registry: McpRegistry): string[] {
+  return [...registry.values()]
+    .filter((entry) => entry.catalog === undefined)
+    .map((entry) => entry.spec.name)
+    .sort();
+}
+
+export function pendingMcpNotice(names: readonly string[]): string | undefined {
+  if (names.length === 0) return undefined;
+  return `MCP servers pending review (${names.join(", ")}) were not started — /mcp to preview and trust them`;
 }
 
 function canonicalize(value: unknown): unknown {

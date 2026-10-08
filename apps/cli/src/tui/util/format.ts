@@ -393,7 +393,11 @@ export function formatMcpRow(row: McpPanelRow): string {
         : "";
   const toolsPart =
     row.toolCount === undefined ? "" : ` · ${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`;
-  return `${row.name} · ${mark}${mcpStatusWord(row.status)}${toolsPart}`;
+  const word =
+    row.status.state === "idle" && row.toolCount === undefined
+      ? "pending review"
+      : mcpStatusWord(row.status);
+  return `${row.name} · ${mark}${word}${toolsPart}`;
 }
 
 export const MEMORY_ACTION_WIDTH = 8;

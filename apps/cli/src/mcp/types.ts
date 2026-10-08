@@ -22,6 +22,10 @@ export type McpToolInfo = {
 
 export type McpCatalog = {
   readonly server: string;
+  // sha256 of url+headers at the moment of /mcp trust. Missing on caches written before
+  // identity existed; loadMcpRegistry treats those as unmatched rather than inheriting
+  // a name-only grant across a later URL change.
+  readonly identity?: string;
   readonly fetchedAt: string;
   readonly tools: readonly McpToolInfo[];
 };

@@ -11,6 +11,7 @@ import {
   type McpClientHandle,
   mcpServerStatus,
 } from "../../src/mcp/client";
+import { serverIdentity } from "../../src/mcp/registry";
 import type { McpServerSpec } from "../../src/mcp/types";
 
 function spec(name = "exa"): McpServerSpec {
@@ -269,6 +270,7 @@ describe("fetchCatalog", () => {
     expect(poolDialCount).toBe(0);
     expect(mcpServerStatus(clients, "exa")).toEqual({ state: "idle" });
     expect(catalog.server).toBe("exa");
+    expect(catalog.identity).toBe(serverIdentity(spec("exa")));
     expect(typeof catalog.fetchedAt).toBe("string");
     expect(catalog.tools).toEqual([
       {
