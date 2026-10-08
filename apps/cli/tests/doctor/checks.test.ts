@@ -490,6 +490,43 @@ describe("runDoctorChecks", () => {
     expect(secrets?.status).not.toBe("fail");
   });
 
+  test("scrubs memory files when seri.db cannot be opened", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, DATABASE_FILENAME), "not a sqlite database");
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const memoryPath = join(getMemoriesDir(configDir), "USER.md");
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(memoryPath, `- [2026-08-11] deploy with ${token}\n`);
+    const scrubbed = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.detail).toContain("replaced");
+    expect(secrets?.detail).toContain("github-pat");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    expect(readFileSync(memoryPath, "utf8")).toContain("[redacted:github-pat:B9Qx]");
+    expect(readFileSync(memoryPath, "utf8")).not.toContain(token);
+  });
+
+  test("reports unreadable memory files on the replaced path", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(join(getMemoriesDir(configDir), "USER.md"), `- [2026-08-11] deploy with ${token}\n`);
+    mkdirSync(join(getMemoriesDir(configDir), "MEMORY.md"));
+    const scrubbed = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("warn");
+    expect(secrets?.detail).toContain("replaced");
+    expect(secrets?.detail).toContain("unreadable");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+  });
+
   test("omits macho_uuid on linux", async () => {
     tempHome();
     process.env.GROQ_API_KEY = "fake-test-key";
