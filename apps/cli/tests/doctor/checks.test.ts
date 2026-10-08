@@ -1,11 +1,16 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_COMPILE_UUID_DARWIN_ARM64, stampMachOUuid } from "../../src/build/machoUuid";
 import { inspectConfig } from "../../src/config/config";
-import { getConfigDir, getDaemonLockPath, setProfileOverride } from "../../src/config/paths";
+import {
+  getConfigDir,
+  getDaemonLockPath,
+  getMemoriesDir,
+  setProfileOverride,
+} from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
@@ -415,6 +420,35 @@ describe("runDoctorChecks", () => {
     } finally {
       loaded.close();
     }
+  });
+
+  test("warns about a residual memory-file token and --scrub replaces it without echoing the value", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const memoryPath = join(getMemoriesDir(configDir), "USER.md");
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(memoryPath, `- [2026-08-11] deploy with ${token}\n`);
+    const deps = quietDoctorDeps(configDir);
+
+    const warned = await runDoctorChecks(deps);
+    const secrets = warned.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("warn");
+    expect(secrets?.detail).toContain("github-pat");
+    expect(secrets?.detail).not.toContain(token);
+    expect(JSON.stringify(warned)).not.toContain(token);
+    expect(readFileSync(memoryPath, "utf8")).toContain(token);
+
+    const scrubbed = await runDoctorChecks({ ...deps, scrub: true });
+    const after = scrubbed.find((check) => check.name === "secrets");
+    expect(after?.status).toBe("ok");
+    expect(after?.detail).toContain("replaced");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    const cleaned = readFileSync(memoryPath, "utf8");
+    expect(cleaned).toContain("[redacted:github-pat:B9Qx]");
+    expect(cleaned).not.toContain(token);
   });
 
   test("omits macho_uuid on linux", async () => {

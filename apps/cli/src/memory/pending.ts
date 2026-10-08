@@ -12,6 +12,7 @@ import {
   type MemoryContext,
   type MemoryScope,
   type MemoryWriteRequest,
+  sanitizeMemoryWrite,
 } from "./store";
 
 export type PendingWrite = {
@@ -36,10 +37,11 @@ function writePendingFile(path: string, record: PendingWrite): void {
 }
 
 export function stagePendingWrite(
-  req: MemoryWriteRequest,
+  raw: MemoryWriteRequest,
   ctx: MemoryContext,
   now: Date,
 ): PendingWrite {
+  const req = sanitizeMemoryWrite(raw);
   const record: PendingWrite = {
     id: randomBytes(6).toString("hex"),
     stagedAt: now.toISOString(),

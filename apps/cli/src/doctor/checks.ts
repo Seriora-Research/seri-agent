@@ -25,8 +25,9 @@ import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
 import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
-import { SessionDatabase } from "../session/database";
-import { formatSecretTally } from "../session/redact";
+import { listMemoryFilePaths, scanMemorySecrets } from "../memory/store";
+import { type SecretScan, SessionDatabase } from "../session/database";
+import { formatSecretTally, mergeTally } from "../session/redact";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
 import { probeRipgrep } from "../tools/selftest";
@@ -297,10 +298,9 @@ function sessionStoreCheck(configDir: string): CheckResult {
 
 function secretsCheck(configDir: string, scrub: boolean): CheckResult {
   const path = join(configDir, DATABASE_FILENAME);
-  if (!existsSync(path)) {
-    return { name: "secrets", status: "info", detail: "seri.db is absent" };
-  }
-  if (scrub && existsSync(getDaemonLockPath(configDir))) {
+  const dbExists = existsSync(path);
+  const memoryPaths = listMemoryFilePaths(configDir);
+  if (scrub && existsSync(getDaemonLockPath(configDir)) && (dbExists || memoryPaths.length > 0)) {
     return {
       name: "secrets",
       status: "fail",
@@ -308,10 +308,23 @@ function secretsCheck(configDir: string, scrub: boolean): CheckResult {
       fix: "stop seri serve, then run seri doctor --scrub",
     };
   }
+  if (!dbExists && memoryPaths.length === 0) {
+    return { name: "secrets", status: "info", detail: "seri.db is absent" };
+  }
   let database: SessionDatabase | undefined;
   try {
-    database = new SessionDatabase(configDir);
-    const scan = scrub ? database.scrubSecrets() : database.scanSecrets();
+    let dbScan: SecretScan = { records: 0, replacements: 0, unreadable: 0, byKind: {} };
+    if (dbExists) {
+      database = new SessionDatabase(configDir);
+      dbScan = scrub ? database.scrubSecrets() : database.scanSecrets();
+    }
+    const memScan = scanMemorySecrets(configDir, scrub);
+    const scan = {
+      records: dbScan.records + memScan.records,
+      replacements: dbScan.replacements + memScan.replacements,
+      unreadable: dbScan.unreadable + memScan.unreadable,
+      byKind: mergeTally(dbScan.byKind, memScan.byKind),
+    };
     if (scan.replacements === 0) {
       const unread =
         scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;

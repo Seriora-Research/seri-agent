@@ -14,7 +14,10 @@ import {
   projectDirToken,
   renderArchivistMemory,
   renderMemoryTier,
+  scanMemorySecrets,
 } from "../../src/memory/store";
+
+const GHP = `ghp_${"A".repeat(20)}B9Qx`;
 
 const originalPlatform = process.platform;
 function setPlatform(platform: string): void {
@@ -450,5 +453,58 @@ describe("renderArchivistMemory", () => {
     expect(rendered).not.toContain("# Memory");
 
     expect(renderMemoryTier(loadMemory(ctx))).toContain("You cannot edit these directly");
+  });
+});
+
+describe("memory secret redaction", () => {
+  test("applyWrite stores a typed marker instead of a ghp_ token", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "user",
+        action: "add",
+        content: `deploy with ${GHP}`,
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-08-11",
+    );
+    const onDisk = readFileSync(memoryFilePath("user", ctx), "utf8");
+    expect(onDisk).toBe("- [2026-08-11] deploy with [redacted:github-pat:B9Qx]");
+    expect(onDisk).not.toContain(GHP);
+  });
+
+  test("loadMemoryFile injects a marker, not the token still sitting on disk", () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `- [2026-08-11] deploy with ${GHP}`);
+    expect(readFileSync(path, "utf8")).toContain(GHP);
+    const loaded = loadMemoryFile("user", ctx);
+    expect(loaded.text).toBe("- [2026-08-11] deploy with [redacted:github-pat:B9Qx]");
+    expect(loaded.text).not.toContain(GHP);
+    expect(readFileSync(path, "utf8")).toContain(GHP);
+  });
+
+  test("scanMemorySecrets counts residual matches and scrub rewrites the file", () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `- [2026-08-11] deploy with ${GHP}`);
+    const scanned = scanMemorySecrets(ctx.configDir, false);
+    expect(scanned).toEqual({
+      records: 1,
+      replacements: 1,
+      unreadable: 0,
+      byKind: { "github-pat": 1 },
+    });
+    expect(readFileSync(path, "utf8")).toContain(GHP);
+    const scrubbed = scanMemorySecrets(ctx.configDir, true);
+    expect(scrubbed.replacements).toBe(1);
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("[redacted:github-pat:B9Qx]");
+    expect(after).not.toContain(GHP);
+    expect(scanMemorySecrets(ctx.configDir, false).replacements).toBe(0);
   });
 });
