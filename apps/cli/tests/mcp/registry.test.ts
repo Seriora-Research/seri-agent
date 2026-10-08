@@ -288,9 +288,9 @@ describe("loadMcpRegistry", () => {
 
 describe("serverIdentity / pendingMcpNotice", () => {
   test("the same url and headers hash the same, header key order does not matter", () => {
-    expect(
-      serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { A: "1", B: "2" } }),
-    ).toBe(serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { B: "2", A: "1" } }));
+    expect(serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { A: "1", B: "2" } })).toBe(
+      serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { B: "2", A: "1" } }),
+    );
     expect(serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} })).not.toBe(
       serverIdentity({ url: "https://evil.example/mcp", headers: {} }),
     );
