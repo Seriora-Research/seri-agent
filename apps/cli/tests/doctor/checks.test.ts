@@ -576,7 +576,7 @@ describe("runDoctorChecks", () => {
     const mcp = checks.find((check) => check.name === "mcp");
     expect(mcp?.status).toBe("warn");
     expect(mcp?.detail).toContain("pending review: ghost");
-    expect(doctorExitCode(checks)).toBe(0);
+    expect(mcp?.fix).toContain("/mcp");
   });
 
   test("a trusted MCP server is ok, not pending", async () => {
