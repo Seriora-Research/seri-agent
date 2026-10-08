@@ -451,6 +451,45 @@ describe("runDoctorChecks", () => {
     expect(cleaned).not.toContain(token);
   });
 
+  test("scrubs a project MEMORY.md without deleting sibling entries after a PEM header", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const projectDir = join(getMemoriesDir(configDir), "aaaaaaaaaaaaaaaa");
+    mkdirSync(projectDir, { recursive: true });
+    const memoryPath = join(projectDir, "MEMORY.md");
+    writeFileSync(
+      memoryPath,
+      [
+        "- [2026-08-11] starts with -----BEGIN OPENSSH PRIVATE KEY-----",
+        "- [2026-08-11] uses bun test",
+      ].join("\n"),
+    );
+    const deps = quietDoctorDeps(configDir);
+    const scrubbed = await runDoctorChecks({ ...deps, scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("ok");
+    expect(secrets?.detail).toContain("replaced");
+    const after = readFileSync(memoryPath, "utf8");
+    expect(after).toContain("[redacted:private-key]");
+    expect(after).toContain("uses bun test");
+    expect(after).not.toContain("BEGIN OPENSSH");
+  });
+
+  test("a memories path that is a file does not crash doctor", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(getMemoriesDir(configDir), "not a directory");
+    const checks = await runDoctorChecks(quietDoctorDeps(configDir));
+    const secrets = checks.find((check) => check.name === "secrets");
+    expect(secrets).toBeDefined();
+    expect(secrets?.status).not.toBe("fail");
+  });
+
   test("omits macho_uuid on linux", async () => {
     tempHome();
     process.env.GROQ_API_KEY = "fake-test-key";

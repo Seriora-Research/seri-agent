@@ -63,7 +63,7 @@ export function loadMemoryFile(scope: MemoryScope, ctx: MemoryContext): MemoryFi
 
   // CRLF (Notepad's default) would blow the char cap differently on Windows vs Linux.
   const normalized = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
-  const text = redactText(normalized).text;
+  const text = redactMemoryText(normalized).text;
   return {
     scope,
     path,
@@ -108,20 +108,35 @@ export function sanitizeMemoryWrite(req: MemoryWriteRequest): MemoryWriteRequest
   };
 }
 
+function redactMemoryText(text: string): { text: string; found: SecretTally } {
+  if (text.length === 0) return { text: "", found: {} };
+  let found: SecretTally = {};
+  const next = text.split("\n").map((line) => {
+    const redacted = redactText(line);
+    found = mergeTally(found, redacted.found);
+    return redacted.text;
+  });
+  return { text: next.join("\n"), found };
+}
+
 export function listMemoryFilePaths(configDir: string): string[] {
   const dir = getMemoriesDir(configDir);
   if (!existsSync(dir)) return [];
-  const paths: string[] = [];
-  for (const name of ["USER.md", "MEMORY.md"] as const) {
-    const path = join(dir, name);
-    if (existsSync(path)) paths.push(path);
+  try {
+    const paths: string[] = [];
+    for (const name of ["USER.md", "MEMORY.md"] as const) {
+      const path = join(dir, name);
+      if (existsSync(path)) paths.push(path);
+    }
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = join(dir, entry.name, "MEMORY.md");
+      if (existsSync(path)) paths.push(path);
+    }
+    return paths;
+  } catch {
+    return [];
   }
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const path = join(dir, entry.name, "MEMORY.md");
-    if (existsSync(path)) paths.push(path);
-  }
-  return paths;
 }
 
 export function scanMemorySecrets(configDir: string, write: boolean): MemorySecretScan {
@@ -134,15 +149,22 @@ export function scanMemorySecrets(configDir: string, write: boolean): MemorySecr
       scan.unreadable += 1;
       continue;
     }
-    const redacted = redactText(raw);
+    const redacted = redactMemoryText(raw);
     if (redacted.text === raw) continue;
+    if (write) {
+      try {
+        atomicWriteFile(path, redacted.text);
+      } catch {
+        scan.unreadable += 1;
+        continue;
+      }
+    }
     scan.records += 1;
     for (const [kind, count] of Object.entries(redacted.found)) {
       if (count === undefined || count === 0) continue;
       scan.replacements += count;
       scan.byKind = mergeTally(scan.byKind, { [kind]: count });
     }
-    if (write) atomicWriteFile(path, redacted.text);
   }
   return scan;
 }
