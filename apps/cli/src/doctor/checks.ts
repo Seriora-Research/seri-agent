@@ -333,8 +333,7 @@ function secretsCheck(configDir: string, scrub: boolean): CheckResult {
     unreadable: dbScan.unreadable + memScan.unreadable,
     byKind: mergeTally(dbScan.byKind, memScan.byKind),
   };
-  const unread =
-    scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;
+  const unread = scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;
 
   if (scan.replacements === 0) {
     if (dbError !== undefined) {

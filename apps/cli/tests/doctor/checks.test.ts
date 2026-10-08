@@ -517,7 +517,10 @@ describe("runDoctorChecks", () => {
     const configDir = getConfigDir();
     const token = `ghp_${"A".repeat(20)}B9Qx`;
     mkdirSync(getMemoriesDir(configDir), { recursive: true });
-    writeFileSync(join(getMemoriesDir(configDir), "USER.md"), `- [2026-08-11] deploy with ${token}\n`);
+    writeFileSync(
+      join(getMemoriesDir(configDir), "USER.md"),
+      `- [2026-08-11] deploy with ${token}\n`,
+    );
     mkdirSync(join(getMemoriesDir(configDir), "MEMORY.md"));
     const scrubbed = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
     const secrets = scrubbed.find((check) => check.name === "secrets");
