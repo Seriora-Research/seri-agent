@@ -9,6 +9,7 @@ import {
   loadMemoryFile,
   type MemoryContext,
   type MemoryWriteRequest,
+  sanitizeMemoryWrite,
 } from "./store";
 
 export const memoryWriteInputSchema = z.object({
@@ -42,7 +43,15 @@ export function makeMemoryWriteTool(
     description: DESCRIPTION,
     inputSchema: memoryWriteInputSchema,
     execute: async (args) => {
-      const scanText = [args.content, args.target, args.reason].filter(Boolean).join("\n");
+      const req: MemoryWriteRequest = sanitizeMemoryWrite({
+        scope: args.scope,
+        action: args.action,
+        target: args.target,
+        content: args.content,
+        reason: args.reason,
+        durable: args.durable,
+      });
+      const scanText = [req.content, req.target, req.reason].filter(Boolean).join("\n");
       const scan = scanForInjection(scanText);
       if (!scan.ok) {
         throw new Error(
@@ -50,15 +59,6 @@ export function makeMemoryWriteTool(
             `Nothing was written or staged.`,
         );
       }
-
-      const req: MemoryWriteRequest = {
-        scope: args.scope,
-        action: args.action,
-        target: args.target,
-        content: args.content,
-        reason: args.reason,
-        durable: args.durable,
-      };
       const today = new Date().toISOString().slice(0, 10);
 
       computeWrite(loadMemoryFile(req.scope, ctx), req, today);

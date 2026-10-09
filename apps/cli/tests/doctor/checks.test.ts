@@ -1,11 +1,16 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUN_COMPILE_UUID_DARWIN_ARM64, stampMachOUuid } from "../../src/build/machoUuid";
 import { inspectConfig } from "../../src/config/config";
-import { getConfigDir, getDaemonLockPath, setProfileOverride } from "../../src/config/paths";
+import {
+  getConfigDir,
+  getDaemonLockPath,
+  getMemoriesDir,
+  setProfileOverride,
+} from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
@@ -415,6 +420,114 @@ describe("runDoctorChecks", () => {
     } finally {
       loaded.close();
     }
+  });
+
+  test("warns about a residual memory-file token and --scrub replaces it without echoing the value", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const memoryPath = join(getMemoriesDir(configDir), "USER.md");
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(memoryPath, `- [2026-08-11] deploy with ${token}\n`);
+    const deps = quietDoctorDeps(configDir);
+
+    const warned = await runDoctorChecks(deps);
+    const secrets = warned.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("warn");
+    expect(secrets?.detail).toContain("github-pat");
+    expect(secrets?.detail).not.toContain(token);
+    expect(JSON.stringify(warned)).not.toContain(token);
+    expect(readFileSync(memoryPath, "utf8")).toContain(token);
+
+    const scrubbed = await runDoctorChecks({ ...deps, scrub: true });
+    const after = scrubbed.find((check) => check.name === "secrets");
+    expect(after?.status).toBe("ok");
+    expect(after?.detail).toContain("replaced");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    const cleaned = readFileSync(memoryPath, "utf8");
+    expect(cleaned).toContain("[redacted:github-pat:B9Qx]");
+    expect(cleaned).not.toContain(token);
+  });
+
+  test("scrubs a project MEMORY.md without deleting sibling entries after a PEM header", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const projectDir = join(getMemoriesDir(configDir), "aaaaaaaaaaaaaaaa");
+    mkdirSync(projectDir, { recursive: true });
+    const memoryPath = join(projectDir, "MEMORY.md");
+    writeFileSync(
+      memoryPath,
+      [
+        "- [2026-08-11] starts with -----BEGIN OPENSSH PRIVATE KEY-----",
+        "- [2026-08-11] uses bun test",
+      ].join("\n"),
+    );
+    const deps = quietDoctorDeps(configDir);
+    const scrubbed = await runDoctorChecks({ ...deps, scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("ok");
+    expect(secrets?.detail).toContain("replaced");
+    const after = readFileSync(memoryPath, "utf8");
+    expect(after).toContain("[redacted:private-key]");
+    expect(after).toContain("uses bun test");
+    expect(after).not.toContain("BEGIN OPENSSH");
+  });
+
+  test("a memories path that is a file does not crash doctor", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(getMemoriesDir(configDir), "not a directory");
+    const checks = await runDoctorChecks(quietDoctorDeps(configDir));
+    const secrets = checks.find((check) => check.name === "secrets");
+    expect(secrets).toBeDefined();
+    expect(secrets?.status).not.toBe("fail");
+  });
+
+  test("scrubs memory files when seri.db cannot be opened", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, DATABASE_FILENAME), "not a sqlite database");
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const memoryPath = join(getMemoriesDir(configDir), "USER.md");
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(memoryPath, `- [2026-08-11] deploy with ${token}\n`);
+    const scrubbed = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.detail).toContain("replaced");
+    expect(secrets?.detail).toContain("github-pat");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
+    expect(readFileSync(memoryPath, "utf8")).toContain("[redacted:github-pat:B9Qx]");
+    expect(readFileSync(memoryPath, "utf8")).not.toContain(token);
+  });
+
+  test("reports unreadable memory files on the replaced path", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(
+      join(getMemoriesDir(configDir), "USER.md"),
+      `- [2026-08-11] deploy with ${token}\n`,
+    );
+    mkdirSync(join(getMemoriesDir(configDir), "MEMORY.md"));
+    const scrubbed = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+    const secrets = scrubbed.find((check) => check.name === "secrets");
+    expect(secrets?.status).toBe("warn");
+    expect(secrets?.detail).toContain("replaced");
+    expect(secrets?.detail).toContain("unreadable");
+    expect(JSON.stringify(scrubbed)).not.toContain(token);
   });
 
   test("omits macho_uuid on linux", async () => {

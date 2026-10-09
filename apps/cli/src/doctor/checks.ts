@@ -25,8 +25,9 @@ import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
 import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
-import { SessionDatabase } from "../session/database";
-import { formatSecretTally } from "../session/redact";
+import { listMemoryFilePaths, scanMemorySecrets } from "../memory/store";
+import { type SecretScan, SessionDatabase } from "../session/database";
+import { formatSecretTally, mergeTally } from "../session/redact";
 import { isBashAvailable } from "../tools/bash";
 import type { grep as GrepFn } from "../tools/grep";
 import { probeRipgrep } from "../tools/selftest";
@@ -297,10 +298,9 @@ function sessionStoreCheck(configDir: string): CheckResult {
 
 function secretsCheck(configDir: string, scrub: boolean): CheckResult {
   const path = join(configDir, DATABASE_FILENAME);
-  if (!existsSync(path)) {
-    return { name: "secrets", status: "info", detail: "seri.db is absent" };
-  }
-  if (scrub && existsSync(getDaemonLockPath(configDir))) {
+  const dbExists = existsSync(path);
+  const memoryPaths = listMemoryFilePaths(configDir);
+  if (scrub && existsSync(getDaemonLockPath(configDir)) && (dbExists || memoryPaths.length > 0)) {
     return {
       name: "secrets",
       status: "fail",
@@ -308,36 +308,65 @@ function secretsCheck(configDir: string, scrub: boolean): CheckResult {
       fix: "stop seri serve, then run seri doctor --scrub",
     };
   }
-  let database: SessionDatabase | undefined;
-  try {
-    database = new SessionDatabase(configDir);
-    const scan = scrub ? database.scrubSecrets() : database.scanSecrets();
-    if (scan.replacements === 0) {
-      const unread =
-        scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;
-      return { name: "secrets", status: "ok", detail: `0 residual matches${unread}` };
-    }
-    const kinds = formatSecretTally(scan.byKind);
-    const summary = `${scan.replacements} values in ${scan.records} records${kinds === "" ? "" : ` (${kinds})`}`;
-    if (scrub) {
-      return { name: "secrets", status: "ok", detail: `replaced ${summary}` };
-    }
-    return {
-      name: "secrets",
-      status: "warn",
-      detail: `${summary} need redaction`,
-      fix: "run seri doctor --scrub",
-    };
-  } catch (error) {
-    return {
-      name: "secrets",
-      status: "fail",
-      detail: error instanceof Error ? error.message : String(error),
-      fix: "move seri.db aside if it is corrupt",
-    };
-  } finally {
-    database?.close();
+  if (!dbExists && memoryPaths.length === 0) {
+    return { name: "secrets", status: "info", detail: "seri.db is absent" };
   }
+
+  let dbScan: SecretScan = { records: 0, replacements: 0, unreadable: 0, byKind: {} };
+  let dbError: string | undefined;
+  if (dbExists) {
+    let database: SessionDatabase | undefined;
+    try {
+      database = new SessionDatabase(configDir);
+      dbScan = scrub ? database.scrubSecrets() : database.scanSecrets();
+    } catch (error) {
+      dbError = error instanceof Error ? error.message : String(error);
+    } finally {
+      database?.close();
+    }
+  }
+
+  const memScan = scanMemorySecrets(configDir, scrub);
+  const scan = {
+    records: dbScan.records + memScan.records,
+    replacements: dbScan.replacements + memScan.replacements,
+    unreadable: dbScan.unreadable + memScan.unreadable,
+    byKind: mergeTally(dbScan.byKind, memScan.byKind),
+  };
+  const unread = scan.unreadable === 0 ? "" : ` (${scan.unreadable} unreadable records skipped)`;
+
+  if (scan.replacements === 0) {
+    if (dbError !== undefined) {
+      return {
+        name: "secrets",
+        status: "fail",
+        detail: dbError,
+        fix: "move seri.db aside if it is corrupt",
+      };
+    }
+    return {
+      name: "secrets",
+      status: scan.unreadable === 0 ? "ok" : "warn",
+      detail: `0 residual matches${unread}`,
+    };
+  }
+
+  const kinds = formatSecretTally(scan.byKind);
+  const summary = `${scan.replacements} values in ${scan.records} records${kinds === "" ? "" : ` (${kinds})`}${unread}`;
+  if (scrub) {
+    return {
+      name: "secrets",
+      status: scan.unreadable === 0 && dbError === undefined ? "ok" : "warn",
+      detail: `replaced ${summary}`,
+      ...(dbError === undefined ? {} : { fix: "move seri.db aside if it is corrupt" }),
+    };
+  }
+  return {
+    name: "secrets",
+    status: "warn",
+    detail: `${summary} need redaction`,
+    fix: "run seri doctor --scrub",
+  };
 }
 
 async function daemonCheck(configDir: string, fetchFn: typeof fetch): Promise<CheckResult> {

@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { atomicWriteFile } from "../atomicWriteFile";
 import { getMemoriesDir } from "../config/paths";
 import { projectKey } from "../permissions/store";
+import { mergeTally, redactText, type SecretTally } from "../session/redact";
 import { truncate } from "../truncate";
 
 export type MemoryScope = "user" | "memory-global" | "memory-project";
@@ -61,7 +62,8 @@ export function loadMemoryFile(scope: MemoryScope, ctx: MemoryContext): MemoryFi
   const raw = existsSync(path) ? readFileSync(path, "utf8") : "";
 
   // CRLF (Notepad's default) would blow the char cap differently on Windows vs Linux.
-  const text = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
+  const normalized = raw.replace(/\r\n/g, "\n").replace(/\n+$/, "");
+  const text = redactMemoryText(normalized).text;
   return {
     scope,
     path,
@@ -89,6 +91,83 @@ export type MemoryWriteRequest = {
   reason: string;
   durable: boolean;
 };
+
+export type MemorySecretScan = {
+  records: number;
+  replacements: number;
+  unreadable: number;
+  byKind: SecretTally;
+};
+
+export function sanitizeMemoryWrite(req: MemoryWriteRequest): MemoryWriteRequest {
+  return {
+    ...req,
+    target: req.target === undefined ? undefined : redactText(req.target).text,
+    content: req.content === undefined ? undefined : redactText(req.content).text,
+    reason: redactText(req.reason).text,
+  };
+}
+
+function redactMemoryText(text: string): { text: string; found: SecretTally } {
+  if (text.length === 0) return { text: "", found: {} };
+  let found: SecretTally = {};
+  const next = text.split("\n").map((line) => {
+    const redacted = redactText(line);
+    found = mergeTally(found, redacted.found);
+    return redacted.text;
+  });
+  return { text: next.join("\n"), found };
+}
+
+export function listMemoryFilePaths(configDir: string): string[] {
+  const dir = getMemoriesDir(configDir);
+  if (!existsSync(dir)) return [];
+  try {
+    const paths: string[] = [];
+    for (const name of ["USER.md", "MEMORY.md"] as const) {
+      const path = join(dir, name);
+      if (existsSync(path)) paths.push(path);
+    }
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = join(dir, entry.name, "MEMORY.md");
+      if (existsSync(path)) paths.push(path);
+    }
+    return paths;
+  } catch {
+    return [];
+  }
+}
+
+export function scanMemorySecrets(configDir: string, write: boolean): MemorySecretScan {
+  const scan: MemorySecretScan = { records: 0, replacements: 0, unreadable: 0, byKind: {} };
+  for (const path of listMemoryFilePaths(configDir)) {
+    let raw: string;
+    try {
+      raw = readFileSync(path, "utf8");
+    } catch {
+      scan.unreadable += 1;
+      continue;
+    }
+    const redacted = redactMemoryText(raw);
+    if (redacted.text === raw) continue;
+    if (write) {
+      try {
+        atomicWriteFile(path, redacted.text);
+      } catch {
+        scan.unreadable += 1;
+        continue;
+      }
+    }
+    scan.records += 1;
+    for (const [kind, count] of Object.entries(redacted.found)) {
+      if (count === undefined || count === 0) continue;
+      scan.replacements += count;
+      scan.byKind = mergeTally(scan.byKind, { [kind]: count });
+    }
+  }
+  return scan;
+}
 
 function currentEntriesBlock(file: MemoryFile): string {
   const lines = [`Current entries (${file.entries.length}, ${file.chars} chars):`];
@@ -122,7 +201,8 @@ function assertSingleLine(content: string): void {
   }
 }
 
-export function computeWrite(file: MemoryFile, req: MemoryWriteRequest, today: string): string {
+export function computeWrite(file: MemoryFile, raw: MemoryWriteRequest, today: string): string {
+  const req = sanitizeMemoryWrite(raw);
   const lines = file.text.length === 0 ? [] : file.text.split("\n");
 
   if (req.action === "add") {
