@@ -19,6 +19,7 @@ import {
 } from "../config/paths";
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
+import { loadMcpRegistry, pendingMcpNames } from "../mcp/registry";
 import { loadDenials, loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
@@ -59,6 +60,7 @@ export async function runDoctorChecks(deps: DoctorDeps): Promise<CheckResult[]> 
     configCheck(configDir),
     credentialsCheck(configDir),
     permissionsCheck(configDir, deps.cwd),
+    mcpCheck(configDir, deps.cwd),
     catalogCheck(deps.env),
     gitCheck(),
     bashCheck(),
@@ -235,6 +237,31 @@ function permissionsCheck(configDir: string, cwd: string): CheckResult {
   }
   const n = grants.global.length + grants.project.length;
   return { name: "permissions", status: "ok", detail: `${n} grants` };
+}
+
+function mcpCheck(configDir: string, cwd: string): CheckResult {
+  const registry = loadMcpRegistry({
+    worktree: cwd,
+    configDir,
+    onWarning: () => {},
+  });
+  if (registry.size === 0) {
+    return { name: "mcp", status: "info", detail: "no servers configured" };
+  }
+  const pending = pendingMcpNames(registry);
+  if (pending.length === 0) {
+    return {
+      name: "mcp",
+      status: "ok",
+      detail: `${registry.size} trusted`,
+    };
+  }
+  return {
+    name: "mcp",
+    status: "warn",
+    detail: `pending review: ${pending.join(", ")}`,
+    fix: "open /mcp to preview and trust each server",
+  };
 }
 
 function catalogCheck(env: NodeJS.ProcessEnv): CheckResult {

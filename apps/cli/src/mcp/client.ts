@@ -3,6 +3,7 @@ import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@a
 import { capToolResult } from "../capToolResult";
 import { messageOf } from "../errors";
 import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
+import { serverIdentity } from "./registry";
 import type { McpCatalog, McpServerSpec } from "./types";
 import { mcpToolName } from "./types";
 
@@ -163,6 +164,7 @@ export async function fetchCatalog(
     const tools = await handle.listTools();
     return {
       server: spec.name,
+      identity: serverIdentity(spec),
       fetchedAt: new Date().toISOString(),
       tools: tools.map((tool) => ({
         name: tool.name,

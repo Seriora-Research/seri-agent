@@ -8,8 +8,11 @@ import {
   grantFingerprint,
   loadMcpRegistry,
   parseServersFile,
+  pendingMcpNames,
+  pendingMcpNotice,
   readCatalogCache,
   removeServerFromFile,
+  serverIdentity,
   toolFingerprint,
   writeCatalogCache,
 } from "../../src/mcp/registry";
@@ -162,6 +165,142 @@ describe("loadMcpRegistry", () => {
     const entry = result.get("ghost");
     expect(entry).toBeDefined();
     expect(entry?.catalog).toBeUndefined();
+  });
+
+  test("a trusted project's new server has no catalog and is pending", () => {
+    const { worktree, configDir } = makeTree({
+      "project/.seri/mcp/servers.yaml": `servers:
+  exa:
+    url: https://mcp.exa.ai/mcp
+  ghost:
+    url: https://127.0.0.1:1/mcp
+`,
+    });
+    writeCatalogCache(configDir, {
+      server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const warnings: string[] = [];
+    const registry = loadMcpRegistry({
+      worktree,
+      configDir,
+      onWarning: (message) => warnings.push(message),
+    });
+    expect(registry.get("exa")?.catalog?.tools).toHaveLength(1);
+    expect(registry.get("ghost")?.catalog).toBeUndefined();
+    expect(pendingMcpNames(registry)).toEqual(["ghost"]);
+    expect(warnings).toEqual([]);
+  });
+
+  test("changing a trusted server's URL drops the catalog", () => {
+    const { worktree, configDir } = makeTree({
+      "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://evil.example/mcp\n",
+    });
+    writeCatalogCache(configDir, {
+      server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const warnings: string[] = [];
+    const registry = loadMcpRegistry({
+      worktree,
+      configDir,
+      onWarning: (message) => warnings.push(message),
+    });
+    expect(registry.get("exa")?.spec.url).toBe("https://evil.example/mcp");
+    expect(registry.get("exa")?.catalog).toBeUndefined();
+    expect(pendingMcpNames(registry)).toEqual(["exa"]);
+    expect(warnings.some((w) => w.includes("exa") && w.includes("changed"))).toBe(true);
+  });
+
+  test("changing a trusted server's header drops the catalog", () => {
+    const { worktree, configDir } = makeTree({
+      "project/.seri/mcp/servers.yaml": `servers:
+  exa:
+    url: https://mcp.exa.ai/mcp
+    headers:
+      Authorization: Bearer other
+`,
+    });
+    writeCatalogCache(configDir, {
+      server: "exa",
+      identity: serverIdentity({
+        url: "https://mcp.exa.ai/mcp",
+        headers: { Authorization: "Bearer original" },
+      }),
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const registry = loadMcpRegistry({ worktree, configDir, onWarning: () => {} });
+    expect(registry.get("exa")?.catalog).toBeUndefined();
+  });
+
+  test("a name-only cached catalog is not inherited", () => {
+    const { worktree, configDir } = makeTree({
+      "project/.seri/mcp/servers.yaml": EXA,
+    });
+    writeCatalogCache(configDir, {
+      server: "exa",
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const warnings: string[] = [];
+    const registry = loadMcpRegistry({
+      worktree,
+      configDir,
+      onWarning: (message) => warnings.push(message),
+    });
+    expect(registry.get("exa")?.catalog).toBeUndefined();
+    expect(warnings.some((w) => w.includes("not bound to a URL"))).toBe(true);
+  });
+});
+
+describe("serverIdentity / pendingMcpNotice", () => {
+  test("the same url and headers hash the same, header key order does not matter", () => {
+    expect(serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { A: "1", B: "2" } })).toBe(
+      serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: { B: "2", A: "1" } }),
+    );
+    expect(serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} })).not.toBe(
+      serverIdentity({ url: "https://evil.example/mcp", headers: {} }),
+    );
+  });
+
+  test("pendingMcpNotice names the servers and is absent when none are pending", () => {
+    expect(pendingMcpNotice([])).toBeUndefined();
+    expect(pendingMcpNotice(["ghost"])).toBe(
+      "MCP servers pending review (ghost) were not started — /mcp to preview and trust them",
+    );
   });
 });
 

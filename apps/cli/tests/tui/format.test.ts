@@ -492,7 +492,7 @@ describe("formatMcpRow", () => {
     expect(formatMcpRow(row)).toBe("supabase · ✕ unreachable");
   });
 
-  test("an idle server with no cached catalog shows no tool count", () => {
+  test("an idle server with no cached catalog is pending review", () => {
     const row: McpPanelRow = {
       kind: "server",
       name: "notion",
@@ -500,7 +500,7 @@ describe("formatMcpRow", () => {
       status: { state: "idle" },
       toolCount: undefined,
     };
-    expect(formatMcpRow(row)).toBe("notion · idle, connects on first use");
+    expect(formatMcpRow(row)).toBe("notion · pending review");
   });
 
   test("a single cached tool is singular, not plural", () => {

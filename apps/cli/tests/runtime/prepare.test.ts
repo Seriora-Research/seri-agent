@@ -15,7 +15,7 @@ import {
   type DialFn,
   type McpClientHandle,
 } from "../../src/mcp/client";
-import { toolFingerprint, writeCatalogCache } from "../../src/mcp/registry";
+import { serverIdentity, toolFingerprint, writeCatalogCache } from "../../src/mcp/registry";
 import { type McpToolInfo, mcpGrantKey } from "../../src/mcp/types";
 import { permissionsPath } from "../../src/permissions/store";
 import {
@@ -208,6 +208,57 @@ describe("prepareSession + mcp", () => {
     expect(entry?.catalog).toBeUndefined();
   });
 
+  test("an unreviewed MCP server is announced at startup and stays uncataloged", async () => {
+    writeGlobalServer("ghost", "https://127.0.0.1:1/mcp");
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.mcp.get("ghost")?.catalog).toBeUndefined();
+    expect(
+      prepared.preMountMessages.some(
+        (message) =>
+          message.text.includes("MCP servers pending review (ghost)") &&
+          message.text.includes("not started"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a trusted server plus a new unreviewed server announces only the new one", async () => {
+    const dir = join(mcpConfigDirFor(tmpConfigRoot), "mcp");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "servers.yaml"),
+      `servers:
+  exa:
+    url: https://mcp.exa.ai/mcp
+  ghost:
+    url: https://127.0.0.1:1/mcp
+`,
+    );
+    writeCatalogCache(mcpConfigDirFor(tmpConfigRoot), {
+      server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
+    const prepared = result as PreparedRun;
+    expect(prepared.mcp.get("exa")?.catalog).toBeDefined();
+    expect(prepared.mcp.get("ghost")?.catalog).toBeUndefined();
+    const notices = prepared.preMountMessages.filter((message) =>
+      message.text.includes("MCP servers pending review"),
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.text).toContain("ghost");
+    expect(notices[0]?.text).not.toContain("exa");
+  });
+
   test("skipPermissions seeds the outside-cwd latch for this run only", async () => {
     const attended = (await prepareSession(baseCtx(makeDir()), deps, false, false)) as PreparedRun;
     expect(attended.outsideConsent?.current).toBe("unasked");
@@ -225,6 +276,7 @@ describe("prepareSession + mcp", () => {
     };
     writeCatalogCache(mcpConfigDirFor(tmpConfigRoot), {
       server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
       fetchedAt: new Date().toISOString(),
       tools: [tool],
     });
@@ -253,6 +305,7 @@ describe("prepareSession + mcp", () => {
     };
     writeCatalogCache(mcpConfigDirFor(tmpConfigRoot), {
       server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
       fetchedAt: new Date().toISOString(),
       tools: [changedTool],
     });
@@ -508,6 +561,7 @@ describe("bindSession + mcp", () => {
     };
     writeCatalogCache(configDir, {
       server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
       fetchedAt: new Date().toISOString(),
       tools: [tool],
     });

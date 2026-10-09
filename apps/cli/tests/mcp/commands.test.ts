@@ -10,6 +10,7 @@ import {
   mcpLoginLine,
   mcpPanelRows,
   mcpStatusWord,
+  mcpTrustWord,
 } from "../../src/mcp/commands";
 import { loadMcpRegistry, writeCatalogCache } from "../../src/mcp/registry";
 import type { McpEntry, McpRegistry, McpToolInfo } from "../../src/mcp/types";
@@ -202,6 +203,17 @@ describe("mcpPanelRows", () => {
   });
 });
 
+describe("mcpTrustWord", () => {
+  test("an idle server with no catalog is pending review", () => {
+    expect(mcpTrustWord(entry(), { state: "idle" })).toBe("pending review");
+  });
+
+  test("a cataloged idle server still connects on first use", () => {
+    const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
+    expect(mcpTrustWord(entry({}, catalog), { state: "idle" })).toBe("idle, connects on first use");
+  });
+});
+
 describe("decideMcpCommand: list", () => {
   test("an empty registry points at /mcp add", () => {
     const { lines } = decideMcpCommand(["list"], {
@@ -230,9 +242,7 @@ describe("decideMcpCommand: list", () => {
     expect(lines.find((l) => l.includes("exa"))).toContain(
       "idle, connects on first use, 1 tool cached",
     );
-    expect(lines.find((l) => l.includes("notion"))).toBe(
-      "notion  user  idle, connects on first use",
-    );
+    expect(lines.find((l) => l.includes("notion"))).toBe("notion  user  pending review");
   });
 
   test("a server whose pool status is failed reports unreachable, not idle", () => {
@@ -378,9 +388,7 @@ describe("decideMcpCommand: add", () => {
     expect(change).toEqual({ kind: "added", entry: expect.anything() });
     if (change?.kind === "added") registry.set(change.entry.spec.name, change.entry);
 
-    expect(decideMcpCommand(["list"], deps).lines).toEqual([
-      "exa  user  idle, connects on first use",
-    ]);
+    expect(decideMcpCommand(["list"], deps).lines).toEqual(["exa  user  pending review"]);
     const rows = mcpPanelRows(registry, deps.clients, worktree);
     expect(rows.filter((row) => row.kind === "server").map((row) => row.name)).toEqual(["exa"]);
   });

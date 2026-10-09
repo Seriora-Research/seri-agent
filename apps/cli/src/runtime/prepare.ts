@@ -32,7 +32,12 @@ import {
   createSessionDial,
   type McpClients,
 } from "../mcp/client";
-import { grantFingerprint, loadMcpRegistry } from "../mcp/registry";
+import {
+  grantFingerprint,
+  loadMcpRegistry,
+  pendingMcpNames,
+  pendingMcpNotice,
+} from "../mcp/registry";
 import {
   isMcpToolName,
   type McpEntry,
@@ -544,6 +549,10 @@ export async function prepareSession(
       configDir,
       onWarning: (msg) => printWarning(msg, warnSink),
     });
+    const mcpPending = pendingMcpNotice(pendingMcpNames(mcp));
+    if (mcpPending !== undefined) {
+      printWarning(mcpPending, warnSink);
+    }
     const mcpClients = createMcpClients(createSessionDial(configDir));
 
     const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));

@@ -13,6 +13,7 @@ import {
 } from "../../src/config/paths";
 import { runDoctorChecks } from "../../src/doctor/checks";
 import { doctorExitCode, formatDoctorReport } from "../../src/doctor/report";
+import { serverIdentity, writeCatalogCache } from "../../src/mcp/registry";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
 import { thinMachO } from "../build/thinMachO";
 
@@ -672,5 +673,51 @@ describe("runDoctorChecks", () => {
     if (stamped.kind === "rewritten") expect(uuid?.detail).toBe(stamped.after);
     if (uuid === undefined) return;
     expect(doctorExitCode([uuid])).toBe(0);
+  });
+
+  test("lists an unreviewed MCP server as pending and does not fetch", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(join(configDir, "mcp"), { recursive: true });
+    writeFileSync(
+      join(configDir, "mcp", "servers.yaml"),
+      "servers:\n  ghost:\n    url: https://127.0.0.1:1/mcp\n",
+    );
+    const checks = await runDoctorChecks(quietDoctorDeps(configDir));
+    const mcp = checks.find((check) => check.name === "mcp");
+    expect(mcp?.status).toBe("warn");
+    expect(mcp?.detail).toContain("pending review: ghost");
+    expect(mcp?.fix).toContain("/mcp");
+  });
+
+  test("a trusted MCP server is ok, not pending", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    mkdirSync(join(configDir, "mcp"), { recursive: true });
+    writeFileSync(
+      join(configDir, "mcp", "servers.yaml"),
+      "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
+    );
+    writeCatalogCache(configDir, {
+      server: "exa",
+      identity: serverIdentity({ url: "https://mcp.exa.ai/mcp", headers: {} }),
+      fetchedAt: new Date().toISOString(),
+      tools: [
+        {
+          name: "web_search",
+          toolName: "mcp_exa_web_search",
+          description: "Search.",
+          inputSchema: {},
+        },
+      ],
+    });
+    const checks = await runDoctorChecks(quietDoctorDeps(configDir));
+    const mcp = checks.find((check) => check.name === "mcp");
+    expect(mcp?.status).toBe("ok");
+    expect(mcp?.detail).toBe("1 trusted");
   });
 });
