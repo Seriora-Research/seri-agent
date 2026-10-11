@@ -408,6 +408,53 @@ describe("applyWrite", () => {
     expect(second.before).toBe(first.after);
     expect(second.after).not.toBe(second.before);
   });
+
+  test("a replace whose expect line was rewritten throws and leaves the rewritten file", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "build uses npm",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-10-01",
+    );
+    const path = memoryFilePath("memory-global", ctx);
+    const expectLine = readFileSync(path, "utf8");
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "replace",
+        target: "build uses npm",
+        content: "build uses npm 10 with --workspaces",
+        reason: "live",
+        durable: true,
+      },
+      ctx,
+      "2026-10-11",
+    );
+    const rewritten = readFileSync(path, "utf8");
+
+    expect(() =>
+      applyWrite(
+        {
+          scope: "memory-global",
+          action: "replace",
+          target: "build uses npm",
+          content: "build uses bun",
+          reason: "stale",
+          durable: true,
+          expect: expectLine,
+        },
+        ctx,
+        "2026-10-11",
+      ),
+    ).toThrow(/memory_write conflict/);
+    expect(readFileSync(path, "utf8")).toBe(rewritten);
+  });
 });
 
 describe("renderMemoryTier", () => {
