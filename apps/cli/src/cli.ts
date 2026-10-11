@@ -3,7 +3,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 import { flushSync } from "@opentui/react";
-import { DaemonClient, isLoopDaemonEvent } from "@seri/daemon-client";
+import { DaemonClient, isLoopDaemonEvent, snapshotProcessEnv } from "@seri/daemon-client";
 import {
   findCatalogEntry,
   type ModelCatalog,
@@ -184,6 +184,7 @@ import { loadSkill, type SkillRegistry } from "./skills/registry";
 import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
 import { probeRipgrep } from "./tools/selftest";
+import { ToolSpawnEnv } from "./tools/toolSpawnEnv";
 import { createTrajectoryWriter, type TrajectoryWriter } from "./trajectory/writer";
 import { App } from "./tui/app";
 import { chromeLoadFromFetch } from "./tui/routes/chrome/ChromePanel";
@@ -852,6 +853,7 @@ async function handleExecCommand(
     for await (const event of client.startTurn({
       task,
       cwd: process.cwd(),
+      env: snapshotProcessEnv(),
       ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
     })) {
       turnId = event.turnId;
@@ -932,6 +934,7 @@ export type RunContext = CommandDirs & {
   taskText: string;
   permissionsDir: string;
   cwd: string;
+  env: ToolSpawnEnv;
   database?: SessionDatabase;
 };
 
@@ -2144,6 +2147,7 @@ async function runTui(
           liveState.session as RunSession,
           configDir,
           ctx.permissionsDir,
+          ctx.env,
           printWarning,
         );
         sessionRebind = rebound;
@@ -2295,6 +2299,7 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     permissionsDir: deps.permissionsDir ?? getConfigDir(),
     configDir: deps.authConfigDir ?? getConfigDir(),
     cwd: process.cwd(),
+    env: ToolSpawnEnv.inherited,
   };
 
   if (runStart(ctx) === "idle" && !isTTY) {

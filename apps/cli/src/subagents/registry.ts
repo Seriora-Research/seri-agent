@@ -13,6 +13,7 @@ import {
   READ_ONLY_TOOL_NAMES,
   type ToolName,
 } from "../provider/tools";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { parseAgentFile } from "./agentFile";
 import { isRoutableRole, pinFromTask, type RoutableRole, type TaskRouteRequest } from "./routes";
 
@@ -88,10 +89,11 @@ export function builtinRegistry(): AgentRegistry {
 
 export function agentToolSet(
   spec: AgentSpec,
+  env: ToolSpawnEnv,
   onAfterMutation?: OnAfterMutation,
   cwd = process.cwd(),
 ): ToolSet {
-  const definitions = createToolDefinitions(cwd);
+  const definitions = createToolDefinitions(cwd, env);
   const tools = Object.fromEntries(
     spec.toolNames.map((name) => [name, definitions[name]]),
   ) as ToolSet;

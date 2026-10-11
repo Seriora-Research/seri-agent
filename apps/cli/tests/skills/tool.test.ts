@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import type { ToolExecutionOptions } from "ai";
 import { checkPermission } from "../../src/gate/gate";
 import { createToolDefinitions } from "../../src/provider/tools";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { loadSkillRegistry, type SkillRegistry } from "../../src/skills/registry";
 import { SKILL_TOOL_NAME, withSkills } from "../../src/skills/tool";
 
@@ -124,7 +125,7 @@ describe("withSkills", () => {
     const match = /^Base directory for this skill: (.+)\n\nSee references\/guide.md$/.exec(text);
     expect(match?.[1]).toBe(join(worktree, ".seri", "skills", "probe"));
     const baseDir = match?.[1] ?? "";
-    const fileTools = createToolDefinitions(worktree);
+    const fileTools = createToolDefinitions(worktree, ToolSpawnEnv.inherited);
     expect(
       await fileTools.read_file.execute?.(
         { path: join(baseDir, "references", "guide.md") },

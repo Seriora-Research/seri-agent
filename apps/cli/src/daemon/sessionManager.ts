@@ -13,6 +13,7 @@ import type { PromptChannel } from "../permissions/promptChannel";
 import { hydrateBinaryArtifacts } from "../session/artifacts";
 import type { SessionDatabase } from "../session/database";
 import type { SessionState } from "../session/session";
+import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 
 type DenialReason<E extends { type: string }> = Extract<
   E,
@@ -29,6 +30,7 @@ export type ExecuteTurnInput = {
   sessionId: string;
   task: string;
   cwd: string;
+  env: ToolSpawnEnv;
   permissionMode: PermissionMode;
   promptChannel?: PromptChannel;
   signal: AbortSignal;
@@ -98,6 +100,7 @@ export class DaemonSessionManager {
     cwd?: string;
     permissionMode?: PermissionMode;
     promptChannel?: PromptChannel;
+    env: ToolSpawnEnv;
   }): Promise<{ turnId: string; sessionId: string; subscribe: (send: Subscriber) => () => void }> {
     const session = this.resolveSession(request);
     const turnId = randomUUID();
@@ -131,6 +134,7 @@ export class DaemonSessionManager {
           request.task,
           request.permissionMode,
           request.promptChannel,
+          request.env,
         );
       })
       .catch(() => {});
@@ -266,6 +270,7 @@ export class DaemonSessionManager {
     task: string,
     permissionMode: PermissionMode | undefined,
     promptChannel: PromptChannel | undefined,
+    env: ToolSpawnEnv,
   ): Promise<void> {
     const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
@@ -291,6 +296,7 @@ export class DaemonSessionManager {
         sessionId: session.id,
         task,
         cwd: session.cwd,
+        env,
         permissionMode: permissionMode ?? session.permissionMode,
         promptChannel,
         signal: handle.abort.signal,

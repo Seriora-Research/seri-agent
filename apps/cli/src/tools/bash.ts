@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { clearEolCache } from "./eolCache";
 import { type ProcessResult, spawnCollect } from "./spawnCollect";
+import { ToolSpawnEnv } from "./toolSpawnEnv";
 
 const WIN32_GIT_BASH_PATHS = [
   "C:\\Program Files\\Git\\bin\\bash.exe",
@@ -65,6 +66,7 @@ export async function runBash(
   signal?: AbortSignal,
   isAvailable: () => boolean = isBashAvailable,
   cwd?: string,
+  env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<ProcessResult> {
   if (!isAvailable()) {
     throw new Error("bash is not available on this system");
@@ -74,7 +76,15 @@ export async function runBash(
     // pkill -f matches -c argv on Linux procps-ng, so POSIX evals the script from fd 3 with stdin ignored.
     // win32 Git Bash + bash -s hung the tree-kill timeout path, so win32 keeps -c.
     if (process.platform === "win32") {
-      return await spawnCollect(resolveBashCommand(), ["-c", command], timeoutMs, signal, cwd);
+      return await spawnCollect(
+        resolveBashCommand(),
+        ["-c", command],
+        timeoutMs,
+        signal,
+        cwd,
+        undefined,
+        env,
+      );
     }
     const script = command.endsWith("\n") ? command : `${command}\n`;
     return await spawnCollect(
@@ -84,6 +94,7 @@ export async function runBash(
       signal,
       cwd,
       { fd3: script },
+      env,
     );
   } finally {
     clearEolCache();

@@ -1,6 +1,11 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { onAbort } from "../abort";
 import { onSignalCleanup } from "../signals";
+import { ToolSpawnEnv } from "./toolSpawnEnv";
+
+type SpawnIo = string | { stdin?: string; fd3?: string };
+type Assert<T extends true> = T;
+type _EnvIsNotIo = Assert<ToolSpawnEnv extends SpawnIo ? false : true>;
 
 export type ProcessResult = {
   stdout: string;
@@ -88,13 +93,15 @@ export function spawnCollect(
   timeoutMs?: number,
   signal?: AbortSignal,
   cwd?: string,
-  io?: string | { stdin?: string; fd3?: string },
+  io?: SpawnIo,
+  env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<ProcessResult> {
   return new Promise((resolve, reject) => {
     // Windows detached: true opens a new console window.
     const spawnOptions = {
       detached: process.platform !== "win32",
       ...(cwd !== undefined ? { cwd } : {}),
+      ...env.spawnOptions(),
     };
     const stdin = typeof io === "string" ? io : io?.stdin;
     const fd3 = typeof io === "string" ? undefined : io?.fd3;

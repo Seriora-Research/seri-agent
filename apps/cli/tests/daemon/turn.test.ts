@@ -6,6 +6,7 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import type { CliDeps } from "../../src/cli";
 import { createAttendedExecuteTurn } from "../../src/daemon/turn";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import * as mcpClient from "../../src/mcp/client";
 import { callMcpTool, type McpClientHandle, type McpClients } from "../../src/mcp/client";
 import type { McpServerSpec } from "../../src/mcp/types";
@@ -150,6 +151,7 @@ function startTurn(
     sessionId,
     task: "hi",
     cwd,
+    env: ToolSpawnEnv.inherited,
     permissionMode: "approve-each",
     signal: new AbortController().signal,
     emitLoop: () => {},

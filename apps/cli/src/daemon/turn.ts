@@ -28,6 +28,7 @@ export function createAttendedExecuteTurn(opts: {
       permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
       cwd: input.cwd,
+      env: input.env,
       database: opts.database,
     };
     const prepared = await prepareSession(ctx, opts.deps, false, false);

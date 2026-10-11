@@ -10,6 +10,7 @@ import { getPendingDir } from "../../src/config/paths";
 import { flushIdleArchivist } from "../../src/daemon/idle";
 import { startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import type { MemoryContext } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { SessionDatabase } from "../../src/session/database";
@@ -215,7 +216,11 @@ describe("idle archivist flush", () => {
     );
 
     async function completeTurn(task: string): Promise<void> {
-      const started = await manager.startTurn({ task, sessionId: "sess-race" });
+      const started = await manager.startTurn({
+        env: ToolSpawnEnv.inherited,
+        task,
+        sessionId: "sess-race",
+      });
       await new Promise<void>((resolve) => {
         started.subscribe((event: DaemonEvent) => {
           if (event.event.type === "turn-complete") resolve();
@@ -261,7 +266,11 @@ describe("idle archivist flush", () => {
     );
 
     async function completeTurn(task: string): Promise<void> {
-      const started = await manager.startTurn({ task, sessionId: "sess-poison" });
+      const started = await manager.startTurn({
+        env: ToolSpawnEnv.inherited,
+        task,
+        sessionId: "sess-poison",
+      });
       await new Promise<void>((resolve) => {
         started.subscribe((event: DaemonEvent) => {
           if (event.event.type === "turn-complete") resolve();
@@ -316,13 +325,21 @@ describe("idle archivist flush", () => {
     );
 
     try {
-      const first = await manager.startTurn({ task: "one", sessionId: "sess-queue" });
+      const first = await manager.startTurn({
+        env: ToolSpawnEnv.inherited,
+        task: "one",
+        sessionId: "sess-queue",
+      });
       const firstDone = new Promise<void>((resolve) => {
         first.subscribe((event: DaemonEvent) => {
           if (event.event.type === "turn-complete") resolve();
         });
       });
-      const second = await manager.startTurn({ task: "two", sessionId: "sess-queue" });
+      const second = await manager.startTurn({
+        env: ToolSpawnEnv.inherited,
+        task: "two",
+        sessionId: "sess-queue",
+      });
       const secondDone = new Promise<void>((resolve) => {
         second.subscribe((event: DaemonEvent) => {
           if (event.event.type === "turn-complete") resolve();

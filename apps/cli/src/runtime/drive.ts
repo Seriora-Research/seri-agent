@@ -314,6 +314,7 @@ export async function driveLoop(
     checkpointer,
     reasoningEffort,
     cwd: worktree,
+    env: ctx.env,
     blockReadsOutsideWorkingDirectories: standingDeny,
     outsideConsent: prepared.outsideConsent,
     onBeforeTool: hookRunner?.onBeforeTool,

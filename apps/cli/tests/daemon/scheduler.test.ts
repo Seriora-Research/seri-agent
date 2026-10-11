@@ -12,6 +12,7 @@ import {
 } from "../../src/daemon/scheduler";
 import { startDaemon } from "../../src/daemon/server";
 import { createScheduledToolDefinitions, createToolDefinitions } from "../../src/provider/tools";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { SessionDatabase } from "../../src/session/database";
 import { withTodo } from "../../src/todo/tool";
 
@@ -56,7 +57,9 @@ describe("scheduled toolset", () => {
 
   test("assertScheduledToolset rejects the normal write-capable toolset", () => {
     const dir = makeDir();
-    expect(() => assertScheduledToolset(createToolDefinitions(dir))).toThrow(/write_file/);
+    expect(() =>
+      assertScheduledToolset(createToolDefinitions(dir, ToolSpawnEnv.inherited)),
+    ).toThrow(/write_file/);
   });
 
   test("assertScheduledToolset rejects ask_user", () => {

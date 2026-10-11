@@ -30,4 +30,5 @@ export {
   isKnownDaemonEvent,
   isLoopDaemonEvent,
   isTerminalDaemonEvent,
+  snapshotProcessEnv,
 } from "./protocol";

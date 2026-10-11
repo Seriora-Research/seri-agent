@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { DaemonClient, type DaemonEvent, isKnownDaemonEvent, iterateSse } from "../src/index";
+import {
+  DaemonClient,
+  type DaemonEvent,
+  isKnownDaemonEvent,
+  iterateSse,
+  snapshotProcessEnv,
+} from "../src/index";
 
 function sseResponse(events: unknown[]): Response {
   const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
@@ -83,5 +89,12 @@ describe("daemon-client", () => {
       if (item.seq === 1) break;
     }
     expect(cancelled).toBe(true);
+  });
+
+  test("snapshotProcessEnv copies string values and drops unset keys", () => {
+    expect(snapshotProcessEnv({ FOO: "b", EMPTY: undefined, PATH: "/bin" })).toEqual({
+      FOO: "b",
+      PATH: "/bin",
+    });
   });
 });
