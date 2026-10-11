@@ -20,13 +20,18 @@ import {
 import { readDaemonDescriptorFile } from "../daemon/descriptor";
 import { looksLikeSeriBinary } from "../installIdentity";
 import { loadMcpRegistry, pendingMcpNames } from "../mcp/registry";
+import {
+  listMemoryFilePaths,
+  MemoryLockBusy,
+  type MemorySecretScan,
+  scanMemorySecrets,
+} from "../memory/store";
 import { loadDenials, loadGrants } from "../permissions/store";
 import { allProviderKeyStates } from "../provider/keys";
 import { subscribedProviders } from "../provider/subscriptions";
 import { probeConfinement } from "../sandbox/confine";
 import { type IoUringProbe, ioUringDoctorCheck, probeIoUringSetup } from "../sandbox/ioUring";
 import { formatSandboxDoctorDetail, idleSandboxTier, resolveShellLaunch } from "../sandbox/policy";
-import { listMemoryFilePaths, type MemorySecretScan, scanMemorySecrets } from "../memory/store";
 import { type SecretScan, SessionDatabase } from "../session/database";
 import { formatSecretTally, mergeTally } from "../session/redact";
 import { isBashAvailable } from "../tools/bash";
@@ -323,8 +328,6 @@ function sessionStoreCheck(configDir: string): CheckResult {
   }
 }
 
-const MEMORY_BUSY_RE = / is locked by (?:pid (\d+)|another process); nothing was written\.$/;
-
 function secretsCheck(configDir: string, scrub: boolean): CheckResult {
   const path = join(configDir, DATABASE_FILENAME);
   const dbExists = existsSync(path);
@@ -359,12 +362,11 @@ function secretsCheck(configDir: string, scrub: boolean): CheckResult {
   try {
     memScan = scanMemorySecrets(configDir, scrub);
   } catch (error) {
-    const busy = MEMORY_BUSY_RE.exec(error instanceof Error ? error.message : "");
-    if (busy === null) throw error;
+    if (!(error instanceof MemoryLockBusy)) throw error;
     return {
       name: "secrets",
       status: "fail",
-      detail: `memory is being written by another seri process${busy[1] === undefined ? "" : ` (pid ${busy[1]})`}`,
+      detail: `memory is being written by another seri process${error.pid === undefined ? "" : ` (pid ${error.pid})`}`,
       fix: "retry seri doctor --scrub",
     };
   }

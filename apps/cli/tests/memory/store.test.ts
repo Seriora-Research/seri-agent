@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -454,6 +454,40 @@ describe("applyWrite", () => {
       ),
     ).toThrow(/memory_write conflict/);
     expect(readFileSync(path, "utf8")).toBe(rewritten);
+  });
+
+  test("a leftover lock that names this pid is reclaimed, and the write lands", () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(`${path}.lock`, `${process.pid} deadbeefdeadbeef\n`);
+
+    applyWrite(
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      ctx,
+      "2026-10-11",
+    );
+
+    expect(readFileSync(path, "utf8")).toBe("- [2026-10-11] prefers tabs");
+    expect(existsSync(`${path}.lock`)).toBe(false);
+  });
+
+  test("a lock whose pid has exited is reclaimed, and the write lands", async () => {
+    const ctx = makeCtx();
+    const path = memoryFilePath("user", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    const dead = Bun.spawn([process.execPath, "-e", "process.exit(0)"]);
+    await dead.exited;
+    writeFileSync(`${path}.lock`, `${dead.pid} 0123456789abcdef\n`);
+
+    applyWrite(
+      { scope: "user", action: "add", content: "prefers tabs", reason: "r", durable: true },
+      ctx,
+      "2026-10-11",
+    );
+
+    expect(readFileSync(path, "utf8")).toBe("- [2026-10-11] prefers tabs");
+    expect(existsSync(`${path}.lock`)).toBe(false);
   });
 });
 

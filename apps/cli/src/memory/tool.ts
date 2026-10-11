@@ -132,8 +132,9 @@ export function makeMemoryWriteTool(
           message: "Written directly (approval gate is off).",
         };
       } catch (error) {
-        if (shown !== undefined && error instanceof MemoryConflict) {
-          shown[error.file.scope] = shownLinesOf(error.file);
+        if (error instanceof MemoryConflict) {
+          if (shown !== undefined) shown[error.file.scope] = shownLinesOf(error.file);
+          return { conflict: true, message: error.message };
         }
         throw error;
       }

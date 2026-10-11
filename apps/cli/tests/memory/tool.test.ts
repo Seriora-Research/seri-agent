@@ -228,12 +228,48 @@ describe("makeMemoryWriteTool", () => {
     const write = (args: Record<string, unknown>) =>
       callTool(toolDef, { scope: "memory-global", reason: "r", durable: true, ...args });
 
-    await expect(write({ action: "remove", target: "build uses npm" })).rejects.toThrow(
-      'memory_write conflict: "- [2026-10-01] build uses npm" changed or was removed in MEMORY.md after it was read.',
+    const first = (await write({ action: "remove", target: "build uses npm" })) as {
+      conflict: boolean;
+      message: string;
+    };
+    expect(first.conflict).toBe(true);
+    expect(first.message).toContain(
+      '"- [2026-10-01] build uses npm" changed or was removed in MEMORY.md after it was read.',
     );
+    expect(first.message).toContain("- [2026-10-11] build uses npm 10 with --workspaces");
     await write({ action: "replace", target: "npm 10", content: "build uses npm 11" });
     await write({ action: "replace", target: "npm 11", content: "build uses bun" });
 
     expect(readFileSync(path, "utf8")).toBe(`- [${today}] build uses bun`);
+  });
+
+  test("a conflict result lists a rewritten line past the 500-character error cut, and a retry can target it", async () => {
+    const ctx = makeCtx();
+    setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
+    const path = memoryFilePath("memory-global", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    const padding = Array.from(
+      { length: 12 },
+      (_, i) => `- [2026-10-01] filler-entry-${String(i).padStart(2, "0")} ${"x".repeat(40)}`,
+    );
+    writeFileSync(path, `${padding.join("\n")}\n- [2026-10-01] build uses npm\n`);
+    const toolDef = makeMemoryWriteTool(ctx, { shown: loadMemory(ctx) });
+    const rewritten = `- [2026-10-11] build uses npm 10 with --workspaces`;
+    writeFileSync(path, `${padding.join("\n")}\n${rewritten}\n`);
+    const write = (args: Record<string, unknown>) =>
+      callTool(toolDef, { scope: "memory-global", reason: "r", durable: true, ...args });
+
+    const first = (await write({ action: "remove", target: "build uses npm" })) as {
+      conflict: boolean;
+      message: string;
+    };
+    expect(first.conflict).toBe(true);
+    expect(first.message.length).toBeGreaterThan(500);
+    expect(first.message).toContain(rewritten);
+    await write({ action: "replace", target: "npm 10", content: "build uses bun" });
+
+    expect(readFileSync(path, "utf8").split("\n").at(-1)).toBe(
+      `- [${new Date().toISOString().slice(0, 10)}] build uses bun`,
+    );
   });
 });

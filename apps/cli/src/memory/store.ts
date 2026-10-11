@@ -3,8 +3,8 @@ import {
   closeSync,
   existsSync,
   openSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -163,8 +163,11 @@ type LockState =
 
 const heldByThisThread = new Set<string>();
 
-class MemoryLockBusy extends Error {
-  constructor(path: string, pid: number | undefined) {
+export class MemoryLockBusy extends Error {
+  constructor(
+    path: string,
+    readonly pid: number | undefined,
+  ) {
     super(
       `memory_write refused: ${path} is locked by ${pid === undefined ? "another process" : `pid ${pid}`}; nothing was written.`,
     );
@@ -252,6 +255,9 @@ function acquireMemoryLock(path: string): string {
   for (let attempt = 0; ; attempt++) {
     if (createLock(lockPath, owner)) return owner;
     const state = readLockState(lockPath);
+    // A leftover that names this pid cannot be a live hold: lock bodies are synchronous, so this
+    // thread is not inside one. A stopped pid is alive; stealing would let it resume and publish.
+    if (state.kind === "held" && state.pid === process.pid && removeLock(lockPath)) continue;
     if (lockIsStale(state) && removeLock(lockPath)) continue;
     if (Date.now() >= deadline) {
       throw new MemoryLockBusy(path, state.kind === "held" ? state.pid : undefined);
