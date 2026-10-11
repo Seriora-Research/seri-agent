@@ -18,9 +18,7 @@ export type TurnRequest = {
 };
 
 /** String-valued snapshot of `process.env`, dropping keys whose value is unset. */
-export function snapshotProcessEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): Record<string, string> {
+export function snapshotProcessEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const snapshot: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) snapshot[key] = value;

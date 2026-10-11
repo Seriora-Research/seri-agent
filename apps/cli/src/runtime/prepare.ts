@@ -58,7 +58,6 @@ import { appliedReasoningEffort } from "../provider/reasoning";
 import { type ResolvedRoute, type RouteCredential, resolveRoute } from "../provider/routing";
 import { subscribedProviders } from "../provider/subscriptions";
 import { createToolDefinitions } from "../provider/tools";
-import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { createRulesState, type RulesState } from "../rules/match";
 import { loadRuleRegistry, type RuleRegistry } from "../rules/registry";
 import { configDirForStore, type SessionDatabase } from "../session/database";
@@ -71,6 +70,7 @@ import {
 import { listPendingSkills } from "../skills/pending";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
+import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { buildRunManifest, collectContextFiles } from "../trajectory/manifest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";

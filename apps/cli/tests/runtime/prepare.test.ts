@@ -18,7 +18,6 @@ import {
 import { serverIdentity, toolFingerprint, writeCatalogCache } from "../../src/mcp/registry";
 import { type McpToolInfo, mcpGrantKey } from "../../src/mcp/types";
 import { permissionsPath } from "../../src/permissions/store";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import {
   bindSession,
   buildCheckpointedTools,
@@ -33,7 +32,8 @@ import {
   wantsWelcomeSplash,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
-import { saveSession, loadSession } from "../../src/session/session";
+import { loadSession, saveSession } from "../../src/session/session";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {

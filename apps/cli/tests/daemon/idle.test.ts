@@ -10,10 +10,10 @@ import { getPendingDir } from "../../src/config/paths";
 import { flushIdleArchivist } from "../../src/daemon/idle";
 import { startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import type { MemoryContext } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { SessionDatabase } from "../../src/session/database";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "../subagents/fakeChildLoop";
 

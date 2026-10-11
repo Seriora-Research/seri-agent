@@ -14,7 +14,9 @@ export const turnRequestSchema = z.object({
   permissionPrompts: z.literal("none").optional(),
   env: clientEnvSchema
     .optional()
-    .transform((vars) => (vars === undefined ? ToolSpawnEnv.inherited : ToolSpawnEnv.exactly(vars))),
+    .transform((vars) =>
+      vars === undefined ? ToolSpawnEnv.inherited : ToolSpawnEnv.exactly(vars),
+    ),
 });
 
 export const approvalBodySchema = z.object({

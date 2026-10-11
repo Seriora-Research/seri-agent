@@ -8,8 +8,8 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 

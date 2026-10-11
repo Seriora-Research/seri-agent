@@ -45,7 +45,10 @@ describe("turnRequestSchema env", () => {
     if (!omitted.success) return;
     expect(omitted.data.env.spawnOptions()).toEqual({});
 
-    const replaced = turnRequestSchema.safeParse({ task: "hi", env: { FOO: "b", "LS_COLORS": "a=b" } });
+    const replaced = turnRequestSchema.safeParse({
+      task: "hi",
+      env: { FOO: "b", LS_COLORS: "a=b" },
+    });
     expect(replaced.success).toBe(true);
     if (!replaced.success) return;
     expect(replaced.data.env.spawnOptions()).toEqual({ env: { FOO: "b", LS_COLORS: "a=b" } });

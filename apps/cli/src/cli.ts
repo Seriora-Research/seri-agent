@@ -91,7 +91,7 @@ import type { PermissionMode } from "./gate/gate";
 import { locationForCall } from "./gate/workingDir";
 import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
-import { userContentFrom, type ImageBytes } from "./imageParts";
+import { type ImageBytes, userContentFrom } from "./imageParts";
 import { findSafeEvictionBoundary } from "./loop/compaction";
 import { compactConversation, createConversation, snapshotOf, windowOf } from "./loop/conversation";
 import {

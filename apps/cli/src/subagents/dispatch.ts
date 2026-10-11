@@ -403,9 +403,7 @@ async function runAgentChild(opts: {
   return { ...settled, identity };
 }
 
-export function createDispatchTool(
-  runtime: DispatchRuntime & { agents: AgentRegistry },
-) {
+export function createDispatchTool(runtime: DispatchRuntime & { agents: AgentRegistry }) {
   const { agents } = runtime;
   return tool({
     description: dispatchDescription(agents),

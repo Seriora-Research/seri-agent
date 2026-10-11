@@ -8,16 +8,15 @@ import { MockLanguageModelV4 } from "ai/test";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { runLoop as realRunLoop } from "../../src/loop/loop";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import {
   type ChildEventPayload,
   createDispatchTool,
   type DispatchResult,
+  type DispatchRuntime,
   dispatchDescription,
   dispatchDirect,
   dispatchSchema,
   runSubagent,
-  type DispatchRuntime,
   type SubagentRuntime,
 } from "../../src/subagents/dispatch";
 import {
@@ -27,6 +26,7 @@ import {
   builtinRegistry,
   composeAddendum,
 } from "../../src/subagents/registry";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { collect, streamResult, textOnlyChunks, toolCallChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "./fakeChildLoop";
 
