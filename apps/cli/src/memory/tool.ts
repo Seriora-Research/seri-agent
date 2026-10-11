@@ -1,13 +1,18 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { loadMemoryConfig } from "../config/config";
+import { truncate } from "../truncate";
 import { scanForInjection } from "./injectionScan";
 import { type PendingWrite, stagePendingWrite } from "./pending";
 import {
   applyWrite,
   computeWrite,
+  type LoadedMemory,
   loadMemoryFile,
+  MemoryConflict,
   type MemoryContext,
+  type MemoryFile,
+  type MemoryScope,
   type MemoryWriteRequest,
   sanitizeMemoryWrite,
 } from "./store";
@@ -31,14 +36,59 @@ const DESCRIPTION =
   `existing entry. "reason" and "durable" are always required: they travel with the write for a ` +
   `human to review, never with the entry text itself.`;
 
+function linesOf(text: string): string[] {
+  return text.length === 0 ? [] : text.split("\n");
+}
+
+function shownLinesOf(file: MemoryFile): Set<string> {
+  return new Set(file.entries.map((entry) => entry.line));
+}
+
+// `target` is resolved against what the model was shown, not against disk, so it cannot land on a
+// line another writer added or rewrote since.
+function expectShownLine(
+  shown: Set<string>,
+  live: MemoryFile,
+  req: MemoryWriteRequest,
+): MemoryWriteRequest {
+  const target = req.target;
+  if (req.action === "add" || target === undefined) return req;
+  const matches = [...shown].filter((line) => line.includes(target));
+  if (matches.length === 0) {
+    throw new MemoryConflict(live, `no entry you were shown contains "${truncate(target, 80)}".`);
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `memory_write refused: "${truncate(target, 80)}" appears in ${matches.length} entries; include enough text to identify exactly one.`,
+    );
+  }
+  return { ...req, expect: matches[0] };
+}
+
+function applyToShown(shown: Set<string>, before: string, after: string): void {
+  const beforeLines = new Set(linesOf(before));
+  const afterLines = new Set(linesOf(after));
+  for (const line of beforeLines) if (!afterLines.has(line)) shown.delete(line);
+  for (const line of afterLines) if (!beforeLines.has(line)) shown.add(line);
+}
+
 export function makeMemoryWriteTool(
   ctx: MemoryContext,
   opts: {
     forceStage?: boolean;
 
     onStaged?: (staged: PendingWrite) => void;
+    shown?: LoadedMemory;
   } = {},
 ) {
+  const shown: Record<MemoryScope, Set<string>> | undefined =
+    opts.shown === undefined
+      ? undefined
+      : {
+          user: shownLinesOf(opts.shown.user),
+          "memory-global": shownLinesOf(opts.shown.global),
+          "memory-project": shownLinesOf(opts.shown.project),
+        };
   return tool({
     description: DESCRIPTION,
     inputSchema: memoryWriteInputSchema,
@@ -61,24 +111,35 @@ export function makeMemoryWriteTool(
       }
       const today = new Date().toISOString().slice(0, 10);
 
-      computeWrite(loadMemoryFile(req.scope, ctx), req, today);
+      try {
+        const live = loadMemoryFile(req.scope, ctx);
+        const resolved = shown === undefined ? req : expectShownLine(shown[req.scope], live, req);
+        computeWrite(live, resolved, today);
 
-      if (opts.forceStage === true || loadMemoryConfig(ctx.configDir).approvalRequired) {
-        const staged = stagePendingWrite(req, ctx, new Date());
-        opts.onStaged?.(staged);
+        if (opts.forceStage === true || loadMemoryConfig(ctx.configDir).approvalRequired) {
+          const staged = stagePendingWrite(resolved, ctx, new Date());
+          opts.onStaged?.(staged);
+          return {
+            staged: true,
+            id: staged.id,
+            scope: staged.scope,
+            message: `Staged for human review: /memory diff ${staged.id}`,
+          };
+        }
+        const result = applyWrite(resolved, ctx, today);
+        if (shown !== undefined) applyToShown(shown[req.scope], result.before, result.after);
         return {
-          staged: true,
-          id: staged.id,
-          scope: staged.scope,
-          message: `Staged for human review: /memory diff ${staged.id}`,
+          staged: false,
+          path: result.path,
+          message: "Written directly (approval gate is off).",
         };
+      } catch (error) {
+        // The conflict listed the file's current entries, so the model has now seen them.
+        if (shown !== undefined && error instanceof MemoryConflict) {
+          shown[error.file.scope] = shownLinesOf(error.file);
+        }
+        throw error;
       }
-      const result = applyWrite(req, ctx, today);
-      return {
-        staged: false,
-        path: result.path,
-        message: "Written directly (approval gate is off).",
-      };
     },
   });
 }

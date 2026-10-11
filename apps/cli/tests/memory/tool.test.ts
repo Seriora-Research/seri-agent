@@ -1,10 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setConfigValue } from "../../src/config/config";
 import { getPendingDir } from "../../src/config/paths";
-import { loadMemoryFile, type MemoryContext, memoryFilePath } from "../../src/memory/store";
+import {
+  loadMemory,
+  loadMemoryFile,
+  type MemoryContext,
+  memoryFilePath,
+} from "../../src/memory/store";
 import { makeMemoryWriteTool, memoryWriteInputSchema } from "../../src/memory/tool";
 
 const MEMORY_CAP_USER = 1_375;
@@ -201,5 +214,26 @@ describe("makeMemoryWriteTool", () => {
     ).rejects.toThrow(/over its 1375-char cap/);
     const pendingDir = join(getPendingDir(ctx.configDir), "user");
     expect(existsSync(pendingDir) ? readdirSync(pendingDir) : []).toHaveLength(0);
+  });
+
+  test("with shown memory, a retry after a conflict targets the listed entries, and a line the tool wrote can be replaced", async () => {
+    const ctx = makeCtx();
+    setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
+    const path = memoryFilePath("memory-global", ctx);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "- [2026-10-01] build uses npm\n");
+    const toolDef = makeMemoryWriteTool(ctx, { shown: loadMemory(ctx) });
+    writeFileSync(path, "- [2026-10-11] build uses npm 10 with --workspaces\n");
+    const today = new Date().toISOString().slice(0, 10);
+    const write = (args: Record<string, unknown>) =>
+      callTool(toolDef, { scope: "memory-global", reason: "r", durable: true, ...args });
+
+    await expect(write({ action: "remove", target: "build uses npm" })).rejects.toThrow(
+      'memory_write conflict: "- [2026-10-01] build uses npm" changed or was removed in MEMORY.md after it was read.',
+    );
+    await write({ action: "replace", target: "npm 10", content: "build uses npm 11" });
+    await write({ action: "replace", target: "npm 11", content: "build uses bun" });
+
+    expect(readFileSync(path, "utf8")).toBe(`- [${today}] build uses bun`);
   });
 });
