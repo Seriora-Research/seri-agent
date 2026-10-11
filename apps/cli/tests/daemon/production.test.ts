@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DaemonClient } from "@seri/daemon-client";
+import { DaemonClient, snapshotProcessEnv } from "@seri/daemon-client";
 import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { startDaemon } from "../../src/daemon/server";
@@ -234,10 +234,7 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client env"
     })) {
       events.push(event);
     }
-    const out = await capture()!.tools.bash!.execute!(
-      { command: "echo $FOO; pwd" },
-      execOpts,
-    );
+    const out = await capture()!.tools.bash!.execute!({ command: "echo $FOO; pwd" }, execOpts);
     expect(out.stdout).toBe(`${FOO_PROBE}\n${realpathSync(work)}\n`);
     expect(process.env.FOO).toBe("daemon-a");
 
@@ -287,9 +284,7 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client env"
     const configDir = makeDir();
     process.env.HOME = configDir;
     const captured: NonNullable<ReturnType<ReturnType<typeof fakeRunLoop>["capture"]>>[] = [];
-    async function* fake(
-      opts: NonNullable<ReturnType<ReturnType<typeof fakeRunLoop>["capture"]>>,
-    ) {
+    async function* fake(opts: NonNullable<ReturnType<ReturnType<typeof fakeRunLoop>["capture"]>>) {
       captured.push(opts);
       yield { type: "done" as const, reason: "no-tool-call" as const };
       return opts.messages;
@@ -348,12 +343,11 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
     process.env.HOME = configDir;
     const work = makeDir();
     const { client, capture } = await startProbingDaemon(configDir);
-    const path = process.env.Path ?? process.env.PATH ?? "";
     await Array.fromAsync(
       client.startTurn({
         task: "probe",
         cwd: work,
-        env: { Path: path, PATH: path, FOO: FOO_PROBE, SystemRoot: process.env.SystemRoot ?? "" },
+        env: { ...snapshotProcessEnv(), FOO: FOO_PROBE },
       }),
     );
     const out = await capture()!.tools.powershell!.execute!(

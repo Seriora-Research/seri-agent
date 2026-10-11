@@ -35,7 +35,7 @@ describe("ToolSpawnEnv", () => {
   });
 });
 
-describe.skipIf(!isBashAvailable())("spawnCollect env", () => {
+describe.skipIf(process.platform === "win32" || !isBashAvailable())("spawnCollect env", () => {
   const originalFoo = process.env.FOO;
 
   function restoreFoo(): void {
@@ -49,14 +49,14 @@ describe.skipIf(!isBashAvailable())("spawnCollect env", () => {
     try {
       const result = await spawnCollect(
         "bash",
-        ["-c", "printf '%s\\n%s' \"$FOO\" \"${ONLY_IN_PARENT-unset}\""],
+        ["-c", 'printf "%s\\n" "$FOO"; printenv ONLY_IN_PARENT >/dev/null; echo $?'],
         15000,
         undefined,
         undefined,
         undefined,
         ToolSpawnEnv.exactly({ FOO: "b", PATH: process.env.PATH ?? "/usr/bin:/bin" }),
       );
-      expect(result.stdout).toBe("b\nunset");
+      expect(result.stdout).toBe("b\n1\n");
       expect(process.env.FOO).toBe("daemon-a");
       expect(process.env.ONLY_IN_PARENT).toBe("leak");
     } finally {
