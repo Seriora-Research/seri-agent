@@ -99,8 +99,6 @@ export type MemoryWriteRequest = {
   content?: string;
   reason: string;
   durable: boolean;
-  // The exact line `target` named when it was read. Without it, `target` matches whatever line
-  // contains it now, which may be a line another writer rewrote since.
   expect?: string;
 };
 
@@ -151,15 +149,11 @@ export function listMemoryFilePaths(configDir: string): string[] {
   }
 }
 
-// A hold is one read and one atomic write of a file under its char cap, so a lock held past the
-// wait belongs to a stuck holder, not a slow one.
 const LOCK_WAIT_MS = 2_000;
-// A holder that died between creating the lock and writing its pid leaves it empty for good.
 const LOCK_EMPTY_GRACE_MS = 500;
 const LOCK_BACKOFF_MS = [1, 2, 5, 10, 20, 50] as const;
 const LOCK_OWNER_RE = /^([1-9]\d*) \S+$/;
 
-// The lock is released when the body returns, so an async body would publish after release.
 type NotPromise<T> = T extends PromiseLike<unknown> ? never : T;
 
 type LockState =
@@ -258,8 +252,6 @@ function acquireMemoryLock(path: string): string {
   for (let attempt = 0; ; attempt++) {
     if (createLock(lockPath, owner)) return owner;
     const state = readLockState(lockPath);
-    // A live pid is never stolen from. A stopped holder (Ctrl-Z, a debugger) would resume and
-    // publish text computed from its own read.
     if (lockIsStale(state) && removeLock(lockPath)) continue;
     if (Date.now() >= deadline) {
       throw new MemoryLockBusy(path, state.kind === "held" ? state.pid : undefined);
@@ -269,16 +261,12 @@ function acquireMemoryLock(path: string): string {
 }
 
 function releaseMemoryLock(path: string, owner: string): void {
-  // A throw here would replace the commit's own result. A lock left behind names this pid and is
-  // reclaimed once it exits.
   try {
     const state = readLockState(`${path}.lock`);
     if (state.kind === "held" && state.owner === owner) unlinkSync(`${path}.lock`);
   } catch {}
 }
 
-// Two waiters can both judge one dead lock stale, and the slower unlink then removes the faster
-// waiter's new lock. Checking the owner right before the rename refuses a publish that lost it.
 function publishMemoryFile(path: string, owner: string, text: string): void {
   const state = readLockState(`${path}.lock`);
   if (state.kind !== "held" || state.owner !== owner) {
@@ -302,8 +290,6 @@ function withMemoryLock<T>(
     try {
       return body((text) => publishMemoryFile(path, owner, text));
     } catch (error) {
-      // Inside the body only publish throws MemoryLockBusy. The lock changed hands after the body's
-      // read, so that read may be stale and is redone under a new lock.
       if (!(error instanceof MemoryLockBusy) || attempt === 2) throw error;
     } finally {
       heldByThisThread.delete(path);
@@ -329,7 +315,6 @@ export function scanMemorySecrets(configDir: string, write: boolean): MemorySecr
         ? withMemoryLock(path, (publish) => redactMemoryFile(path, publish))
         : redactMemoryFile(path);
     } catch (error) {
-      // A busy file is not skipped. A scrub that reported it clean could leave a secret in it.
       if (error instanceof MemoryLockBusy) throw error;
       scan.unreadable += 1;
       continue;

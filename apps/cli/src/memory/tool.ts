@@ -44,8 +44,6 @@ function shownLinesOf(file: MemoryFile): Set<string> {
   return new Set(file.entries.map((entry) => entry.line));
 }
 
-// `target` is resolved against what the model was shown, not against disk, so it cannot land on a
-// line another writer added or rewrote since.
 function expectShownLine(
   shown: Set<string>,
   live: MemoryFile,
@@ -134,7 +132,6 @@ export function makeMemoryWriteTool(
           message: "Written directly (approval gate is off).",
         };
       } catch (error) {
-        // The conflict listed the file's current entries, so the model has now seen them.
         if (shown !== undefined && error instanceof MemoryConflict) {
           shown[error.file.scope] = shownLinesOf(error.file);
         }
