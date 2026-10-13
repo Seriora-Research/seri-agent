@@ -28,6 +28,14 @@ function pathWithWrapperFirst(wrapperDir: string): string {
   return `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
 }
 
+function snapshotWithoutPath(): Record<string, string> {
+  const snapshot = snapshotProcessEnv();
+  for (const key of Object.keys(snapshot)) {
+    if (key.toUpperCase() === "PATH") delete snapshot[key];
+  }
+  return snapshot;
+}
+
 beforeEach(() => {
   resetCatalogCache();
   process.env.SERI_DISABLE_MODELS_FETCH = "1";
@@ -419,7 +427,7 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
       client.startTurn({
         task: "probe",
         cwd: work,
-        env: { ...snapshotProcessEnv(), PATH: emptyDir, Path: emptyDir },
+        env: { ...snapshotWithoutPath(), Path: emptyDir },
       }),
     );
     await expect(

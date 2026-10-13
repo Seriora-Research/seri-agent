@@ -113,6 +113,39 @@ describe("ToolSpawnEnv", () => {
     }
   });
 
+  test.skipIf(process.platform !== "win32")("win32 uses Path when PATH is absent", () => {
+    const bin = mkdtempSync(join(tmpdir(), "seri-client-pwsh-path-"));
+    try {
+      const file = join(bin, "powershell.exe");
+      writeFileSync(file, "not a shell\n");
+      expect(
+        ToolSpawnEnv.exactly({ Path: bin }).resolveExecutable("powershell", daemonLookupMustNotRun),
+      ).toBe(file);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("win32 PATH wins over Path", () => {
+    const pathDir = mkdtempSync(join(tmpdir(), "seri-client-pwsh-PATH-"));
+    const pathAlt = mkdtempSync(join(tmpdir(), "seri-client-pwsh-Path-"));
+    try {
+      const fromPath = join(pathDir, "powershell.exe");
+      const fromPathAlt = join(pathAlt, "powershell.exe");
+      writeFileSync(fromPath, "from PATH\n");
+      writeFileSync(fromPathAlt, "from Path\n");
+      expect(
+        ToolSpawnEnv.exactly({ PATH: pathDir, Path: pathAlt }).resolveExecutable(
+          "powershell",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(fromPath);
+    } finally {
+      rmSync(pathDir, { recursive: true, force: true });
+      rmSync(pathAlt, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform === "win32")("an unreadable PATH directory is skipped", () => {
     const locked = mkdtempSync(join(tmpdir(), "seri-client-bash-locked-"));
     const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
