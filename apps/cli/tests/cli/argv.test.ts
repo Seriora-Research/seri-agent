@@ -107,6 +107,7 @@ describe("run (argv and usage errors)", () => {
   afterEach(() => {
     restoreEnv("GROQ_API_KEY", originalKey);
     restoreEnv("HOME", originalHome);
+    setProfileOverride(undefined);
     rmSync(sessionsDir, { recursive: true, force: true });
     rmSync(tmpConfigRoot, { recursive: true, force: true });
   });
@@ -1155,6 +1156,94 @@ describe("run (serve / exec)", () => {
     }
     expect(code).toBe(0);
     expect(JSON.stringify(turnBodies[0])).toContain('"permissionPrompts":"none"');
+  });
+
+  test("`seri exec` omits profile when the process profile is default", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const turnBodies: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["exec", "write"], { fetch: fetchImpl, authConfigDir: getConfigDir() });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(0);
+    expect(Object.hasOwn(turnBodies[0] as object, "profile")).toBe(false);
+  });
+
+  test("`seri exec --profile work` POSTs profile work and can attach to the default daemon", async () => {
+    writeDaemonDescriptor(getBaseConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const turnBodies: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["--profile", "work", "exec", "write"], { fetch: fetchImpl });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(0);
+    expect(JSON.stringify(turnBodies[0])).toContain('"profile":"work"');
   });
 
   test("`seri exec` cancels the daemon turn on the first SIGINT", async () => {

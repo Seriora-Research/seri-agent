@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { turnRequestSchema } from "../../src/daemon/protocol";
+import { profileDir } from "../../src/config/paths";
+import { resolveTurnPermissionsDir, turnRequestSchema } from "../../src/daemon/protocol";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { SessionDatabase } from "../../src/session/database";
 
@@ -79,6 +80,52 @@ describe("turnRequestSchema permissionPrompts", () => {
     expect(turnRequestSchema.safeParse({ task: "hi", permissionPrompts: "auto" }).success).toBe(
       false,
     );
+  });
+});
+
+describe("turnRequestSchema profile", () => {
+  test("omitted profile is undefined; a valid name is kept", () => {
+    const omitted = turnRequestSchema.safeParse({ task: "hi" });
+    expect(omitted.success).toBe(true);
+    if (!omitted.success) return;
+    expect(omitted.data.profile).toBeUndefined();
+
+    const named = turnRequestSchema.safeParse({ task: "hi", profile: "strict" });
+    expect(named.success).toBe(true);
+    if (!named.success) return;
+    expect(named.data.profile).toBe("strict");
+  });
+
+  test("rejects empty, reserved, and illegal profile names", () => {
+    expect(turnRequestSchema.safeParse({ task: "hi", profile: "" }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", profile: "sessions" }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", profile: "strict/../x" }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", profile: "a\0b" }).success).toBe(false);
+  });
+});
+
+describe("resolveTurnPermissionsDir", () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  test("omitted profile keeps the daemon dir; a named existing profile is that profile's dir", () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const daemonDir = home;
+    expect(resolveTurnPermissionsDir(undefined, daemonDir)).toBe(daemonDir);
+
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    expect(resolveTurnPermissionsDir("strict", daemonDir)).toBe(strictDir);
+  });
+
+  test("a named profile whose directory does not exist is unknown", () => {
+    process.env.HOME = makeDir();
+    expect(resolveTurnPermissionsDir("missing", process.env.HOME)).toBeUndefined();
   });
 });
 
@@ -185,5 +232,98 @@ describe("daemon startup imports legacy JSONL", () => {
     }
     expect(readFileSync(jsonl)).toEqual(snapshot);
     expect(readFileSync(trajPath)).toEqual(trajSnapshot);
+  });
+});
+
+describe("daemon turn profile", () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  test("POST /v1/turns with a missing profile directory is 400 and does not start a turn", async () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const seen: string[] = [];
+    const daemon = await startDaemon({
+      configDir: home,
+      executeTurn: async (input) => {
+        seen.push(input.permissionsDir ?? "none");
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", profile: "strict" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "unknown profile" });
+    expect(seen).toEqual([]);
+  });
+
+  test("POST /v1/turns with a reserved profile name is 400 invalid turn request", async () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const daemon = await startDaemon({
+      configDir: home,
+      executeTurn: idleTurn,
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", profile: "sessions" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid turn request" });
+  });
+
+  test("a named profile's permissionsDir is the profile directory, not the daemon's", async () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    const seen: string[] = [];
+    const daemon = await startDaemon({
+      configDir: home,
+      executeTurn: async (input) => {
+        seen.push(input.permissionsDir ?? "none");
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+    });
+    stop = daemon.stop;
+    const named = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", profile: "strict" }),
+    });
+    expect(named.status).toBe(200);
+    await named.text();
+    const omitted = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi" }),
+    });
+    expect(omitted.status).toBe(200);
+    await omitted.text();
+    expect(seen).toEqual([strictDir, home]);
   });
 });
