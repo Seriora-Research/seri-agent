@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
 import type { TurnRequest } from "@seri/daemon-client";
 import { z } from "zod";
 import { profileDir, profileNameError } from "../config/paths";
+import { isUsablePermissionsDir } from "../permissions/store";
 import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 
 const hasNoNul = (text: string): boolean => !text.includes("\0");
@@ -33,7 +33,7 @@ export function resolveTurnPermissionsDir(
 ): string | undefined {
   if (profile === undefined) return daemonPermissionsDir;
   const dir = profileDir(profile);
-  return existsSync(dir) ? dir : undefined;
+  return isUsablePermissionsDir(dir) ? dir : undefined;
 }
 
 export const approvalBodySchema = z.object({

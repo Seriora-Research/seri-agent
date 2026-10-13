@@ -127,6 +127,26 @@ describe("resolveTurnPermissionsDir", () => {
     process.env.HOME = makeDir();
     expect(resolveTurnPermissionsDir("missing", process.env.HOME)).toBeUndefined();
   });
+
+  test("a named profile that is a file, not a directory, is unknown", () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    mkdirSync(join(home, ".seri"), { recursive: true });
+    writeFileSync(profileDir("strict"), "not-a-directory");
+    expect(resolveTurnPermissionsDir("strict", home)).toBeUndefined();
+  });
+
+  test("a named profile whose permissions.yaml does not parse is unknown", () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    writeFileSync(
+      join(strictDir, "permissions.yaml"),
+      "global: []\nprojects: {}\ndeny:\n\t- write_file(/x)\n",
+    );
+    expect(resolveTurnPermissionsDir("strict", home)).toBeUndefined();
+  });
 });
 
 describe("daemon protocol auth", () => {
@@ -246,6 +266,38 @@ describe("daemon turn profile", () => {
   test("POST /v1/turns with a missing profile directory is 400 and does not start a turn", async () => {
     const home = makeDir();
     process.env.HOME = home;
+    const seen: string[] = [];
+    const daemon = await startDaemon({
+      configDir: home,
+      executeTurn: async (input) => {
+        seen.push(input.permissionsDir ?? "none");
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", profile: "strict" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "unknown profile" });
+    expect(seen).toEqual([]);
+  });
+
+  test("POST /v1/turns with an unreadable named-profile yaml is 400 and does not start a turn", async () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    writeFileSync(
+      join(strictDir, "permissions.yaml"),
+      "global: []\nprojects: {}\ndeny:\n\t- write_file(/x)\n",
+    );
     const seen: string[] = [];
     const daemon = await startDaemon({
       configDir: home,

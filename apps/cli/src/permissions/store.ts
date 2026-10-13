@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { type Document, parseDocument, Scalar, YAMLMap, YAMLSeq } from "yaml";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
-import { parseAutoModeOnBlock, type AutoModeOnBlock } from "../gate/classifier";
+import { type AutoModeOnBlock, parseAutoModeOnBlock } from "../gate/classifier";
 import type { PathDenial } from "../gate/gate";
 import { isMcpGrantKey, isMcpToolName, mcpGrantKey, parseMcpGrantKey } from "../mcp/types";
 
@@ -18,6 +18,15 @@ export const PERMISSIONS_FILENAME = "permissions.yaml";
 
 export function permissionsPath(configDir: string): string {
   return join(configDir, PERMISSIONS_FILENAME);
+}
+
+export function isUsablePermissionsDir(dir: string): boolean {
+  try {
+    if (!statSync(dir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+  return parseYamlStore(dir).status !== "unreadable";
 }
 
 export function projectKey(worktree: string): string {

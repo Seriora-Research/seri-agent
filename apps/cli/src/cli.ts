@@ -74,6 +74,7 @@ import {
   getBaseConfigDir,
   getConfigDir,
   getTrajectoriesDir,
+  profileDir,
   profileNameError,
   resolveProfile,
   resolveUserHome,
@@ -124,7 +125,13 @@ import {
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { type PromptChannel, parsePromptChannel } from "./permissions/promptChannel";
-import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
+import {
+  effectiveTools,
+  isPersistableTool,
+  isUsablePermissionsDir,
+  loadGrants,
+  rememberGrant,
+} from "./permissions/store";
 import { unlinkPlanFile } from "./plan/files";
 import {
   isPlanOverlayOn,
@@ -834,6 +841,10 @@ async function handleExecCommand(
   const task = positionals.slice(1).join(" ").trim();
   if (task.length === 0) return usageError("seri exec requires a task");
   const { profile, source } = currentProfile();
+  if (source !== "default" && !isUsablePermissionsDir(profileDir(profile))) {
+    console.error("unknown profile");
+    return 1;
+  }
   const configDir = deps.authConfigDir ?? getConfigDir();
   const descriptor =
     readDaemonDescriptorFile(configDir) ??

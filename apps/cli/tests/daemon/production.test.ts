@@ -361,10 +361,17 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
   }, 15000);
 });
 
-function permissionsYaml(deny: readonly string[]): string {
+function permissionsYaml(
+  deny: readonly string[],
+  global: readonly string[] = ["write_file"],
+): string {
   const denyBlock =
     deny.length === 0 ? "deny: []\n" : `deny:\n${deny.map((entry) => `  - ${entry}\n`).join("")}`;
-  return `global:\n  - write_file\nprojects: {}\n${denyBlock}`;
+  const globalBlock =
+    global.length === 0
+      ? "global: []\n"
+      : `global:\n${global.map((entry) => `  - ${entry}\n`).join("")}`;
+  return `${globalBlock}projects: {}\n${denyBlock}`;
 }
 
 describe("client permission profile", () => {
@@ -472,5 +479,63 @@ describe("client permission profile", () => {
     const denials = captured.map((opts) => opts.pathDenials ?? []);
     expect(denials).toContainEqual([{ tool: "write_file", pattern: posixOutside }]);
     expect(denials).toContainEqual([]);
+  });
+
+  test("a named profile without a write_file grant asks; the daemon grant still writes", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const work = makeDir();
+    const inside = join(work, "in.txt");
+    writeFileSync(permissionsPath(configDir), permissionsYaml([], ["write_file"]));
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    writeFileSync(permissionsPath(strictDir), permissionsYaml([], []));
+
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      deps: {
+        getGroqModel: () =>
+          new MockLanguageModelV4({
+            doStream: [
+              streamResult(
+                toolCallChunks("call-1", "write_file", { path: "in.txt", content: "inside" }),
+              ),
+              streamResult(textOnlyChunks("Done")),
+              streamResult(
+                toolCallChunks("call-2", "write_file", { path: "in.txt", content: "inside" }),
+              ),
+              streamResult(textOnlyChunks("Done")),
+            ],
+          }),
+        loadAgentsFile: () => "",
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+
+    const strictEvents = [];
+    for await (const event of client.startTurn({
+      task: "write",
+      cwd: work,
+      profile: "strict",
+      permissionPrompts: "none",
+    })) {
+      strictEvents.push(event);
+    }
+    expect(existsSync(inside)).toBe(false);
+    expect(
+      strictEvents.some(
+        (event) =>
+          isLoopDaemonEvent(event.event) &&
+          event.event.value.type === "permission-denied" &&
+          event.event.value.name === "write_file",
+      ),
+    ).toBe(true);
+
+    await Array.fromAsync(
+      client.startTurn({ task: "write", cwd: work, permissionPrompts: "none" }),
+    );
+    expect(existsSync(inside)).toBe(true);
   });
 });
