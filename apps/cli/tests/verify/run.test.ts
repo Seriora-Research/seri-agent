@@ -1,5 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { snapshotProcessEnv } from "@seri/daemon-client";
 import type { ProcessResult } from "../../src/tools/spawnCollect";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { MAX_DIAGNOSTICS, runCheck } from "../../src/verify/run";
 
 const OK: ProcessResult = {
@@ -52,6 +57,19 @@ describe("runCheck", () => {
     await runCheck("tsc --noEmit", "src/written.ts", controller.signal, { spawn: runner.spawn });
 
     expect(runner.calls[0].signal).toBe(controller.signal);
+  });
+
+  test("threads the caller's env through to the process runner", async () => {
+    const env = ToolSpawnEnv.exactly({ FOO: "b" });
+    let seen: ToolSpawnEnv | undefined;
+    await runCheck("tsc --noEmit", "src/written.ts", undefined, {
+      env,
+      spawn: async (_executable, _args, _timeout, _signal, _cwd, _io, spawnEnv) => {
+        seen = spawnEnv;
+        return { ...OK };
+      },
+    });
+    expect(seen).toBe(env);
   });
 
   test("exit 0 with nothing parseable is ok, and reports what ran and what it cost", async () => {
@@ -187,4 +205,55 @@ describe("runCheck", () => {
     if (outcome.status !== "failed") throw new Error("unreachable");
     expect(outcome.reason).toContain("cancelled");
   });
+});
+
+describe("runCheck env", () => {
+  const originalFoo = process.env.FOO;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+    dirs.length = 0;
+    if (originalFoo === undefined) delete process.env.FOO;
+    else process.env.FOO = originalFoo;
+  });
+
+  function writeCheckScript(): string {
+    const dir = mkdtempSync(join(tmpdir(), "seri-verify-env-"));
+    dirs.push(dir);
+    if (process.platform === "win32") {
+      const path = join(dir, "check.cmd");
+      writeFileSync(path, "@echo off\r\necho %FOO% 1>&2\r\nexit /b 1\r\n");
+      return path;
+    }
+    const path = join(dir, "check.sh");
+    writeFileSync(path, '#!/bin/sh\nprintf "%s" "$FOO" >&2\nexit 1\n');
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  function commandFor(script: string): string {
+    return process.platform === "win32" ? `cmd.exe /c ${script}` : script;
+  }
+
+  test("the check child sees the replace FOO and not the parent's", async () => {
+    process.env.FOO = "daemon-a";
+    const script = writeCheckScript();
+    const command = commandFor(script);
+    const env =
+      process.platform === "win32"
+        ? ToolSpawnEnv.exactly({ ...snapshotProcessEnv(), FOO: "b" })
+        : ToolSpawnEnv.exactly({ FOO: "b", PATH: process.env.PATH ?? "/usr/bin:/bin" });
+    const replaced = await runCheck(command, "src/written.ts", undefined, { env });
+    expect(replaced.status).toBe("failed");
+    if (replaced.status !== "failed") throw new Error("unreachable");
+    expect(replaced.reason).toContain("b");
+    expect(replaced.reason).not.toContain("daemon-a");
+
+    const inherited = await runCheck(command, "src/written.ts", undefined);
+    expect(inherited.status).toBe("failed");
+    if (inherited.status !== "failed") throw new Error("unreachable");
+    expect(inherited.reason).toContain("daemon-a");
+    expect(process.env.FOO).toBe("daemon-a");
+  }, 15000);
 });

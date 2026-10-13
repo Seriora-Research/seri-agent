@@ -77,7 +77,11 @@ export function createToolDefinitions(cwd: string, env: ToolSpawnEnv) {
     }),
 
     execute: ({ pattern, path, glob: globFilter, mode }, { abortSignal }) =>
-      grep(pattern, { path: resolveAgainstCwd(cwd, path), glob: globFilter, mode }, abortSignal),
+      grep(
+        pattern,
+        { path: resolveAgainstCwd(cwd, path), glob: globFilter, mode, env },
+        abortSignal,
+      ),
   });
 
   const globTool = tool({
@@ -87,7 +91,7 @@ export function createToolDefinitions(cwd: string, env: ToolSpawnEnv) {
       path: z.string(),
     }),
     execute: ({ pattern, path }, { abortSignal }) =>
-      glob(pattern, { path: resolveAgainstCwd(cwd, path) }, abortSignal),
+      glob(pattern, { path: resolveAgainstCwd(cwd, path), env }, abortSignal),
   });
 
   const bashTool = tool({

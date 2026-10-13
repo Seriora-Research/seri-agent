@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, snapshotProcessEnv } from "@seri/daemon-client";
@@ -357,4 +357,56 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
     expect(out.stdout.trim()).toBe(FOO_PROBE);
     expect(process.env.FOO).toBe("daemon-a");
   }, 15000);
+});
+
+function writeLogFooHooks(configDir: string): void {
+  const hooksDir = join(configDir, "hooks");
+  mkdirSync(hooksDir, { recursive: true });
+  writeFileSync(join(hooksDir, "hooks.yaml"), "hooks:\n  PreToolUse:\n    - script: log-foo\n");
+  writeFileSync(join(hooksDir, "log-foo.sh"), '#!/usr/bin/env bash\necho "$FOO" >&2\nexit 2\n');
+  writeFileSync(join(hooksDir, "log-foo.ps1"), "[Console]::Error.WriteLine($env:FOO)\nexit 2\n");
+}
+
+describe("client env (hooks)", () => {
+  const originalFoo = process.env.FOO;
+
+  afterEach(() => {
+    if (originalFoo === undefined) delete process.env.FOO;
+    else process.env.FOO = originalFoo;
+  });
+
+  test("a PreToolUse hook in a daemon turn sees the client's FOO", async () => {
+    process.env.FOO = "daemon-a";
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    writeLogFooHooks(configDir);
+    const work = makeDir();
+    const { client, capture } = await startProbingDaemon(configDir);
+    await Array.fromAsync(
+      client.startTurn({
+        task: "probe",
+        cwd: work,
+        env: { ...snapshotProcessEnv(), FOO: FOO_PROBE },
+      }),
+    );
+    const hook = capture()?.onBeforeTool;
+    expect(hook).toBeDefined();
+    const outcome = await hook!("bash", { command: "echo hi" });
+    expect(outcome.block).toBe(FOO_PROBE);
+    expect(process.env.FOO).toBe("daemon-a");
+  }, 20000);
+
+  test("a turn with no env still sees the daemon's FOO in a PreToolUse hook", async () => {
+    process.env.FOO = "daemon-a";
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    writeLogFooHooks(configDir);
+    const work = makeDir();
+    const { client, capture } = await startProbingDaemon(configDir);
+    await Array.fromAsync(client.startTurn({ task: "probe", cwd: work }));
+    const hook = capture()?.onBeforeTool;
+    expect(hook).toBeDefined();
+    const outcome = await hook!("bash", { command: "echo hi" });
+    expect(outcome.block).toBe("daemon-a");
+  }, 20000);
 });

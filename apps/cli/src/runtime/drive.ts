@@ -292,6 +292,7 @@ export async function driveLoop(
     registry: prepared.hooks.registry,
     cwd: session.cwd,
     signal: controller.signal,
+    env: ctx.env,
   });
   const containmentEscapeExpected = loadContainmentExpected(config);
   const subagentRuntime = {
