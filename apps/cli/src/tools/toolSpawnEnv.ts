@@ -38,7 +38,12 @@ function findOnClientPath(
   pathValue: string | undefined,
 ): string | undefined {
   if (pathValue === undefined) return undefined;
-  const names = process.platform === "win32" ? [`${name}.exe`, name] : [name];
+  const names =
+    name === "powershell"
+      ? ["powershell.exe"]
+      : process.platform === "win32"
+        ? ["bash.exe", "bash"]
+        : ["bash"];
   for (const dir of pathValue.split(delimiter).filter(isAbsolute)) {
     for (const candidate of names.map((fileName) => join(dir, fileName))) {
       if (isSpawnableFile(candidate)) return candidate;
@@ -48,9 +53,9 @@ function findOnClientPath(
 }
 
 function isSpawnableFile(path: string): boolean {
-  if (statSync(path, { throwIfNoEntry: false })?.isFile() !== true) return false;
-  if (process.platform === "win32") return true;
   try {
+    if (!statSync(path).isFile()) return false;
+    if (process.platform === "win32") return true;
     accessSync(path, constants.X_OK);
     return true;
   } catch {

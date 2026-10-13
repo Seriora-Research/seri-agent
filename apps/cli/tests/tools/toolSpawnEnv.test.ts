@@ -76,6 +76,61 @@ describe("ToolSpawnEnv", () => {
       ToolSpawnEnv.exactly({}).resolveExecutable("bash", daemonLookupMustNotRun),
     ).toThrow("bash is not on the client's PATH");
   });
+
+  test("exactly resolveExecutable searches powershell.exe", () => {
+    const bin = mkdtempSync(join(tmpdir(), "seri-client-pwsh-"));
+    try {
+      const file = join(bin, "powershell.exe");
+      writeFileSync(file, "not a shell\n");
+      chmodSync(file, 0o755);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: bin }).resolveExecutable(
+          "powershell",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(file);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("a PATH entry that is a file is skipped", () => {
+    const root = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const asFile = join(root, "not-a-dir");
+    try {
+      writeFileSync(asFile, "not a directory\n");
+      const bash = writeClientBash(wrapperDir, 0o755);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: `${asFile}${delimiter}${wrapperDir}` }).resolveExecutable(
+          "bash",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(bash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("an unreadable PATH directory is skipped", () => {
+    const locked = mkdtempSync(join(tmpdir(), "seri-client-bash-locked-"));
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      const bash = writeClientBash(wrapperDir, 0o755);
+      chmodSync(locked, 0o000);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: `${locked}${delimiter}${wrapperDir}` }).resolveExecutable(
+          "bash",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(bash);
+    } finally {
+      chmodSync(locked, 0o755);
+      rmSync(locked, { recursive: true, force: true });
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe.skipIf(process.platform === "win32" || !isBashAvailable())("spawnCollect env", () => {
