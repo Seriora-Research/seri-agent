@@ -31,6 +31,7 @@ export type ExecuteTurnInput = {
   task: string;
   cwd: string;
   env: ToolSpawnEnv;
+  permissionsDir?: string;
   permissionMode: PermissionMode;
   promptChannel?: PromptChannel;
   signal: AbortSignal;
@@ -101,6 +102,7 @@ export class DaemonSessionManager {
     permissionMode?: PermissionMode;
     promptChannel?: PromptChannel;
     env: ToolSpawnEnv;
+    permissionsDir?: string;
   }): Promise<{ turnId: string; sessionId: string; subscribe: (send: Subscriber) => () => void }> {
     const session = this.resolveSession(request);
     const turnId = randomUUID();
@@ -135,6 +137,7 @@ export class DaemonSessionManager {
           request.permissionMode,
           request.promptChannel,
           request.env,
+          request.permissionsDir,
         );
       })
       .catch(() => {});
@@ -271,6 +274,7 @@ export class DaemonSessionManager {
     permissionMode: PermissionMode | undefined,
     promptChannel: PromptChannel | undefined,
     env: ToolSpawnEnv,
+    permissionsDir: string | undefined,
   ): Promise<void> {
     const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
@@ -297,6 +301,7 @@ export class DaemonSessionManager {
         task,
         cwd: session.cwd,
         env,
+        permissionsDir,
         permissionMode: permissionMode ?? session.permissionMode,
         promptChannel,
         signal: handle.abort.signal,

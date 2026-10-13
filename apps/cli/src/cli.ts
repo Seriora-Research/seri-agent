@@ -70,6 +70,8 @@ import {
   type VerifyConfig,
 } from "./config/config";
 import {
+  currentProfile,
+  getBaseConfigDir,
   getConfigDir,
   getTrajectoriesDir,
   profileNameError,
@@ -831,8 +833,11 @@ async function handleExecCommand(
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
   if (task.length === 0) return usageError("seri exec requires a task");
+  const { profile, source } = currentProfile();
   const configDir = deps.authConfigDir ?? getConfigDir();
-  const descriptor = readDaemonDescriptorFile(configDir);
+  const descriptor =
+    readDaemonDescriptorFile(configDir) ??
+    (source === "default" ? undefined : readDaemonDescriptorFile(getBaseConfigDir()));
   if (descriptor === undefined) {
     console.error("no daemon is running for this profile — start one with seri serve");
     return 1;
@@ -854,6 +859,7 @@ async function handleExecCommand(
       task,
       cwd: process.cwd(),
       env: snapshotProcessEnv(),
+      ...(source === "default" ? {} : { profile }),
       ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
     })) {
       turnId = event.turnId;

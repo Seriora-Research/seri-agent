@@ -1,10 +1,17 @@
+import { existsSync } from "node:fs";
 import type { TurnRequest } from "@seri/daemon-client";
 import { z } from "zod";
+import { profileDir, profileNameError } from "../config/paths";
 import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 
 const hasNoNul = (text: string): boolean => !text.includes("\0");
 
 const clientEnvSchema = z.record(z.string().min(1).refine(hasNoNul), z.string().refine(hasNoNul));
+
+const profileSchema = z
+  .string()
+  .min(1)
+  .refine((name) => profileNameError(name) === undefined);
 
 export const turnRequestSchema = z.object({
   task: z.string().min(1),
@@ -17,7 +24,17 @@ export const turnRequestSchema = z.object({
     .transform((vars) =>
       vars === undefined ? ToolSpawnEnv.inherited : ToolSpawnEnv.exactly(vars),
     ),
+  profile: profileSchema.optional(),
 });
+
+export function resolveTurnPermissionsDir(
+  profile: string | undefined,
+  daemonPermissionsDir: string,
+): string | undefined {
+  if (profile === undefined) return daemonPermissionsDir;
+  const dir = profileDir(profile);
+  return existsSync(dir) ? dir : undefined;
+}
 
 export const approvalBodySchema = z.object({
   answer: z.enum(["once", "always", "no"]),
