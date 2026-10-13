@@ -21,6 +21,10 @@ function writeClientBash(dir: string, mode: number): string {
   return file;
 }
 
+function pathWithWrapperFirst(wrapperDir: string): string {
+  return `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
+}
+
 describe("ToolSpawnEnv", () => {
   test("JSON.stringify, spread and inspect do not reveal the variables", () => {
     const env = ToolSpawnEnv.exactly({ FOO: "secret", PATH: "/bin" });
@@ -171,15 +175,12 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client PATH
     const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
     try {
       writeClientBash(wrapperDir, 0o755);
-      // POSIX runBash evals the script with cat <&3. The wrapper directory is first.
-      // The rest of PATH stays so a daemon bash can still find cat.
-      const path = `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
       const marked = await runBash(
         "echo daemon",
         undefined,
         undefined,
         undefined,
-        ToolSpawnEnv.exactly({ PATH: path }),
+        ToolSpawnEnv.exactly({ PATH: pathWithWrapperFirst(wrapperDir) }),
       );
       expect(marked.stdout).toBe(`${CLIENT_BASH_MARKER}\n`);
       const inherited = await runBash("echo hi");
@@ -210,7 +211,6 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client PATH
     const originalCwd = process.cwd();
     try {
       writeClientBash(work, 0o755);
-      // "." is the process cwd. A scan that stats it would find this bash and run it.
       process.chdir(work);
       await expect(
         runBash("echo daemon", undefined, undefined, work, ToolSpawnEnv.exactly({ PATH: "." })),

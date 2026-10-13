@@ -24,6 +24,10 @@ function makeDir(): string {
   return dir;
 }
 
+function pathWithWrapperFirst(wrapperDir: string): string {
+  return `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
+}
+
 beforeEach(() => {
   resetCatalogCache();
   process.env.SERI_DISABLE_MODELS_FETCH = "1";
@@ -339,13 +343,11 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client env"
     chmodSync(file, 0o755);
     const { client, capture } = await startProbingDaemon(configDir);
     try {
-      // POSIX runBash evals the script with cat <&3. The wrapper directory is first.
-      // The rest of PATH stays so a daemon bash can still find cat.
       await Array.fromAsync(
         client.startTurn({
           task: "probe",
           cwd: work,
-          env: { PATH: `${wrapperDir}${delimiter}${process.env.PATH ?? ""}` },
+          env: { PATH: pathWithWrapperFirst(wrapperDir) },
         }),
       );
       const marked = await capture()!.tools.bash!.execute!({ command: "echo daemon" }, execOpts);
