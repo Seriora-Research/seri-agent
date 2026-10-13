@@ -84,10 +84,7 @@ describe("ToolSpawnEnv", () => {
       writeFileSync(file, "not a shell\n");
       chmodSync(file, 0o755);
       expect(
-        ToolSpawnEnv.exactly({ PATH: bin }).resolveExecutable(
-          "powershell",
-          daemonLookupMustNotRun,
-        ),
+        ToolSpawnEnv.exactly({ PATH: bin }).resolveExecutable("powershell", daemonLookupMustNotRun),
       ).toBe(file);
     } finally {
       rmSync(bin, { recursive: true, force: true });
