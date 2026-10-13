@@ -12,6 +12,7 @@ import {
   type ChildEventPayload,
   createDispatchTool,
   type DispatchResult,
+  type DispatchRuntime,
   dispatchDescription,
   dispatchDirect,
   dispatchSchema,
@@ -25,6 +26,7 @@ import {
   builtinRegistry,
   composeAddendum,
 } from "../../src/subagents/registry";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { collect, streamResult, textOnlyChunks, toolCallChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "./fakeChildLoop";
 
@@ -77,8 +79,8 @@ function usageEvent(inputTokens?: number, outputTokens?: number): LoopEvent {
 
 function makeRuntime(
   fake: (opts: RunLoopOpts) => AsyncGenerator<LoopEvent>,
-  overrides: Partial<SubagentRuntime & { system: string; agents: AgentRegistry }> = {},
-): SubagentRuntime & { system: string; agents: AgentRegistry } {
+  overrides: Partial<DispatchRuntime & { agents: AgentRegistry }> = {},
+): DispatchRuntime & { agents: AgentRegistry } {
   const catalog: ModelCatalog = { fetchedAt: "", entries: [] };
   return {
     runLoop: fake as unknown as typeof runLoop,
@@ -92,6 +94,7 @@ function makeRuntime(
     allowedTools: [],
     pathDenials: [],
     reasoningEffort: undefined,
+    env: ToolSpawnEnv.inherited,
     ...overrides,
   };
 }
@@ -166,7 +169,7 @@ describe("dispatch_subagents", () => {
     const events = await collect(
       realRunLoop({
         model,
-        tools: agentToolSet(agentSpec("explore")),
+        tools: agentToolSet(agentSpec("explore"), ToolSpawnEnv.inherited),
         messages: [{ role: "user", content: "go" }],
         permissionMode: "auto",
       }),
@@ -267,7 +270,7 @@ describe("dispatch_subagents", () => {
     }));
     const forwarded: ChildEventPayload[] = [];
     await runSubagent({
-      tools: agentToolSet(agentSpec("explore")),
+      tools: agentToolSet(agentSpec("explore"), ToolSpawnEnv.inherited),
       system: "irrelevant",
       messages: [{ role: "user", content: "go" }],
       runtime: makeRuntime(fake, {
@@ -582,7 +585,7 @@ describe("dispatch_subagents", () => {
     };
 
     const result = await runSubagent({
-      tools: agentToolSet(withMutators().get("writer")!),
+      tools: agentToolSet(withMutators().get("writer")!, ToolSpawnEnv.inherited),
       system: "irrelevant",
       messages: [{ role: "user", content: "go" }],
       runtime,
@@ -646,7 +649,7 @@ describe("dispatch_subagents", () => {
         reasoningEffort: undefined,
       };
       await runSubagent({
-        tools: agentToolSet(agentSpec("explore"), undefined, app),
+        tools: agentToolSet(agentSpec("explore"), ToolSpawnEnv.inherited, undefined, app),
         system: "irrelevant",
         messages: [{ role: "user", content: "go" }],
         runtime,
@@ -1034,7 +1037,7 @@ describe("dispatch_subagents", () => {
     const events = await collect(
       realRunLoop({
         model,
-        tools: agentToolSet(agentSpec("explore")),
+        tools: agentToolSet(agentSpec("explore"), ToolSpawnEnv.inherited),
         messages: [{ role: "user", content: "go" }],
         permissionMode: "auto",
       }),

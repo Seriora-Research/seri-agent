@@ -32,6 +32,7 @@ import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
 import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -115,6 +116,7 @@ function unusedCtx(configDir: string) {
     permissionsDir: configDir,
     configDir,
     cwd: configDir,
+    env: ToolSpawnEnv.inherited,
   };
 }
 

@@ -16,6 +16,7 @@ import type { LoopEvent, runLoop } from "../loop/loop";
 import type { CostReport } from "../provider/cost";
 import type { RouteCredential } from "../provider/routing";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
+import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import {
   type AgentRegistry,
   type AgentSpec,
@@ -71,6 +72,8 @@ export type SubagentResult = SubagentTask & {
 };
 
 export type DispatchResult = { results: SubagentResult[]; totalUsage: SubagentUsage };
+
+export type DispatchRuntime = SubagentRuntime & { system: string; env: ToolSpawnEnv };
 
 export type SubagentRuntime = {
   runLoop: typeof runLoop;
@@ -356,7 +359,7 @@ type ChildIdentity = {
 };
 
 async function runAgentChild(opts: {
-  runtime: SubagentRuntime & { system: string };
+  runtime: DispatchRuntime;
   spec: AgentSpec;
   goal: string;
   childId: string;
@@ -378,7 +381,7 @@ async function runAgentChild(opts: {
     ...identity,
   });
   const settled = await runSubagent({
-    tools: agentToolSet(spec, runtime.checkpointer?.onAfterMutation, runtime.cwd),
+    tools: agentToolSet(spec, runtime.env, runtime.checkpointer?.onAfterMutation, runtime.cwd),
     system: joinTiers(runtime.system, spec.addendum),
     messages: [{ role: "user", content: goal }],
     runtime:
@@ -400,9 +403,7 @@ async function runAgentChild(opts: {
   return { ...settled, identity };
 }
 
-export function createDispatchTool(
-  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
-) {
+export function createDispatchTool(runtime: DispatchRuntime & { agents: AgentRegistry }) {
   const { agents } = runtime;
   return tool({
     description: dispatchDescription(agents),
@@ -507,14 +508,14 @@ export function createDispatchTool(
 
 export function withSubagents(
   tools: ToolSet,
-  runtime: SubagentRuntime & { system: string; agents: AgentRegistry },
+  runtime: DispatchRuntime & { agents: AgentRegistry },
 ): ToolSet {
   return { ...tools, [DISPATCH_TOOL_NAME]: createDispatchTool(runtime) };
 }
 
 /** `/name <task>` engine: one child with the same grant, overlay, checkpoint, and rows a model dispatch gets. */
 export async function dispatchDirect(opts: {
-  runtime: SubagentRuntime & { system: string };
+  runtime: DispatchRuntime;
   spec: AgentSpec;
   goal: string;
   toolCallId: string;

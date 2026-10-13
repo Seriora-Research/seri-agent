@@ -23,6 +23,9 @@ export type SessionState<TMessage = unknown> = {
   messages: TMessage[];
 };
 
+type Assert<T extends true> = T;
+type _EnvIsNotPersisted = Assert<"env" extends keyof SessionState ? false : true>;
+
 function withDatabase<T>(
   sessionsDir: string,
   fn: (database: SessionDatabase) => T,

@@ -13,10 +13,11 @@ import { grep } from "../tools/grep";
 import { runPowerShell } from "../tools/powershell";
 import { readFile } from "../tools/readFile";
 import { MAX_FILE_RESULTS, MAX_RESULTS } from "../tools/runRipgrep";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { writeFile } from "../tools/writeFile";
 
 // Always resolve, including absolute input: otherwise /abs/other/../secret stays un-normalized.
-export function createToolDefinitions(cwd: string) {
+export function createToolDefinitions(cwd: string, env: ToolSpawnEnv) {
   const readFileTool = tool({
     description: `Read a file's contents as text, or return an image part for PNG/JPEG/GIF/WebP when the model accepts images. Text is capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file.`,
     inputSchema: z.object({ path: z.string() }),
@@ -95,7 +96,7 @@ export function createToolDefinitions(cwd: string) {
     inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
 
     execute: async ({ command, timeoutMs }, { abortSignal }) =>
-      runBash(command, timeoutMs, abortSignal, isBashAvailable, cwd),
+      runBash(command, timeoutMs, abortSignal, isBashAvailable, cwd, env),
   });
 
   const powershellTool = tool({
@@ -103,7 +104,7 @@ export function createToolDefinitions(cwd: string) {
       "Run a shell command via PowerShell. Each stream is capped at 30000 characters; `stdoutTruncated` and `stderrTruncated` say which one was cut, and a cut drops the middle and keeps both ends, so redirect that stream to a file and read the part you need rather than assuming it is the whole output. Commands are killed after 2 minutes and `timedOut` is set, with whatever they printed first; pass timeoutMs (up to 600000) for a command you expect to take longer.",
     inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
     execute: async ({ command, timeoutMs }, { abortSignal }) =>
-      runPowerShell(command, timeoutMs, abortSignal, cwd),
+      runPowerShell(command, timeoutMs, abortSignal, cwd, env),
   });
 
   return {
@@ -117,7 +118,7 @@ export function createToolDefinitions(cwd: string) {
   };
 }
 
-export const toolDefinitions = createToolDefinitions(process.cwd());
+export const toolDefinitions = createToolDefinitions(process.cwd(), ToolSpawnEnv.inherited);
 
 export const WRITE_TOOL_NAMES: (keyof typeof toolDefinitions)[] = [
   "write_file",
@@ -139,7 +140,7 @@ export const READ_ONLY_TOOL_NAMES: readonly ToolName[] = (
 ).filter((name) => !WRITE_TOOL_NAMES.includes(name));
 
 export function createScheduledToolDefinitions(cwd: string) {
-  const all = createToolDefinitions(cwd);
+  const all = createToolDefinitions(cwd, ToolSpawnEnv.inherited);
   return {
     read_file: tool({
       description: `Read a file's contents as text, capped at ${MAX_TOOL_RESULT_CHARS} characters; a cut drops the middle and keeps both ends, so grep for the part you need rather than assuming this is the whole file. Scheduled runs do not ingest image files.`,

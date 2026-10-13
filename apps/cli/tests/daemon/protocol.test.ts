@@ -38,6 +38,35 @@ const ROUTES: { method: string; path: string; body?: string }[] = [
   { method: "GET", path: "/v1/sessions/search?q=hi" },
 ];
 
+describe("turnRequestSchema env", () => {
+  test("omitted env inherits; a record replaces; empty object replaces with nothing", () => {
+    const omitted = turnRequestSchema.safeParse({ task: "hi" });
+    expect(omitted.success).toBe(true);
+    if (!omitted.success) return;
+    expect(omitted.data.env.spawnOptions()).toEqual({});
+
+    const replaced = turnRequestSchema.safeParse({
+      task: "hi",
+      env: { FOO: "b", LS_COLORS: "a=b" },
+    });
+    expect(replaced.success).toBe(true);
+    if (!replaced.success) return;
+    expect(replaced.data.env.spawnOptions()).toEqual({ env: { FOO: "b", LS_COLORS: "a=b" } });
+
+    const empty = turnRequestSchema.safeParse({ task: "hi", env: {} });
+    expect(empty.success).toBe(true);
+    if (!empty.success) return;
+    expect(empty.data.env.spawnOptions()).toEqual({ env: {} });
+  });
+
+  test("rejects an empty name or a NUL byte, and accepts equals in values", () => {
+    expect(turnRequestSchema.safeParse({ task: "hi", env: { "": "x" } }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", env: { "A\0B": "x" } }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", env: { A: "x\0y" } }).success).toBe(false);
+    expect(turnRequestSchema.safeParse({ task: "hi", env: { FOO: "a=b" } }).success).toBe(true);
+  });
+});
+
 describe("turnRequestSchema permissionPrompts", () => {
   test("omit and none parse; live and other values do not", () => {
     expect(turnRequestSchema.safeParse({ task: "hi" }).success).toBe(true);

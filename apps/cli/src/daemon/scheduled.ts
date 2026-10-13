@@ -18,6 +18,7 @@ import { createSessionTrajectory, type RunSession, resolveModelRoute } from "../
 import type { SessionDatabase } from "../session/database";
 import { saveSession } from "../session/session";
 import { builtinRegistry } from "../subagents/registry";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { assertScheduledToolset, type RunScheduled } from "./scheduler";
 
 export function createRunScheduled(opts: {
@@ -100,6 +101,7 @@ export function createRunScheduled(opts: {
       permissionsDir: opts.permissionsDir,
       configDir: opts.configDir,
       cwd: session.cwd,
+      env: ToolSpawnEnv.inherited,
       database: opts.database,
     };
 

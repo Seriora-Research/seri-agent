@@ -70,6 +70,7 @@ import {
 import { listPendingSkills } from "../skills/pending";
 import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
+import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { buildRunManifest, collectContextFiles } from "../trajectory/manifest";
 import { createTrajectoryWriter, type TrajectoryWriter } from "../trajectory/writer";
 import { destroyTuiRenderer } from "../tui/runtime/renderer";
@@ -317,6 +318,7 @@ export function buildCheckpointedTools(opts: {
   worktree: string;
   sessionId: string;
   cwd: string;
+  env: ToolSpawnEnv;
   verifyConfig: VerifyConfig;
   onWarning: (message: string) => void;
   onCheckpoint?: (entry: { op: "snapshot"; tool: string; toolCallId: string }) => void;
@@ -332,7 +334,7 @@ export function buildCheckpointedTools(opts: {
   };
   const tools = withVerification(
     withCheckpoints(
-      createToolDefinitions(opts.cwd),
+      createToolDefinitions(opts.cwd, opts.env),
       checkpointer.onBeforeMutation,
       checkpointer.onAfterMutation,
     ),
@@ -386,6 +388,7 @@ export async function bindSession(
   session: RunSession,
   configDir: string,
   permissionsDir: string,
+  env: ToolSpawnEnv,
   onWarning: (message: string) => void,
 ): Promise<ArchivistState> {
   const trajectory = createSessionTrajectory(session, configDir, onWarning, prepared.database, {
@@ -403,6 +406,7 @@ export async function bindSession(
     worktree: prepared.worktree,
     sessionId: session.id,
     cwd: session.cwd,
+    env,
     verifyConfig: prepared.verifyConfig,
     onWarning,
     onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),
@@ -595,6 +599,7 @@ export async function prepareSession(
       worktree,
       sessionId: session.id,
       cwd: session.cwd,
+      env: ctx.env,
       verifyConfig,
       onWarning: (msg) => printWarning(msg, warnSink),
       onCheckpoint: (entry) => trajectory.recordCheckpoint(entry),

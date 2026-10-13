@@ -32,7 +32,8 @@ import {
   wantsWelcomeSplash,
 } from "../../src/runtime/prepare";
 import { SessionDatabase } from "../../src/session/database";
-import { saveSession, loadSession } from "../../src/session/session";
+import { loadSession, saveSession } from "../../src/session/session";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { expectDedicatedFileTools, expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
@@ -125,6 +126,7 @@ describe("explicit session cwd", () => {
       worktree: sessionDir,
       sessionId: "sess",
       cwd: sessionDir,
+      env: ToolSpawnEnv.inherited,
       verifyConfig: loadVerifyConfig(sessionDir),
       onWarning: () => {},
     });
@@ -173,6 +175,7 @@ describe("prepareSession + mcp", () => {
       permissionsDir,
       configDir: tmpConfigRoot,
       cwd,
+      env: ToolSpawnEnv.inherited,
     };
   }
 
@@ -479,6 +482,7 @@ describe("bindSession + mcp", () => {
       permissionsDir,
       configDir: tmpConfigRoot,
       cwd: makeDir(),
+      env: ToolSpawnEnv.inherited,
     };
     const result = await prepareSession(
       ctx,
@@ -531,6 +535,7 @@ describe("bindSession + mcp", () => {
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
       permissionsDir,
+      ToolSpawnEnv.inherited,
       () => {},
     );
     if (prepared.mcpClients !== warmClients && !closed) newPoolWhileClosing = true;
@@ -576,6 +581,7 @@ describe("bindSession + mcp", () => {
       { ...prepared.session, id: "next" },
       configDir,
       permissionsDir,
+      ToolSpawnEnv.inherited,
       () => {},
     );
 
@@ -596,6 +602,7 @@ describe("bindSession + mcp", () => {
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
       permissionsDir,
+      ToolSpawnEnv.inherited,
       () => {},
     );
     expect(prepared.pathDenials).toEqual([{ tool: "grep", pattern: "/hidden/**" }]);
@@ -614,6 +621,7 @@ describe("bindSession + mcp", () => {
       { ...prepared.session, id: "next" },
       mcpConfigDirFor(tmpConfigRoot),
       permissionsDir,
+      ToolSpawnEnv.inherited,
       () => {},
     );
     expect(prepared.autoModeOnBlock).toBe("ask");
@@ -629,6 +637,7 @@ describe("bindSession + mcp", () => {
       permissionsDir,
       configDir: tmpConfigRoot,
       cwd: makeDir(),
+      env: ToolSpawnEnv.inherited,
     };
     const result = await prepareSession(
       ctx,

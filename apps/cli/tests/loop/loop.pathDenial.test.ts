@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { MockLanguageModelV4 } from "ai/test";
 import { runLoop } from "../../src/loop/loop";
 import { createToolDefinitions } from "../../src/provider/tools";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { baseMessages, collect, streamResult, textOnlyChunks, toolCallChunks } from "./fixtures";
 
 let tmpDir: string;
@@ -60,7 +61,7 @@ describe("runLoop path denials", () => {
       const events = await collect(
         runLoop({
           model: oneCallThenText(toolName, input),
-          tools: createToolDefinitions(tmpDir),
+          tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
           messages: baseMessages,
           permissionMode: "auto",
           cwd: tmpDir,
@@ -82,7 +83,7 @@ describe("runLoop path denials", () => {
     const events = await collect(
       runLoop({
         model: oneCallThenText("glob", { pattern: "*.txt", path: missing }),
-        tools: createToolDefinitions(tmpDir),
+        tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
         messages: baseMessages,
         permissionMode: "auto",
       }),
@@ -98,7 +99,7 @@ describe("runLoop path denials", () => {
       const events = await collect(
         runLoop({
           model: oneCallThenText("read_file", { path }),
-          tools: createToolDefinitions(tmpDir),
+          tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
           messages: baseMessages,
           permissionMode: "auto",
           cwd: tmpDir,
@@ -121,7 +122,7 @@ describe("runLoop path denials", () => {
           pattern: "*.txt",
           path: `${tmpDir.replaceAll("\\", "/")}/other/../secret/missing`,
         }),
-        tools: createToolDefinitions(tmpDir),
+        tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
         messages: baseMessages,
         permissionMode: "auto",
         cwd: tmpDir,
@@ -141,7 +142,7 @@ describe("runLoop path denials", () => {
     const events = await collect(
       runLoop({
         model: oneCallThenText("glob", { pattern: "*.txt", path: "../secret/missing" }),
-        tools: createToolDefinitions(app),
+        tools: createToolDefinitions(app, ToolSpawnEnv.inherited),
         messages: baseMessages,
         permissionMode: "auto",
         cwd: app,
@@ -160,7 +161,7 @@ describe("runLoop path denials", () => {
     const events = await collect(
       runLoop({
         model: oneCallThenText("read_file", { path: missing }),
-        tools: createToolDefinitions(tmpDir),
+        tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
         messages: baseMessages,
         permissionMode: "auto",
         cwd: tmpDir,
@@ -174,7 +175,7 @@ describe("runLoop path denials", () => {
   });
 
   test("a path deny never reaches execute", async () => {
-    const tools = createToolDefinitions(tmpDir);
+    const tools = createToolDefinitions(tmpDir, ToolSpawnEnv.inherited);
     const original = tools.read_file;
     if (original === undefined || original.execute === undefined) {
       throw new Error("expected read_file.execute");
@@ -226,7 +227,7 @@ describe("runLoop path denials", () => {
     const events = await collect(
       runLoop({
         model: oneCallThenText("read_file", { path: missing }),
-        tools: createToolDefinitions(tmpDir),
+        tools: createToolDefinitions(tmpDir, ToolSpawnEnv.inherited),
         messages: baseMessages,
         permissionMode: "auto",
         cwd: tmpDir,

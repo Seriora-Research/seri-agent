@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ModelCatalog } from "@seri/model-catalog";
@@ -7,7 +7,6 @@ import type { ToolExecutionOptions } from "ai";
 import { foldsCase } from "../../src/caseFold";
 import type { MutationContext } from "../../src/checkpoint/wrapTools";
 import { DISPATCH_TOOL_NAME, type ToolName, toolDefinitions } from "../../src/provider/tools";
-import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import {
   type AgentRegistry,
   type AgentSpec,
@@ -20,6 +19,9 @@ import {
   describeAgent,
   loadAgentRegistry,
 } from "../../src/subagents/registry";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
+import { isBashAvailable } from "../../src/tools/bash";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 function execOpts(): ToolExecutionOptions<Record<string, unknown>> {
   return { toolCallId: "c1", messages: [], context: { rewindTo: 0 } };
@@ -45,36 +47,70 @@ function fileAgent(name: string, toolNames: readonly ToolName[]): AgentSpec {
 
 describe("agentToolSet", () => {
   test("explore and plan are both exactly read_file/grep/glob, and identical to each other", () => {
-    expect(Object.keys(agentToolSet(agent("explore"))).sort()).toEqual([
+    expect(Object.keys(agentToolSet(agent("explore"), ToolSpawnEnv.inherited)).sort()).toEqual([
       "glob",
       "grep",
       "read_file",
     ]);
-    expect(Object.keys(agentToolSet(agent("plan"))).sort()).toEqual(["glob", "grep", "read_file"]);
+    expect(Object.keys(agentToolSet(agent("plan"), ToolSpawnEnv.inherited)).sort()).toEqual([
+      "glob",
+      "grep",
+      "read_file",
+    ]);
   });
 
   test("a file-defined writer has every key it named and no dispatch_subagents", () => {
     const spec = fileAgent("writer", ["write_file", "read_file", "grep", "glob"]);
-    expect(Object.keys(agentToolSet(spec)).sort()).toEqual(
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited)).sort()).toEqual(
       ["glob", "grep", "read_file", "write_file"].sort(),
     );
-    expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
-    expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(
+      DISPATCH_TOOL_NAME,
+    );
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(TODO_TOOL_NAME);
   });
 
   test("a file-defined tester adds bash/powershell to the read-only set and has no write_file/edit", () => {
     const tools = agentToolSet(
       fileAgent("tester", ["bash", "powershell", "read_file", "grep", "glob"]),
+      ToolSpawnEnv.inherited,
     );
     expect(Object.keys(tools).sort()).toEqual(["bash", "glob", "grep", "powershell", "read_file"]);
     expect(tools.write_file).toBeUndefined();
     expect(tools.edit).toBeUndefined();
   });
 
+  test.skipIf(process.platform === "win32" || !isBashAvailable())(
+    "bash on a file agent sees the given spawn env, not process.env",
+    async () => {
+      const originalFoo = process.env.FOO;
+      process.env.FOO = "daemon-a";
+      const dir = mkdtempSync(join(tmpdir(), "seri-agent-env-"));
+      try {
+        const tools = agentToolSet(
+          fileAgent("tester", ["bash", "read_file"]),
+          ToolSpawnEnv.exactly({ FOO: "b", PATH: process.env.PATH ?? "/usr/bin:/bin" }),
+          undefined,
+          dir,
+        );
+        const out = await tools.bash?.execute?.({ command: "echo $FOO; pwd" }, execOpts());
+        expect((out as { stdout: string }).stdout).toBe(`b\n${realpathSync(dir)}\n`);
+        expect(process.env.FOO).toBe("daemon-a");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+        if (originalFoo === undefined) delete process.env.FOO;
+        else process.env.FOO = originalFoo;
+      }
+    },
+    15000,
+  );
+
   test("recursion guard: no built-in agent's ToolSet contains dispatch_subagents or todo", () => {
     for (const spec of BUILTIN_AGENTS) {
-      expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
-      expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
+      expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(
+        DISPATCH_TOOL_NAME,
+      );
+      expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(TODO_TOOL_NAME);
     }
   });
 
@@ -82,7 +118,7 @@ describe("agentToolSet", () => {
     const dir = mkdtempSync(join(tmpdir(), "seri-agent-cwd-"));
     writeFileSync(join(dir, "note.txt"), "session-copy");
     try {
-      const tools = agentToolSet(agent("explore"), undefined, dir);
+      const tools = agentToolSet(agent("explore"), ToolSpawnEnv.inherited, undefined, dir);
       const read = await tools.read_file?.execute?.({ path: "note.txt" }, execOpts());
       expect(read).toBe("session-copy");
       expect(process.cwd()).not.toBe(dir);
@@ -93,8 +129,10 @@ describe("agentToolSet", () => {
 
   test("write_file is recorded via onAfterMutation when one is provided, with no other tool wrapped", async () => {
     const calls: MutationContext[] = [];
-    const tools = agentToolSet(fileAgent("writer", ["write_file", "read_file"]), (context) =>
-      calls.push(context),
+    const tools = agentToolSet(
+      fileAgent("writer", ["write_file", "read_file"]),
+      ToolSpawnEnv.inherited,
+      (context) => calls.push(context),
     );
 
     const root = mkdtempSync(join(tmpdir(), "seri-agent-tools-test-"));
@@ -116,7 +154,7 @@ describe("composeAddendum", () => {
   test("names each built-in's own tools and says it cannot dispatch subagents", () => {
     for (const spec of BUILTIN_AGENTS) {
       expect(spec.addendum).toContain("cannot dispatch subagents");
-      for (const name of Object.keys(agentToolSet(spec))) {
+      for (const name of Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))) {
         expect(spec.addendum).toContain(name);
       }
     }
@@ -165,7 +203,8 @@ describe("describeAgent", () => {
     const spec = fileAgent("tester", ["bash", "read_file", "grep"]);
     const line = describeAgent(spec);
     expect(line).toContain('"tester"');
-    for (const name of Object.keys(agentToolSet(spec))) expect(line).toContain(name);
+    for (const name of Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited)))
+      expect(line).toContain(name);
     expect(line).not.toContain("write_file");
   });
 });
@@ -435,8 +474,10 @@ describe("loadAgentRegistry", () => {
     const spec = agents.get("hostile");
     expect(spec).toBeDefined();
     if (spec === undefined) return;
-    expect(Object.keys(agentToolSet(spec))).toEqual(["read_file"]);
-    expect(Object.keys(agentToolSet(spec))).not.toContain(DISPATCH_TOOL_NAME);
-    expect(Object.keys(agentToolSet(spec))).not.toContain(TODO_TOOL_NAME);
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).toEqual(["read_file"]);
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(
+      DISPATCH_TOOL_NAME,
+    );
+    expect(Object.keys(agentToolSet(spec, ToolSpawnEnv.inherited))).not.toContain(TODO_TOOL_NAME);
   });
 });

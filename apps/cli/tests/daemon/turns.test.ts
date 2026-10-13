@@ -9,6 +9,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { type ExecuteTurn, startDaemon } from "../../src/daemon/server";
 import { DaemonSessionManager } from "../../src/daemon/sessionManager";
 import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
@@ -143,7 +144,7 @@ describe("daemon turns", () => {
       { idleMs: 0 },
     );
     try {
-      const started = await manager.startTurn({ task: "stream" });
+      const started = await manager.startTurn({ env: ToolSpawnEnv.inherited, task: "stream" });
       const live: DaemonEvent[] = [];
       await new Promise<void>((resolve) => {
         started.subscribe((event) => {
@@ -381,7 +382,7 @@ describe("daemon turns", () => {
       { idleMs: 0 },
     );
     try {
-      const started = await manager.startTurn({ task: "done" });
+      const started = await manager.startTurn({ env: ToolSpawnEnv.inherited, task: "done" });
       await new Promise<void>((resolve) => {
         started.subscribe((event) => {
           if (event.event.type === "turn-complete") resolve();
@@ -575,7 +576,7 @@ describe("daemon turns", () => {
       { idleMs: 0 },
     );
     try {
-      const started = await manager.startTurn({ task: "stream" });
+      const started = await manager.startTurn({ env: ToolSpawnEnv.inherited, task: "stream" });
       started.subscribe(() => {});
       await emitted.promise;
       expect(database.turnLastSeq(started.turnId)).toBe(2);

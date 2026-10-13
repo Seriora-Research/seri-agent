@@ -8,6 +8,7 @@ import { isBashAvailable } from "../../src/tools/bash";
 import type { GlobResult } from "../../src/tools/glob";
 import type { GrepResult } from "../../src/tools/grep";
 import { spawnCollect } from "../../src/tools/spawnCollect";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 const execOpts: ToolExecutionOptions<Record<string, unknown>> = {
   toolCallId: "test-call",
@@ -58,8 +59,8 @@ describe("cwd-bound tools", () => {
     writeFileSync(join(dirA, "note.txt"), "alpha");
     writeFileSync(join(dirB, "note.txt"), "beta");
 
-    const toolsA = createToolDefinitions(dirA);
-    const toolsB = createToolDefinitions(dirB);
+    const toolsA = createToolDefinitions(dirA, ToolSpawnEnv.inherited);
+    const toolsB = createToolDefinitions(dirB, ToolSpawnEnv.inherited);
     const fromA = await toolsA.read_file.execute?.({ path: "note.txt" }, execOpts);
     const fromB = await toolsB.read_file.execute?.({ path: "note.txt" }, execOpts);
 
@@ -74,7 +75,7 @@ describe("cwd-bound tools", () => {
     writeFileSync(join(dir, "sub", "hit.txt"), "needle-token\n");
     writeFileSync(join(dir, "sub", "other.md"), "");
 
-    const tools = createToolDefinitions(dir);
+    const tools = createToolDefinitions(dir, ToolSpawnEnv.inherited);
     const grepResult = (await tools.grep.execute?.(
       { pattern: "needle-token", path: "." },
       execOpts,
@@ -91,7 +92,7 @@ describe("cwd-bound tools", () => {
 
   test("cwd-bound write_file writes into the injected directory", async () => {
     const dir = makeDir();
-    const tools = createToolDefinitions(dir);
+    const tools = createToolDefinitions(dir, ToolSpawnEnv.inherited);
     await tools.write_file.execute?.({ path: "out.txt", content: "written" }, execOpts);
     expect(readFileSync(join(dir, "out.txt"), "utf8")).toBe("written");
   });
@@ -100,7 +101,7 @@ describe("cwd-bound tools", () => {
     "cwd-bound bash reports the injected cwd",
     async () => {
       const dir = makeDir();
-      const tools = createToolDefinitions(dir);
+      const tools = createToolDefinitions(dir, ToolSpawnEnv.inherited);
       const result = (await tools.bash.execute?.(
         { command: "echo bound > cwd-marker && pwd" },
         execOpts,
@@ -117,7 +118,7 @@ describe("cwd-bound tools", () => {
     "cwd-bound powershell reports the injected cwd",
     async () => {
       const dir = makeDir();
-      const tools = createToolDefinitions(dir);
+      const tools = createToolDefinitions(dir, ToolSpawnEnv.inherited);
       const result = (await tools.powershell.execute?.(
         { command: "Set-Content -Path cwd-marker -Value bound; (Get-Location).Path" },
         execOpts,
