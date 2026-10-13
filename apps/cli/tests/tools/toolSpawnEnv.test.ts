@@ -68,9 +68,9 @@ describe("ToolSpawnEnv", () => {
   });
 
   test("exactly with no PATH throws when bash is not on the client's PATH", () => {
-    expect(() => ToolSpawnEnv.exactly({}).resolveExecutable("bash", daemonLookupMustNotRun)).toThrow(
-      "bash is not on the client's PATH",
-    );
+    expect(() =>
+      ToolSpawnEnv.exactly({}).resolveExecutable("bash", daemonLookupMustNotRun),
+    ).toThrow("bash is not on the client's PATH");
   });
 });
 
@@ -207,12 +207,16 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client PATH
 
   test("a relative PATH entry is not searched", async () => {
     const work = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const originalCwd = process.cwd();
     try {
       writeClientBash(work, 0o755);
+      // "." is the process cwd. A scan that stats it would find this bash and run it.
+      process.chdir(work);
       await expect(
         runBash("echo daemon", undefined, undefined, work, ToolSpawnEnv.exactly({ PATH: "." })),
       ).rejects.toThrow("bash is not on the client's PATH");
     } finally {
+      process.chdir(originalCwd);
       rmSync(work, { recursive: true, force: true });
     }
   }, 15000);
