@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DaemonClient, snapshotProcessEnv } from "@seri/daemon-client";
 import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { startDaemon } from "../../src/daemon/server";
 import { DISPATCH_TOOL_NAME, READ_ONLY_TOOL_NAMES } from "../../src/provider/tools";
 import { SessionDatabase } from "../../src/session/database";
-import { isBashAvailable } from "../../src/tools/bash";
+import { _resetBashResolutionForTests, isBashAvailable } from "../../src/tools/bash";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
@@ -327,6 +327,55 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("client env"
     );
     expect([first.stdout, second.stdout].sort()).toEqual(["one\n", "two\n"]);
   }, 15000);
+
+  test("bash in a daemon turn runs the bash first on the client's PATH", async () => {
+    _resetBashResolutionForTests();
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const work = makeDir();
+    const wrapperDir = makeDir();
+    const file = join(wrapperDir, "bash");
+    writeFileSync(file, "#!/bin/sh\necho seri-client-bash-280\n");
+    chmodSync(file, 0o755);
+    const { client, capture } = await startProbingDaemon(configDir);
+    try {
+      // POSIX runBash evals the script with cat <&3. The wrapper directory is first.
+      // The rest of PATH stays so a daemon bash can still find cat.
+      await Array.fromAsync(
+        client.startTurn({
+          task: "probe",
+          cwd: work,
+          env: { PATH: `${wrapperDir}${delimiter}${process.env.PATH ?? ""}` },
+        }),
+      );
+      const marked = await capture()!.tools.bash!.execute!({ command: "echo daemon" }, execOpts);
+      expect(marked.stdout).toBe("seri-client-bash-280\n");
+
+      await Array.fromAsync(client.startTurn({ task: "probe", cwd: work }));
+      const daemon = await capture()!.tools.bash!.execute!({ command: "echo daemon" }, execOpts);
+      expect(daemon.stdout).toBe("daemon\n");
+    } finally {
+      _resetBashResolutionForTests();
+    }
+  }, 15000);
+
+  test("a client PATH without bash fails the call instead of running the daemon's", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const work = makeDir();
+    const emptyDir = makeDir();
+    const { client, capture } = await startProbingDaemon(configDir);
+    await Array.fromAsync(
+      client.startTurn({
+        task: "probe",
+        cwd: work,
+        env: { PATH: emptyDir },
+      }),
+    );
+    await expect(
+      capture()!.tools.bash!.execute!({ command: "echo daemon" }, execOpts),
+    ).rejects.toThrow("bash is not on the client's PATH");
+  }, 15000);
 });
 
 describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
@@ -356,5 +405,23 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
     );
     expect(out.stdout.trim()).toBe(FOO_PROBE);
     expect(process.env.FOO).toBe("daemon-a");
+  }, 15000);
+
+  test("a client Path without powershell fails instead of running another powershell", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const work = makeDir();
+    const emptyDir = makeDir();
+    const { client, capture } = await startProbingDaemon(configDir);
+    await Array.fromAsync(
+      client.startTurn({
+        task: "probe",
+        cwd: work,
+        env: { ...snapshotProcessEnv(), PATH: emptyDir, Path: emptyDir },
+      }),
+    );
+    await expect(
+      capture()!.tools.powershell!.execute!({ command: "Write-Output hi" }, execOpts),
+    ).rejects.toThrow("powershell is not on the client's PATH");
   }, 15000);
 });
