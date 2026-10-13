@@ -16,8 +16,8 @@ export type TurnRequest = {
    */
   env?: Record<string, string>;
   /**
-   * Named permission profile for this turn's grants, path denials, and
-   * autoModeOnBlock. Omit the field to use the daemon's permissions.yaml.
+   * Named permission profile for this turn's grants and path denials.
+   * Omit the field to use the daemon's permissions.yaml.
    * Not stored on the session.
    */
   profile?: string;
