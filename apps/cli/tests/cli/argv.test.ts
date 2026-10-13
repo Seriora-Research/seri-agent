@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../../package.json";
@@ -7,6 +7,7 @@ import { run } from "../../src/cli";
 import {
   getBaseConfigDir,
   getConfigDir,
+  getDaemonDescriptorPath,
   profileDir,
   setProfileOverride,
 } from "../../src/config/paths";
@@ -1289,6 +1290,43 @@ describe("run (serve / exec)", () => {
     }
     expect(code).toBe(1);
     expect(errors).toEqual(["unknown profile"]);
+    expect(turnBodies).toEqual([]);
+  });
+
+  test("`seri exec --profile work` does not attach to the default daemon when work's daemon.json is truncated", async () => {
+    mkdirSync(profileDir("work"), { recursive: true });
+    writeFileSync(getDaemonDescriptorPath(profileDir("work")), "{not json");
+    writeDaemonDescriptor(getBaseConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const turnBodies: unknown[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/turns") {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        return new Response("no", { status: 500 });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const errors: string[] = [];
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = (msg: string) => errors.push(String(msg));
+    console.log = () => {};
+    let code: number;
+    try {
+      code = await run(["--profile", "work", "exec", "write"], { fetch: fetchImpl });
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(code).toBe(1);
+    expect(errors).toEqual(["no daemon is running for this profile — start one with seri serve"]);
     expect(turnBodies).toEqual([]);
   });
 

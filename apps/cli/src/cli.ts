@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -73,6 +74,7 @@ import {
   currentProfile,
   getBaseConfigDir,
   getConfigDir,
+  getDaemonDescriptorPath,
   getTrajectoriesDir,
   profileDir,
   profileNameError,
@@ -848,7 +850,9 @@ async function handleExecCommand(
   const configDir = deps.authConfigDir ?? getConfigDir();
   const descriptor =
     readDaemonDescriptorFile(configDir) ??
-    (source === "default" ? undefined : readDaemonDescriptorFile(getBaseConfigDir()));
+    (source !== "default" && !existsSync(getDaemonDescriptorPath(configDir))
+      ? readDaemonDescriptorFile(getBaseConfigDir())
+      : undefined);
   if (descriptor === undefined) {
     console.error("no daemon is running for this profile — start one with seri serve");
     return 1;

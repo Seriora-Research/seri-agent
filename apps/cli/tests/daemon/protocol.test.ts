@@ -147,6 +147,18 @@ describe("resolveTurnPermissionsDir", () => {
     );
     expect(resolveTurnPermissionsDir("strict", home)).toBeUndefined();
   });
+
+  test("a named profile whose deny key is not a list is unknown", () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    writeFileSync(
+      join(strictDir, "permissions.yaml"),
+      "global:\n  - write_file\nprojects: {}\ndeny: not-a-list\n",
+    );
+    expect(resolveTurnPermissionsDir("strict", home)).toBeUndefined();
+  });
 });
 
 describe("daemon protocol auth", () => {
@@ -297,6 +309,38 @@ describe("daemon turn profile", () => {
     writeFileSync(
       join(strictDir, "permissions.yaml"),
       "global: []\nprojects: {}\ndeny:\n\t- write_file(/x)\n",
+    );
+    const seen: string[] = [];
+    const daemon = await startDaemon({
+      configDir: home,
+      executeTurn: async (input) => {
+        seen.push(input.permissionsDir ?? "none");
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", profile: "strict" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "unknown profile" });
+    expect(seen).toEqual([]);
+  });
+
+  test("POST /v1/turns with a named-profile deny that is not a list is 400 and does not start a turn", async () => {
+    const home = makeDir();
+    process.env.HOME = home;
+    const strictDir = profileDir("strict");
+    mkdirSync(strictDir, { recursive: true });
+    writeFileSync(
+      join(strictDir, "permissions.yaml"),
+      "global:\n  - write_file\nprojects: {}\ndeny: not-a-list\n",
     );
     const seen: string[] = [];
     const daemon = await startDaemon({

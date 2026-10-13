@@ -26,7 +26,12 @@ export function isUsablePermissionsDir(dir: string): boolean {
   } catch {
     return false;
   }
-  return parseYamlStore(dir).status !== "unreadable";
+  const parsed = parseYamlStore(dir);
+  if (parsed.status === "unreadable") return false;
+  if (parsed.status === "missing") return true;
+  const deny = parsed.doc.get("deny");
+  if (deny === undefined || deny === null) return true;
+  return deny instanceof YAMLSeq;
 }
 
 export function projectKey(worktree: string): string {
