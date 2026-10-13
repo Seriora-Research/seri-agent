@@ -40,7 +40,6 @@ export type McpClients = {
   readonly status: Map<string, McpServerStatus>;
 };
 
-// Two names on one url still dial separately: each name has its own OAuth provider.
 function poolKey(spec: Pick<McpServerSpec, "name" | "url" | "headers">): McpPoolKey {
   return `${spec.name}@${serverIdentity(spec)}` as McpPoolKey;
 }
@@ -215,7 +214,6 @@ export async function closeMcpClients(
   onWarning: (message: string) => void,
   timeoutMs = MCP_CLOSE_TIMEOUT_MS,
 ): Promise<void> {
-  // The map key also carries the identity hash. The warning names the server.
   const closing = [...clients.handles.values()].map((slot) =>
     closeBounded(
       slot.handle.then((client) => client.close()),

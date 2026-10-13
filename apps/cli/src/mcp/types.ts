@@ -5,7 +5,6 @@ export const MCP_TOOL_PREFIX = "mcp_";
 
 export type McpServerSpec = {
   readonly name: string;
-  // url and headers are the expanded values sent on the wire and hashed for trust.
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly source: ExtensionSource;

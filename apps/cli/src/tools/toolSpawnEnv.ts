@@ -16,8 +16,9 @@ export class ToolSpawnEnv {
   }
 
   get(name: string): string | undefined {
-    const value = (this.#vars ?? process.env)[name];
-    // Only strings count, so constructor or __proto__ never resolve to Object.prototype members.
+    const vars = this.#vars ?? process.env;
+    if (!Object.hasOwn(vars, name)) return undefined;
+    const value = vars[name];
     return typeof value === "string" ? value : undefined;
   }
 }
