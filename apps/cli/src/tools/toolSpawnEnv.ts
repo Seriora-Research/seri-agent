@@ -14,4 +14,10 @@ export class ToolSpawnEnv {
   spawnOptions(): { env?: Record<string, string> } {
     return this.#vars === undefined ? {} : { env: { ...this.#vars } };
   }
+
+  get(name: string): string | undefined {
+    const value = (this.#vars ?? process.env)[name];
+    // Only strings count, so constructor or __proto__ never resolve to Object.prototype members.
+    return typeof value === "string" ? value : undefined;
+  }
 }

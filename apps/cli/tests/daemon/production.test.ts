@@ -466,11 +466,11 @@ describe("client env reaches MCP headers", () => {
       events.push(event);
     }
     const last = events.at(-1)?.event;
-    return {
-      sawMcp,
-      output,
-      exitCode: last?.type === "turn-complete" ? last.exitCode : undefined,
-    };
+    const exitCode =
+      last?.type === "turn-complete" && typeof last.exitCode === "number"
+        ? last.exitCode
+        : undefined;
+    return { sawMcp, output, exitCode };
   }
 
   test("an attach whose snapshot matches the trusted bearer sends that bearer", async () => {

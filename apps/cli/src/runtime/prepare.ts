@@ -426,7 +426,12 @@ export async function bindSession(
   });
   warnOnNameCollisions(prepared.skills, prepared.agents, onWarning);
   await closeMcpClients(prepared.mcpClients, onWarning);
-  prepared.mcp = loadMcpRegistry({ worktree: prepared.worktree, configDir, onWarning });
+  prepared.mcp = loadMcpRegistry({
+    worktree: prepared.worktree,
+    configDir,
+    env,
+    onWarning,
+  });
   prepared.mcpClients = createMcpClients(createSessionDial(configDir));
   const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);
   prepared.allowedTools = filterMcpGrants(effectiveTools(grants), prepared.mcp, onWarning);
@@ -551,6 +556,7 @@ export async function prepareSession(
     const mcp = loadMcpRegistry({
       worktree,
       configDir,
+      env: ctx.env,
       onWarning: (msg) => printWarning(msg, warnSink),
     });
     const mcpPending = pendingMcpNotice(pendingMcpNames(mcp));
