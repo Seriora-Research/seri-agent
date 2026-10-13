@@ -87,7 +87,8 @@ describe("a successful dial whose listTools then fails", () => {
     const clients = createMcpClients(async () => handle);
     await expect(callMcpTool(clients, spec("exa"), "web_search", {})).rejects.toThrow(/bad schema/);
     expect(closed).toBe(true);
-    expect(clients.handles.has("exa")).toBe(false);
+    expect(clients.handles.size).toBe(0);
+    expect(mcpServerStatus(clients, "exa").state).toBe("failed");
   });
 });
 
@@ -298,6 +299,88 @@ describe("fetchCatalog", () => {
   });
 });
 
+function headed(authorization: string, url = "https://mcp.exa.ai/mcp"): McpServerSpec {
+  return {
+    name: "exa",
+    url,
+    headers: { Authorization: authorization },
+    source: "project",
+    filePath: "x",
+  };
+}
+
+describe("the pool key is the name plus the expanded server", () => {
+  test("the same name with a different header dials again", async () => {
+    let dialCount = 0;
+    const dial: DialFn = async (next) => {
+      dialCount++;
+      const authorization = next.headers.Authorization ?? "";
+      return fakeHandle({ callTool: async () => authorization });
+    };
+    const clients = createMcpClients(dial);
+    expect(await callMcpTool(clients, headed("Bearer a"), "web_search", {})).toBe("Bearer a");
+    expect(await callMcpTool(clients, headed("Bearer b"), "web_search", {})).toBe("Bearer b");
+    expect(dialCount).toBe(2);
+  });
+
+  test("the same name at a different url dials again", async () => {
+    let dialCount = 0;
+    const dial: DialFn = async (next) => {
+      dialCount++;
+      return fakeHandle({ callTool: async () => next.url });
+    };
+    const clients = createMcpClients(dial);
+    const first = spec("exa");
+    const second = { ...spec("exa"), url: "https://mcp.other.ai/mcp" };
+    expect(await callMcpTool(clients, first, "web_search", {})).toBe(first.url);
+    expect(await callMcpTool(clients, second, "web_search", {})).toBe(second.url);
+    expect(dialCount).toBe(2);
+  });
+
+  test("two names on one url and the same headers dial twice", async () => {
+    let dialCount = 0;
+    const dial: DialFn = async (next) => {
+      dialCount++;
+      return fakeHandle({ callTool: async () => next.name });
+    };
+    const clients = createMcpClients(dial);
+    const exa = spec("exa");
+    const other = { ...spec("other"), url: exa.url, headers: exa.headers };
+    expect(await callMcpTool(clients, exa, "web_search", {})).toBe("exa");
+    expect(await callMcpTool(clients, other, "web_search", {})).toBe("other");
+    expect(dialCount).toBe(2);
+  });
+
+  test("bearer b, then a, then b dials twice and reuses the first connection", async () => {
+    let dialCount = 0;
+    const dial: DialFn = async (next) => {
+      dialCount++;
+      const authorization = next.headers.Authorization ?? "";
+      return fakeHandle({ callTool: async () => authorization });
+    };
+    const clients = createMcpClients(dial);
+    expect(await callMcpTool(clients, headed("Bearer b"), "web_search", {})).toBe("Bearer b");
+    expect(await callMcpTool(clients, headed("Bearer a"), "web_search", {})).toBe("Bearer a");
+    expect(await callMcpTool(clients, headed("Bearer b"), "web_search", {})).toBe("Bearer b");
+    expect(dialCount).toBe(2);
+  });
+
+  test("a failed dial drops only that identity", async () => {
+    let dialCount = 0;
+    const dial: DialFn = async (next) => {
+      dialCount++;
+      if (next.headers.Authorization === "Bearer a") throw new Error("nope");
+      return fakeHandle({ callTool: async () => "ok-b" });
+    };
+    const clients = createMcpClients(dial);
+    expect(await callMcpTool(clients, headed("Bearer b"), "web_search", {})).toBe("ok-b");
+    await expect(callMcpTool(clients, headed("Bearer a"), "web_search", {})).rejects.toThrow();
+    expect(clients.handles.size).toBe(1);
+    expect(await callMcpTool(clients, headed("Bearer b"), "web_search", {})).toBe("ok-b");
+    expect(dialCount).toBe(2);
+  });
+});
+
 describe("closeMcpClients", () => {
   test("awaits every dialled handle's close before resolving, and is idempotent", async () => {
     let closed = false;
@@ -347,5 +430,28 @@ describe("closeMcpClients", () => {
     expect(Date.now() - started).toBeLessThan(500);
     expect(warnings.some((w) => w.includes("exa") && w.includes("timed out"))).toBe(true);
     expect(clients.handles.size).toBe(0);
+  });
+
+  test("closes every connection and warns with the server name", async () => {
+    let closes = 0;
+    const dial: DialFn = async () =>
+      fakeHandle({
+        close: async () => {
+          closes++;
+          throw new Error("stuck");
+        },
+      });
+    const clients = createMcpClients(dial);
+    await callMcpTool(clients, headed("Bearer a"), "web_search", {});
+    await callMcpTool(clients, headed("Bearer b"), "web_search", {});
+    const warnings: string[] = [];
+    await closeMcpClients(clients, (message) => warnings.push(message));
+    expect(closes).toBe(2);
+    expect(warnings).toHaveLength(2);
+    for (const warning of warnings) {
+      expect(warning).toContain("exa");
+      expect(warning).toContain("stuck");
+      expect(warning).not.toMatch(/[0-9a-f]{64}/);
+    }
   });
 });
