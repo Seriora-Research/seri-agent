@@ -24,6 +24,7 @@ export type PendingWrite = {
   content?: string;
   reason: string;
   durable: boolean;
+  expect?: string;
   projectPath?: string;
   entryDate: string;
 };
@@ -51,6 +52,7 @@ export function stagePendingWrite(
     content: req.content,
     reason: req.reason,
     durable: req.durable,
+    expect: req.expect,
 
     projectPath: req.scope === "memory-project" ? projectKey(ctx.worktree) : undefined,
     entryDate: now.toISOString().slice(0, 10),
@@ -69,6 +71,7 @@ function isPendingWrite(value: unknown): value is PendingWrite {
     (v.action === "add" || v.action === "replace" || v.action === "remove") &&
     typeof v.reason === "string" &&
     typeof v.durable === "boolean" &&
+    (v.expect === undefined || typeof v.expect === "string") &&
     typeof v.entryDate === "string" &&
     (v.scope !== "memory-project" ||
       (typeof v.projectPath === "string" && v.projectPath.length > 0))
@@ -137,6 +140,7 @@ function toRequest(p: PendingWrite): MemoryWriteRequest {
     content: p.content,
     reason: p.reason,
     durable: p.durable,
+    expect: p.expect,
   };
 }
 

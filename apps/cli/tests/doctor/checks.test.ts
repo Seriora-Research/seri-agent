@@ -423,6 +423,33 @@ describe("runDoctorChecks", () => {
     }
   });
 
+  test("refuses --scrub while another process is writing a memory file and does not rewrite it", async () => {
+    tempHome();
+    process.env.GROQ_API_KEY = "fake-test-key";
+    process.env.SERI_DISABLE_MODELS_FETCH = "1";
+    const configDir = getConfigDir();
+    const token = `ghp_${"A".repeat(20)}B9Qx`;
+    const memoryPath = join(getMemoriesDir(configDir), "MEMORY.md");
+    mkdirSync(getMemoriesDir(configDir), { recursive: true });
+    writeFileSync(memoryPath, `- [2026-08-11] deploy with ${token}\n`);
+    const holder = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60_000)"]);
+    try {
+      writeFileSync(`${memoryPath}.lock`, `${holder.pid} 0123456789abcdef\n`);
+
+      const checks = await runDoctorChecks({ ...quietDoctorDeps(configDir), scrub: true });
+      expect(checks.find((check) => check.name === "secrets")).toEqual({
+        name: "secrets",
+        status: "fail",
+        detail: `memory is being written by another seri process (pid ${holder.pid})`,
+        fix: "retry seri doctor --scrub",
+      });
+      expect(readFileSync(memoryPath, "utf8")).toBe(`- [2026-08-11] deploy with ${token}\n`);
+    } finally {
+      holder.kill();
+      await holder.exited;
+    }
+  }, 15000);
+
   test("warns about a residual memory-file token and --scrub replaces it without echoing the value", async () => {
     tempHome();
     process.env.GROQ_API_KEY = "fake-test-key";

@@ -205,13 +205,15 @@ export async function runArchivist(args: {
   const transcriptGeneration = args.state.transcriptGeneration;
   const transcript = args.state.messages.slice(args.state.messageCursor);
 
-  const goal = buildArchivistGoal(transcript, loadMemory(args.ctx), args.trigger);
+  const memory = loadMemory(args.ctx);
+  const goal = buildArchivistGoal(transcript, memory, args.trigger);
 
   const staged: ArchivistStagedWrite[] = [];
   const tools: ToolSet = {
     memory_write: makeMemoryWriteTool(args.ctx, {
       forceStage: args.forceStage === true,
       onStaged: (p) => staged.push({ kind: "memory", id: p.id, label: pendingLabel(p) }),
+      shown: memory,
     }),
 
     skill_write: makeSkillWriteTool(args.ctx, {

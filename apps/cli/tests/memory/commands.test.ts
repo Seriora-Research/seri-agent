@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadMemoryConfig } from "../../src/config/config";
@@ -10,7 +10,7 @@ import {
   memoryPanelRows,
 } from "../../src/memory/commands";
 import { pendingPath, stagePendingWrite } from "../../src/memory/pending";
-import type { MemoryContext } from "../../src/memory/store";
+import { applyWrite, type MemoryContext, memoryFilePath } from "../../src/memory/store";
 
 let configDir: string | undefined;
 function makeCtx(worktree = "/home/x/harness"): MemoryContext {
@@ -116,6 +116,57 @@ describe("decideMemoryCommand", () => {
     );
     const result = decideMemoryCommand(["approve", staged.id], ctx);
     expect(result.lines).toEqual([{ text: "1 memory approved." }]);
+  });
+
+  test("approve of a replace whose expect line was rewritten reports the conflict and leaves the pending write", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "build uses npm",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-10-01",
+    );
+    const livePath = memoryFilePath("memory-global", ctx);
+    const expectLine = readFileSync(livePath, "utf8");
+    const staged = stagePendingWrite(
+      {
+        scope: "memory-global",
+        action: "replace",
+        target: "build uses npm",
+        content: "build uses bun",
+        reason: "stale",
+        durable: true,
+        expect: expectLine,
+      },
+      ctx,
+      new Date("2026-10-11T00:00:00Z"),
+    );
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "replace",
+        target: "build uses npm",
+        content: "build uses npm 10 with --workspaces",
+        reason: "live",
+        durable: true,
+      },
+      ctx,
+      "2026-10-11",
+    );
+
+    const result = decideMemoryCommand(["approve", staged.id], ctx);
+
+    expect(result.lines[0]?.text).toContain(`Could not approve ${staged.id}`);
+    expect(result.lines[0]?.text).toContain("memory_write conflict");
+    expect(existsSync(pendingPath(ctx.configDir, "memory-global", staged.id))).toBe(true);
+    expect(readFileSync(livePath, "utf8")).toBe(
+      "- [2026-10-11] build uses npm 10 with --workspaces",
+    );
   });
 
   test("diff/approve/reject on an unknown id report no match", () => {

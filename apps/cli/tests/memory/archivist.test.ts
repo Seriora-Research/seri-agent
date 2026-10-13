@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { ModelCatalog } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
@@ -28,7 +30,7 @@ import {
   shouldRunArchivist,
 } from "../../src/memory/archivist";
 import { resolvePendingRef } from "../../src/memory/pending";
-import { applyWrite, loadMemory, type MemoryContext } from "../../src/memory/store";
+import { applyWrite, loadMemory, type MemoryContext, memoryFilePath } from "../../src/memory/store";
 import { makeMemoryWriteTool } from "../../src/memory/tool";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import { runSubagent, type SubagentRuntime } from "../../src/subagents/dispatch";
@@ -1178,5 +1180,171 @@ describe("session-1 correction changes session-2 behavior without being repeated
 
     const afterTier = buildVolatileTier("m", "groq", undefined, loadMemory(ctx));
     expect(afterTier).toContain("tests are run with bun test from the repo root, never npm test");
+  });
+});
+
+describe("another writer commits to memory during an archivist pass", () => {
+  const STORE = pathToFileURL(join(import.meta.dir, "../../src/memory/store.ts")).href;
+
+  function archivistWriting(ctx: MemoryContext, input: Record<string, unknown>) {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallStream("call-1", "memory_write", input)),
+        streamResult(stopStream()),
+      ],
+    });
+    const state = createArchivistState(emptySession());
+    setMessages(state, [{ role: "user", content: "task" }]);
+    return {
+      model,
+      args: {
+        state,
+        trigger: "tool-count" as const,
+        ctx,
+        model,
+        route: { model: "test-model", provider: "groq" as const },
+        catalog: catalogFor(),
+        contextWindow: 100_000,
+        signal: new AbortController().signal,
+        onWarning: () => {},
+      },
+    };
+  }
+
+  async function settle(child: Bun.Subprocess<"ignore", "pipe" | "ignore", "pipe">) {
+    const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    return { exitCode, stderr };
+  }
+
+  test.skipIf(process.platform === "win32")(
+    "an add another process is committing when the archivist writes is kept alongside the archivist's add",
+    async () => {
+      const ctx = makeCtx();
+      setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
+      applyWrite(
+        {
+          scope: "memory-global",
+          action: "add",
+          content: "build uses npm",
+          reason: "r",
+          durable: true,
+        },
+        ctx,
+        "2026-10-01",
+      );
+      const path = memoryFilePath("memory-global", ctx);
+      const base = readFileSync(path, "utf8");
+      const live = {
+        scope: "memory-global",
+        action: "add",
+        content: "prefers tabs",
+        reason: "live turn",
+        durable: true,
+      };
+      const { args } = archivistWriting(ctx, {
+        scope: "memory-global",
+        action: "add",
+        content: "tests run with bun test",
+        reason: "seen in transcript",
+        durable: true,
+      });
+
+      const children: Bun.Subprocess<"ignore", "pipe" | "ignore", "pipe">[] = [];
+      await runArchivist({
+        ...args,
+        onBeforeTool: async () => {
+          expect(spawnSync("mkfifo", [`${path}.fifo`]).status).toBe(0);
+          renameSync(`${path}.fifo`, path);
+          const writer = Bun.spawn(
+            [
+              process.execPath,
+              "-e",
+              `const { applyWrite } = await import(${JSON.stringify(STORE)});` +
+                `applyWrite(${JSON.stringify(live)}, ${JSON.stringify(ctx)}, "2026-10-11");`,
+            ],
+            { stdout: "ignore", stderr: "pipe" },
+          );
+          const feeder = Bun.spawn(
+            [
+              process.execPath,
+              "-e",
+              `const fs = await import("node:fs");` +
+                `const fd = fs.openSync(${JSON.stringify(path)}, "w");` +
+                `console.log("open");` +
+                `await Bun.sleep(300);` +
+                `fs.writeSync(fd, ${JSON.stringify(base)});` +
+                `fs.closeSync(fd);`,
+            ],
+            { stdout: "pipe", stderr: "pipe" },
+          );
+          children.push(writer, feeder);
+          const opened = await feeder.stdout.getReader().read();
+          expect(new TextDecoder().decode(opened.value)).toBe("open\n");
+          writeFileSync(`${path}.base`, base);
+          renameSync(`${path}.base`, path);
+          return {};
+        },
+      });
+
+      expect(await Promise.all(children.map(settle))).toEqual([
+        { exitCode: 0, stderr: "" },
+        { exitCode: 0, stderr: "" },
+      ]);
+      expect(readFileSync(path, "utf8").split("\n")).toEqual([
+        "- [2026-10-01] build uses npm",
+        "- [2026-10-11] prefers tabs",
+        `- [${new Date().toISOString().slice(0, 10)}] tests run with bun test`,
+      ]);
+    },
+    15000,
+  );
+
+  test("a remove aimed at a line another writer rewrote mid-pass is a conflict, and the rewritten line stays", async () => {
+    const ctx = makeCtx();
+    setConfigValue("SERI_MEMORY_APPROVAL", "false", ctx.configDir);
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "build uses npm",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-10-01",
+    );
+    const { model, args } = archivistWriting(ctx, {
+      scope: "memory-global",
+      action: "remove",
+      target: "build uses npm",
+      reason: "npm was dropped",
+      durable: true,
+    });
+
+    await runArchivist({
+      ...args,
+      onBeforeTool: async () => {
+        applyWrite(
+          {
+            scope: "memory-global",
+            action: "replace",
+            target: "build uses npm",
+            content: "build uses npm 10 with --workspaces",
+            reason: "live turn",
+            durable: true,
+          },
+          ctx,
+          "2026-10-11",
+        );
+        return {};
+      },
+    });
+
+    expect(readFileSync(memoryFilePath("memory-global", ctx), "utf8")).toBe(
+      "- [2026-10-11] build uses npm 10 with --workspaces",
+    );
+    expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain(
+      'memory_write conflict: \\"- [2026-10-01] build uses npm\\"',
+    );
   });
 });

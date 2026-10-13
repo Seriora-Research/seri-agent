@@ -12,7 +12,12 @@ import {
   resolvePendingRef,
   stagePendingWrite,
 } from "../../src/memory/pending";
-import { loadMemoryFile, type MemoryContext, memoryFilePath } from "../../src/memory/store";
+import {
+  applyWrite,
+  loadMemoryFile,
+  type MemoryContext,
+  memoryFilePath,
+} from "../../src/memory/store";
 
 let configDir: string | undefined;
 function makeCtx(worktree = "/home/x/harness"): MemoryContext {
@@ -251,5 +256,99 @@ describe("diffPending / approvePending / rejectPending", () => {
     approvePending(ctx.configDir, first);
     expect(() => approvePending(ctx.configDir, second)).toThrow(/over its 1375-char cap/);
     expect(existsSync(pendingPath(ctx.configDir, "user", second.id))).toBe(true);
+  });
+
+  test("a staged replace carries expect, so approve conflicts if that line was rewritten instead of matching the new line as a substring", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "build uses npm",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-10-01",
+    );
+    const livePath = memoryFilePath("memory-global", ctx);
+    const expectLine = readFileSync(livePath, "utf8");
+    const staged = stagePendingWrite(
+      {
+        scope: "memory-global",
+        action: "replace",
+        target: "build uses npm",
+        content: "build uses bun",
+        reason: "stale",
+        durable: true,
+        expect: expectLine,
+      },
+      ctx,
+      new Date("2026-10-11T00:00:00Z"),
+    );
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "replace",
+        target: "build uses npm",
+        content: "build uses npm 10 with --workspaces",
+        reason: "live",
+        durable: true,
+      },
+      ctx,
+      "2026-10-11",
+    );
+    const rewritten = readFileSync(livePath, "utf8");
+
+    expect(staged.expect).toBe(expectLine);
+    expect(() => approvePending(ctx.configDir, staged)).toThrow(/memory_write conflict/);
+    expect(existsSync(pendingPath(ctx.configDir, "memory-global", staged.id))).toBe(true);
+    expect(readFileSync(livePath, "utf8")).toBe(rewritten);
+  });
+
+  test("approve of an add keeps a line written after the write was staged", () => {
+    const ctx = makeCtx();
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "build uses npm",
+        reason: "r",
+        durable: true,
+      },
+      ctx,
+      "2026-10-01",
+    );
+    const staged = stagePendingWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "prefers tabs",
+        reason: "archivist",
+        durable: true,
+      },
+      ctx,
+      new Date("2026-10-11T00:00:00Z"),
+    );
+    applyWrite(
+      {
+        scope: "memory-global",
+        action: "add",
+        content: "tests run with bun test",
+        reason: "live",
+        durable: true,
+      },
+      ctx,
+      "2026-10-11",
+    );
+
+    approvePending(ctx.configDir, staged);
+
+    expect(readFileSync(memoryFilePath("memory-global", ctx), "utf8").split("\n")).toEqual([
+      "- [2026-10-01] build uses npm",
+      "- [2026-10-11] tests run with bun test",
+      "- [2026-10-11] prefers tabs",
+    ]);
+    expect(existsSync(pendingPath(ctx.configDir, "memory-global", staged.id))).toBe(false);
   });
 });
