@@ -510,4 +510,53 @@ describe("client env reaches MCP headers", () => {
     expect(result.sawMcp).toBe(false);
     expect(authorizations).toEqual([]);
   });
+
+  test("a later attach on the same daemon does not send the starter bearer", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    trustProbe(configDir, "Bearer a");
+    const sawMcp: boolean[] = [];
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      deps: {
+        runLoop: async function* probe(opts: RunLoopOpts) {
+          const mcp = opts.tools.mcp;
+          sawMcp.push(mcp !== undefined);
+          if (mcp?.execute !== undefined) {
+            await mcp.execute({ tool: "mcp_probe_echo" }, execOpts);
+          }
+          yield { type: "done", reason: "no-tool-call" };
+          return opts.messages;
+        },
+        getGroqModel: () =>
+          new MockLanguageModelV4({
+            doStream: async () => streamResult(textOnlyChunks("ready")),
+          }),
+        loadAgentsFile: () => "",
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+
+    const omitted = [];
+    for await (const event of client.startTurn({ task: "probe", cwd: makeDir() })) {
+      omitted.push(event);
+    }
+    expect(omitted.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    expect(sawMcp).toEqual([true]);
+    expect(authorizations).toEqual(["Bearer a"]);
+
+    const attached = [];
+    for await (const event of client.startTurn({
+      task: "probe",
+      cwd: makeDir(),
+      env: { ...snapshotProcessEnv(), SERI_TEST_MCP_TOKEN: "b" },
+    })) {
+      attached.push(event);
+    }
+    expect(attached.at(-1)?.event).toEqual({ type: "turn-complete", exitCode: 0 });
+    expect(sawMcp).toEqual([true, false]);
+    expect(authorizations).toEqual(["Bearer a"]);
+  });
 });
