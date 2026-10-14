@@ -90,6 +90,12 @@ describe("ToolSpawnEnv", () => {
     }
   });
 
+  test.skipIf(process.platform !== "win32")("win32 get matches Path and PATH", () => {
+    expect(typeof ToolSpawnEnv.inherited.get("PATH")).toBe("string");
+    expect(ToolSpawnEnv.inherited.get("Path")).toBe(ToolSpawnEnv.inherited.get("PATH"));
+    expect(ToolSpawnEnv.exactly({ Path: "C:\\client-bin" }).get("PATH")).toBe("C:\\client-bin");
+  });
+
   test("inherited resolveExecutable returns the daemon lookup", () => {
     expect(ToolSpawnEnv.inherited.resolveExecutable("bash", () => "/daemon/bash")).toBe(
       "/daemon/bash",

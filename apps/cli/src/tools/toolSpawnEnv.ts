@@ -20,9 +20,18 @@ export class ToolSpawnEnv {
 
   get(name: string): string | undefined {
     const vars = this.#vars ?? process.env;
-    if (!Object.hasOwn(vars, name)) return undefined;
-    const value = vars[name];
-    return typeof value === "string" ? value : undefined;
+    if (Object.hasOwn(vars, name)) {
+      const value = vars[name];
+      return typeof value === "string" ? value : undefined;
+    }
+    if (process.platform !== "win32") return undefined;
+    const upper = name.toUpperCase();
+    for (const key of Object.keys(vars)) {
+      if (key.toUpperCase() !== upper) continue;
+      const value = vars[key];
+      return typeof value === "string" ? value : undefined;
+    }
+    return undefined;
   }
 
   resolveExecutable(name: "bash" | "powershell", daemonLookup: () => string): string {
