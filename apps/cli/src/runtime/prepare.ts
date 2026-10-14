@@ -338,7 +338,7 @@ export function buildCheckpointedTools(opts: {
       checkpointer.onBeforeMutation,
       checkpointer.onAfterMutation,
     ),
-    opts.verifyConfig,
+    { ...opts.verifyConfig, env: opts.env },
   );
   return { checkpointer, tools };
 }

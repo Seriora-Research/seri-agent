@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import pkg from "../../package.json";
 import { getBaseConfigDir } from "../../src/config/paths";
 import { runRipgrep } from "../../src/tools/runRipgrep";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 const MODULE = pathToFileURL(join(import.meta.dir, "../../src/tools/runRipgrep.ts")).href;
 const ASSET = join(import.meta.dir, "../../src/tools/rg-vendored.bin");
@@ -250,6 +251,28 @@ describe("runRipgrep", () => {
 
     expect(truncated).toBe(false);
     expect(stdout).toContain("needle");
+  });
+
+  test("a replace env does not write process.env and still searches", async () => {
+    const originalFoo = process.env.FOO;
+    process.env.FOO = "daemon-a";
+    writeFileSync(join(tmpDir, "a.txt"), "needle\n");
+    try {
+      const { stdout, truncated } = await runRipgrep(
+        ["--json", "needle", tmpDir],
+        undefined,
+        ToolSpawnEnv.exactly({
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          FOO: "b",
+        }),
+      );
+      expect(truncated).toBe(false);
+      expect(stdout).toContain("needle");
+      expect(process.env.FOO).toBe("daemon-a");
+    } finally {
+      if (originalFoo === undefined) delete process.env.FOO;
+      else process.env.FOO = originalFoo;
+    }
   });
 
   test("reports truncation instead of throwing when rg outruns the stdout buffer", async () => {

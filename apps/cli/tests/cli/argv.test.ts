@@ -228,6 +228,7 @@ describe("run (argv and usage errors)", () => {
     });
   });
 
+  // Windows finishCliRun is multi-second on a loaded runner; bun's default 5000ms is too tight.
   test.each(["serve", "exec", "doctor", "update"])(
     "`seri -- %s` sends the verb as task text instead of dispatching it",
     async (verb) => {
@@ -242,6 +243,7 @@ describe("run (argv and usage errors)", () => {
       expect(code).toBe(0);
       expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: verb });
     },
+    { timeout: 15_000 },
   );
 
   test("`seri exec do-it` still dispatches exec when it comes before `--`", async () => {

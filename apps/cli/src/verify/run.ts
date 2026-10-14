@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { spawnCollect as spawnCollectReal } from "../tools/spawnCollect";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import type { CheckOutcome } from "./outcome";
 import { parseDiagnostics } from "./parse";
 
@@ -9,7 +10,7 @@ export const MAX_DIAGNOSTICS = 20;
 
 const RAW_TAIL_CHARS = 600;
 
-export type RunCheckOptions = { spawn?: typeof spawnCollectReal };
+export type RunCheckOptions = { spawn?: typeof spawnCollectReal; env?: ToolSpawnEnv };
 
 function tail(text: string): string {
   return text.length > RAW_TAIL_CHARS ? text.slice(-RAW_TAIL_CHARS) : text;
@@ -34,7 +35,15 @@ export async function runCheck(
 
   let result;
   try {
-    result = await (options.spawn ?? spawnCollectReal)(executable, args, undefined, signal);
+    result = await (options.spawn ?? spawnCollectReal)(
+      executable,
+      args,
+      undefined,
+      signal,
+      undefined,
+      undefined,
+      options.env ?? ToolSpawnEnv.inherited,
+    );
   } catch (err) {
     return {
       status: "failed",
