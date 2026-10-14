@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { foldsCase } from "../caseFold";
 import { clearEolCache } from "../tools/eolCache";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import {
   applyRestore,
   commitTree,
@@ -127,11 +128,11 @@ function sessionRef(sessionId: string): string {
   return `${SESSION_REF_PREFIX}${sessionId}`;
 }
 
-function initStore(storeDir: string, worktree: string): void {
+function initStore(storeDir: string, worktree: string, env: ToolSpawnEnv): void {
   ensureOwnerOnlyDir(storeDir);
   writeFileSync(join(storeDir, "worktree"), `${resolve(worktree)}\n`);
-  initShadow(gitDirOf(storeDir));
-  mirrorLocalExcludes(gitDirOf(storeDir), worktree);
+  initShadow(gitDirOf(storeDir), env);
+  mirrorLocalExcludes(gitDirOf(storeDir), worktree, env);
 }
 
 export function readLog(storeDir: string, sessionId: string): CheckpointRecord[] {
@@ -159,16 +160,20 @@ export function appendBarrier(storeDir: string, sessionId: string, cause: Barrie
   append(storeDir, sessionId, { kind, at: new Date().toISOString() });
 }
 
-export function pruneSessions(storeDir: string, keep?: string): void {
+export function pruneSessions(
+  storeDir: string,
+  keep?: string,
+  env: ToolSpawnEnv = ToolSpawnEnv.inherited,
+): void {
   const gitDir = gitDirOf(storeDir);
-  const refs = listSessionRefs(gitDir).filter((ref) => ref !== keep);
+  const refs = listSessionRefs(gitDir, env).filter((ref) => ref !== keep);
   if (refs.length <= MAX_RETAINED_SESSIONS) return;
 
   for (const ref of refs.slice(0, refs.length - MAX_RETAINED_SESSIONS)) {
-    deleteRef(gitDir, ref);
+    deleteRef(gitDir, ref, env);
     rmSync(logPath(storeDir, ref.slice(SESSION_REF_PREFIX.length)), { force: true });
   }
-  gc(gitDir);
+  gc(gitDir, env);
 }
 
 export type Checkpointer = {
@@ -189,8 +194,10 @@ export function createCheckpointer(opts: {
   gitAvailable?: () => boolean;
   // Session cwd, not process.cwd(); write_file resolves relative paths against this directory.
   cwd?: string;
+  env?: ToolSpawnEnv;
 }): Checkpointer {
   const sessionCwd = opts.cwd ?? process.cwd();
+  const spawnEnv = opts.env ?? ToolSpawnEnv.inherited;
   const gitAvailable = opts.gitAvailable ?? isGitAvailable;
   const gitDir = gitDirOf(opts.storeDir);
   const scopeCache = new Map<string, PathScope>();
@@ -210,9 +217,9 @@ export function createCheckpointer(opts: {
       );
       return false;
     }
-    initStore(opts.storeDir, opts.worktree);
+    initStore(opts.storeDir, opts.worktree, spawnEnv);
     try {
-      pruneSessions(opts.storeDir, sessionRef(opts.sessionId));
+      pruneSessions(opts.storeDir, sessionRef(opts.sessionId), spawnEnv);
     } catch {}
 
     const log = readLog(opts.storeDir, opts.sessionId);
@@ -220,7 +227,7 @@ export function createCheckpointer(opts: {
     cursor = {
       snapshotted: false,
       tree: anchored(log).at(-1)?.tree,
-      commit: resolveRef(gitDir, sessionRef(opts.sessionId)),
+      commit: resolveRef(gitDir, sessionRef(opts.sessionId), spawnEnv),
     };
     return true;
   }
@@ -230,7 +237,7 @@ export function createCheckpointer(opts: {
     const absolute = isAbsolute(path) ? path : resolve(sessionCwd, path);
     const inside = relative(opts.worktree, absolute);
     if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return "outside";
-    return isIgnored(gitDir, opts.worktree, absolute) ? "ignored" : "checkpointed";
+    return isIgnored(gitDir, opts.worktree, absolute, spawnEnv) ? "ignored" : "checkpointed";
   }
 
   function relativeInside(absolute: string): string | undefined {
@@ -279,7 +286,7 @@ export function createCheckpointer(opts: {
   }
 
   function warnAboutScope(): void {
-    const { files, nested } = summarizeIndex(gitDir, opts.worktree);
+    const { files, nested } = summarizeIndex(gitDir, opts.worktree, spawnEnv);
     const messages: string[] = [];
 
     if (nested.length > 0) {
@@ -326,7 +333,7 @@ export function createCheckpointer(opts: {
               ...new Set([...pendingWritePaths, ...(writeRel !== undefined ? [writeRel] : [])]),
             ].filter((rel) => existsSync(join(opts.worktree, rel)))
           : undefined;
-        tree = writeTree(gitDir, opts.worktree, restage);
+        tree = writeTree(gitDir, opts.worktree, restage, spawnEnv);
         if (!pathScoped) pendingWritePaths.clear();
         needsFullAdd = context.tool !== "write_file";
         if (writeRel !== undefined) pendingWritePaths.add(writeRel);
@@ -339,8 +346,8 @@ export function createCheckpointer(opts: {
       }
       let commit = cursor.commit;
       if (tree !== cursor.tree || commit === undefined) {
-        commit = commitTree(gitDir, opts.worktree, tree, commit);
-        updateRef(gitDir, sessionRef(opts.sessionId), commit);
+        commit = commitTree(gitDir, opts.worktree, tree, commit, spawnEnv);
+        updateRef(gitDir, sessionRef(opts.sessionId), commit, spawnEnv);
       }
       cursor = { snapshotted: true, tree, commit };
 
@@ -376,7 +383,7 @@ export function createCheckpointer(opts: {
     cursor = { snapshotted: false, commit: cursor.commit };
     pendingWritePaths.clear();
     needsFullAdd = false;
-    cursor.commit = resolveRef(gitDir, sessionRef(opts.sessionId));
+    cursor.commit = resolveRef(gitDir, sessionRef(opts.sessionId), spawnEnv);
   };
 
   return { onBeforeMutation, onAfterMutation, invalidate };
@@ -420,6 +427,7 @@ type RestoreOpts = {
   worktree: string;
   sessionId: string;
   onPlan: (plan: RestorePlan) => void;
+  env?: ToolSpawnEnv;
 };
 
 function ignoredSince(log: CheckpointRecord[], index: number): string[] {
@@ -443,17 +451,19 @@ function partitionByLedger(
 
 function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): RestoreResult {
   const gitDir = gitDirOf(opts.storeDir);
-  if (!treeExists(gitDir, treeish)) {
+  const spawnEnv = opts.env ?? ToolSpawnEnv.inherited;
+  if (!treeExists(gitDir, treeish, spawnEnv)) {
     throw new Error(`${treeish} is not a checkpoint in this session's store.`);
   }
-  const currentTree = writeTree(gitDir, opts.worktree);
+  const currentTree = writeTree(gitDir, opts.worktree, undefined, spawnEnv);
   const preUndoCommit = commitTree(
     gitDir,
     opts.worktree,
     currentTree,
-    resolveRef(gitDir, sessionRef(opts.sessionId)),
+    resolveRef(gitDir, sessionRef(opts.sessionId), spawnEnv),
+    spawnEnv,
   );
-  updateRef(gitDir, sessionRef(opts.sessionId), preUndoCommit);
+  updateRef(gitDir, sessionRef(opts.sessionId), preUndoCommit, spawnEnv);
   append(opts.storeDir, opts.sessionId, {
     kind: "pre-undo",
     tree: currentTree,
@@ -461,7 +471,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
     at: new Date().toISOString(),
   });
 
-  const candidates = planRestore(gitDir, opts.worktree, treeish);
+  const candidates = planRestore(gitDir, opts.worktree, treeish, spawnEnv);
   const { safe: deleted, unsafe: preserved } = partitionByLedger(
     opts.storeDir,
     opts.worktree,
@@ -470,7 +480,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
 
   const plan: RestorePlan = {
     tree: treeish,
-    diff: diffTree(gitDir, opts.worktree, treeish),
+    diff: diffTree(gitDir, opts.worktree, treeish, spawnEnv),
     restored: candidates.restored,
     deleted,
     ignored,
@@ -484,7 +494,7 @@ function restoreTo(opts: RestoreOpts, treeish: string, ignored: string[]): Resto
   );
   const finalPreserved = [...plan.preserved, ...newlyUnsafe];
   try {
-    applyRestore(gitDir, opts.worktree, finalDeleted);
+    applyRestore(gitDir, opts.worktree, finalDeleted, spawnEnv);
   } finally {
     clearEolCache();
   }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
@@ -70,8 +71,12 @@ import {
   type VerifyConfig,
 } from "./config/config";
 import {
+  currentProfile,
+  getBaseConfigDir,
   getConfigDir,
+  getDaemonDescriptorPath,
   getTrajectoriesDir,
+  profileDir,
   profileNameError,
   resolveProfile,
   resolveUserHome,
@@ -122,7 +127,13 @@ import {
 import { decideMemoryCommand, memoryDiffLines, memoryPanelRows } from "./memory/commands";
 import { type LoadedMemory, loadMemory } from "./memory/store";
 import { type PromptChannel, parsePromptChannel } from "./permissions/promptChannel";
-import { effectiveTools, isPersistableTool, loadGrants, rememberGrant } from "./permissions/store";
+import {
+  effectiveTools,
+  isPersistableTool,
+  isUsablePermissionsDir,
+  loadGrants,
+  rememberGrant,
+} from "./permissions/store";
 import { unlinkPlanFile } from "./plan/files";
 import {
   isPlanOverlayOn,
@@ -831,8 +842,17 @@ async function handleExecCommand(
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
   if (task.length === 0) return usageError("seri exec requires a task");
+  const { profile, source } = currentProfile();
+  if (source !== "default" && !isUsablePermissionsDir(profileDir(profile))) {
+    console.error("unknown profile");
+    return 1;
+  }
   const configDir = deps.authConfigDir ?? getConfigDir();
-  const descriptor = readDaemonDescriptorFile(configDir);
+  const descriptor =
+    readDaemonDescriptorFile(configDir) ??
+    (source !== "default" && !existsSync(getDaemonDescriptorPath(configDir))
+      ? readDaemonDescriptorFile(getBaseConfigDir())
+      : undefined);
   if (descriptor === undefined) {
     console.error("no daemon is running for this profile — start one with seri serve");
     return 1;
@@ -854,6 +874,7 @@ async function handleExecCommand(
       task,
       cwd: process.cwd(),
       env: snapshotProcessEnv(),
+      ...(source === "default" ? {} : { profile }),
       ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
     })) {
       turnId = event.turnId;

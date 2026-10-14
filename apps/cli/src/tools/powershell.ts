@@ -9,9 +9,10 @@ export async function runPowerShell(
   cwd?: string,
   env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<ProcessResult> {
+  const powershell = env.resolveExecutable("powershell", () => "powershell.exe");
   try {
     return await spawnCollect(
-      "powershell.exe",
+      powershell,
       ["-NonInteractive", "-NoProfile", "-Command", command],
       timeoutMs,
       signal,

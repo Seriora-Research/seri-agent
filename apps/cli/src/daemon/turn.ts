@@ -25,7 +25,7 @@ export function createAttendedExecuteTurn(opts: {
       taskText: input.task,
       sessionsDir: opts.sessionsDir,
       checkpointsDir: opts.checkpointsDir,
-      permissionsDir: opts.permissionsDir,
+      permissionsDir: input.permissionsDir ?? opts.permissionsDir,
       configDir: opts.configDir,
       cwd: input.cwd,
       env: input.env,

@@ -60,35 +60,30 @@ export function _detectBashForTests(find: () => string | undefined): {
   return detectBash(find);
 }
 
+function daemonBash(): string {
+  const detected = detectBash();
+  if (!detected.available) throw new Error("bash is not available on this system");
+  return detected.command;
+}
+
 export async function runBash(
   command: string,
   timeoutMs?: number,
   signal?: AbortSignal,
-  isAvailable: () => boolean = isBashAvailable,
   cwd?: string,
   env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<ProcessResult> {
-  if (!isAvailable()) {
-    throw new Error("bash is not available on this system");
-  }
+  const bash = env.resolveExecutable("bash", daemonBash);
 
   try {
     // pkill -f matches -c argv on Linux procps-ng, so POSIX evals the script from fd 3 with stdin ignored.
     // win32 Git Bash + bash -s hung the tree-kill timeout path, so win32 keeps -c.
     if (process.platform === "win32") {
-      return await spawnCollect(
-        resolveBashCommand(),
-        ["-c", command],
-        timeoutMs,
-        signal,
-        cwd,
-        undefined,
-        env,
-      );
+      return await spawnCollect(bash, ["-c", command], timeoutMs, signal, cwd, undefined, env);
     }
     const script = command.endsWith("\n") ? command : `${command}\n`;
     return await spawnCollect(
-      resolveBashCommand(),
+      bash,
       ["-c", 'eval "$(cat <&3)"'],
       timeoutMs,
       signal,

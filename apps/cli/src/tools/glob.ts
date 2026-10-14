@@ -1,10 +1,11 @@
 import { assertSearchPath, MAX_FILE_RESULTS, outputLines, runRipgrep } from "./runRipgrep";
+import { ToolSpawnEnv } from "./toolSpawnEnv";
 
 export type GlobResult = { files: string[]; truncated: boolean };
 
 export async function glob(
   pattern: string,
-  opts: { path: string },
+  opts: { path: string; env?: ToolSpawnEnv },
   signal?: AbortSignal,
 ): Promise<GlobResult> {
   await assertSearchPath(opts.path);
@@ -13,6 +14,7 @@ export async function glob(
   const { stdout, truncated: overflowed } = await runRipgrep(
     ["--files", "-g", pattern, "--", opts.path],
     signal,
+    opts.env ?? ToolSpawnEnv.inherited,
   );
   const files = outputLines(stdout, overflowed);
 
