@@ -6,7 +6,8 @@ import { buildFileChange } from "../fileChange";
 import { resolveAgainstCwd } from "../gate/workingDir";
 
 export { resolveAgainstCwd };
-import { isBashAvailable, runBash } from "../tools/bash";
+
+import { runBash } from "../tools/bash";
 import { edit } from "../tools/edit";
 import { glob } from "../tools/glob";
 import { grep } from "../tools/grep";
@@ -100,7 +101,7 @@ export function createToolDefinitions(cwd: string, env: ToolSpawnEnv) {
     inputSchema: z.object({ command: z.string(), timeoutMs: z.number().optional() }),
 
     execute: async ({ command, timeoutMs }, { abortSignal }) =>
-      runBash(command, timeoutMs, abortSignal, isBashAvailable, cwd, env),
+      runBash(command, timeoutMs, abortSignal, cwd, env),
   });
 
   const powershellTool = tool({

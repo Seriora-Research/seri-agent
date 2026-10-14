@@ -1,10 +1,29 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { isBashAvailable, runBash } from "../../src/tools/bash";
+import { delimiter, join } from "node:path";
+import { _resetBashResolutionForTests, isBashAvailable, runBash } from "../../src/tools/bash";
 import { spawnCollect } from "../../src/tools/spawnCollect";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
+
+const CLIENT_BASH_MARKER = "seri-client-bash-280";
+const CLIENT_BASH_BODY = `#!/bin/sh\necho ${CLIENT_BASH_MARKER}\n`;
+
+function daemonLookupMustNotRun(): string {
+  throw new Error("daemon lookup must not run");
+}
+
+function writeClientBash(dir: string, mode: number): string {
+  const name = process.platform === "win32" ? "bash.exe" : "bash";
+  const file = join(dir, name);
+  writeFileSync(file, CLIENT_BASH_BODY);
+  chmodSync(file, mode);
+  return file;
+}
+
+function pathWithWrapperFirst(wrapperDir: string): string {
+  return `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
+}
 
 describe("ToolSpawnEnv", () => {
   test("JSON.stringify, spread and inspect do not reveal the variables", () => {
@@ -32,6 +51,115 @@ describe("ToolSpawnEnv", () => {
     type _EnvIsNotIo = Assert<ToolSpawnEnv extends SpawnIo ? false : true>;
     const _keep: _EnvIsNotIo = true;
     expect(_keep).toBe(true);
+  });
+
+  test("inherited resolveExecutable returns the daemon lookup", () => {
+    expect(ToolSpawnEnv.inherited.resolveExecutable("bash", () => "/daemon/bash")).toBe(
+      "/daemon/bash",
+    );
+  });
+
+  test("exactly resolveExecutable returns the bash on the snapshot PATH", () => {
+    const bin = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      const bash = writeClientBash(bin, 0o755);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: bin }).resolveExecutable("bash", daemonLookupMustNotRun),
+      ).toBe(bash);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("exactly with no PATH throws when bash is not on the client's PATH", () => {
+    expect(() =>
+      ToolSpawnEnv.exactly({}).resolveExecutable("bash", daemonLookupMustNotRun),
+    ).toThrow("bash is not on the client's PATH");
+  });
+
+  test("exactly resolveExecutable searches powershell.exe", () => {
+    const bin = mkdtempSync(join(tmpdir(), "seri-client-pwsh-"));
+    try {
+      const file = join(bin, "powershell.exe");
+      writeFileSync(file, "not a shell\n");
+      chmodSync(file, 0o755);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: bin }).resolveExecutable("powershell", daemonLookupMustNotRun),
+      ).toBe(file);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test("a PATH entry that is a file is skipped", () => {
+    const root = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const asFile = join(root, "not-a-dir");
+    try {
+      writeFileSync(asFile, "not a directory\n");
+      const bash = writeClientBash(wrapperDir, 0o755);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: `${asFile}${delimiter}${wrapperDir}` }).resolveExecutable(
+          "bash",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(bash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("win32 uses Path when PATH is absent", () => {
+    const bin = mkdtempSync(join(tmpdir(), "seri-client-pwsh-path-"));
+    try {
+      const file = join(bin, "powershell.exe");
+      writeFileSync(file, "not a shell\n");
+      expect(
+        ToolSpawnEnv.exactly({ Path: bin }).resolveExecutable("powershell", daemonLookupMustNotRun),
+      ).toBe(file);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== "win32")("win32 PATH wins over Path", () => {
+    const pathDir = mkdtempSync(join(tmpdir(), "seri-client-pwsh-PATH-"));
+    const pathAlt = mkdtempSync(join(tmpdir(), "seri-client-pwsh-Path-"));
+    try {
+      const fromPath = join(pathDir, "powershell.exe");
+      const fromPathAlt = join(pathAlt, "powershell.exe");
+      writeFileSync(fromPath, "from PATH\n");
+      writeFileSync(fromPathAlt, "from Path\n");
+      expect(
+        ToolSpawnEnv.exactly({ PATH: pathDir, Path: pathAlt }).resolveExecutable(
+          "powershell",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(fromPath);
+    } finally {
+      rmSync(pathDir, { recursive: true, force: true });
+      rmSync(pathAlt, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")("an unreadable PATH directory is skipped", () => {
+    const locked = mkdtempSync(join(tmpdir(), "seri-client-bash-locked-"));
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      const bash = writeClientBash(wrapperDir, 0o755);
+      chmodSync(locked, 0o000);
+      expect(
+        ToolSpawnEnv.exactly({ PATH: `${locked}${delimiter}${wrapperDir}` }).resolveExecutable(
+          "bash",
+          daemonLookupMustNotRun,
+        ),
+      ).toBe(bash);
+    } finally {
+      chmodSync(locked, 0o755);
+      rmSync(locked, { recursive: true, force: true });
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -113,7 +241,6 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("runBash env
         "echo $FOO; pwd",
         15000,
         undefined,
-        isBashAvailable,
         work,
         ToolSpawnEnv.exactly({ FOO: "b", PATH: process.env.PATH ?? "/usr/bin:/bin" }),
       );
@@ -123,6 +250,81 @@ describe.skipIf(process.platform === "win32" || !isBashAvailable())("runBash env
       rmSync(work, { recursive: true, force: true });
       if (originalFoo === undefined) delete process.env.FOO;
       else process.env.FOO = originalFoo;
+    }
+  }, 15000);
+});
+
+describe.skipIf(process.platform === "win32" || !isBashAvailable())("client PATH bash", () => {
+  test("a snapshot hit does not pin the daemon's bash", async () => {
+    _resetBashResolutionForTests();
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      writeClientBash(wrapperDir, 0o755);
+      const marked = await runBash(
+        "echo daemon",
+        undefined,
+        undefined,
+        undefined,
+        ToolSpawnEnv.exactly({ PATH: pathWithWrapperFirst(wrapperDir) }),
+      );
+      expect(marked.stdout).toBe(`${CLIENT_BASH_MARKER}\n`);
+      const inherited = await runBash("echo hi");
+      expect(inherited.stdout.trim()).toBe("hi");
+    } finally {
+      _resetBashResolutionForTests();
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("Path is not PATH on POSIX", () => {
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      writeClientBash(wrapperDir, 0o755);
+      expect(() =>
+        ToolSpawnEnv.exactly({ Path: wrapperDir }).resolveExecutable(
+          "bash",
+          daemonLookupMustNotRun,
+        ),
+      ).toThrow("bash is not on the client's PATH");
+    } finally {
+      rmSync(wrapperDir, { recursive: true, force: true });
+    }
+  });
+
+  test("a relative PATH entry is not searched", async () => {
+    const work = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    const originalCwd = process.cwd();
+    try {
+      writeClientBash(work, 0o755);
+      process.chdir(work);
+      await expect(
+        runBash("echo daemon", undefined, undefined, work, ToolSpawnEnv.exactly({ PATH: "." })),
+      ).rejects.toThrow("bash is not on the client's PATH");
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(work, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  test("a non-executable bash is skipped", async () => {
+    const noexecDir = mkdtempSync(join(tmpdir(), "seri-client-bash-noexec-"));
+    const wrapperDir = mkdtempSync(join(tmpdir(), "seri-client-bash-"));
+    try {
+      const stub = join(noexecDir, "bash");
+      writeFileSync(stub, "not a shell\n");
+      chmodSync(stub, 0o644);
+      writeClientBash(wrapperDir, 0o755);
+      const result = await runBash(
+        "echo daemon",
+        undefined,
+        undefined,
+        undefined,
+        ToolSpawnEnv.exactly({ PATH: `${noexecDir}${delimiter}${wrapperDir}` }),
+      );
+      expect(result.stdout).toBe(`${CLIENT_BASH_MARKER}\n`);
+    } finally {
+      rmSync(noexecDir, { recursive: true, force: true });
+      rmSync(wrapperDir, { recursive: true, force: true });
     }
   }, 15000);
 });

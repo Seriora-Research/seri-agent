@@ -42,7 +42,7 @@ export async function runHostShell(
   cwd: string,
   signal?: AbortSignal,
 ): Promise<ProcessResult> {
-  if (isBashAvailable()) return runBash(command, undefined, signal, isBashAvailable, cwd);
+  if (isBashAvailable()) return runBash(command, undefined, signal, cwd);
   if (process.platform === "win32") return runPowerShell(command, undefined, signal, cwd);
   throw new Error("bash is not available on this system");
 }

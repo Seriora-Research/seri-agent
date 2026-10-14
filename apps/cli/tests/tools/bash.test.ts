@@ -9,6 +9,7 @@ import {
   isBashAvailable,
   runBash,
 } from "../../src/tools/bash";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -36,9 +37,40 @@ describe("runBash", () => {
     expect(result.exitCode).toBe(0);
   }, 15000);
 
-  test("rejects before spawning when bash is unavailable", () => {
-    expect(runBash("echo hi", undefined, undefined, () => false)).rejects.toThrow();
+  test("rejects before spawning when bash is not on the client's PATH", async () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), "seri-bash-empty-"));
+    try {
+      await expect(
+        runBash(
+          "echo hi",
+          undefined,
+          undefined,
+          undefined,
+          ToolSpawnEnv.exactly({ PATH: emptyDir }),
+        ),
+      ).rejects.toThrow("bash is not on the client's PATH");
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "rejects before spawning when the daemon has no bash",
+    async () => {
+      _resetBashResolutionForTests();
+      const emptyDir = mkdtempSync(join(tmpdir(), "seri-bash-empty-"));
+      const originalPath = process.env.PATH;
+      process.env.PATH = emptyDir;
+      try {
+        await expect(runBash("echo hi")).rejects.toThrow("bash is not available on this system");
+      } finally {
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+        rmSync(emptyDir, { recursive: true, force: true });
+        _resetBashResolutionForTests();
+      }
+    },
+  );
 
   test("times out a long-running command", async () => {
     const started = Date.now();
