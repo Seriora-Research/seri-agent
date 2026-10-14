@@ -1,3 +1,4 @@
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { runHook } from "./run";
 import { type HookRegistry, hookMatches } from "./types";
 
@@ -19,11 +20,13 @@ export function createHookRunner(opts: {
   signal?: AbortSignal;
 
   run?: typeof runHook;
+  env?: ToolSpawnEnv;
 }): HookRunner | undefined {
   const beforeSpecs = opts.registry.get("PreToolUse") ?? [];
   const afterSpecs = opts.registry.get("PostToolUse") ?? [];
   if (beforeSpecs.length === 0 && afterSpecs.length === 0) return undefined;
   const run = opts.run ?? runHook;
+  const env = opts.env ?? ToolSpawnEnv.inherited;
   const delivered = new Set<string>();
   const takeNotice = (message: string, into: string[]): void => {
     if (delivered.has(message) || into.includes(message)) return;
@@ -43,6 +46,8 @@ export function createHookRunner(opts: {
           spec,
           { hook_event_name: "PreToolUse", tool_name: subject, cwd: opts.cwd, tool_input: input },
           opts.signal,
+          undefined,
+          env,
         );
 
         switch (outcome.kind) {
@@ -78,6 +83,8 @@ export function createHookRunner(opts: {
             tool_response: result,
           },
           opts.signal,
+          undefined,
+          env,
         );
 
         switch (outcome.kind) {

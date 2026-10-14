@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { snapshotProcessEnv } from "@seri/daemon-client";
 import { runHook } from "../../src/hooks/run";
 import {
   HOOK_BLOCK_EXIT_CODE,
@@ -11,6 +12,7 @@ import {
 } from "../../src/hooks/types";
 import { _resetBashResolutionForTests } from "../../src/tools/bash";
 import type { ProcessResult } from "../../src/tools/spawnCollect";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 function makeSpec(overrides: Partial<HookSpec> = {}): HookSpec {
   return {
@@ -265,6 +267,30 @@ describeSh("runHook (real bash subprocess)", () => {
     expect(outcome.kind === "block" && outcome.reason).toContain("saw the tool name on stdin");
   }, 15_000);
 
+  test("a PreToolUse hook sees the replace FOO and not the parent's", async () => {
+    const originalFoo = process.env.FOO;
+    process.env.FOO = "daemon-a";
+    const dir = makeTempDir();
+    const path = writeShScript(dir, "log-foo", 'echo "$FOO" >&2\nexit 2');
+    const spec = makeSpec({ script: "log-foo", path, timeoutMs: 10_000 });
+    try {
+      const replaced = await runHook(
+        spec,
+        makePayload({ cwd: dir }),
+        undefined,
+        undefined,
+        ToolSpawnEnv.exactly({ FOO: "b", PATH: process.env.PATH ?? "/usr/bin:/bin" }),
+      );
+      expect(replaced).toEqual({ kind: "block", reason: "b" });
+      const inherited = await runHook(spec, makePayload({ cwd: dir }));
+      expect(inherited).toEqual({ kind: "block", reason: "daemon-a" });
+      expect(process.env.FOO).toBe("daemon-a");
+    } finally {
+      if (originalFoo === undefined) delete process.env.FOO;
+      else process.env.FOO = originalFoo;
+    }
+  }, 15_000);
+
   test("a script that never reads stdin and exits 0 is ok and does not crash the process", async () => {
     const dir = makeTempDir();
     const path = writeShScript(dir, "ignores-stdin", "exit 0");
@@ -346,6 +372,30 @@ describePs1("runHook (real powershell subprocess)", () => {
 
     expect(outcome.kind).toBe("block");
     expect(outcome.kind === "block" && outcome.reason).toContain("saw the tool name on stdin");
+  }, 20_000);
+
+  test("a PreToolUse hook sees the replace FOO and not the parent's", async () => {
+    const originalFoo = process.env.FOO;
+    process.env.FOO = "daemon-a";
+    const dir = makeTempDir();
+    const path = writePs1Script(dir, "log-foo", "[Console]::Error.WriteLine($env:FOO)\nexit 2");
+    const spec = makeSpec({ script: "log-foo", path, timeoutMs: 15_000 });
+    try {
+      const replaced = await runHook(
+        spec,
+        makePayload({ cwd: dir }),
+        undefined,
+        undefined,
+        ToolSpawnEnv.exactly({ ...snapshotProcessEnv(), FOO: "b" }),
+      );
+      expect(replaced).toEqual({ kind: "block", reason: "b" });
+      const inherited = await runHook(spec, makePayload({ cwd: dir }));
+      expect(inherited).toEqual({ kind: "block", reason: "daemon-a" });
+      expect(process.env.FOO).toBe("daemon-a");
+    } finally {
+      if (originalFoo === undefined) delete process.env.FOO;
+      else process.env.FOO = originalFoo;
+    }
   }, 20_000);
 
   test("a script that never reads stdin and exits 0 is ok and does not crash the process", async () => {

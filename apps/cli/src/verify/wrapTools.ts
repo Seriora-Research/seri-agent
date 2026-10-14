@@ -1,6 +1,7 @@
 import type { ToolExecutionOptions, ToolSet } from "ai";
 import { basename } from "node:path";
 import { buildFileChange, isFileChangeView } from "../fileChange";
+import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import type { CheckOutcome, WriteFileResult } from "./outcome";
 import { runCheck as runCheckReal } from "./run";
 
@@ -13,6 +14,7 @@ export type VerifyDeps = {
 
   command?: string;
   runCheck?: typeof runCheckReal;
+  env?: ToolSpawnEnv;
 };
 
 export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet {
@@ -38,7 +40,7 @@ export function withVerification(tools: ToolSet, deps: VerifyDeps = {}): ToolSet
             const { path, content } = args as { path: string; content: string };
 
             const verification = enabled
-              ? await runCheck(deps.command, path, options.abortSignal)
+              ? await runCheck(deps.command, path, options.abortSignal, { env: deps.env })
               : DISABLED;
             const producedRecord =
               produced !== null && typeof produced === "object" && !Array.isArray(produced)

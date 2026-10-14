@@ -2,6 +2,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { messageOf } from "../errors";
 import { isBashAvailable, resolveBashCommand } from "../tools/bash";
 import { spawnCollect } from "../tools/spawnCollect";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import {
   HOOK_BLOCK_EXIT_CODE,
   HOOK_REASON_MAX_CHARS,
@@ -57,6 +58,7 @@ export async function runHook(
   payload: HookPayload,
   signal?: AbortSignal,
   spawn: typeof spawnCollect = spawnCollect,
+  env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<HookOutcome> {
   // A shell "not found" exit means the hook started. A missing, unreadable, or
   // directory path never did (bash would still exec a directory and exit 126).
@@ -85,6 +87,7 @@ export async function runHook(
       signal,
       payload.cwd,
       JSON.stringify(payload),
+      env,
     );
   } catch (err) {
     if (signal?.aborted === true) throw err;

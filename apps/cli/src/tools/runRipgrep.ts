@@ -18,6 +18,7 @@ import { onAbort } from "../abort";
 import { getBaseConfigDir } from "../config/paths";
 import rgAsset from "./rg-vendored.bin" with { type: "file" };
 import { killOnFatalSignal } from "./spawnCollect";
+import { ToolSpawnEnv } from "./toolSpawnEnv";
 
 const RG_TIMEOUT_MS = 30_000;
 
@@ -140,12 +141,14 @@ export async function assertSearchPath(path: string): Promise<void> {
 export function runRipgrep(
   args: string[],
   signal?: AbortSignal,
+  env: ToolSpawnEnv = ToolSpawnEnv.inherited,
 ): Promise<{ stdout: string; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     // --no-config: rg otherwise reads RIPGREP_CONFIG_PATH / ~/.ripgreprc.
     const child = spawn(resolveRg(), ["--no-config", ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      ...env.spawnOptions(),
     });
 
     let stdout = "";
