@@ -5,6 +5,7 @@ import {
   outputLines,
   runRipgrep,
 } from "./runRipgrep";
+import { ToolSpawnEnv } from "./toolSpawnEnv";
 
 // rg emits `text` for UTF-8 and base64 `bytes` otherwise.
 type RgText = { text: string } | { bytes: string };
@@ -30,7 +31,7 @@ function decodeRgText(value: RgText): string {
 
 export async function grep(
   pattern: string,
-  opts: { path: string; glob?: string; mode?: GrepMode },
+  opts: { path: string; glob?: string; mode?: GrepMode; env?: ToolSpawnEnv },
   signal?: AbortSignal,
 ): Promise<GrepResult> {
   await assertSearchPath(opts.path);
@@ -48,7 +49,11 @@ export async function grep(
   // `--` stops rg from parsing a pattern like --force as a flag.
   args.push("--", pattern, opts.path);
 
-  const { stdout, truncated: overflowed } = await runRipgrep(args, signal);
+  const { stdout, truncated: overflowed } = await runRipgrep(
+    args,
+    signal,
+    opts.env ?? ToolSpawnEnv.inherited,
+  );
   const lines = outputLines(stdout, overflowed);
 
   if (mode === "files_with_matches") {

@@ -12,7 +12,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
+import { snapshotProcessEnv } from "@seri/daemon-client";
 import { gitArgv } from "../../src/checkpoint/gitArgv";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import {
   applyRestore,
   commitTree,
@@ -373,6 +375,35 @@ describe.skipIf(!isGitAvailable())("shadowGit", () => {
       expect(existsSync(sentinel)).toBe(false);
       expect(existsSync(join(root, "sentinel-gitdir"))).toBe(false);
       expect(existsSync(join(gitDir, "index"))).toBe(true);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  test(
+    "a replace env drops the parent's GIT_INDEX_FILE and does not write process.env",
+    () => {
+      const sentinel = join(root, "replace-sentinel-index");
+      const originalIndexFile = process.env.GIT_INDEX_FILE;
+      const originalFoo = process.env.FOO;
+      seedWorktree(workTree);
+      initShadow(gitDir);
+      process.env.FOO = "daemon-a";
+      process.env.GIT_INDEX_FILE = sentinel;
+      try {
+        const snapshot = snapshotProcessEnv();
+        delete snapshot.GIT_INDEX_FILE;
+        delete snapshot.GIT_DIR;
+        writeTree(gitDir, workTree, undefined, ToolSpawnEnv.exactly({ ...snapshot, FOO: "b" }));
+        expect(existsSync(sentinel)).toBe(false);
+        expect(existsSync(join(gitDir, "index"))).toBe(true);
+        expect(process.env.FOO).toBe("daemon-a");
+        expect(process.env.GIT_INDEX_FILE).toBe(sentinel);
+      } finally {
+        if (originalIndexFile === undefined) delete process.env.GIT_INDEX_FILE;
+        else process.env.GIT_INDEX_FILE = originalIndexFile;
+        if (originalFoo === undefined) delete process.env.FOO;
+        else process.env.FOO = originalFoo;
+      }
     },
     GIT_TEST_TIMEOUT_MS,
   );
