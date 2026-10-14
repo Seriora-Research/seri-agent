@@ -589,6 +589,38 @@ describe("bindSession + mcp", () => {
     expect(prepared.allowedTools).toContain("mcp_exa_web_search");
   });
 
+  test("bindSession expands MCP headers from the turn env", async () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const prepared = await freshPrepared();
+      const configDir = mcpConfigDirFor(tmpConfigRoot);
+      mkdirSync(join(configDir, "mcp"), { recursive: true });
+      writeFileSync(
+        join(configDir, "mcp", "servers.yaml"),
+        [
+          "servers:",
+          "  probe:",
+          "    url: https://mcp.probe.test/mcp",
+          "    headers:",
+          "      Authorization: Bearer ${env:SERI_TEST_MCP_TOKEN}",
+          "",
+        ].join("\n"),
+      );
+      await bindSession(
+        prepared,
+        { ...prepared.session, id: "next" },
+        configDir,
+        permissionsDir,
+        ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "b" }),
+        () => {},
+      );
+      expect(prepared.mcp.get("probe")?.spec.headers.Authorization).toBe("Bearer b");
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
+  });
+
   test("bindSession reloads path denials from disk", async () => {
     const prepared = await freshPrepared();
     expect(prepared.pathDenials).toEqual([]);

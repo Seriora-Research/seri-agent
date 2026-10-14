@@ -18,19 +18,24 @@ export class ToolSpawnEnv {
     return this.#vars === undefined ? {} : { env: { ...this.#vars } };
   }
 
+  get(name: string): string | undefined {
+    const vars = this.#vars ?? process.env;
+    if (!Object.hasOwn(vars, name)) return undefined;
+    const value = vars[name];
+    return typeof value === "string" ? value : undefined;
+  }
+
   resolveExecutable(name: "bash" | "powershell", daemonLookup: () => string): string {
     if (this.#vars === undefined) return daemonLookup();
-    const found = findOnClientPath(name, posixPathOrWin32Path(this.#vars));
+    let pathValue = this.get("PATH");
+    if (pathValue === undefined && process.platform === "win32") {
+      const key = Object.keys(this.#vars).find((entry) => entry.toUpperCase() === "PATH");
+      pathValue = key === undefined ? undefined : this.get(key);
+    }
+    const found = findOnClientPath(name, pathValue);
     if (found === undefined) throw new Error(`${name} is not on the client's PATH`);
     return found;
   }
-}
-
-function posixPathOrWin32Path(vars: Readonly<Record<string, string>>): string | undefined {
-  if (process.platform !== "win32") return vars.PATH;
-  if (vars.PATH !== undefined) return vars.PATH;
-  const key = Object.keys(vars).find((entry) => entry.toUpperCase() === "PATH");
-  return key === undefined ? undefined : vars[key];
 }
 
 function findOnClientPath(

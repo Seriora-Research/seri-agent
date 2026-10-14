@@ -25,12 +25,24 @@ export type McpServerStatus =
 
 export type DialFn = (spec: McpServerSpec, signal?: AbortSignal) => Promise<McpClientHandle>;
 
+declare const poolKeyBrand: unique symbol;
+type McpPoolKey = string & { readonly [poolKeyBrand]: true };
+
+type McpPoolSlot = {
+  readonly server: string;
+  readonly handle: Promise<McpClientHandle>;
+};
+
 export type McpClients = {
   readonly dial: DialFn;
 
-  readonly handles: Map<string, Promise<McpClientHandle>>;
+  readonly handles: Map<McpPoolKey, McpPoolSlot>;
   readonly status: Map<string, McpServerStatus>;
 };
+
+function poolKey(spec: Pick<McpServerSpec, "name" | "url" | "headers">): McpPoolKey {
+  return `${spec.name}@${serverIdentity(spec)}` as McpPoolKey;
+}
 
 export function flattenContent(result: {
   content?: readonly { type: string; text?: string }[];
@@ -97,8 +109,9 @@ function dialOnce(
   spec: McpServerSpec,
   signal?: AbortSignal,
 ): Promise<McpClientHandle> {
-  const existing = clients.handles.get(spec.name);
-  if (existing !== undefined) return existing;
+  const key = poolKey(spec);
+  const existing = clients.handles.get(key);
+  if (existing !== undefined) return existing.handle;
 
   const promise = clients
     .dial(spec, signal)
@@ -115,7 +128,7 @@ function dialOnce(
       }
     })
     .catch((err: unknown) => {
-      clients.handles.delete(spec.name);
+      clients.handles.delete(key);
       clients.status.set(
         spec.name,
         isAuthRequired(err)
@@ -125,7 +138,7 @@ function dialOnce(
       throw err;
     });
 
-  clients.handles.set(spec.name, promise);
+  clients.handles.set(key, { server: spec.name, handle: promise });
   return promise;
 }
 
@@ -201,11 +214,13 @@ export async function closeMcpClients(
   onWarning: (message: string) => void,
   timeoutMs = MCP_CLOSE_TIMEOUT_MS,
 ): Promise<void> {
-  const closing = [...clients.handles.entries()].map(([name, handle]) =>
+  const closing = [...clients.handles.values()].map((slot) =>
     closeBounded(
-      handle.then((client) => client.close()),
+      slot.handle.then((client) => client.close()),
       timeoutMs,
-    ).catch((err: unknown) => onWarning(`could not close MCP server "${name}": ${messageOf(err)}`)),
+    ).catch((err: unknown) =>
+      onWarning(`could not close MCP server "${slot.server}": ${messageOf(err)}`),
+    ),
   );
   clients.handles.clear();
   clients.status.clear();

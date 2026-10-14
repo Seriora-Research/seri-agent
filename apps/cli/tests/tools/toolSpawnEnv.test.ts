@@ -53,6 +53,43 @@ describe("ToolSpawnEnv", () => {
     expect(_keep).toBe(true);
   });
 
+  test("exactly reads its snapshot and does not fall back to process.env", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const snapshot = ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "b" });
+      expect(snapshot.get("SERI_TEST_MCP_TOKEN")).toBe("b");
+      expect(ToolSpawnEnv.exactly({}).get("SERI_TEST_MCP_TOKEN")).toBeUndefined();
+      expect(Object.keys(snapshot)).toEqual([]);
+      expect(JSON.stringify(snapshot)).toBe("{}");
+    } finally {
+      if (original === undefined) delete process.env.SERI_TEST_MCP_TOKEN;
+      else process.env.SERI_TEST_MCP_TOKEN = original;
+    }
+  });
+
+  test("inherited reads process.env at the moment of the call", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    const env = ToolSpawnEnv.inherited;
+    delete process.env.SERI_TEST_MCP_TOKEN;
+    expect(env.get("SERI_TEST_MCP_TOKEN")).toBeUndefined();
+    process.env.SERI_TEST_MCP_TOKEN = "later";
+    try {
+      expect(env.get("SERI_TEST_MCP_TOKEN")).toBe("later");
+    } finally {
+      if (original === undefined) delete process.env.SERI_TEST_MCP_TOKEN;
+      else process.env.SERI_TEST_MCP_TOKEN = original;
+    }
+  });
+
+  test("get does not resolve constructor, __proto__, or toString", () => {
+    for (const env of [ToolSpawnEnv.inherited, ToolSpawnEnv.exactly({})]) {
+      expect(env.get("constructor")).toBeUndefined();
+      expect(env.get("__proto__")).toBeUndefined();
+      expect(env.get("toString")).toBeUndefined();
+    }
+  });
+
   test("inherited resolveExecutable returns the daemon lookup", () => {
     expect(ToolSpawnEnv.inherited.resolveExecutable("bash", () => "/daemon/bash")).toBe(
       "/daemon/bash",

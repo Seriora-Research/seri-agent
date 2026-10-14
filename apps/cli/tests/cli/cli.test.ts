@@ -938,53 +938,62 @@ describe("run (task invocation)", () => {
     expect(code).toBe(0);
   });
 
-  test("a denial followed by a tool that executes still exits 0", async () => {
-    process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([
-      { type: "permission-denied", name: "write_file", reason: "declined" },
-      { type: "tool-call", name: "bash", args: { command: "echo hi" } },
-      { type: "done", reason: "no-tool-call" },
-    ]);
+  // Windows finishCliRun is multi-second on a loaded runner; bun's default 5000ms is too tight.
+  test(
+    "a denial followed by a tool that executes still exits 0",
+    async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake } = fakeRunLoop([
+        { type: "permission-denied", name: "write_file", reason: "declined" },
+        { type: "tool-call", name: "bash", args: { command: "echo hi" } },
+        { type: "done", reason: "no-tool-call" },
+      ]);
 
-    const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map() },
+      const { code } = await captureLogs(() =>
+        run(["do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
         }),
-        sessionsDir,
-      }),
-    );
+      );
 
-    expect(code).toBe(0);
-  });
+      expect(code).toBe(0);
+    },
+    { timeout: 15_000 },
+  );
 
-  test("repeated-denials still exits 1 regardless of hadDenial/ranTool", async () => {
-    process.env.GROQ_API_KEY = "fake-test-key";
-    const { fake } = fakeRunLoop([
-      { type: "tool-call", name: "write_file", args: { path: "a.txt" } },
-      { type: "permission-denied", name: "write_file", reason: "declined" },
-      { type: "done", reason: "repeated-denials" },
-    ]);
+  test(
+    "repeated-denials still exits 1 regardless of hadDenial/ranTool",
+    async () => {
+      process.env.GROQ_API_KEY = "fake-test-key";
+      const { fake } = fakeRunLoop([
+        { type: "tool-call", name: "write_file", args: { path: "a.txt" } },
+        { type: "permission-denied", name: "write_file", reason: "declined" },
+        { type: "done", reason: "repeated-denials" },
+      ]);
 
-    const { code } = await captureLogs(() =>
-      run(["do", "a", "task"], {
-        runLoop: fake,
-        loadAgentsFile: () => "",
-        loadExtensions: () => ({
-          skills: new Map(),
-          rules: new Map(),
-          hooks: { registry: new Map() },
+      const { code } = await captureLogs(() =>
+        run(["do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          loadExtensions: () => ({
+            skills: new Map(),
+            rules: new Map(),
+            hooks: { registry: new Map() },
+          }),
+          sessionsDir,
         }),
-        sessionsDir,
-      }),
-    );
+      );
 
-    expect(code).toBe(1);
-  });
+      expect(code).toBe(1);
+    },
+    { timeout: 15_000 },
+  );
 
   test("a read-only block does not count as a denial for the exit code", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";

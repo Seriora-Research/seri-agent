@@ -17,6 +17,7 @@ import {
   writeCatalogCache,
 } from "../../src/mcp/registry";
 import type { McpCatalog, McpEntry, McpRegistry, McpToolInfo } from "../../src/mcp/types";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 let roots: string[] = [];
 
@@ -46,6 +47,7 @@ function load(files: Record<string, string>): { registry: McpRegistry; warnings:
   const registry = loadMcpRegistry({
     worktree,
     configDir,
+    env: ToolSpawnEnv.inherited,
     onWarning: (message) => warnings.push(message),
   });
   return { registry, warnings };
@@ -315,10 +317,237 @@ describe("parseServersFile: $(...) is never expanded", () => {
 `,
       filePath: "servers.yaml",
       source: "project",
-      env: {},
+      env: ToolSpawnEnv.exactly({}),
     });
     expect(warnings).toEqual([]);
     expect(specs[0]?.headers["X-Whoami"]).toBe("$(whoami)");
+  });
+});
+
+function restoreEnv(key: string, original: string | undefined): void {
+  if (original === undefined) delete process.env[key];
+  else process.env[key] = original;
+}
+
+const TOKEN_SERVER = [
+  "servers:",
+  "  probe:",
+  "    url: https://mcp.probe.test/mcp",
+  "    headers:",
+  "      Authorization: Bearer ${env:SERI_TEST_MCP_TOKEN}",
+  "",
+].join("\n");
+
+describe("MCP config expands from the turn env", () => {
+  test("a header expands from the snapshot when process.env holds a different value", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const { worktree, configDir } = makeTree({
+        "project/.seri/mcp/servers.yaml": TOKEN_SERVER,
+      });
+      const registry = loadMcpRegistry({
+        worktree,
+        configDir,
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "b" }),
+        onWarning: () => {},
+      });
+      expect(registry.get("probe")?.spec.headers.Authorization).toBe("Bearer b");
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
+  });
+
+  test("a snapshot that omits the variable skips the server instead of reading process.env", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const { worktree, configDir } = makeTree({
+        "project/.seri/mcp/servers.yaml": TOKEN_SERVER,
+      });
+      const warnings: string[] = [];
+      const registry = loadMcpRegistry({
+        worktree,
+        configDir,
+        env: ToolSpawnEnv.exactly({}),
+        onWarning: (message) => warnings.push(message),
+      });
+      expect(registry.has("probe")).toBe(false);
+      expect(warnings.some((warning) => warning.includes("SERI_TEST_MCP_TOKEN"))).toBe(true);
+      expect(warnings.some((warning) => warning.includes("Bearer a"))).toBe(false);
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
+  });
+
+  test("inherited expands a header from process.env", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const { worktree, configDir } = makeTree({
+        "project/.seri/mcp/servers.yaml": TOKEN_SERVER,
+      });
+      const registry = loadMcpRegistry({
+        worktree,
+        configDir,
+        env: ToolSpawnEnv.inherited,
+        onWarning: () => {},
+      });
+      expect(registry.get("probe")?.spec.headers.Authorization).toBe("Bearer a");
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
+  });
+
+  test("a host placeholder expands before the url is validated", () => {
+    const original = process.env.SERI_TEST_MCP_HOST;
+    process.env.SERI_TEST_MCP_HOST = "mcp.a.test";
+    try {
+      const { specs, warnings } = parseServersFile({
+        text: ["servers:", "  probe:", "    url: https://${env:SERI_TEST_MCP_HOST}/mcp", ""].join(
+          "\n",
+        ),
+        filePath: "servers.yaml",
+        source: "project",
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_HOST: "mcp.b.test" }),
+      });
+      expect(warnings).toEqual([]);
+      expect(specs[0]?.url).toBe("https://mcp.b.test/mcp");
+    } finally {
+      restoreEnv("SERI_TEST_MCP_HOST", original);
+    }
+  });
+
+  test("a path placeholder is stored expanded", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "other";
+    try {
+      const { specs, warnings } = parseServersFile({
+        text: [
+          "servers:",
+          "  probe:",
+          "    url: https://mcp.x.ai/${env:SERI_TEST_MCP_TOKEN}/mcp",
+          "",
+        ].join("\n"),
+        filePath: "servers.yaml",
+        source: "project",
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "acme" }),
+      });
+      expect(warnings).toEqual([]);
+      expect(specs[0]?.url).toBe("https://mcp.x.ai/acme/mcp");
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
+  });
+
+  test("an unset variable in the url skips that server", () => {
+    const original = process.env.SERI_TEST_MCP_HOST;
+    delete process.env.SERI_TEST_MCP_HOST;
+    try {
+      const { specs, warnings } = parseServersFile({
+        text: ["servers:", "  probe:", "    url: https://${env:SERI_TEST_MCP_HOST}/mcp", ""].join(
+          "\n",
+        ),
+        filePath: "servers.yaml",
+        source: "project",
+        env: ToolSpawnEnv.exactly({}),
+      });
+      expect(specs).toEqual([]);
+      expect(
+        warnings.some(
+          (warning) =>
+            warning.includes('"url"') &&
+            warning.includes("unset") &&
+            warning.includes("SERI_TEST_MCP_HOST"),
+        ),
+      ).toBe(true);
+    } finally {
+      restoreEnv("SERI_TEST_MCP_HOST", original);
+    }
+  });
+
+  test("a url that expands to http is skipped and the warning quotes the template", () => {
+    const original = process.env.SERI_TEST_MCP_HOST;
+    process.env.SERI_TEST_MCP_HOST = "https://mcp.a.test/mcp";
+    try {
+      const { specs, warnings } = parseServersFile({
+        text: ["servers:", "  probe:", "    url: ${env:SERI_TEST_MCP_HOST}", ""].join("\n"),
+        filePath: "servers.yaml",
+        source: "project",
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_HOST: "http://leak.test/mcp" }),
+      });
+      expect(specs).toEqual([]);
+      expect(
+        warnings.some(
+          (warning) =>
+            warning.includes("${env:SERI_TEST_MCP_HOST}") &&
+            warning.includes("https") &&
+            !warning.includes("leak.test"),
+        ),
+      ).toBe(true);
+    } finally {
+      restoreEnv("SERI_TEST_MCP_HOST", original);
+    }
+  });
+
+  test("a url with no placeholder is stored as written", () => {
+    const { specs, warnings } = parseServersFile({
+      text: ["servers:", "  exa:", "    url: https://mcp.exa.ai", ""].join("\n"),
+      filePath: "servers.yaml",
+      source: "project",
+      env: ToolSpawnEnv.exactly({}),
+    });
+    expect(warnings).toEqual([]);
+    expect(specs[0]?.url).toBe("https://mcp.exa.ai");
+  });
+
+  test("trust follows the expanded header of the snapshot that was trusted", () => {
+    const original = process.env.SERI_TEST_MCP_TOKEN;
+    process.env.SERI_TEST_MCP_TOKEN = "a";
+    try {
+      const { worktree, configDir } = makeTree({
+        "project/.seri/mcp/servers.yaml": TOKEN_SERVER,
+      });
+      writeCatalogCache(configDir, {
+        server: "probe",
+        identity: serverIdentity({
+          url: "https://mcp.probe.test/mcp",
+          headers: { Authorization: "Bearer b" },
+        }),
+        fetchedAt: new Date().toISOString(),
+        tools: [
+          {
+            name: "echo",
+            toolName: "mcp_probe_echo",
+            description: "Echo.",
+            inputSchema: {},
+          },
+        ],
+      });
+      const attached = loadMcpRegistry({
+        worktree,
+        configDir,
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "b" }),
+        onWarning: () => {},
+      });
+      expect(attached.get("probe")?.spec.headers.Authorization).toBe("Bearer b");
+      expect(attached.get("probe")?.catalog?.tools).toHaveLength(1);
+
+      const warnings: string[] = [];
+      const pending = loadMcpRegistry({
+        worktree,
+        configDir,
+        env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "c" }),
+        onWarning: (message) => warnings.push(message),
+      });
+      expect(pending.get("probe")?.catalog).toBeUndefined();
+      expect(pendingMcpNames(pending)).toEqual(["probe"]);
+      expect(warnings.some((warning) => warning.includes("changed since it was trusted"))).toBe(
+        true,
+      );
+    } finally {
+      restoreEnv("SERI_TEST_MCP_TOKEN", original);
+    }
   });
 });
 

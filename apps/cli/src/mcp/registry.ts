@@ -6,6 +6,7 @@ import { atomicWriteFile } from "../atomicWriteFile";
 import { getMcpDir, MCP_DIRNAME } from "../config/paths";
 import { messageOf } from "../errors";
 import { type ExtensionSource, extensionScopes } from "../extensions/discovery";
+import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import type { McpCatalog, McpEntry, McpRegistry, McpServerSpec, McpToolInfo } from "./types";
 
 export type { McpEntry, McpRegistry } from "./types";
@@ -16,13 +17,10 @@ export const NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 
 const ENV_REF = /\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-function expandEnvRefs(
-  value: string,
-  env: Record<string, string | undefined>,
-): { text: string; missingVar?: string } {
+function expandEnvRefs(value: string, env: ToolSpawnEnv): { text: string; missingVar?: string } {
   let missingVar: string | undefined;
   const text = value.replace(ENV_REF, (_match, varName: string) => {
-    const v = env[varName];
+    const v = env.get(varName);
     if (v === undefined) {
       missingVar = varName;
       return "";
@@ -37,7 +35,7 @@ function parseOneServer(opts: {
   raw: unknown;
   filePath: string;
   source: ExtensionSource;
-  env: Record<string, string | undefined>;
+  env: ToolSpawnEnv;
 }): { spec: McpServerSpec | undefined; warning: string | undefined } {
   const { name, filePath } = opts;
   const skip = (reason: string) => ({
@@ -59,9 +57,13 @@ function parseOneServer(opts: {
   if (typeof rawUrl !== "string" || rawUrl.length === 0) {
     return skip('"url" is missing');
   }
+  const { text: url, missingVar: urlVar } = expandEnvRefs(rawUrl, opts.env);
+  if (urlVar !== undefined) {
+    return skip(`"url" references unset environment variable "${urlVar}"`);
+  }
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(rawUrl);
+    parsedUrl = new URL(url);
   } catch {
     return skip(`"${rawUrl}" is not a valid URL`);
   }
@@ -89,7 +91,7 @@ function parseOneServer(opts: {
   }
 
   return {
-    spec: { name, url: rawUrl, headers, source: opts.source, filePath },
+    spec: { name, url, headers, source: opts.source, filePath },
     warning: undefined,
   };
 }
@@ -98,7 +100,7 @@ export function parseServersFile(opts: {
   text: string;
   filePath: string;
   source: ExtensionSource;
-  env: Record<string, string | undefined>;
+  env: ToolSpawnEnv;
 }): { specs: readonly McpServerSpec[]; warnings: readonly string[] } {
   const warnings: string[] = [];
   let doc: unknown;
@@ -215,8 +217,10 @@ function catalogForSpec(
 export function loadMcpRegistry(opts: {
   worktree: string;
   configDir: string;
+  env?: ToolSpawnEnv;
   onWarning: (message: string) => void;
 }): Map<string, McpEntry> {
+  const env = opts.env ?? ToolSpawnEnv.inherited;
   const registry = new Map<string, McpEntry>();
   const scopes = extensionScopes({
     worktree: opts.worktree,
@@ -238,7 +242,7 @@ export function loadMcpRegistry(opts: {
       text,
       filePath,
       source: scope.source,
-      env: process.env,
+      env,
     });
     for (const warning of warnings) opts.onWarning(warning);
     for (const spec of specs) {
