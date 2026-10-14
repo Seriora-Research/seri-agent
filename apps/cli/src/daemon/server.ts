@@ -16,7 +16,7 @@ import {
   writeDaemonDescriptor,
 } from "./descriptor";
 import { flushIdleSession } from "./idle";
-import { approvalBodySchema, turnRequestSchema } from "./protocol";
+import { approvalBodySchema, resolveTurnPermissionsDir, turnRequestSchema } from "./protocol";
 import { createRunScheduled } from "./scheduled";
 import { type RunScheduled, Scheduler, ScheduleValidationError } from "./scheduler";
 import { DaemonSessionManager, type ExecuteTurn, SessionNotFoundError } from "./sessionManager";
@@ -198,6 +198,8 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
           }
           const parsed = turnRequestSchema.safeParse(body);
           if (!parsed.success) return json(400, { error: "invalid turn request" });
+          const turnPermissionsDir = resolveTurnPermissionsDir(parsed.data.profile, permissionsDir);
+          if (turnPermissionsDir === undefined) return json(400, { error: "unknown profile" });
           try {
             const started = await manager.startTurn({
               task: parsed.data.task,
@@ -206,6 +208,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
               permissionMode: parsed.data.permissionMode,
               promptChannel: parsed.data.permissionPrompts === "none" ? "none" : undefined,
               env: parsed.data.env,
+              permissionsDir: turnPermissionsDir,
             });
             return sseResponse(started.subscribe, req.signal);
           } catch (error) {
