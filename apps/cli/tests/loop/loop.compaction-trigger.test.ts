@@ -3,10 +3,12 @@ import { APICallError } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import {
+  COMPACT_HISTORY_PREFIX,
   isContextOverflowError,
   requestOutputCap,
   streamOutputCap,
 } from "../../src/loop/compaction";
+import { FULL_WINDOW } from "../../src/loop/conversation";
 import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
   collect,
@@ -561,5 +563,54 @@ describe("requestOutputCap", () => {
     expect(requestOutputCap(0)).toBe(32_000);
     expect(requestOutputCap(-1)).toBe(32_000);
     expect(requestOutputCap(Number.NaN)).toBe(32_000);
+  });
+});
+
+describe("runLoop compaction summary validation", () => {
+  test("a reasoning-only summarizer fails compaction and leaves the window uncompacted", async () => {
+    const messages = fatHistory(12, 400);
+    const archiveBefore = structuredClone(messages);
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => ({
+        content: [{ type: "reasoning", text: "Let me plan the sections first." }],
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage: usage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 2_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 200,
+      }),
+    );
+
+    const error = events.find((e) => e.type === "error");
+    expect(error?.error).toMatch(/compaction/i);
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(0);
+    expect(model.doGenerateCalls).toHaveLength(2);
+
+    const updated = events.filter(
+      (e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated",
+    );
+    for (const event of updated) {
+      expect(event.compact ?? FULL_WINDOW).toEqual(FULL_WINDOW);
+      expect(event.messages.slice(0, archiveBefore.length)).toEqual(archiveBefore);
+      expect(
+        event.messages.some((message) => {
+          if (message.role !== "user" || typeof message.content !== "string") return false;
+          return message.content.startsWith(COMPACT_HISTORY_PREFIX);
+        }),
+      ).toBe(false);
+    }
+    expect(events.at(-1)?.type).toBe("done");
   });
 });
