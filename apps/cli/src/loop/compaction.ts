@@ -513,7 +513,5 @@ export async function compactMessages(
     }
     reason = verdict.reason;
   }
-  throw new Error(
-    reason.length > 0 ? `compaction failed: ${reason}` : "compaction failed",
-  );
+  throw new Error(reason.length > 0 ? `compaction failed: ${reason}` : "compaction failed");
 }

@@ -604,10 +604,12 @@ describe("runLoop compaction summary validation", () => {
     for (const event of updated) {
       expect(event.compact ?? FULL_WINDOW).toEqual(FULL_WINDOW);
       expect(event.messages.slice(0, archiveBefore.length)).toEqual(archiveBefore);
-      expect(event.messages.some((message) => {
-        if (message.role !== "user" || typeof message.content !== "string") return false;
-        return message.content.startsWith(COMPACT_HISTORY_PREFIX);
-      })).toBe(false);
+      expect(
+        event.messages.some((message) => {
+          if (message.role !== "user" || typeof message.content !== "string") return false;
+          return message.content.startsWith(COMPACT_HISTORY_PREFIX);
+        }),
+      ).toBe(false);
     }
     expect(events.at(-1)?.type).toBe("done");
   });
