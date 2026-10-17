@@ -8,7 +8,7 @@ import {
   findSafeEvictionBoundary,
   SUMMARIZER_STRING_CAP_BYTES,
 } from "../../src/loop/compaction";
-import { streamResult, textOnlyChunks } from "./fixtures";
+import { reasoningOnlyChunks, streamResult, textOnlyChunks } from "./fixtures";
 
 function usage(inputTotal: number, outputTotal: number) {
   return {
@@ -773,5 +773,251 @@ describe("compactMessages", () => {
     expect(sent).toContain("Newly evicted turns:");
     expect(result.summary.goal).toBe(originalGoal);
     expect(result.summary.goal).not.toBe(injectedGoal);
+  });
+
+  const shortWindow: ModelMessage[] = [
+    { role: "user", content: "do the task" },
+    assistantToolCallMsg("call-1"),
+    toolResultMsg("call-1", "ok"),
+    { role: "user", content: "keep me, recent tail" },
+  ];
+  const validSummary = {
+    goal: "finish the task",
+    progress: "wrote the file",
+    blockers: "none",
+    nextSteps: "continue",
+  };
+
+  function generateContent(
+    content: Array<{ type: "text"; text: string } | { type: "reasoning"; text: string }>,
+  ) {
+    return {
+      content,
+      finishReason: { unified: "stop" as const, raw: undefined },
+      usage: usage(20, 10),
+      warnings: [],
+    };
+  }
+
+  test("a reasoning-only summarizer reply fails compaction and does not replace the window", async () => {
+    const snapshot = structuredClone(shortWindow);
+    const model = new MockLanguageModelV4({
+      doGenerate: async () =>
+        generateContent([{ type: "reasoning", text: "Let me plan the sections first." }]),
+    });
+
+    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    expect(shortWindow).toEqual(snapshot);
+  });
+
+  test("a visible non-JSON reply is refused as unreadable, not as empty", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => generateContent([{ type: "text", text: "not json" }]),
+    });
+    let message = "";
+    try {
+      await compactMessages(shortWindow, model, 3);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/not a JSON object/);
+    expect(message).not.toMatch(/no visible text/);
+  });
+
+  test("empty and whitespace-only summarizer text fail compaction", async () => {
+    for (const text of ["", "   \n\t  "]) {
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => generateContent([{ type: "text", text }]),
+      });
+      await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    }
+  });
+
+  test("JSON whose four fields have no visible text fails compaction", async () => {
+    const emptyFields = { goal: "", progress: "", blockers: "", nextSteps: "" };
+    const whitespaceFields = { goal: "  ", progress: "\n", blockers: "\t", nextSteps: "   " };
+    for (const summary of [emptyFields, whitespaceFields]) {
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => generateContent([{ type: "text", text: JSON.stringify(summary) }]),
+      });
+      await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    }
+  });
+
+  test("a reasoning-only reply is retried once and a later visible summary commits", async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        calls++;
+        if (calls === 1) {
+          return generateContent([{ type: "reasoning", text: "planning the recap" }]);
+        }
+        return generateContent([{ type: "text", text: JSON.stringify(validSummary) }]);
+      },
+    });
+
+    const result = await compactMessages(shortWindow, model, 3);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(result.summary).toEqual(validSummary);
+    expect(result.messages[0]?.role).toBe("user");
+    expect(result.messages[0]?.content as string).toContain("wrote the file");
+  });
+
+  test("two empty summaries abort after one retry and do not commit", async () => {
+    const snapshot = structuredClone(shortWindow);
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => generateContent([{ type: "text", text: "" }]),
+    });
+
+    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(shortWindow).toEqual(snapshot);
+  });
+
+  test("stream: true rejects a reasoning-only summarizer reply", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("generateText is rejected on the ChatGPT-plan host");
+      },
+      doStream: async () => streamResult(reasoningOnlyChunks("Let me plan the sections first.")),
+    });
+
+    await expect(
+      compactMessages(shortWindow, model, 3, undefined, { stream: true }),
+    ).rejects.toThrow(/reasoning only, no visible text/);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  test("the retry prompt names why the first reply was refused", async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        calls++;
+        if (calls === 1) return generateContent([{ type: "text", text: "```json\n```" }]);
+        return generateContent([{ type: "text", text: JSON.stringify(validSummary) }]);
+      },
+    });
+
+    const result = await compactMessages(shortWindow, model, 3, undefined, {
+      temperature: 0,
+      seed: 7,
+    });
+
+    const first = promptRoleText(model.doGenerateCalls[0]?.prompt, "user");
+    const second = promptRoleText(model.doGenerateCalls[1]?.prompt, "user");
+    expect(second.startsWith(first)).toBe(true);
+    expect(second).toContain("no visible text");
+    expect(first).not.toContain("no visible text");
+    expect(model.doGenerateCalls[0]?.temperature).toBe(0);
+    expect(model.doGenerateCalls[1]?.temperature).toBe(0);
+    expect(model.doGenerateCalls[0]?.seed).toBe(7);
+    expect(model.doGenerateCalls[1]?.seed).toBe(7);
+    expect(result.retries).toBe(0);
+    expect(result.usage.inputTokens).toBe(40);
+    expect(result.usage.outputTokens).toBe(20);
+    expect(result.usage.totalTokens).toBe(60);
+    expect(result.summary).toEqual(validSummary);
+  });
+
+  test("a blank blockers field still commits when another field has text", async () => {
+    const summary = { goal: "finish the task", progress: "", blockers: "", nextSteps: "" };
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => generateContent([{ type: "text", text: JSON.stringify(summary) }]),
+    });
+
+    const result = await compactMessages(shortWindow, model, 3);
+
+    expect(result.summary).toEqual(summary);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("a fenced JSON summary still commits", async () => {
+    const fenced = [
+      `\`\`\`json\n${JSON.stringify(validSummary)}\n\`\`\``,
+      `\`\`\`JSON\n${JSON.stringify(validSummary)}\n\`\`\``,
+      `\`\`\` json\n${JSON.stringify(validSummary)}\n\`\`\``,
+    ];
+    for (const text of fenced) {
+      const model = new MockLanguageModelV4({
+        doGenerate: async () => generateContent([{ type: "text", text }]),
+      });
+      const result = await compactMessages(shortWindow, model, 3);
+      expect(result.summary).toEqual(validSummary);
+      expect(model.doGenerateCalls).toHaveLength(1);
+    }
+  });
+
+  test("a streamed provider error is not retried as a summary attempt", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("generateText is rejected on the ChatGPT-plan host");
+      },
+      doStream: async () =>
+        streamResult([
+          { type: "error", error: new Error("server_error: upstream overloaded") },
+          {
+            type: "finish",
+            finishReason: { unified: "error", raw: undefined },
+            usage: usage(20, 10),
+          },
+        ]),
+    });
+
+    await expect(
+      compactMessages(shortWindow, model, 3, undefined, { stream: true }),
+    ).rejects.toThrow(/upstream overloaded/);
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(0);
+  });
+
+  test("a streamed summary still commits when an error part follows the text", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("generateText is rejected on the ChatGPT-plan host");
+      },
+      doStream: async () =>
+        streamResult([
+          { type: "text-start", id: "1" },
+          { type: "text-delta", id: "1", delta: JSON.stringify(validSummary) },
+          { type: "text-end", id: "1" },
+          { type: "error", error: new Error("server_error: late") },
+          {
+            type: "finish",
+            finishReason: { unified: "error", raw: undefined },
+            usage: usage(20, 10),
+          },
+        ]),
+    });
+
+    const result = await compactMessages(shortWindow, model, 3, undefined, { stream: true });
+    expect(result.summary).toEqual(validSummary);
+    expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  test("a thrown summarizer call is not retried", async () => {
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        throw new Error("provider down");
+      },
+    });
+
+    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/provider down/);
+    expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("an aborted signal skips the summary retry", async () => {
+    const controller = new AbortController();
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        controller.abort();
+        return generateContent([{ type: "text", text: "" }]);
+      },
+    });
+
+    await expect(compactMessages(shortWindow, model, 3, controller.signal)).rejects.toThrow(
+      /abort/i,
+    );
+    expect(model.doGenerateCalls).toHaveLength(1);
   });
 });
