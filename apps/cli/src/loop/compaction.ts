@@ -1,15 +1,25 @@
-import { generateText, streamText, wrapLanguageModel } from "ai";
 import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
+import { generateText, streamText, wrapLanguageModel } from "ai";
 import { z } from "zod";
 
-export const CompactionSummarySchema = z.object({
-  goal: z.string(),
-  progress: z.string(),
-  blockers: z.string(),
-  nextSteps: z.string(),
-});
+function hasVisibleText(text: string): boolean {
+  return /[^\s\p{Cc}\p{Cf}]/u.test(text);
+}
 
-export type CompactionSummary = z.infer<typeof CompactionSummarySchema>;
+export const CompactionSummarySchema = z
+  .object({
+    goal: z.string(),
+    progress: z.string(),
+    blockers: z.string(),
+    nextSteps: z.string(),
+  })
+  .refine((summary) => Object.values(summary).some(hasVisibleText), {
+    message: "all four fields are blank",
+  })
+  .brand<"CommittableSummary">();
+
+export type CompactionSummary = z.input<typeof CompactionSummarySchema>;
+type CommittableSummary = z.output<typeof CompactionSummarySchema>;
 
 const DEFAULT_MIN_EVICTABLE = 4;
 
@@ -254,6 +264,163 @@ function buildSummarizerPrompt(
   };
 }
 
+const SUMMARIZER_ATTEMPTS = 2;
+
+type SummarizerReply = {
+  readonly text: string;
+  readonly reasoned: boolean;
+  readonly usage: LanguageModelUsage;
+  readonly streamError?: unknown;
+};
+
+type SummaryVerdict =
+  | { readonly ok: true; readonly summary: CommittableSummary }
+  | { readonly ok: false; readonly reason: string };
+
+type SummarizerCall = {
+  readonly system: string;
+  readonly prompt: string;
+  readonly stream: boolean;
+  readonly sampling: { readonly temperature?: number; readonly seed?: number };
+  readonly maxOutputTokens: number | undefined;
+};
+
+function addNumeric(total: number | undefined, reported: number | undefined): number | undefined {
+  if (typeof reported === "number") {
+    return typeof total === "number" ? total + reported : reported;
+  }
+  return total;
+}
+
+function addUsage(total: LanguageModelUsage, next: LanguageModelUsage): LanguageModelUsage {
+  const raw = next.raw !== undefined ? next.raw : total.raw;
+  return {
+    inputTokens: addNumeric(total.inputTokens, next.inputTokens),
+    inputTokenDetails: {
+      noCacheTokens: addNumeric(
+        total.inputTokenDetails?.noCacheTokens,
+        next.inputTokenDetails?.noCacheTokens,
+      ),
+      cacheReadTokens: addNumeric(
+        total.inputTokenDetails?.cacheReadTokens,
+        next.inputTokenDetails?.cacheReadTokens,
+      ),
+      cacheWriteTokens: addNumeric(
+        total.inputTokenDetails?.cacheWriteTokens,
+        next.inputTokenDetails?.cacheWriteTokens,
+      ),
+    },
+    outputTokens: addNumeric(total.outputTokens, next.outputTokens),
+    outputTokenDetails: {
+      textTokens: addNumeric(
+        total.outputTokenDetails?.textTokens,
+        next.outputTokenDetails?.textTokens,
+      ),
+      reasoningTokens: addNumeric(
+        total.outputTokenDetails?.reasoningTokens,
+        next.outputTokenDetails?.reasoningTokens,
+      ),
+    },
+    totalTokens: addNumeric(total.totalTokens, next.totalTokens),
+    ...(raw !== undefined ? { raw } : {}),
+  };
+}
+
+async function requestSummary(
+  model: LanguageModel,
+  call: SummarizerCall,
+  signal: AbortSignal | undefined,
+): Promise<SummarizerReply> {
+  if (call.stream) {
+    let streamError: unknown;
+    const result = streamText({
+      model,
+      abortSignal: signal,
+      maxRetries: MAX_RETRIES,
+      system: call.system,
+      prompt: call.prompt,
+      ...call.sampling,
+      onError: ({ error }) => {
+        streamError = error;
+      },
+    });
+    const text = await result.text;
+    const reasoning = await result.reasoningText;
+    const usage = await result.usage;
+    return {
+      text,
+      reasoned: reasoning !== undefined && hasVisibleText(reasoning),
+      usage,
+      ...(streamError !== undefined ? { streamError } : {}),
+    };
+  }
+  const generated = await generateText({
+    model,
+    abortSignal: signal,
+    maxRetries: MAX_RETRIES,
+    system: call.system,
+    prompt: call.prompt,
+    ...call.sampling,
+    maxOutputTokens: streamOutputCap(call.maxOutputTokens),
+  });
+  return {
+    text: generated.text,
+    reasoned: generated.reasoningText !== undefined && hasVisibleText(generated.reasoningText),
+    usage: generated.usage,
+  };
+}
+
+function parseSummaryReply(reply: SummarizerReply): SummaryVerdict {
+  const stripped = reply.text
+    .replace(/^\s*```(?:\s*json)?\s*/i, "")
+    .replace(/\s*```\s*$/, "")
+    .trim();
+  if (!hasVisibleText(stripped)) {
+    return {
+      ok: false,
+      reason: reply.reasoned ? "reasoning only, no visible text" : "no visible text",
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch {
+    return { ok: false, reason: "not a JSON object" };
+  }
+  const result = CompactionSummarySchema.safeParse(parsed);
+  if (!result.success) {
+    const issue = result.error.issues[0];
+    if (issue === undefined) return { ok: false, reason: "invalid summary" };
+    const path = issue.path.map(String).join(".");
+    return { ok: false, reason: path.length > 0 ? `${path}: ${issue.message}` : issue.message };
+  }
+  return { ok: true, summary: result.data };
+}
+
+function retryPrompt(prompt: string, reason: string): string {
+  return (
+    `${prompt}\n\nYour previous reply was refused: ${reason}. Reply with ONLY the JSON object ` +
+    "described above, written as visible text, not inside reasoning."
+  );
+}
+
+function buildRecapMessage(
+  summary: CommittableSummary,
+  evictBoundary: number,
+  evicted: readonly ModelMessage[],
+): ModelMessage {
+  return {
+    role: "user",
+    content:
+      `[Compacted history — ${evictBoundary} earlier messages condensed]\n` +
+      `Goal: ${summary.goal}\n` +
+      `Progress: ${summary.progress}\n` +
+      `Blockers: ${summary.blockers}\n` +
+      `Next steps: ${summary.nextSteps}` +
+      formatFileListLines(extractFileLists(evicted)),
+  };
+}
+
 export async function compactMessages(
   messages: ModelMessage[],
   model: LanguageModel,
@@ -278,7 +445,7 @@ export async function compactMessages(
   const evicted = messages.slice(0, evictBoundary);
 
   // generateText fires onLanguageModelCallStart once per step before its retry wrapper (ai@7.0.48); wrapGenerate is the only retry counter. ChatGPT-plan Responses rejects generateText unless stream is true.
-  let attempts = 0;
+  let modelCalls = 0;
   const countedModel =
     typeof model === "string"
       ? model
@@ -287,74 +454,66 @@ export async function compactMessages(
           middleware: opts?.stream
             ? {
                 wrapStream: async ({ doStream }) => {
-                  attempts++;
+                  modelCalls++;
                   return await doStream();
                 },
               }
             : {
                 wrapGenerate: async ({ doGenerate }) => {
-                  attempts++;
+                  modelCalls++;
                   return await doGenerate();
                 },
               },
         });
 
   const { system, prompt } = buildSummarizerPrompt(evicted, opts?.customInstructions);
-
-  let text: string;
-  let usage: LanguageModelUsage;
   const sampling = {
     ...(opts?.temperature !== undefined ? { temperature: opts.temperature } : {}),
     ...(opts?.seed !== undefined ? { seed: opts.seed } : {}),
   };
-  if (opts?.stream) {
-    const result = streamText({
-      model: countedModel,
-      abortSignal: signal,
-      maxRetries: MAX_RETRIES,
-      system,
-      prompt,
-      ...sampling,
-    });
-    text = await result.text;
-    usage = await result.usage;
-  } else {
-    const generated = await generateText({
-      model: countedModel,
-      abortSignal: signal,
-      maxRetries: MAX_RETRIES,
-      system,
-      prompt,
-      ...sampling,
-      maxOutputTokens: streamOutputCap(opts?.maxOutputTokens),
-    });
-    text = generated.text;
-    usage = generated.usage;
+  const call: SummarizerCall = {
+    system,
+    prompt,
+    stream: opts?.stream === true,
+    sampling,
+    maxOutputTokens: opts?.maxOutputTokens,
+  };
+
+  let usage: LanguageModelUsage | undefined;
+  let reason = "";
+  let sdkRetries = 0;
+  for (let attempt = 1; attempt <= SUMMARIZER_ATTEMPTS; attempt++) {
+    if (attempt > 1) signal?.throwIfAborted?.();
+    const callsBefore = modelCalls;
+    const reply = await requestSummary(
+      countedModel,
+      attempt === 1 ? call : { ...call, prompt: retryPrompt(prompt, reason) },
+      signal,
+    );
+    sdkRetries += Math.max(modelCalls - callsBefore - 1, 0);
+    usage = usage === undefined ? reply.usage : addUsage(usage, reply.usage);
+    const verdict = parseSummaryReply(reply);
+    if (verdict.ok) {
+      return {
+        messages: [
+          buildRecapMessage(verdict.summary, evictBoundary, evicted),
+          ...messages.slice(evictBoundary),
+        ],
+        summary: verdict.summary,
+        evictedCount: evictBoundary,
+        usage,
+        retries: sdkRetries,
+        tokensBefore,
+      };
+    }
+    if (reply.streamError !== undefined) {
+      throw reply.streamError instanceof Error
+        ? reply.streamError
+        : new Error(String(reply.streamError));
+    }
+    reason = verdict.reason;
   }
-  const stripped = text
-    .trim()
-    .replace(/^```(?:json)?\s*/, "")
-    .replace(/\s*```$/, "");
-  const summary = CompactionSummarySchema.parse(JSON.parse(stripped));
-
-  const fileLists = extractFileLists(evicted);
-  const summaryMessage: ModelMessage = {
-    role: "user",
-    content:
-      `[Compacted history — ${evictBoundary} earlier messages condensed]\n` +
-      `Goal: ${summary.goal}\n` +
-      `Progress: ${summary.progress}\n` +
-      `Blockers: ${summary.blockers}\n` +
-      `Next steps: ${summary.nextSteps}` +
-      formatFileListLines(fileLists),
-  };
-
-  return {
-    messages: [summaryMessage, ...messages.slice(evictBoundary)],
-    summary,
-    evictedCount: evictBoundary,
-    usage,
-    retries: Math.max(attempts - 1, 0),
-    tokensBefore,
-  };
+  throw new Error(
+    reason.length > 0 ? `compaction failed: ${reason}` : "compaction failed",
+  );
 }
