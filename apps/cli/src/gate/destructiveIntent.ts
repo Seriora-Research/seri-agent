@@ -118,6 +118,211 @@ function collectBare(command: string): PathToken[] {
     .map((raw) => ({ raw, quotingWidened: false }));
 }
 
+type HeredocOp = {
+  readonly delimiter: string;
+  readonly quoted: boolean;
+  readonly stripTabs: boolean;
+};
+
+function isBlank(ch: string | undefined): boolean {
+  return ch === " " || ch === "\t";
+}
+
+function parseHeredocDelimiter(
+  command: string,
+  start: number,
+): { delimiter: string; quoted: boolean; next: number } | undefined {
+  if (start >= command.length || command[start] === "\n") return undefined;
+  const opener = command[start];
+  if (opener === "'" || opener === '"') {
+    const close = command.indexOf(opener, start + 1);
+    if (close === -1) return undefined;
+    return { delimiter: command.slice(start + 1, close), quoted: true, next: close + 1 };
+  }
+  if (opener === "\\" && start + 1 < command.length && command[start + 1] !== "\n") {
+    return { delimiter: command[start + 1] ?? "", quoted: true, next: start + 2 };
+  }
+  let end = start;
+  while (end < command.length) {
+    const ch = command[end];
+    if (ch === undefined || isBlank(ch) || /[;&|<>(){}\n]/.test(ch)) break;
+    end++;
+  }
+  if (end === start) return undefined;
+  return { delimiter: command.slice(start, end), quoted: false, next: end };
+}
+
+function matchingParen(command: string, open: number, end: number): number {
+  let depth = 1;
+  let quote: "'" | '"' | null = null;
+  for (let i = open + 1; i < end; i++) {
+    const ch = command[i];
+    if (quote !== null) {
+      if (quote === '"' && ch === "\\") {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function findTerminator(
+  command: string,
+  from: number,
+  delimiter: string,
+  stripTabs: boolean,
+): { bodyEnd: number; after: number } {
+  let lineStart = from;
+  for (let i = from; i <= command.length; i++) {
+    if (i !== command.length && command[i] !== "\n") continue;
+    const raw = command.slice(lineStart, i);
+    const line = stripTabs ? raw.replace(/^\t+/, "") : raw;
+    if (line === delimiter) {
+      return { bodyEnd: lineStart, after: i === command.length ? i : i + 1 };
+    }
+    lineStart = i + 1;
+  }
+  return { bodyEnd: command.length, after: command.length };
+}
+
+function consumeHeredocs(
+  command: string,
+  out: string[],
+  pending: HeredocOp[],
+  bodyStart: number,
+): number {
+  let start = bodyStart;
+  for (const op of pending) {
+    const found = findTerminator(command, start, op.delimiter, op.stripTabs);
+    maskRange(out, command, start, found.bodyEnd, !op.quoted);
+    start = found.after;
+  }
+  pending.length = 0;
+  return start;
+}
+
+function maskRange(
+  out: string[],
+  command: string,
+  start: number,
+  end: number,
+  preserveSubstitutions: boolean,
+): void {
+  if (!preserveSubstitutions) {
+    for (let i = start; i < end; i++) {
+      if (out[i] !== "\n") out[i] = " ";
+    }
+    return;
+  }
+  let i = start;
+  while (i < end) {
+    if (command.startsWith("$(", i) && !command.startsWith("$((", i)) {
+      const close = matchingParen(command, i + 1, end);
+      i = close === -1 ? end : close + 1;
+      continue;
+    }
+    if (command[i] === "`") {
+      const close = command.indexOf("`", i + 1);
+      i = close === -1 || close >= end ? end : close + 1;
+      continue;
+    }
+    if (out[i] !== "\n") out[i] = " ";
+    i++;
+  }
+}
+
+// Quote pairing in collectQuoted is stateless, so a `'` inside a heredoc body can swallow a
+// later real argument and hide the command that follows. Bodies are data: mask them, then
+// parse. A missing terminator means the rest of the input is body, matching bash.
+function maskHeredocBodies(command: string): string {
+  const out = command.split("");
+  const pending: HeredocOp[] = [];
+  let quote: "'" | '"' | "`" | null = null;
+  let arith = 0;
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    if (quote !== null) {
+      if (quote !== "'" && ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (arith > 0) {
+      if (command.startsWith("$((", i)) {
+        arith++;
+        i += 3;
+        continue;
+      }
+      if (command.startsWith("))", i)) {
+        arith--;
+        i += 2;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      i++;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < command.length) {
+      i += 2;
+      continue;
+    }
+    if (command.startsWith("$((", i)) {
+      arith++;
+      i += 3;
+      continue;
+    }
+    if (ch === "<" && command[i + 1] === "<") {
+      if (command[i + 2] === "<") {
+        i += 3;
+        continue;
+      }
+      let pos = i + 2;
+      let stripTabs = false;
+      if (command[pos] === "-") {
+        stripTabs = true;
+        pos++;
+      }
+      while (isBlank(command[pos])) pos++;
+      const parsed = parseHeredocDelimiter(command, pos);
+      if (parsed !== undefined) {
+        pending.push({ delimiter: parsed.delimiter, quoted: parsed.quoted, stripTabs });
+        i = parsed.next;
+        continue;
+      }
+      i += 2;
+      continue;
+    }
+    if (pending.length > 0 && (ch === "\n" || i === command.length - 1)) {
+      const bodyStart = ch === "\n" ? i + 1 : command.length;
+      i = consumeHeredocs(command, out, pending, bodyStart);
+      continue;
+    }
+    i++;
+  }
+  if (pending.length > 0) consumeHeredocs(command, out, pending, command.length);
+  return out.join("");
+}
+
 function kindOf(command: string): DestructiveKind | undefined {
   if (ROBOCOPY.test(command) && ROBOCOPY_MOVE.test(command)) return "move";
   if (REMOVE_VERB.test(command)) return "remove";
@@ -160,9 +365,10 @@ export function destructiveIntentOf(
   if (toolName !== "bash" && toolName !== "powershell") return undefined;
   const command = commandOf(input);
   if (command === undefined) return undefined;
-  const kind = kindOf(command);
+  const scanned = maskHeredocBodies(command);
+  const kind = kindOf(scanned);
   if (kind === undefined) return undefined;
-  const tokens = [...collectQuoted(command), ...collectBare(command)];
+  const tokens = [...collectQuoted(scanned), ...collectBare(scanned)];
   const quotingWidened = tokens.some((token) => token.quotingWidened);
   const targets = [
     ...new Set(
@@ -171,7 +377,7 @@ export function destructiveIntentOf(
         .map((token) => resolveTarget(cwd, token.raw, toolName)),
     ),
   ];
-  return { kind, targets, quotingWidened, recursive: isRecursive(command) };
+  return { kind, targets, quotingWidened, recursive: isRecursive(scanned) };
 }
 
 function matchKey(path: string): string {
