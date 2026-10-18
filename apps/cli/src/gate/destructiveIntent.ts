@@ -243,9 +243,6 @@ function maskRange(
   }
 }
 
-// Quote pairing in collectQuoted is stateless, so a `'` inside a heredoc body can swallow a
-// later real argument and hide the command that follows. Bodies are data: mask them, then
-// parse. A missing terminator means the rest of the input is body, matching bash.
 function maskHeredocBodies(command: string): string {
   const out = command.split("");
   const pending: HeredocOp[] = [];
