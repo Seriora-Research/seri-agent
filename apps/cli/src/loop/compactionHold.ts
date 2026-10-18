@@ -10,7 +10,7 @@ export type CompactionHold =
   | {
       readonly status: "held";
       readonly reason: "yield-low";
-      readonly armedAtIteration: number;
+      readonly remainingTurns: number;
       readonly tokensAtArm: number;
     };
 
@@ -24,20 +24,19 @@ export function watermarkTokens(trigger: number): number {
   return Math.floor(trigger * COMPACTION_WATERMARK_RATIO);
 }
 
-export function holdClears(
+export function tickHold(
   hold: CompactionHold,
-  iteration: number,
   windowTokens: number,
   usableInput: number,
-): boolean {
-  if (hold.status !== "held") return false;
-  if (iteration - hold.armedAtIteration > COMPACTION_HOLD_TURNS) return true;
+): CompactionHold {
+  if (hold.status !== "held") return hold;
   const growth = Math.floor(usableInput * COMPACTION_HOLD_GROWTH_RATIO);
-  return windowTokens - hold.tokensAtArm >= growth;
+  if (windowTokens - hold.tokensAtArm >= growth) return OPEN_COMPACTION_HOLD;
+  if (hold.remainingTurns <= 0) return OPEN_COMPACTION_HOLD;
+  return { ...hold, remainingTurns: hold.remainingTurns - 1 };
 }
 
 export function noteAutoCompactYield(args: {
-  iteration: number;
   windowTokensAfter: number;
   usableInput: number;
   threshold: number;
@@ -52,7 +51,7 @@ export function noteAutoCompactYield(args: {
     hold: {
       status: "held",
       reason: "yield-low",
-      armedAtIteration: args.iteration,
+      remainingTurns: COMPACTION_HOLD_TURNS,
       tokensAtArm: args.windowTokensAfter,
     },
     warn: COMPACTION_YIELD_LOW_MESSAGE,

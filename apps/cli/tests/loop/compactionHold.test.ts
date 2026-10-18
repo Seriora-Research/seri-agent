@@ -4,9 +4,9 @@ import {
   COMPACTION_HOLD_TURNS,
   COMPACTION_YIELD_LOW_MESSAGE,
   type CompactionHold,
-  holdClears,
   noteAutoCompactYield,
   OPEN_COMPACTION_HOLD,
+  tickHold,
   triggerTokens,
   watermarkTokens,
 } from "../../src/loop/compactionHold";
@@ -23,27 +23,37 @@ describe("watermarkTokens", () => {
   });
 });
 
-describe("holdClears", () => {
-  const held: CompactionHold = {
+describe("tickHold", () => {
+  const held = (remainingTurns: number): Extract<CompactionHold, { status: "held" }> => ({
     status: "held",
     reason: "yield-low",
-    armedAtIteration: 0,
+    remainingTurns,
     tokensAtArm: 4_500,
-  };
-
-  test("open never clears", () => {
-    expect(holdClears(OPEN_COMPACTION_HOLD, 99, 9_000, usable)).toBe(false);
   });
 
-  test("clears after N more iterations", () => {
-    expect(holdClears(held, COMPACTION_HOLD_TURNS, 4_500, usable)).toBe(false);
-    expect(holdClears(held, COMPACTION_HOLD_TURNS + 1, 4_500, usable)).toBe(true);
+  test("open never ticks", () => {
+    expect(tickHold(OPEN_COMPACTION_HOLD, 9_000, usable)).toEqual(OPEN_COMPACTION_HOLD);
   });
 
-  test("clears after the window grows by half of usable input", () => {
+  test("stays held for N later turns, then opens", () => {
+    let hold: CompactionHold = held(COMPACTION_HOLD_TURNS);
+    for (let i = 0; i < COMPACTION_HOLD_TURNS; i++) {
+      hold = tickHold(hold, 4_500, usable);
+      expect(hold.status).toBe("held");
+    }
+    expect(tickHold(hold, 4_500, usable)).toEqual(OPEN_COMPACTION_HOLD);
+  });
+
+  test("opens after the window grows by half of usable input", () => {
     const growth = Math.floor(usable * COMPACTION_HOLD_GROWTH_RATIO);
-    expect(holdClears(held, 1, held.tokensAtArm + growth - 1, usable)).toBe(false);
-    expect(holdClears(held, 1, held.tokensAtArm + growth, usable)).toBe(true);
+    const hold = held(COMPACTION_HOLD_TURNS);
+    const stillOver = hold.tokensAtArm + growth - 1;
+    const grown = hold.tokensAtArm + growth;
+    expect(tickHold(hold, stillOver, usable)).toEqual({
+      ...hold,
+      remainingTurns: COMPACTION_HOLD_TURNS - 1,
+    });
+    expect(tickHold(hold, grown, usable)).toEqual(OPEN_COMPACTION_HOLD);
   });
 });
 
@@ -51,7 +61,6 @@ describe("noteAutoCompactYield", () => {
   test("opens when the window lands below the watermark", () => {
     expect(
       noteAutoCompactYield({
-        iteration: 2,
         windowTokensAfter: watermark - 1,
         usableInput: usable,
         threshold,
@@ -61,7 +70,6 @@ describe("noteAutoCompactYield", () => {
 
   test("arms a hold and names the reason when the window stays at or above the watermark", () => {
     const noted = noteAutoCompactYield({
-      iteration: 2,
       windowTokensAfter: watermark,
       usableInput: usable,
       threshold,
@@ -70,7 +78,7 @@ describe("noteAutoCompactYield", () => {
     expect(noted.hold).toEqual({
       status: "held",
       reason: "yield-low",
-      armedAtIteration: 2,
+      remainingTurns: COMPACTION_HOLD_TURNS,
       tokensAtArm: watermark,
     });
   });
