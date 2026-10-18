@@ -177,6 +177,7 @@ describe("driveLoop options", () => {
     expect(capture.capture()?.workingDirectory).toBe(prepared.session.cwd);
     expect(capture.capture()?.askOutsideFs).toBe(true);
     expect(capture.capture()?.outsideConsent?.current).toBe("unasked");
+    expect(capture.capture()?.compactionHold?.current).toEqual({ status: "open" });
   });
 
   test("askOutsideFs false reaches the loop so a dummy prompt is not a live human", async () => {

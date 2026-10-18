@@ -148,7 +148,8 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
     if (
       event.type === "text-delta" ||
       event.type === "reasoning-delta" ||
-      event.type === "messages-updated"
+      event.type === "messages-updated" ||
+      event.type === "compaction-held"
     ) {
       return;
     }

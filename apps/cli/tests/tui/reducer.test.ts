@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { COMPACTION_YIELD_LOW_MESSAGE } from "../../src/loop/compactionHold";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { McpPanelRow } from "../../src/mcp/commands";
 import type { SessionState } from "../../src/session/session";
@@ -18,7 +19,7 @@ import { MAX_LIVE_TRANSCRIPT_ROWS } from "../../src/tui/util/liveTranscript";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
 import { buildFileChange } from "../../src/fileChange";
 import { TOOL_INDENT } from "../../src/tui/theme/spacing";
-import { ERROR_MARK, TREE_BRANCH } from "../../src/tui/theme/theme";
+import { ERROR_MARK, TREE_BRANCH, WARNING_MARK } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
@@ -530,6 +531,11 @@ describe("tuiReducer: transcript role tagging", () => {
       { type: "retry", attempt: 1 },
       { type: "done", reason: "no-tool-call" },
       { type: "error", error: "boom" },
+      {
+        type: "compaction-held",
+        reason: "yield-low",
+        message: COMPACTION_YIELD_LOW_MESSAGE,
+      },
     ];
 
     let state = initialTuiState(session());
@@ -695,6 +701,17 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.some((e) => e.text.includes("→ Read"))).toBe(false);
     expect(state.transcript.some((e) => e.text === "Read 2 files")).toBe(true);
     expect(state.toolActivity).toEqual([]);
+  });
+
+  test("compaction-held is a warning line, not an error status", () => {
+    const state = apply(undefined, {
+      type: "compaction-held",
+      reason: "yield-low",
+      message: COMPACTION_YIELD_LOW_MESSAGE,
+    });
+    expect(state.transcript.at(-1)?.text).toBe(`${WARNING_MARK}${COMPACTION_YIELD_LOW_MESSAGE}`);
+    expect(state.status).toBe("");
+    expect(state.transcript.at(-1)?.text.startsWith(ERROR_MARK)).toBe(false);
   });
 
   test("a hosted quota hard-stop stays unmarked and tagged, not an ERROR_MARK line", () => {

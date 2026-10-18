@@ -46,6 +46,7 @@ export type PublicLoopEvent =
   | { type: "usage"; usage: unknown; cost?: unknown }
   | { type: "retry"; attempt: number }
   | { type: "tool-allowed"; name: string }
+  | { type: "compaction-held"; reason: "yield-low"; message: string }
   | { type: "done"; reason: string }
   | { type: "error"; error: string };
 

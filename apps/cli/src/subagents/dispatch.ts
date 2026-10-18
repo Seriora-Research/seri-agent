@@ -185,6 +185,7 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
     case "retry":
     case "tool-allowed":
     case "reasoning-delta":
+    case "compaction-held":
       return false;
     default: {
       const _exhaustive: never = event;

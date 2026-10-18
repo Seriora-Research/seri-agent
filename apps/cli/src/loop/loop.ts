@@ -52,6 +52,13 @@ import {
   requestOutputCap,
 } from "./compaction";
 import {
+  COMPACTION_YIELD_LOW_MESSAGE,
+  noteAutoCompactYield,
+  OPEN_COMPACTION_HOLD,
+  tickHold,
+  type CompactionHold,
+} from "./compactionHold";
+import {
   applyRecap,
   type CompactCursor,
   createConversation,
@@ -88,6 +95,7 @@ export type LoopEvent =
   | { type: "retry"; attempt: number }
   // Emitted when an always-grant is added to the live Set, before that tool runs.
   | { type: "tool-allowed"; name: string }
+  | { type: "compaction-held"; reason: "yield-low"; message: string }
   // "aborted" is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
@@ -401,6 +409,7 @@ export async function* runLoop(opts: {
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
   compact?: CompactCursor;
+  compactionHold?: { current: CompactionHold };
   /** Runs after a compact is decided and before messages are evicted. */
   onBeforeCompact?: () => Promise<void>;
 }): AsyncGenerator<LoopEvent> {
@@ -421,6 +430,7 @@ export async function* runLoop(opts: {
   const samplingFields = samplingCallFields(sampling);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
+  const holdBox = opts.compactionHold ?? { current: OPEN_COMPACTION_HOLD };
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
   const closedUnanswered = closeUnansweredToolCalls(messages);
@@ -431,6 +441,24 @@ export async function* runLoop(opts: {
   }
   function messagesUpdated(): Extract<LoopEvent, { type: "messages-updated" }> {
     return { type: "messages-updated", ...snapshotOf(conversation) };
+  }
+  let compactedThisIteration = false;
+  function adoptYield(
+    windowTokens: number,
+    armOnly = false,
+  ): Extract<LoopEvent, { type: "compaction-held" }> | undefined {
+    const noted = noteAutoCompactYield({
+      windowTokensAfter: windowTokens,
+      usableInput,
+      threshold: compactionThreshold,
+    });
+    if (noted.hold.status === "open") {
+      if (!armOnly) holdBox.current = OPEN_COMPACTION_HOLD;
+      return undefined;
+    }
+    if (holdBox.current.status === "held") return undefined;
+    holdBox.current = noted.hold;
+    return { type: "compaction-held", reason: "yield-low", message: COMPACTION_YIELD_LOW_MESSAGE };
   }
   const turnUserText = lastUserText(opts.messages);
 
@@ -459,6 +487,7 @@ export async function* runLoop(opts: {
       if (recap === undefined) throw new Error("compactMessages returned an empty window");
       applyRecap(conversation, recap, compacted.evictedCount);
       estimatedTokens = estimateTokens(windowOf(conversation));
+      compactedThisIteration = true;
       for (let attempt = 1; attempt <= compacted.retries; attempt++) {
         yield { type: "retry", attempt };
       }
@@ -470,6 +499,8 @@ export async function* runLoop(opts: {
         tokensBefore: compacted.tokensBefore,
       };
       yield messagesUpdated();
+      const heldEvent = adoptYield(estimatedTokens);
+      if (heldEvent !== undefined) yield heldEvent;
       return "ok";
     } catch (err) {
       if (opts.signal?.aborted) {
@@ -496,10 +527,14 @@ export async function* runLoop(opts: {
       return;
     }
 
+    compactedThisIteration = false;
+    holdBox.current = tickHold(holdBox.current, estimatedTokens, usableInput);
     const tokens = Math.max(lastInputTokens, estimatedTokens);
     if (tokens / usableInput >= compactionThreshold) {
-      const thresholdOutcome = yield* tryCompact("soft");
-      if (thresholdOutcome === "aborted") return;
+      if (holdBox.current.status !== "held") {
+        const thresholdOutcome = yield* tryCompact("soft");
+        if (thresholdOutcome === "aborted") return;
+      }
     }
 
     let text = "";
@@ -616,6 +651,10 @@ export async function* runLoop(opts: {
         }
         const resultUsage = await result.usage;
         lastInputTokens = resultUsage.inputTokens ?? 0;
+        if (compactedThisIteration) {
+          const heldEvent = adoptYield(Math.max(lastInputTokens, estimatedTokens), true);
+          if (heldEvent !== undefined) yield heldEvent;
+        }
         let cost: CostReport | undefined;
         let servedProvider: string | undefined;
         if (opts.credential === "subscription") {

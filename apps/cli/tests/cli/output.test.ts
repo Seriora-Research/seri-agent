@@ -11,6 +11,7 @@ import {
   USAGE,
 } from "../../src/cli/output";
 import { buildFileChange } from "../../src/fileChange";
+import { COMPACTION_YIELD_LOW_MESSAGE } from "../../src/loop/compactionHold";
 import type { ArchivistReport } from "../../src/memory/archivist";
 import { ARCHIVIST_MARK } from "../../src/tui/theme/theme";
 
@@ -239,6 +240,29 @@ describe("approvalPromptText", () => {
     expect(approvalPromptText("bash", { command: "ls" }, false, "")).toBe(
       'Approve bash({"command":"ls"})? [y]es / [N]o ',
     );
+  });
+});
+
+describe("printEvent compaction-held", () => {
+  test("writes the hold reason to stderr, not stdout", () => {
+    const warns: string[] = [];
+    const originalWarn = console.warn;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    console.warn = (msg: string) => warns.push(String(msg));
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      printEvent({
+        type: "compaction-held",
+        reason: "yield-low",
+        message: COMPACTION_YIELD_LOW_MESSAGE,
+      });
+    } finally {
+      console.warn = originalWarn;
+      console.log = originalLog;
+    }
+    expect(warns).toEqual([COMPACTION_YIELD_LOW_MESSAGE]);
+    expect(logs).toEqual([]);
   });
 });
 

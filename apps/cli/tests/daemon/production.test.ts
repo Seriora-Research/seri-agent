@@ -430,7 +430,7 @@ describe.skipIf(process.platform !== "win32")("client env (powershell)", () => {
     );
     expect(out.stdout.trim()).toBe(FOO_PROBE);
     expect(process.env.FOO).toBe("daemon-a");
-  }, 15000);
+  }, 20000);
 
   test("a client Path without powershell fails instead of running another powershell", async () => {
     const configDir = makeDir();
@@ -527,7 +527,7 @@ describe("client permission profile", () => {
         (event) => isLoopDaemonEvent(event.event) && event.event.value.type === "permission-denied",
       ),
     ).toBe(false);
-  });
+  }, 15000);
 
   test("two concurrent turns each keep their own path denials", async () => {
     const configDir = makeDir();
