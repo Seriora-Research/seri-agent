@@ -18,6 +18,7 @@ import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { createHookRunner } from "../hooks/gate";
+import { OPEN_COMPACTION_HOLD } from "../loop/compactionHold";
 import {
   type ApprovalPrompt,
   DEFAULT_COMPACTION_THRESHOLD,
@@ -178,6 +179,9 @@ export async function driveLoop(
   const askOutsideFs = driveOpts.askOutsideFs !== false;
   if (prepared.outsideConsent === undefined) {
     prepared.outsideConsent = { current: "unasked" };
+  }
+  if (prepared.compactionHold === undefined) {
+    prepared.compactionHold = { current: OPEN_COMPACTION_HOLD };
   }
   prepared.trajectory.setStepCeiling(maxTurns ?? 500);
 
@@ -441,6 +445,7 @@ export async function driveLoop(
           blockReadsOutsideWorkingDirectories: standingDeny,
           askOutsideFs,
           outsideConsent: prepared.outsideConsent,
+          compactionHold: prepared.compactionHold,
           system: parentSystem,
           onToolPhaseEnd: createRuleInjector({
             rules: prepared.rules,

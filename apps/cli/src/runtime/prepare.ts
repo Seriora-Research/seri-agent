@@ -25,6 +25,7 @@ import {
 } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
+import { OPEN_COMPACTION_HOLD, type CompactionHold } from "../loop/compactionHold";
 import { type HooksLoad, loadHookRegistry } from "../hooks/registry";
 import {
   closeMcpClients,
@@ -256,6 +257,7 @@ export type PreparedRun = {
   model: LanguageModel;
   permissionMode: PermissionMode;
   outsideConsent?: { current: Consent };
+  compactionHold?: { current: CompactionHold };
   worktree: string;
   allowedTools: readonly string[];
   autoModeOnBlock?: AutoModeOnBlock;
@@ -629,6 +631,7 @@ export async function prepareSession(
       model,
       permissionMode,
       outsideConsent: { current: skipPermissions ? "allowed-this-run" : "unasked" },
+      compactionHold: { current: OPEN_COMPACTION_HOLD },
       worktree,
       allowedTools,
       pathDenials,

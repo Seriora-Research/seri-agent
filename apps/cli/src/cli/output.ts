@@ -193,6 +193,9 @@ export function printEvent(event: LoopEvent): void {
     case "compacted":
       console.log(`\n⚙ compacted ${event.evictedCount} messages`);
       break;
+    case "compaction-held":
+      console.warn(event.message);
+      break;
     // The SDK retry callback is handed neither the error nor the delay, so this line cannot name which of 429 or 5xx it was.
     case "retry":
       console.log(`\n↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);

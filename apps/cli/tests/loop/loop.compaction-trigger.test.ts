@@ -3,10 +3,13 @@ import { APICallError } from "@ai-sdk/provider";
 import type { ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import {
+  estimateTokens,
   isContextOverflowError,
   requestOutputCap,
   streamOutputCap,
 } from "../../src/loop/compaction";
+import { COMPACTION_YIELD_LOW_MESSAGE } from "../../src/loop/compactionHold";
+import { createConversation, windowOf } from "../../src/loop/conversation";
 import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
   collect,
@@ -516,6 +519,93 @@ describe("runLoop compaction trigger", () => {
 
     expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
     expect(model.doGenerateCalls).toHaveLength(1);
+  });
+
+  test("a low-yield pass arms a hold so 10 later turns do not compact again", async () => {
+    const laterTurns = 10;
+    const tools = makeTools(async () => "y".repeat(400));
+    const model = new MockLanguageModelV4({
+      doStream: [
+        ...Array.from({ length: laterTurns }, (_, i) =>
+          streamResult(
+            toolCallChunks(`call-${i}`, "write_file", { path: `f${i}.txt` }, usage(5, 5)),
+          ),
+        ),
+        streamResult(textOnlyChunks("done")),
+      ],
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools,
+        messages: fatHistory(24, 2_000),
+        permissionMode: "auto",
+        maxIterations: laterTurns + 1,
+        contextWindowSize: 10_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 4_750,
+      }),
+    );
+
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(model.doGenerateCalls).toHaveLength(1);
+    const held = events.filter(
+      (e): e is Extract<LoopEvent, { type: "compaction-held" }> => e.type === "compaction-held",
+    );
+    expect(held).toHaveLength(1);
+    expect(held[0]?.reason).toBe("yield-low");
+    expect(held[0]?.message).toBe(COMPACTION_YIELD_LOW_MESSAGE);
+    const lastUpdate = events
+      .filter(
+        (e): e is Extract<LoopEvent, { type: "messages-updated" }> => e.type === "messages-updated",
+      )
+      .at(-1);
+    if (lastUpdate === undefined) throw new Error("no messages-updated event");
+    expect(
+      estimateTokens(windowOf(createConversation(lastUpdate.messages, lastUpdate.compact))),
+    ).toBeGreaterThanOrEqual(5_000);
+  });
+
+  test("an overflow compact still runs while auto-compaction is held", async () => {
+    let streamAttempts = 0;
+    const messages = fatHistory(12, 80);
+    const model = new MockLanguageModelV4({
+      doStream: async () => {
+        streamAttempts++;
+        if (streamAttempts === 1) {
+          throw new Error("This model's maximum context length was exceeded");
+        }
+        return streamResult(textOnlyChunks("recovered"));
+      },
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages,
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 100_000,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 80,
+        compactionHold: {
+          current: {
+            status: "held",
+            reason: "yield-low",
+            armedAtIteration: 0,
+            tokensAtArm: 90_000,
+          },
+        },
+      }),
+    );
+
+    expect(streamAttempts).toBe(2);
+    expect(events.filter((e) => e.type === "compacted")).toHaveLength(1);
+    expect(events.some((e) => e.type === "text-delta" && e.text === "recovered")).toBe(true);
   });
 });
 

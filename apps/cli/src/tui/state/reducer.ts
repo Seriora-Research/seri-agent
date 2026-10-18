@@ -23,7 +23,7 @@ import {
 import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
 import type { ChildEventPayload } from "../../subagents/dispatch";
-import { ERROR_MARK } from "../theme/theme";
+import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
 import { fileChangeFromTool, fileChangePlainText, sameHunk } from "../../fileChange";
 import {
   estimateTokens,
@@ -419,6 +419,7 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
     case "messages-updated":
     case "retry":
     case "tool-allowed":
+    case "compaction-held":
       return child;
     default: {
       const _exhaustive: never = event;
@@ -1034,6 +1035,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
           ...state.turn,
           tokens: reconcileUsage(state.turn.tokens, event.usage),
         },
+      };
+    case "compaction-held":
+      return {
+        ...pushLine(state, `${WARNING_MARK}${event.message}`),
+        status: "",
       };
     case "retry":
       return pushLine(state, `↻ rate-limited or unavailable; retrying (attempt ${event.attempt})`);

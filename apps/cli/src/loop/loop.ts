@@ -52,6 +52,13 @@ import {
   requestOutputCap,
 } from "./compaction";
 import {
+  COMPACTION_YIELD_LOW_MESSAGE,
+  holdClears,
+  noteAutoCompactYield,
+  OPEN_COMPACTION_HOLD,
+  type CompactionHold,
+} from "./compactionHold";
+import {
   applyRecap,
   type CompactCursor,
   createConversation,
@@ -88,6 +95,7 @@ export type LoopEvent =
   | { type: "retry"; attempt: number }
   // Emitted when an always-grant is added to the live Set, before that tool runs.
   | { type: "tool-allowed"; name: string }
+  | { type: "compaction-held"; reason: "yield-low"; message: string }
   // "aborted" is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
@@ -401,6 +409,7 @@ export async function* runLoop(opts: {
   classifyToolCall?: ToolCallClassifier;
   autoModeOnBlock?: AutoModeOnBlock;
   compact?: CompactCursor;
+  compactionHold?: { current: CompactionHold };
   /** Runs after a compact is decided and before messages are evicted. */
   onBeforeCompact?: () => Promise<void>;
 }): AsyncGenerator<LoopEvent> {
@@ -421,6 +430,7 @@ export async function* runLoop(opts: {
   const samplingFields = samplingCallFields(sampling);
   const compactionThreshold = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
+  const holdBox = opts.compactionHold ?? { current: OPEN_COMPACTION_HOLD };
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
   const closedUnanswered = closeUnansweredToolCalls(messages);
@@ -431,6 +441,23 @@ export async function* runLoop(opts: {
   }
   function messagesUpdated(): Extract<LoopEvent, { type: "messages-updated" }> {
     return { type: "messages-updated", ...snapshotOf(conversation) };
+  }
+  function adoptYield(
+    iteration: number,
+  ): Extract<LoopEvent, { type: "compaction-held" }> | undefined {
+    const noted = noteAutoCompactYield({
+      iteration,
+      windowTokensAfter: estimatedTokens,
+      usableInput,
+      threshold: compactionThreshold,
+    });
+    if (noted.hold.status === "open") {
+      holdBox.current = OPEN_COMPACTION_HOLD;
+      return undefined;
+    }
+    if (holdBox.current.status === "held") return undefined;
+    holdBox.current = noted.hold;
+    return { type: "compaction-held", reason: "yield-low", message: COMPACTION_YIELD_LOW_MESSAGE };
   }
   const turnUserText = lastUserText(opts.messages);
 
@@ -444,6 +471,7 @@ export async function* runLoop(opts: {
 
   async function* tryCompact(
     onSummarizerFail: "soft" | "hard",
+    iteration: number,
   ): AsyncGenerator<LoopEvent, "ok" | "skipped" | "failed" | "aborted"> {
     const window = windowOf(conversation);
     const evictBoundary = findSafeEvictionBoundary(window, preserveRecentTokens);
@@ -470,6 +498,8 @@ export async function* runLoop(opts: {
         tokensBefore: compacted.tokensBefore,
       };
       yield messagesUpdated();
+      const heldEvent = adoptYield(iteration);
+      if (heldEvent !== undefined) yield heldEvent;
       return "ok";
     } catch (err) {
       if (opts.signal?.aborted) {
@@ -498,8 +528,16 @@ export async function* runLoop(opts: {
 
     const tokens = Math.max(lastInputTokens, estimatedTokens);
     if (tokens / usableInput >= compactionThreshold) {
-      const thresholdOutcome = yield* tryCompact("soft");
-      if (thresholdOutcome === "aborted") return;
+      if (
+        holdBox.current.status === "held" &&
+        holdClears(holdBox.current, iteration, estimatedTokens, usableInput)
+      ) {
+        holdBox.current = OPEN_COMPACTION_HOLD;
+      }
+      if (holdBox.current.status !== "held") {
+        const thresholdOutcome = yield* tryCompact("soft", iteration);
+        if (thresholdOutcome === "aborted") return;
+      }
     }
 
     let text = "";
@@ -574,7 +612,7 @@ export async function* runLoop(opts: {
             });
           } else if (part.type === "error") {
             if (!overflowRetried && isContextOverflowError(part.error)) {
-              const overflowOutcome = yield* tryCompact("hard");
+              const overflowOutcome = yield* tryCompact("hard", iteration);
               if (overflowOutcome === "aborted") return;
               if (overflowOutcome === "ok") {
                 overflowRetried = true;
@@ -642,7 +680,7 @@ export async function* runLoop(opts: {
           return;
         }
         if (!overflowRetried && isContextOverflowError(err)) {
-          const overflowOutcome = yield* tryCompact("hard");
+          const overflowOutcome = yield* tryCompact("hard", iteration);
           if (overflowOutcome === "aborted") return;
           if (overflowOutcome === "ok") {
             overflowRetried = true;

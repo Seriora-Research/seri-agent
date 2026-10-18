@@ -265,8 +265,10 @@ describe("prepareSession + mcp", () => {
   test("skipPermissions seeds the outside-cwd latch for this run only", async () => {
     const attended = (await prepareSession(baseCtx(makeDir()), deps, false, false)) as PreparedRun;
     expect(attended.outsideConsent?.current).toBe("unasked");
+    expect(attended.compactionHold?.current).toEqual({ status: "open" });
     const skipped = (await prepareSession(baseCtx(makeDir()), deps, true, false)) as PreparedRun;
     expect(skipped.outsideConsent?.current).toBe("allowed-this-run");
+    expect(skipped.compactionHold?.current).toEqual({ status: "open" });
   });
 
   test("a stored MCP grant whose digest matches the session catalog enters allowedTools as the bare name", async () => {
