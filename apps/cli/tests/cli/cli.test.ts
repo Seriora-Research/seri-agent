@@ -5030,6 +5030,50 @@ describe("run (/compact)", () => {
     expect(cancelledSignal).toBe("SIGINT");
   });
 
+  test("a reasoning-only summarizer fails compaction and leaves the saved session uncompacted", async () => {
+    seedCheckpointLog();
+    const session = makeSession(longMessages(30));
+    saveSession(session, sessionsDir);
+    const before = loadSession(SESSION_ID, sessionsDir);
+
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => ({
+        content: [{ type: "reasoning", text: "Let me plan the sections first." }],
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage: compactionUsage(20, 10),
+        warnings: [],
+      }),
+    });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    let thrown: unknown;
+    try {
+      await getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/compaction/i);
+    expect(model.doGenerateCalls).toHaveLength(2);
+    expect(logs).toEqual(["⚙ compacting…"]);
+    expect(loadSession(SESSION_ID, sessionsDir)).toEqual(before);
+    expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
+  });
+
   test("a successful compaction frees the onSignalCancel slot, so a later signal is not silently swallowed", async () => {
     const session = makeSession(longMessages(30));
     saveSession(session, sessionsDir);
