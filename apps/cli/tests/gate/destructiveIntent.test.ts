@@ -112,6 +112,14 @@ describe("writeFileDenialCovers", () => {
       ),
     ).toBe(false);
   });
+
+  test("a quote in a heredoc body does not hide a later denied path", () => {
+    const command = "cat <<'EOF'\nit's\nEOF\nrm .env 'z'";
+    const intent = destructiveIntentOf("bash", { command }, cwd);
+    expect(writeFileDenialCovers([{ tool: "write_file", pattern: ".env" }], intent, cwd)).toBe(
+      true,
+    );
+  });
 });
 
 describe("treesOverlap", () => {
@@ -189,5 +197,80 @@ describe("catastrophicOf", () => {
     expect(catastrophicOf(destructiveIntentOf("bash", { command: "echo hi" }, cwd), cwd)).toBe(
       undefined,
     );
+  });
+
+  test("a quote in a heredoc body does not hide a later volume-root remove", () => {
+    const command = "cat <<EOF\ndon't\nEOF\nrm -rf / 'x'";
+    const intent = destructiveIntentOf("bash", { command }, cwd);
+    expect(catastrophicOf(intent, cwd)).toEqual({ reason: "volume-root", target: "/" });
+  });
+
+  test("a quote in a quoted-delimiter heredoc body does not hide a later workspace-escape", () => {
+    const command = "cat <<'EOF'\nit's\nEOF\nrm -rf ~ 'y'";
+    const intent = destructiveIntentOf("bash", { command }, cwd);
+    expect(catastrophicOf(intent, cwd)?.reason).toBe("workspace-escape");
+    expect(sameResolved(catastrophicOf(intent, cwd)?.target ?? "", homedir())).toBe(true);
+  });
+
+  test("tab-indented <<- terminator still leaves a later volume-root remove visible", () => {
+    const command = "cat <<-'EOF'\n\tit's\n\tEOF\nrm -rf /";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)).toEqual({
+      reason: "volume-root",
+      target: "/",
+    });
+  });
+
+  test("a here-string is not treated as a heredoc", () => {
+    const command = "cat <<<EOF; rm -rf /";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)).toEqual({
+      reason: "volume-root",
+      target: "/",
+    });
+  });
+
+  test("arithmetic shift is not treated as a heredoc", () => {
+    const command = "echo $((1<<4)); rm -rf /";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)).toEqual({
+      reason: "volume-root",
+      target: "/",
+    });
+  });
+
+  test("rm in a heredoc body is data, not a later command", () => {
+    const command = "cat <<'EOF'\nNever run rm -rf /\nEOF\necho ok";
+    expect(destructiveIntentOf("bash", { command }, cwd)).toBeUndefined();
+  });
+
+  test("a missing terminator treats the rest of the input as body", () => {
+    const command = "cat <<'EOF'\nit's\nrm -rf /";
+    expect(destructiveIntentOf("bash", { command }, cwd)).toBeUndefined();
+  });
+
+  test("two heredocs on one line still leave a later volume-root remove visible", () => {
+    const command = "cat <<'A'; cat <<'B'\nit's\nA\nok\nB\nrm -rf /";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)).toEqual({
+      reason: "volume-root",
+      target: "/",
+    });
+  });
+
+  test("an unquoted heredoc still sees a remove inside substitution", () => {
+    const command = "cat <<EOF\n$(rm -rf /tmp/unrelated-tree)\nEOF";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)?.reason).toBe(
+      "workspace-escape",
+    );
+  });
+
+  test("a quoted-delimiter body does not treat substitution as a command", () => {
+    const command = "cat <<'EOF'\n$(rm -rf /)\nEOF\necho ok";
+    expect(destructiveIntentOf("bash", { command }, cwd)).toBeUndefined();
+  });
+
+  test("a heredoc inside substitution does not hide a later volume-root remove", () => {
+    const command = "X=$(cat <<'EOF'\nit's\nEOF\n); rm -rf /";
+    expect(catastrophicOf(destructiveIntentOf("bash", { command }, cwd), cwd)).toEqual({
+      reason: "volume-root",
+      target: "/",
+    });
   });
 });

@@ -371,6 +371,36 @@ describe("runLoop destructive deny", () => {
     expect(events.at(-1)).toEqual({ type: "done", reason: "destructive-denied" });
   });
 
+  test("a quote in a heredoc body does not let a later volume-root remove run in auto", async () => {
+    const executed: string[] = [];
+    const command = "cat <<EOF\ndon't\nEOF\nrm -rf / 'x'";
+    const events = await collect(
+      runLoop({
+        model: new MockLanguageModelV4({
+          doStream: [
+            streamResult(toolCallChunks("call-1", "bash", { command })),
+            streamResult(textOnlyChunks("Done")),
+          ],
+        }),
+        tools: shellTools(async (toolName, cmd) => {
+          executed.push(`${toolName}:${cmd}`);
+          return "ok";
+        }),
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: "/tmp/project",
+        workingDirectory: "/tmp/project",
+      }),
+    );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "bash",
+      reason: "blocked",
+    });
+    expect(events.at(-1)).toEqual({ type: "done", reason: "destructive-denied" });
+  });
+
   test("auto mode still blocks a recursive delete outside the working directory", async () => {
     const executed: string[] = [];
     const events = await collect(

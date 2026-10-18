@@ -39,6 +39,15 @@ export function reasoningThenTextChunks(
   ];
 }
 
+export function reasoningOnlyChunks(thought: string): LanguageModelV4StreamPart[] {
+  return [
+    { type: "reasoning-start", id: "r1" },
+    { type: "reasoning-delta", id: "r1", delta: thought },
+    { type: "reasoning-end", id: "r1" },
+    { type: "finish", finishReason: { unified: "stop", raw: undefined }, usage: usage(5, 5) },
+  ];
+}
+
 export function toolCallChunks(
   toolCallId: string,
   toolName: string,
