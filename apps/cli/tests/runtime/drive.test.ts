@@ -442,6 +442,41 @@ describe("driveLoop directDispatch", () => {
     ]);
   });
 
+  test("a failed child still yields tool-result, then an error, and is not a successful turn", async () => {
+    const seen: LoopEvent[] = [];
+    const { run } = runDirect([{ type: "error", error: "HTTP 429 crash" }], (event) =>
+      seen.push(event),
+    );
+    const result = await run;
+
+    expect(seen.map((event) => event.type)).toEqual([
+      "tool-call",
+      "tool-result",
+      "messages-updated",
+      "error",
+    ]);
+    expect(seen.some((event) => event.type === "done")).toBe(false);
+    const toolResult = seen.find((event) => event.type === "tool-result");
+    expect(toolResult?.type).toBe("tool-result");
+    if (toolResult?.type !== "tool-result") throw new Error("missing tool-result");
+    expect(toolResult.result).toMatchObject({
+      results: [{ status: "failed", summary: "HTTP 429 crash" }],
+    });
+    expect(result.doneReason).toBeUndefined();
+    expect(result.directSummary).toContain("HTTP 429 crash");
+    expect(exitCodeFromDriveResult(result)).toBe(1);
+  });
+
+  test("a cancelled child yields done aborted", async () => {
+    const seen: LoopEvent[] = [];
+    const { run } = runDirect([{ type: "done", reason: "aborted" }], (event) => seen.push(event));
+    const result = await run;
+
+    expect(seen.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    expect(result.doneReason).toBe("aborted");
+    expect(exitCodeFromDriveResult(result)).toBe(1);
+  });
+
   test("the parent model is never called: the one runLoop call is the child's", async () => {
     const prepared = preparedStub();
     const only = fakeRunLoop();

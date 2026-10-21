@@ -192,7 +192,7 @@ describe("toolResultLine", () => {
       type: "tool-result",
       name: "dispatch_subagents",
       result: {
-        results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+        results: [{ status: "succeeded" }, { status: "succeeded" }],
         totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     });
@@ -203,7 +203,7 @@ describe("toolResultLine", () => {
     const line = toolResultLine({
       type: "tool-result",
       name: "dispatch_subagents",
-      result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      result: { results: [{ status: "succeeded" }], totalUsage: {} },
     });
     expect(line).toBe("✓ Dispatched subagents done (1 task)");
   });
@@ -213,11 +213,43 @@ describe("toolResultLine", () => {
       type: "tool-result",
       name: "dispatch_subagents",
       result: {
-        results: [{ doneReason: "no-tool-call" }, { doneReason: undefined }],
+        results: [{ status: "succeeded" }, { status: "not-run" }],
         totalUsage: {},
       },
     });
     expect(line).toBe("✓ Dispatched subagents done (1 of 2 tasks)");
+  });
+
+  test("dispatch_subagents counts a failed sibling as started", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [
+          { id: "t1:0", status: "failed" },
+          { id: "t1:1", status: "succeeded" },
+          { id: "t1:2", status: "succeeded" },
+        ],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ Dispatched subagents done (3 tasks, 1 failed)");
+  });
+
+  test("dispatch_subagents counts cancelled separately from tasks that never ran", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [
+          { id: "t1:0", status: "succeeded" },
+          { id: "t1:1", status: "cancelled" },
+          { id: "t1:2", status: "not-run" },
+        ],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ Dispatched subagents done (2 of 3 tasks, 1 cancelled)");
   });
 });
 

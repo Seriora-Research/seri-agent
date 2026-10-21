@@ -257,6 +257,11 @@ export async function runArchivist(args: {
     return undefined;
   }
   if (args.signal.aborted) return undefined;
+  if (result.doneReason === undefined) {
+    args.state.toolCallsSinceRun = 0;
+    args.onWarning(`archivist run failed: ${result.summary}`);
+    return undefined;
+  }
 
   const usage: LanguageModelUsage = {
     inputTokens: result.usage.inputTokens,

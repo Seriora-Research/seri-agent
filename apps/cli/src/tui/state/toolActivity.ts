@@ -1,7 +1,6 @@
 import path from "node:path";
 import { escapeControlChars, toolResultLine } from "../../cli/output";
 import { isMcpToolName } from "../../mcp/types";
-import type { DispatchResult } from "../../subagents/dispatch";
 import { TODO_TOOL_NAME } from "../../todo/tool";
 import type { GlobResult } from "../../tools/glob";
 import type { GrepResult } from "../../tools/grep";
@@ -190,15 +189,6 @@ function stderrSnippet(stderr: string | undefined): string | undefined {
   return cap(display(first), STDERR_CAP);
 }
 
-function dispatchCounts(result: unknown): { ran: number; total: number } | undefined {
-  const value = result as Partial<DispatchResult> | undefined;
-  if (!Array.isArray(value?.results)) return undefined;
-  return {
-    ran: value.results.filter((r) => r.doneReason !== undefined).length,
-    total: value.results.length,
-  };
-}
-
 function writeFileAnomaly(result: unknown): string | undefined {
   const verification = writeFileVerification(result);
   if (verification === undefined) return undefined;
@@ -229,11 +219,6 @@ export function anomalyLineForResult(
   }
   if (name === "grep" || name === "glob") return undefined;
   if (name === "write_file") return writeFileAnomaly(result);
-  if (name === "dispatch_subagents") {
-    const counts = dispatchCounts(result);
-    if (counts === undefined || counts.ran >= counts.total) return undefined;
-    return `${counts.total - counts.ran} of ${counts.total} subagents did not finish`;
-  }
   return undefined;
 }
 

@@ -17,6 +17,7 @@ import {
   dispatchDirect,
   dispatchSchema,
   runSubagent,
+  type SubagentResult,
   type SubagentRuntime,
 } from "../../src/subagents/dispatch";
 import {
@@ -27,6 +28,7 @@ import {
   composeAddendum,
 } from "../../src/subagents/registry";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
+import { initialTuiState, tuiReducer } from "../../src/tui/state/reducer";
 import { collect, streamResult, textOnlyChunks, toolCallChunks } from "../loop/fixtures";
 import { fakeChildLoop } from "./fakeChildLoop";
 
@@ -44,6 +46,12 @@ function agentSpec(name: string): AgentSpec {
   const spec = builtinRegistry().get(name);
   if (spec === undefined) throw new Error(`no built-in agent named "${name}"`);
   return spec;
+}
+
+function succeededRow(row: SubagentResult): Extract<SubagentResult, { status: "succeeded" }> {
+  expect(row.status).toBe("succeeded");
+  if (row.status !== "succeeded") throw new Error("expected succeeded");
+  return row;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -306,7 +314,7 @@ describe("dispatch_subagents", () => {
     expect(calls).toHaveLength(3);
     expect(result.results).toHaveLength(4);
     expect(result.results[3].summary).toContain("3-task limit");
-    expect(result.results[3].doneReason).toBeUndefined();
+    expect(result.results[3].status).toBe("not-run");
 
     const childIds = [...new Set(forwarded.map((p) => p.childId))].sort();
     expect(childIds).toEqual(["t1:0", "t1:1", "t1:2"]);
@@ -688,7 +696,7 @@ describe("dispatch_subagents", () => {
     expect(result.results[4].summary).toContain("3-task limit");
 
     expect(result.results[3].usage).toEqual({});
-    expect(result.results[3].doneReason).toBeUndefined();
+    expect(result.results[3].status).toBe("not-run");
   });
 
   test("each child's opts match the runtime it was built from", async () => {
@@ -806,9 +814,10 @@ describe("dispatch_subagents", () => {
     expect(calls[0].opts.maxOutputTokens).toBe(32_000);
 
     expect(calls[0].opts.reasoningEffort).toBeUndefined();
-    expect(result.results[0].model).toBe("claude-sonnet-5");
-    expect(result.results[0].provider).toBe("anthropic");
-    expect(result.results[0].inherited).toBe(false);
+    const row = succeededRow(result.results[0]);
+    expect(row.model).toBe("claude-sonnet-5");
+    expect(row.provider).toBe("anthropic");
+    expect(row.inherited).toBe(false);
   });
 
   test("same-pair resolveRole still forwards parent reasoningEffort", async () => {
@@ -858,11 +867,11 @@ describe("dispatch_subagents", () => {
       dispatchOpts("t1"),
     )) as DispatchResult;
 
-    expect(result.results[3].doneReason).toBeUndefined();
-    expect(result.results[3].model).toBeUndefined();
-    expect(result.results[3].provider).toBeUndefined();
-    expect(result.results[3].inherited).toBeUndefined();
-    expect(result.results[0].model).toBe("claude-sonnet-5");
+    expect(result.results[3].status).toBe("not-run");
+    expect(result.results[3]).not.toHaveProperty("model");
+    expect(result.results[3]).not.toHaveProperty("provider");
+    expect(result.results[3]).not.toHaveProperty("inherited");
+    expect(succeededRow(result.results[0]).model).toBe("claude-sonnet-5");
   });
 
   test("child-started carries the actual pair when not inherited", async () => {
@@ -936,7 +945,7 @@ describe("dispatch_subagents", () => {
     });
     expect(calls[0].opts.modelId).toBe("claude-sonnet-5");
     expect(calls[0].opts.reasoningEffort).toBe("high");
-    expect(result.results[0].inherited).toBe(false);
+    expect(succeededRow(result.results[0]).inherited).toBe(false);
   });
 
   test("two tasks with the same role and different models get two overlays", async () => {
@@ -968,7 +977,10 @@ describe("dispatch_subagents", () => {
     expect(ids).toContain("claude-sonnet-5");
     expect(ids).toContain("gpt-5");
     expect(calls.find((c) => c.opts.modelId === "gpt-5")?.opts.reasoningEffort).toBe("high");
-    expect(result.results.map((r) => r.model)).toEqual(["claude-sonnet-5", "gpt-5"]);
+    expect(result.results.map((row) => succeededRow(row).model)).toEqual([
+      "claude-sonnet-5",
+      "gpt-5",
+    ]);
   });
 
   test("overflow rows omit model/provider/inherited even when the overflow task named a pair", async () => {
@@ -1004,11 +1016,11 @@ describe("dispatch_subagents", () => {
       dispatchOpts("t1"),
     )) as DispatchResult;
 
-    expect(result.results[3].doneReason).toBeUndefined();
-    expect(result.results[3].model).toBeUndefined();
-    expect(result.results[3].provider).toBeUndefined();
-    expect(result.results[3].inherited).toBeUndefined();
-    expect(result.results[3].effort).toBeUndefined();
+    expect(result.results[3].status).toBe("not-run");
+    expect(result.results[3]).not.toHaveProperty("model");
+    expect(result.results[3]).not.toHaveProperty("provider");
+    expect(result.results[3]).not.toHaveProperty("inherited");
+    expect(result.results[3]).not.toHaveProperty("effort");
   });
 
   test("a hostile explore calling write_file/edit/bash/powershell/dispatch_subagents gets Unknown tool and writes nothing", async () => {
@@ -1210,7 +1222,7 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(result.results[1].role).toBe("ghost");
     expect(result.results[1].summary).toContain('no agent named "ghost"');
     expect(result.results[1].usage).toEqual({});
-    expect(result.results[1].doneReason).toBeUndefined();
+    expect(result.results[1].status).toBe("not-run");
   });
 
   test("a custom agent runs with exactly its own ToolSet and its own addendum", async () => {
@@ -1341,5 +1353,448 @@ describe("dispatch_subagents with a file-defined agent", () => {
     });
     expect(calls[0].opts.reasoningEffort).toBe("high");
     expect(events[0]?.role).toBe("reviewer");
+  });
+});
+
+describe("per-child dispatch outcomes", () => {
+  const exploreRow = {
+    role: "explore" as const,
+    usage: {},
+    toolCallsMade: 0,
+    model: "test-model",
+    provider: "groq" as const,
+    inherited: true,
+  };
+
+  test("a yielded error on child 0 returns failed, succeeded, succeeded with task ids", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return { events: [{ type: "error", error: "HTTP 429 rate limited" }] };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: index === 1 ? "summary A" : "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+        before: () => sleep(20),
+      };
+    });
+
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish a" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results).toEqual([
+      {
+        ...exploreRow,
+        id: "t1:0",
+        status: "failed",
+        goal: "fail now",
+        summary: "HTTP 429 rate limited",
+      },
+      {
+        ...exploreRow,
+        id: "t1:1",
+        status: "succeeded",
+        doneReason: "no-tool-call",
+        goal: "finish a",
+        summary: "summary A",
+      },
+      {
+        ...exploreRow,
+        id: "t1:2",
+        status: "succeeded",
+        doneReason: "no-tool-call",
+        goal: "finish b",
+        summary: "summary B",
+      },
+    ]);
+    expect(result.totalUsage).toEqual({});
+  });
+
+  test("a thrown error on child 0 returns the same three rows and forwards one child error", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("HTTP 429 crash");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: index === 1 ? "summary A" : "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+        before: () => sleep(20),
+      };
+    });
+    const forwarded: ChildEventPayload[] = [];
+    const result = (await createDispatchTool(
+      makeRuntime(fake, { onChildEvent: (payload) => forwarded.push(payload) }),
+    ).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish a" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "HTTP 429 crash"],
+      ["t1:1", "succeeded", "summary A"],
+      ["t1:2", "succeeded", "summary B"],
+    ]);
+    const childErrors = forwarded.filter(
+      (payload) => payload.childId === "t1:0" && payload.event.type === "error",
+    );
+    expect(childErrors).toHaveLength(1);
+    expect(childErrors[0]?.event).toEqual({ type: "error", error: "HTTP 429 crash" });
+  });
+
+  test("a throw after a tool-call keeps that child's spent usage on the failed row", async () => {
+    let index = 0;
+    async function* fake(_opts: RunLoopOpts): AsyncGenerator<LoopEvent> {
+      const n = index++;
+      if (n === 0) {
+        yield { type: "tool-call", name: "read_file", args: { path: "a.ts" } };
+        yield usageEvent(100, 50);
+        throw new Error("HTTP 429 crash");
+      }
+      yield { type: "text-delta", text: "summary B" };
+      yield { type: "done", reason: "no-tool-call" };
+    }
+
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail after work" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results.map((row) => [row.id, row.status, row.toolCallsMade, row.usage])).toEqual(
+      [
+        ["t1:0", "failed", 1, { inputTokens: 100, outputTokens: 50, totalTokens: 150 }],
+        ["t1:1", "succeeded", 0, {}],
+      ],
+    );
+    expect(result.totalUsage).toEqual({ inputTokens: 100, outputTokens: 50, totalTokens: 150 });
+  });
+
+  test("a resolveRole throw on child 0 still returns the sibling row", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "summary B" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    let calls = 0;
+    const result = (await createDispatchTool(
+      makeRuntime(fake, {
+        resolveRole: () => {
+          calls += 1;
+          if (calls === 1) throw new Error("bad auth.json");
+          return {
+            model: new MockLanguageModelV4({}),
+            provider: "groq",
+            modelId: "test-model",
+            reasoningEffort: undefined,
+            inherited: true,
+          };
+        },
+      }),
+    ).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "bad auth.json"],
+      ["t1:1", "succeeded", "summary B"],
+    ]);
+  });
+
+  test("a host onChildEvent throw during the failure emit still keeps sibling rows", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("HTTP 429 crash");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+      };
+    });
+    const result = (await createDispatchTool(
+      makeRuntime(fake, {
+        onChildEvent: (payload) => {
+          if (payload.event.type === "error") throw new Error("host boom");
+        },
+      }),
+    ).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "HTTP 429 crash"],
+      ["t1:1", "succeeded", "summary B"],
+    ]);
+  });
+
+  test("a throw after the abort signal is cancelled", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [],
+      before: async () => {
+        throw new Error("HTTP 429 crash");
+      },
+    }));
+    const controller = new AbortController();
+    controller.abort();
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "stop" }] },
+      dispatchOpts("t1", [], controller.signal),
+    )) as DispatchResult;
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      id: "t1:0",
+      status: "cancelled",
+      summary: "cancelled before it produced a summary",
+      usage: {},
+      toolCallsMade: 0,
+    });
+  });
+
+  test("streamed text then a yielded error uses the error as the summary", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "partial answer" },
+        { type: "error", error: "HTTP 429 rate limited" },
+      ],
+    }));
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "fail after text" }] },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toMatchObject({
+      id: "t1:0",
+      status: "failed",
+      summary: "HTTP 429 rate limited",
+    });
+  });
+
+  test("a thrown writer still lets the next writer run", async () => {
+    const { fake, calls } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("writer crashed");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: "wrote it" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+      };
+    });
+    const result = (await createDispatchTool(makeRuntime(fake, { agents: withMutators() })).execute(
+      {
+        tasks: [
+          { role: "writer", goal: "first" },
+          { role: "writer", goal: "second" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(calls).toHaveLength(2);
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "writer crashed"],
+      ["t1:1", "succeeded", "wrote it"],
+    ]);
+  });
+
+  test("an unknown role keeps its task index and the next child uses the next id", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "found it" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    const result = (await createDispatchTool(
+      makeRuntime(fake, { onChildEvent: (payload) => forwarded.push(payload) }),
+    ).execute(
+      {
+        tasks: [
+          { role: "ghost", goal: "haunt" },
+          { role: "explore", goal: "look" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toEqual({
+      id: "t1:0",
+      status: "not-run",
+      role: "ghost",
+      goal: "haunt",
+      summary: 'not run: no agent named "ghost" is loaded in this session',
+      usage: {},
+      toolCallsMade: 0,
+    });
+    expect(result.results[1]).toMatchObject({
+      id: "t1:1",
+      status: "succeeded",
+      summary: "found it",
+    });
+    expect(forwarded.length).toBeGreaterThan(0);
+    expect(forwarded.every((payload) => payload.childId === "t1:1")).toBe(true);
+  });
+
+  test("dispatchDirect resolves when the child throws", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [],
+      before: async () => {
+        throw new Error("direct crash");
+      },
+    }));
+    const { result } = await dispatchDirect({
+      runtime: makeRuntime(fake),
+      spec: agentSpec("explore"),
+      goal: "go",
+      toolCallId: "t1",
+      rewindTo: 0,
+    });
+
+    expect(result.results).toEqual([
+      {
+        ...exploreRow,
+        id: "t1:0",
+        status: "failed",
+        goal: "go",
+        summary: "direct crash",
+      },
+    ]);
+  });
+
+  test("a thrown child still yields a parent tool-result and clears the roster", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("HTTP 429 crash");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: index === 1 ? "summary A" : "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+      };
+    });
+
+    const tools = { [DISPATCH_TOOL_NAME]: createDispatchTool(makeRuntime(fake)) };
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(
+          toolCallChunks("parent-call", DISPATCH_TOOL_NAME, {
+            tasks: [
+              { role: "explore", goal: "fail now" },
+              { role: "explore", goal: "finish a" },
+              { role: "explore", goal: "finish b" },
+            ],
+          }),
+        ),
+        streamResult(textOnlyChunks("parent saw the rows")),
+      ],
+    });
+
+    const events = await collect(
+      realRunLoop({
+        model,
+        tools,
+        messages: [{ role: "user", content: "fan out" }],
+        permissionMode: "auto",
+      }),
+    );
+
+    expect(
+      events.some(
+        (event) => event.type === "error" && event.error.includes("threw during execution"),
+      ),
+    ).toBe(false);
+
+    const toolResult = events.find(
+      (event) => event.type === "tool-result" && event.name === DISPATCH_TOOL_NAME,
+    );
+    expect(toolResult?.type).toBe("tool-result");
+    if (toolResult?.type !== "tool-result") throw new Error("missing tool-result");
+    const result = toolResult.result as DispatchResult;
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["parent-call:0", "failed", "HTTP 429 crash"],
+      ["parent-call:1", "succeeded", "summary A"],
+      ["parent-call:2", "succeeded", "summary B"],
+    ]);
+
+    let state = initialTuiState({
+      id: "s1",
+      cwd: "/repo",
+      systemPrompt: "",
+      permissionMode: "auto",
+      messages: [],
+    });
+    for (const row of result.results) {
+      state = tuiReducer(state, {
+        type: "subagent-child-event",
+        childId: row.id,
+        role: row.role,
+        goal: row.goal,
+        event: { type: "child-started" },
+      });
+    }
+    expect(state.subagents).toHaveLength(3);
+    state = tuiReducer(state, {
+      type: "loop-event",
+      event: { type: "tool-result", name: DISPATCH_TOOL_NAME, result },
+    });
+    expect(state.subagents).toEqual([]);
   });
 });
