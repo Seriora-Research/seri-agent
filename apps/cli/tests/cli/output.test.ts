@@ -219,6 +219,38 @@ describe("toolResultLine", () => {
     });
     expect(line).toBe("✓ Dispatched subagents done (1 of 2 tasks)");
   });
+
+  test("dispatch_subagents counts a failed sibling as started", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [
+          { id: "t1:0", status: "failed" },
+          { id: "t1:1", status: "succeeded" },
+          { id: "t1:2", status: "succeeded" },
+        ],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ Dispatched subagents done (3 tasks, 1 failed)");
+  });
+
+  test("dispatch_subagents counts cancelled separately from tasks that never ran", () => {
+    const line = toolResultLine({
+      type: "tool-result",
+      name: "dispatch_subagents",
+      result: {
+        results: [
+          { id: "t1:0", status: "succeeded" },
+          { id: "t1:1", status: "cancelled" },
+          { id: "t1:2", status: "not-run" },
+        ],
+        totalUsage: {},
+      },
+    });
+    expect(line).toBe("✓ Dispatched subagents done (2 of 3 tasks, 1 cancelled)");
+  });
 });
 
 describe("approvalPromptText", () => {

@@ -1038,6 +1038,58 @@ describe("runArchivist", () => {
     expect(state.toolCallsSinceRun).toBe(0);
   });
 
+  test("a terminal error after partial text stores no summary, and a thrown run still warns", async () => {
+    const ctx = makeCtx();
+    const state = createArchivistState(emptySession());
+    setMessages(state, [{ role: "user", content: "task" }]);
+    state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    async function* partialThenError(): AsyncGenerator<LoopEvent> {
+      yield { type: "text-delta", text: "half a note" };
+      yield { type: "error", error: "HTTP 429 rate limited" };
+    }
+
+    const report = await runArchivist({
+      state,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 100_000,
+      signal: new AbortController().signal,
+      onWarning: () => {},
+      runLoop: partialThenError as unknown as typeof runLoop,
+    });
+
+    expect(report).toBeDefined();
+    expect(report?.summary).toBeUndefined();
+
+    const warnings: string[] = [];
+    const thrownState = createArchivistState(emptySession());
+    thrownState.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+
+    async function* crash(): AsyncGenerator<LoopEvent> {
+      throw new Error("archivist boom");
+    }
+
+    const thrown = await runArchivist({
+      state: thrownState,
+      trigger: "tool-count",
+      ctx,
+      model: new MockLanguageModelV4({ doStream: [] }),
+      route: { model: "test-model", provider: "groq" },
+      catalog: catalogFor(),
+      contextWindow: 100_000,
+      signal: new AbortController().signal,
+      onWarning: (message) => warnings.push(message),
+      runLoop: crash as unknown as typeof runLoop,
+    });
+
+    expect(thrown).toBeUndefined();
+    expect(warnings[0]).toContain("archivist run failed");
+  });
+
   test("an already-aborted signal returns undefined silently (no onWarning call) and leaves the counter untouched", async () => {
     const ctx = makeCtx();
     const model = new MockLanguageModelV4({ doStream: [] });

@@ -1343,3 +1343,252 @@ describe("dispatch_subagents with a file-defined agent", () => {
     expect(events[0]?.role).toBe("reviewer");
   });
 });
+
+describe("per-child dispatch outcomes", () => {
+  const exploreRow = {
+    role: "explore" as const,
+    usage: {},
+    toolCallsMade: 0,
+    model: "test-model",
+    provider: "groq" as const,
+    inherited: true,
+  };
+
+  test("a yielded error on child 0 returns failed, succeeded, succeeded with task ids", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return { events: [{ type: "error", error: "HTTP 429 rate limited" }] };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: index === 1 ? "summary A" : "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+        before: () => sleep(20),
+      };
+    });
+
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish a" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results).toEqual([
+      {
+        ...exploreRow,
+        id: "t1:0",
+        status: "failed",
+        goal: "fail now",
+        summary: "HTTP 429 rate limited",
+      },
+      {
+        ...exploreRow,
+        id: "t1:1",
+        status: "succeeded",
+        doneReason: "no-tool-call",
+        goal: "finish a",
+        summary: "summary A",
+      },
+      {
+        ...exploreRow,
+        id: "t1:2",
+        status: "succeeded",
+        doneReason: "no-tool-call",
+        goal: "finish b",
+        summary: "summary B",
+      },
+    ]);
+    expect(result.totalUsage).toEqual({});
+  });
+
+  test("a thrown error on child 0 returns the same three rows and forwards one child error", async () => {
+    const { fake } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("HTTP 429 crash");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: index === 1 ? "summary A" : "summary B" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+        before: () => sleep(20),
+      };
+    });
+    const forwarded: ChildEventPayload[] = [];
+    const result = (await createDispatchTool(
+      makeRuntime(fake, { onChildEvent: (payload) => forwarded.push(payload) }),
+    ).execute(
+      {
+        tasks: [
+          { role: "explore", goal: "fail now" },
+          { role: "explore", goal: "finish a" },
+          { role: "explore", goal: "finish b" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "HTTP 429 crash"],
+      ["t1:1", "succeeded", "summary A"],
+      ["t1:2", "succeeded", "summary B"],
+    ]);
+    const childErrors = forwarded.filter(
+      (payload) => payload.childId === "t1:0" && payload.event.type === "error",
+    );
+    expect(childErrors).toHaveLength(1);
+    expect(childErrors[0]?.event).toEqual({ type: "error", error: "HTTP 429 crash" });
+  });
+
+  test("a throw after the abort signal is cancelled", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [],
+      before: async () => {
+        throw new Error("HTTP 429 crash");
+      },
+    }));
+    const controller = new AbortController();
+    controller.abort();
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "stop" }] },
+      dispatchOpts("t1", [], controller.signal),
+    )) as DispatchResult;
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({
+      id: "t1:0",
+      status: "cancelled",
+      summary: "cancelled before it produced a summary",
+      usage: {},
+      toolCallsMade: 0,
+    });
+  });
+
+  test("streamed text then a yielded error uses the error as the summary", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "partial answer" },
+        { type: "error", error: "HTTP 429 rate limited" },
+      ],
+    }));
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "fail after text" }] },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toMatchObject({
+      id: "t1:0",
+      status: "failed",
+      summary: "HTTP 429 rate limited",
+    });
+  });
+
+  test("a thrown writer still lets the next writer run", async () => {
+    const { fake, calls } = fakeChildLoop((_opts, index) => {
+      if (index === 0) {
+        return {
+          events: [],
+          before: async () => {
+            throw new Error("writer crashed");
+          },
+        };
+      }
+      return {
+        events: [
+          { type: "text-delta", text: "wrote it" },
+          { type: "done", reason: "no-tool-call" },
+        ],
+      };
+    });
+    const result = (await createDispatchTool(makeRuntime(fake, { agents: withMutators() })).execute(
+      {
+        tasks: [
+          { role: "writer", goal: "first" },
+          { role: "writer", goal: "second" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(calls).toHaveLength(2);
+    expect(result.results.map((row) => [row.id, row.status, row.summary])).toEqual([
+      ["t1:0", "failed", "writer crashed"],
+      ["t1:1", "succeeded", "wrote it"],
+    ]);
+  });
+
+  test("an unknown role keeps its task index and the next child uses the next id", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [
+        { type: "text-delta", text: "found it" },
+        { type: "done", reason: "no-tool-call" },
+      ],
+    }));
+    const forwarded: ChildEventPayload[] = [];
+    const result = (await createDispatchTool(
+      makeRuntime(fake, { onChildEvent: (payload) => forwarded.push(payload) }),
+    ).execute(
+      {
+        tasks: [
+          { role: "ghost", goal: "haunt" },
+          { role: "explore", goal: "look" },
+        ],
+      },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toEqual({
+      id: "t1:0",
+      status: "not-run",
+      role: "ghost",
+      goal: "haunt",
+      summary: 'not run: no agent named "ghost" is loaded in this session',
+      usage: {},
+      toolCallsMade: 0,
+    });
+    expect(result.results[1]).toMatchObject({
+      id: "t1:1",
+      status: "succeeded",
+      summary: "found it",
+    });
+    expect(forwarded.length).toBeGreaterThan(0);
+    expect(forwarded.every((payload) => payload.childId === "t1:1")).toBe(true);
+  });
+
+  test("dispatchDirect resolves when the child throws", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [],
+      before: async () => {
+        throw new Error("direct crash");
+      },
+    }));
+    const { result } = await dispatchDirect({
+      runtime: makeRuntime(fake),
+      spec: agentSpec("explore"),
+      goal: "go",
+      toolCallId: "t1",
+      rewindTo: 0,
+    });
+
+    expect(result.results).toEqual([
+      {
+        ...exploreRow,
+        id: "t1:0",
+        status: "failed",
+        goal: "go",
+        summary: "direct crash",
+      },
+    ]);
+  });
+});
