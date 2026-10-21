@@ -3,10 +3,10 @@ import { fileChangeFromTool, fileChangePlainText } from "../fileChange";
 import type { LoopEvent } from "../loop/loop";
 import type { ArchivistReport } from "../memory/archivist";
 import type { CostReport } from "../provider/cost";
-import type { DispatchResult } from "../subagents/dispatch";
-import { ARCHIVIST_MARK } from "../tui/theme/theme";
+import type { SubagentStatus } from "../subagents/dispatch";
 import { formatTodoLines, parseTodoList } from "../todo/list";
 import { TODO_TOOL_NAME } from "../todo/tool";
+import { ARCHIVIST_MARK } from "../tui/theme/theme";
 import { type CheckOutcome, writeFileVerification } from "../verify/outcome";
 
 export const USAGE = `Usage:
@@ -128,18 +128,41 @@ function verificationSuffix(verification: CheckOutcome): string {
   }
 }
 
-function dispatchSummary(
-  result: unknown,
-): { ran: number; total: number; tokens: number | undefined } | undefined {
-  const value = result as Partial<DispatchResult> | undefined;
-  if (!Array.isArray(value?.results)) return undefined;
-  const ran = value.results.filter((r) => r.doneReason !== undefined).length;
-  const tokens = value.totalUsage?.totalTokens;
-  return {
-    ran,
-    total: value.results.length,
-    tokens: typeof tokens === "number" ? tokens : undefined,
+function isSubagentStatus(value: unknown): value is SubagentStatus {
+  return (
+    value === "succeeded" || value === "failed" || value === "cancelled" || value === "not-run"
+  );
+}
+
+function dispatchTally(result: unknown):
+  | {
+      total: number;
+      counts: Record<SubagentStatus, number>;
+      tokens: number | undefined;
+    }
+  | undefined {
+  if (result === null || typeof result !== "object" || !("results" in result)) return undefined;
+  if (!Array.isArray(result.results)) return undefined;
+  const counts: Record<SubagentStatus, number> = {
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    "not-run": 0,
   };
+  for (const row of result.results) {
+    if (row === null || typeof row !== "object" || !("status" in row)) continue;
+    const status: unknown = row.status;
+    if (isSubagentStatus(status)) counts[status] += 1;
+  }
+  const tokens =
+    "totalUsage" in result &&
+    result.totalUsage !== null &&
+    typeof result.totalUsage === "object" &&
+    "totalTokens" in result.totalUsage &&
+    typeof result.totalUsage.totalTokens === "number"
+      ? result.totalUsage.totalTokens
+      : undefined;
+  return { total: result.results.length, counts, tokens };
 }
 
 export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }>): string {
@@ -151,14 +174,18 @@ export function toolResultLine(event: Extract<LoopEvent, { type: "tool-result" }
       return lines.length === 0 ? "→ todo" : `→ todo\n${lines.join("\n")}`;
     }
   }
-  const dispatch = event.name === "dispatch_subagents" ? dispatchSummary(event.result) : undefined;
+  const dispatch = event.name === "dispatch_subagents" ? dispatchTally(event.result) : undefined;
   if (dispatch !== undefined) {
-    const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;
+    const started = dispatch.total - dispatch.counts["not-run"];
     const tasks =
-      dispatch.ran === dispatch.total
+      started === dispatch.total
         ? `${dispatch.total} ${dispatch.total === 1 ? "task" : "tasks"}`
-        : `${dispatch.ran} of ${dispatch.total} tasks`;
-    return `✓ Dispatched subagents done (${tasks}${tokens})`;
+        : `${started} of ${dispatch.total} tasks`;
+    const failed = dispatch.counts.failed === 0 ? "" : `, ${dispatch.counts.failed} failed`;
+    const cancelled =
+      dispatch.counts.cancelled === 0 ? "" : `, ${dispatch.counts.cancelled} cancelled`;
+    const tokens = dispatch.tokens === undefined ? "" : `, ${dispatch.tokens} tokens`;
+    return `✓ Dispatched subagents done (${tasks}${failed}${cancelled}${tokens})`;
   }
   const verification = writeFileVerification(event.result);
   return `✓ ${event.name} done${verification === undefined ? "" : verificationSuffix(verification)}`;

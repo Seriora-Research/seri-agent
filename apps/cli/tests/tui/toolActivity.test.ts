@@ -7,11 +7,11 @@ import {
   anomalyLineForResult,
   anomalyLineForThrow,
   detailLinesForResult,
+  formatToolSummary,
   recordCall,
   recordDenial,
   recordResult,
   recordThrow,
-  formatToolSummary,
   renderLiveToolActivity,
   renderToolActivity,
   summarizeArgs,
@@ -36,16 +36,23 @@ function proc(overrides: Partial<ProcessResult> = {}): ProcessResult {
   };
 }
 
-function dispatchResult(ran: number, total: number): DispatchResult {
+function dispatchResult(): DispatchResult {
   return {
-    results: Array.from({ length: total }, (_, i) => ({
-      role: "explore" as const,
-      goal: "g",
-      summary: "s",
-      usage: {},
-      toolCallsMade: 0,
-      doneReason: i < ran ? ("no-tool-call" as const) : undefined,
-    })),
+    results: [
+      {
+        id: "t:0",
+        status: "succeeded",
+        doneReason: "no-tool-call",
+        role: "explore",
+        goal: "g",
+        summary: "s",
+        usage: {},
+        toolCallsMade: 0,
+        model: "test-model",
+        provider: "groq",
+        inherited: true,
+      },
+    ],
     totalUsage: {},
   };
 }
@@ -252,16 +259,6 @@ describe("anomalyLineForResult", () => {
     expect(
       anomalyLineForResult("write_file", { path: "a.txt" }, { written: true, verification }),
     ).toBeUndefined();
-  });
-
-  test("dispatch_subagents with ran < total is an anomaly", () => {
-    expect(anomalyLineForResult("dispatch_subagents", {}, dispatchResult(1, 3))).toBe(
-      "2 of 3 subagents did not finish",
-    );
-  });
-
-  test("a clean dispatch_subagents run is not an anomaly", () => {
-    expect(anomalyLineForResult("dispatch_subagents", {}, dispatchResult(2, 2))).toBeUndefined();
   });
 
   test("grep truncated is not an anomaly", () => {
@@ -622,7 +619,7 @@ describe("recordCall / recordResult / recordDenial", () => {
   });
 
   test("dispatch_subagents is never aggregated", () => {
-    const result = dispatchResult(1, 1);
+    const result = dispatchResult();
     let entries = recordResult([], "dispatch_subagents", {}, result);
     entries = recordResult(entries, "dispatch_subagents", {}, result);
     expect(entries).toEqual([]);

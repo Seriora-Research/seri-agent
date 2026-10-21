@@ -1068,10 +1068,7 @@ describe("runArchivist", () => {
     const warnings: string[] = [];
     const thrownState = createArchivistState(emptySession());
     thrownState.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
-
-    async function* crash(): AsyncGenerator<LoopEvent> {
-      throw new Error("archivist boom");
-    }
+    const brokenCatalog = { fetchedAt: "", entries: null } as unknown as ModelCatalog;
 
     const thrown = await runArchivist({
       state: thrownState,
@@ -1079,11 +1076,10 @@ describe("runArchivist", () => {
       ctx,
       model: new MockLanguageModelV4({ doStream: [] }),
       route: { model: "test-model", provider: "groq" },
-      catalog: catalogFor(),
+      catalog: brokenCatalog,
       contextWindow: 100_000,
       signal: new AbortController().signal,
       onWarning: (message) => warnings.push(message),
-      runLoop: crash as unknown as typeof runLoop,
     });
 
     expect(thrown).toBeUndefined();

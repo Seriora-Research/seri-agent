@@ -192,7 +192,7 @@ describe("toolResultLine", () => {
       type: "tool-result",
       name: "dispatch_subagents",
       result: {
-        results: [{ doneReason: "no-tool-call" }, { doneReason: "no-tool-call" }],
+        results: [{ status: "succeeded" }, { status: "succeeded" }],
         totalUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       },
     });
@@ -203,7 +203,7 @@ describe("toolResultLine", () => {
     const line = toolResultLine({
       type: "tool-result",
       name: "dispatch_subagents",
-      result: { results: [{ doneReason: "no-tool-call" }], totalUsage: {} },
+      result: { results: [{ status: "succeeded" }], totalUsage: {} },
     });
     expect(line).toBe("✓ Dispatched subagents done (1 task)");
   });
@@ -213,7 +213,7 @@ describe("toolResultLine", () => {
       type: "tool-result",
       name: "dispatch_subagents",
       result: {
-        results: [{ doneReason: "no-tool-call" }, { doneReason: undefined }],
+        results: [{ status: "succeeded" }, { status: "not-run" }],
         totalUsage: {},
       },
     });

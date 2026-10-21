@@ -9,6 +9,7 @@ import {
   type OnBeforeMutation,
   rewindToFromContext,
 } from "../checkpoint/wrapTools";
+import { messageOf } from "../errors";
 import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
@@ -31,7 +32,11 @@ const MAX_TASKS_PER_DISPATCH = 3;
 
 const MAX_CHILD_ITERATIONS = 25;
 
+const CANCELLED_SUMMARY = "cancelled before it produced a summary";
+const OVERFLOW_SUMMARY = `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`;
+
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
+type FinishedReason = Exclude<DoneReason, "aborted">;
 
 export type SubagentUsage = {
   inputTokens?: number;
@@ -51,25 +56,32 @@ export type ChildEventPayload = {
   inherited?: boolean;
 };
 
-export type SubagentTask = {
-  role: string;
-  goal: string;
-  model?: string;
-  provider?: string;
-  effort?: string;
+export type SubagentId = `${string}:${number}`;
+
+type ChildIdentity = {
+  model: string;
+  provider: ModelProvider;
+  inherited: boolean;
 };
 
-export type SubagentResult = SubagentTask & {
+type RowBase = {
+  id: SubagentId;
+  role: string;
+  goal: string;
   summary: string;
   usage: SubagentUsage;
   toolCallsMade: number;
-
-  doneReason: DoneReason | undefined;
-
-  model?: string;
-  provider?: ModelProvider;
-  inherited?: boolean;
 };
+
+export type SubagentResult =
+  | (RowBase & ChildIdentity & { status: "succeeded"; doneReason: FinishedReason })
+  | (RowBase & ChildIdentity & { status: "failed" })
+  | (RowBase & ChildIdentity & { status: "cancelled" })
+  | (RowBase & { status: "not-run" });
+
+export type SubagentStatus = SubagentResult["status"];
+
+type RanResult = Exclude<SubagentResult, { status: "not-run" }>;
 
 export type DispatchResult = { results: SubagentResult[]; totalUsage: SubagentUsage };
 
@@ -134,6 +146,26 @@ export type SubagentRuntime = {
   autoModeOnBlock?: AutoModeOnBlock;
 };
 
+function subagentId(toolCallId: string, taskIndex: number): SubagentId {
+  return `${toolCallId}:${taskIndex}`;
+}
+
+function notRunRow(
+  id: SubagentId,
+  task: { role: string; goal: string },
+  summary: string,
+): SubagentResult {
+  return {
+    id,
+    status: "not-run",
+    role: task.role,
+    goal: task.goal,
+    summary,
+    usage: {},
+    toolCallsMade: 0,
+  };
+}
+
 function addTokens(total: number | undefined, next: number | undefined): number | undefined {
   return next === undefined ? total : (total ?? 0) + next;
 }
@@ -153,7 +185,7 @@ function fallbackSummary(
   mode: PermissionMode,
   containmentDenied: boolean,
 ): string {
-  if (doneReason === "aborted") return "cancelled before it produced a summary";
+  if (doneReason === "aborted") return CANCELLED_SUMMARY;
   if (deniedCount > 0) {
     if (containmentDenied) {
       return (
@@ -291,13 +323,16 @@ export async function runSubagent(opts: {
     }
   }
 
-  const summary = segment.trim();
-  const summaryIsFallback = summary.length === 0;
+  const text = segment.trim();
+  // A yielded error is the outcome. Partial assistant text would hide it.
+  const failure = doneReason === undefined ? lastError : undefined;
   return {
-    summary: summaryIsFallback
-      ? fallbackSummary(doneReason, lastError, deniedCount, mode, containmentDenied)
-      : summary,
-    summaryIsFallback,
+    summary:
+      failure ??
+      (text.length > 0
+        ? text
+        : fallbackSummary(doneReason, lastError, deniedCount, mode, containmentDenied)),
+    summaryIsFallback: failure !== undefined || text.length === 0,
     usage,
     toolCallsMade,
     doneReason,
@@ -313,7 +348,9 @@ export function dispatchDescription(agents: AgentRegistry): string {
     `Run one or more subagents in parallel on separate goals, each with its own limited tool ` +
     `access. Agents — ${roster} Subagents cannot dispatch further subagents — this is a ` +
     `one-level tool. Up to ${MAX_TASKS_PER_DISPATCH} tasks run per call; extra tasks come back as ` +
-    `not-run rows so you can re-dispatch them. Each subagent's final assistant message is its ` +
+    `not-run rows so you can re-dispatch them. Every row carries the subagent's id and a status ` +
+    `of succeeded, failed, cancelled, or not-run. A failed row's summary is why it failed, and ` +
+    `its siblings still report their own results. Each subagent's final assistant message is its ` +
     `only deliverable, returned here as that task's summary. When the user names a model for a ` +
     `child, pass that task's model and provider together: provider is one of groq, openrouter, ` +
     `anthropic, openai, google; model is that provider's id (OpenRouter: the OpenRouter slug). ` +
@@ -346,62 +383,127 @@ export function dispatchSchema(agents: AgentRegistry) {
   });
 }
 
-function hasSpec<T>(entry: {
-  task: T;
-  spec: AgentSpec | undefined;
-}): entry is { task: T; spec: AgentSpec } {
-  return entry.spec !== undefined;
+type ChildSettlement =
+  | ({ kind: "returned" } & Awaited<ReturnType<typeof runSubagent>>)
+  | { kind: "thrown"; error: unknown; signal: AbortSignal | undefined };
+
+type StartedOutcome =
+  | {
+      status: "succeeded";
+      doneReason: FinishedReason;
+      summary: string;
+      usage: SubagentUsage;
+      toolCallsMade: number;
+    }
+  | { status: "failed"; summary: string; usage: SubagentUsage; toolCallsMade: number }
+  | { status: "cancelled"; summary: string; usage: SubagentUsage; toolCallsMade: number };
+
+function toStartedOutcome(settlement: ChildSettlement): StartedOutcome {
+  if (settlement.kind === "thrown") {
+    if (settlement.signal?.aborted) {
+      return {
+        status: "cancelled",
+        summary: CANCELLED_SUMMARY,
+        usage: {},
+        toolCallsMade: 0,
+      };
+    }
+    return {
+      status: "failed",
+      summary: messageOf(settlement.error),
+      usage: {},
+      toolCallsMade: 0,
+    };
+  }
+  const { summary, usage, toolCallsMade, doneReason } = settlement;
+  if (doneReason === "aborted") {
+    return { status: "cancelled", summary, usage, toolCallsMade };
+  }
+  if (doneReason === undefined) {
+    return { status: "failed", summary, usage, toolCallsMade };
+  }
+  return { status: "succeeded", doneReason, summary, usage, toolCallsMade };
 }
 
-type ChildIdentity = {
-  model: string;
-  provider: ModelProvider;
-  inherited: boolean;
-};
+function startedRow(
+  id: SubagentId,
+  role: string,
+  goal: string,
+  identity: ChildIdentity,
+  outcome: StartedOutcome,
+): RanResult {
+  const shared = {
+    role,
+    goal,
+    summary: outcome.summary,
+    usage: outcome.usage,
+    toolCallsMade: outcome.toolCallsMade,
+    model: identity.model,
+    provider: identity.provider,
+    inherited: identity.inherited,
+  };
+  if (outcome.status === "succeeded") {
+    return { id, status: "succeeded", doneReason: outcome.doneReason, ...shared };
+  }
+  if (outcome.status === "failed") {
+    return { id, status: "failed", ...shared };
+  }
+  return { id, status: "cancelled", ...shared };
+}
 
 async function runAgentChild(opts: {
   runtime: DispatchRuntime;
   spec: AgentSpec;
   goal: string;
-  childId: string;
+  id: SubagentId;
   request?: TaskRouteRequest;
   signal?: AbortSignal;
-}): Promise<Awaited<ReturnType<typeof runSubagent>> & { identity: ChildIdentity }> {
-  const { runtime, spec, goal, childId } = opts;
+}): Promise<RanResult> {
+  const { runtime, spec, goal, id } = opts;
   const overlay = runtime.resolveRole?.(spec.name, agentRouteRequest(spec, opts.request));
   const identity: ChildIdentity = {
     model: overlay?.modelId ?? runtime.modelId,
     provider: overlay?.provider ?? runtime.provider,
     inherited: overlay?.inherited ?? true,
   };
-  runtime.onChildEvent?.({
-    childId,
-    role: spec.name,
-    goal,
-    event: { type: "child-started" },
-    ...identity,
-  });
-  const settled = await runSubagent({
-    tools: agentToolSet(spec, runtime.env, runtime.checkpointer?.onAfterMutation, runtime.cwd),
-    system: joinTiers(runtime.system, spec.addendum),
-    messages: [{ role: "user", content: goal }],
-    runtime:
-      overlay === undefined
-        ? runtime
-        : {
-            ...runtime,
-            model: overlay.model,
-            provider: overlay.provider,
-            modelId: overlay.modelId,
-            contextWindowSize: overlay.contextWindowSize,
-            maxOutputTokens: overlay.maxOutputTokens,
-            reasoningEffort: overlay.reasoningEffort,
-            credential: overlay.credential ?? runtime.credential,
-          },
-    signal: opts.signal,
-    child: { id: childId, role: spec.name, goal, ...identity },
-  });
-  return { ...settled, identity };
+  const emit = (event: ChildEventPayload["event"]) => {
+    runtime.onChildEvent?.({ childId: id, role: spec.name, goal, event, ...identity });
+  };
+  emit({ type: "child-started" });
+  try {
+    const settled = await runSubagent({
+      tools: agentToolSet(spec, runtime.env, runtime.checkpointer?.onAfterMutation, runtime.cwd),
+      system: joinTiers(runtime.system, spec.addendum),
+      messages: [{ role: "user", content: goal }],
+      runtime:
+        overlay === undefined
+          ? runtime
+          : {
+              ...runtime,
+              model: overlay.model,
+              provider: overlay.provider,
+              modelId: overlay.modelId,
+              contextWindowSize: overlay.contextWindowSize,
+              maxOutputTokens: overlay.maxOutputTokens,
+              reasoningEffort: overlay.reasoningEffort,
+              credential: overlay.credential ?? runtime.credential,
+            },
+      signal: opts.signal,
+      child: { id, role: spec.name, goal, ...identity },
+    });
+    return startedRow(
+      id,
+      spec.name,
+      goal,
+      identity,
+      toStartedOutcome({ kind: "returned", ...settled }),
+    );
+  } catch (error) {
+    // A throw never reaches the usage fold. onChildUsage already metered any tokens.
+    const outcome = toStartedOutcome({ kind: "thrown", error, signal: opts.signal });
+    if (outcome.status === "failed") emit({ type: "error", error: outcome.summary });
+    return startedRow(id, spec.name, goal, identity, outcome);
+  }
 }
 
 export function createDispatchTool(runtime: DispatchRuntime & { agents: AgentRegistry }) {
@@ -411,14 +513,14 @@ export function createDispatchTool(runtime: DispatchRuntime & { agents: AgentReg
     inputSchema: dispatchSchema(agents),
     execute: async (args, options) => {
       const { tasks } = args;
+      const specs = tasks.map((task, index) =>
+        index < MAX_TASKS_PER_DISPATCH ? agents.get(task.role) : undefined,
+      );
 
-      const scheduled = tasks
-        .slice(0, MAX_TASKS_PER_DISPATCH)
-        .map((task) => ({ task, spec: agents.get(task.role) }));
-      const runnable = scheduled.filter(hasSpec);
-      const overflow = tasks.slice(MAX_TASKS_PER_DISPATCH);
-
-      if (runnable.some(({ spec }) => agentMutatesFilesystem(spec)) && runtime.checkpointer) {
+      if (
+        specs.some((spec) => spec !== undefined && agentMutatesFilesystem(spec)) &&
+        runtime.checkpointer
+      ) {
         const context: MutationContext = {
           tool: DISPATCH_TOOL_NAME,
           toolCallId: options.toolCallId,
@@ -428,79 +530,46 @@ export function createDispatchTool(runtime: DispatchRuntime & { agents: AgentReg
         runtime.checkpointer.onBeforeMutation(context);
       }
 
-      type Runnable = (typeof runnable)[number];
-
-      function runOne(entry: Runnable, index: number) {
-        return runAgentChild({
-          runtime,
-          spec: entry.spec,
-          goal: entry.task.goal,
-          childId: `${options.toolCallId}:${index}`,
-          request: {
-            model: entry.task.model,
-            provider: entry.task.provider,
-            effort: entry.task.effort,
-          },
-          signal: options.abortSignal,
-        });
-      }
-
-      const settled: Awaited<ReturnType<typeof runOne>>[] = new Array(runnable.length);
-      const readerIdx = runnable
-        .map((_, i) => i)
-        .filter((i) => !agentMutatesFilesystem(runnable[i].spec));
-      const writerIdx = runnable
-        .map((_, i) => i)
-        .filter((i) => agentMutatesFilesystem(runnable[i].spec));
-      await Promise.all([
-        ...readerIdx.map(async (i) => {
-          settled[i] = await runOne(runnable[i], i);
+      let writerTail: Promise<unknown> = Promise.resolve();
+      const results = await Promise.all(
+        tasks.map((task, index): Promise<SubagentResult> => {
+          const id = subagentId(options.toolCallId, index);
+          if (index >= MAX_TASKS_PER_DISPATCH)
+            return Promise.resolve(notRunRow(id, task, OVERFLOW_SUMMARY));
+          const spec = specs[index];
+          if (spec === undefined) {
+            return Promise.resolve(
+              notRunRow(
+                id,
+                task,
+                `not run: no agent named "${task.role}" is loaded in this session`,
+              ),
+            );
+          }
+          const run = () =>
+            runAgentChild({
+              runtime,
+              spec,
+              goal: task.goal,
+              id,
+              request: {
+                model: task.model,
+                provider: task.provider,
+                effort: task.effort,
+              },
+              signal: options.abortSignal,
+            });
+          if (!agentMutatesFilesystem(spec)) return run();
+          const row = writerTail.then(() => run());
+          writerTail = row;
+          return row;
         }),
-        (async () => {
-          for (const i of writerIdx) settled[i] = await runOne(runnable[i], i);
-        })(),
-      ]);
+      );
 
-      const results: SubagentResult[] = [];
-      let settledIndex = 0;
-      for (const { task, spec } of scheduled) {
-        if (spec === undefined) {
-          results.push({
-            role: task.role,
-            goal: task.goal,
-            summary: `not run: no agent named "${task.role}" is loaded in this session`,
-            usage: {},
-            toolCallsMade: 0,
-            doneReason: undefined,
-          });
-          continue;
-        }
-        const child = settled[settledIndex++];
-        results.push({
-          role: spec.name,
-          goal: task.goal,
-          summary: child.summary,
-          usage: child.usage,
-          toolCallsMade: child.toolCallsMade,
-          doneReason: child.doneReason,
-          ...child.identity,
-        });
-      }
-
-      for (const task of overflow) {
-        results.push({
-          role: task.role,
-          goal: task.goal,
-          summary: `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`,
-
-          usage: {},
-          toolCallsMade: 0,
-          doneReason: undefined,
-        });
-      }
-
-      const totalUsage = results.reduce<SubagentUsage>((total, r) => sumUsage(total, r.usage), {});
-
+      const totalUsage = results.reduce<SubagentUsage>(
+        (total, row) => sumUsage(total, row.usage),
+        {},
+      );
       const result: DispatchResult = { results, totalUsage };
       return result;
     },
@@ -536,27 +605,17 @@ export async function dispatchDirect(opts: {
     });
   }
 
-  const settled = await runAgentChild({
+  const row = await runAgentChild({
     runtime,
     spec,
     goal,
-    childId: `${toolCallId}:0`,
+    id: subagentId(toolCallId, 0),
     signal: opts.signal,
   });
 
   const result: DispatchResult = {
-    results: [
-      {
-        role: spec.name,
-        goal,
-        summary: settled.summary,
-        usage: settled.usage,
-        toolCallsMade: settled.toolCallsMade,
-        doneReason: settled.doneReason,
-        ...settled.identity,
-      },
-    ],
-    totalUsage: settled.usage,
+    results: [row],
+    totalUsage: row.usage,
   };
 
   return {
