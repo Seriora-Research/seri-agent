@@ -417,10 +417,19 @@ export async function driveLoop(
       rewindTo: session.messages.length,
       signal: controller.signal,
     });
-    directSummary = `[dispatched to the "${direct.agent.name}" subagent]\n\n${result.results[0].summary}`;
+    const row = result.results[0];
+    directSummary = `[dispatched to the "${direct.agent.name}" subagent]\n\n${row.summary}`;
     yield { type: "tool-result", name: DISPATCH_TOOL_NAME, result };
     yield { type: "messages-updated", messages: [...session.messages, ...rows] };
-    yield { type: "done", reason: controller.signal.aborted ? "aborted" : "no-tool-call" };
+    if (controller.signal.aborted || row.status === "cancelled") {
+      yield { type: "done", reason: "aborted" };
+      return;
+    }
+    if (row.status === "failed") {
+      yield { type: "error", error: row.summary };
+      return;
+    }
+    yield { type: "done", reason: "no-tool-call" };
   }
 
   try {

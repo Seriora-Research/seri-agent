@@ -1038,11 +1038,13 @@ describe("runArchivist", () => {
     expect(state.toolCallsSinceRun).toBe(0);
   });
 
-  test("a terminal error after partial text stores no summary, and a thrown run still warns", async () => {
+  test("a yielded terminal error warns, leaves the cursor, and stores no report", async () => {
     const ctx = makeCtx();
     const state = createArchivistState(emptySession());
     setMessages(state, [{ role: "user", content: "task" }]);
     state.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+    const cursor = state.messageCursor;
+    const warnings: string[] = [];
 
     async function* partialThenError(): AsyncGenerator<LoopEvent> {
       yield { type: "text-delta", text: "half a note" };
@@ -1058,16 +1060,23 @@ describe("runArchivist", () => {
       catalog: catalogFor(),
       contextWindow: 100_000,
       signal: new AbortController().signal,
-      onWarning: () => {},
+      onWarning: (message) => warnings.push(message),
       runLoop: partialThenError as unknown as typeof runLoop,
     });
 
-    expect(report).toBeDefined();
-    expect(report?.summary).toBeUndefined();
+    expect(report).toBeUndefined();
+    expect(warnings[0]).toContain("archivist run failed");
+    expect(warnings[0]).toContain("HTTP 429 rate limited");
+    expect(state.messageCursor).toBe(cursor);
+    expect(state.toolCallsSinceRun).toBe(0);
+  });
 
-    const warnings: string[] = [];
+  test("a thrown run still warns and leaves the cursor", async () => {
+    const ctx = makeCtx();
     const thrownState = createArchivistState(emptySession());
     thrownState.toolCallsSinceRun = ARCHIVIST_TOOL_CALL_INTERVAL;
+    const cursor = thrownState.messageCursor;
+    const warnings: string[] = [];
     const brokenCatalog = { fetchedAt: "", entries: null } as unknown as ModelCatalog;
 
     const thrown = await runArchivist({
@@ -1084,6 +1093,7 @@ describe("runArchivist", () => {
 
     expect(thrown).toBeUndefined();
     expect(warnings[0]).toContain("archivist run failed");
+    expect(thrownState.messageCursor).toBe(cursor);
   });
 
   test("an already-aborted signal returns undefined silently (no onWarning call) and leaves the counter untouched", async () => {
