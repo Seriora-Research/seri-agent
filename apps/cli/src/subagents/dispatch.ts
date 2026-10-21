@@ -324,15 +324,14 @@ export async function runSubagent(opts: {
   }
 
   const text = segment.trim();
-  // A yielded error is the outcome. Partial assistant text would hide it.
-  const failure = doneReason === undefined ? lastError : undefined;
+  const terminalError = doneReason === undefined ? lastError : undefined;
   return {
     summary:
-      failure ??
+      terminalError ??
       (text.length > 0
         ? text
         : fallbackSummary(doneReason, lastError, deniedCount, mode, containmentDenied)),
-    summaryIsFallback: failure !== undefined || text.length === 0,
+    summaryIsFallback: terminalError !== undefined || text.length === 0,
     usage,
     toolCallsMade,
     doneReason,
@@ -385,7 +384,13 @@ export function dispatchSchema(agents: AgentRegistry) {
 
 type ChildSettlement =
   | ({ kind: "returned" } & Awaited<ReturnType<typeof runSubagent>>)
-  | { kind: "thrown"; error: unknown; signal: AbortSignal | undefined };
+  | {
+      kind: "thrown";
+      error: unknown;
+      signal: AbortSignal | undefined;
+      usage: SubagentUsage;
+      toolCallsMade: number;
+    };
 
 type StartedOutcome =
   | {
@@ -404,15 +409,15 @@ function toStartedOutcome(settlement: ChildSettlement): StartedOutcome {
       return {
         status: "cancelled",
         summary: CANCELLED_SUMMARY,
-        usage: {},
-        toolCallsMade: 0,
+        usage: settlement.usage,
+        toolCallsMade: settlement.toolCallsMade,
       };
     }
     return {
       status: "failed",
       summary: messageOf(settlement.error),
-      usage: {},
-      toolCallsMade: 0,
+      usage: settlement.usage,
+      toolCallsMade: settlement.toolCallsMade,
     };
   }
   const { summary, usage, toolCallsMade, doneReason } = settlement;
@@ -460,34 +465,62 @@ async function runAgentChild(opts: {
   signal?: AbortSignal;
 }): Promise<RanResult> {
   const { runtime, spec, goal, id } = opts;
-  const overlay = runtime.resolveRole?.(spec.name, agentRouteRequest(spec, opts.request));
   const identity: ChildIdentity = {
-    model: overlay?.modelId ?? runtime.modelId,
-    provider: overlay?.provider ?? runtime.provider,
-    inherited: overlay?.inherited ?? true,
+    model: runtime.modelId,
+    provider: runtime.provider,
+    inherited: true,
   };
+  let spent: { usage: SubagentUsage; toolCallsMade: number } = { usage: {}, toolCallsMade: 0 };
   const emit = (event: ChildEventPayload["event"]) => {
     runtime.onChildEvent?.({ childId: id, role: spec.name, goal, event, ...identity });
   };
-  emit({ type: "child-started" });
+
   try {
+    const overlay = runtime.resolveRole?.(spec.name, agentRouteRequest(spec, opts.request));
+    if (overlay !== undefined) {
+      identity.model = overlay.modelId;
+      identity.provider = overlay.provider;
+      identity.inherited = overlay.inherited;
+    }
+    emit({ type: "child-started" });
+    const childRuntime: SubagentRuntime =
+      overlay === undefined
+        ? runtime
+        : {
+            ...runtime,
+            model: overlay.model,
+            provider: overlay.provider,
+            modelId: overlay.modelId,
+            contextWindowSize: overlay.contextWindowSize,
+            maxOutputTokens: overlay.maxOutputTokens,
+            reasoningEffort: overlay.reasoningEffort,
+            credential: overlay.credential ?? runtime.credential,
+          };
+    const metered: SubagentRuntime = {
+      ...childRuntime,
+      onChildUsage: (usage, cost) => {
+        spent = {
+          usage: sumUsage(spent.usage, {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+          }),
+          toolCallsMade: spent.toolCallsMade,
+        };
+        childRuntime.onChildUsage?.(usage, cost);
+      },
+      onChildEvent: (payload) => {
+        if (payload.event.type === "tool-call") {
+          spent = { usage: spent.usage, toolCallsMade: spent.toolCallsMade + 1 };
+        }
+        childRuntime.onChildEvent?.(payload);
+      },
+    };
     const settled = await runSubagent({
       tools: agentToolSet(spec, runtime.env, runtime.checkpointer?.onAfterMutation, runtime.cwd),
       system: joinTiers(runtime.system, spec.addendum),
       messages: [{ role: "user", content: goal }],
-      runtime:
-        overlay === undefined
-          ? runtime
-          : {
-              ...runtime,
-              model: overlay.model,
-              provider: overlay.provider,
-              modelId: overlay.modelId,
-              contextWindowSize: overlay.contextWindowSize,
-              maxOutputTokens: overlay.maxOutputTokens,
-              reasoningEffort: overlay.reasoningEffort,
-              credential: overlay.credential ?? runtime.credential,
-            },
+      runtime: metered,
       signal: opts.signal,
       child: { id, role: spec.name, goal, ...identity },
     });
@@ -499,9 +532,19 @@ async function runAgentChild(opts: {
       toStartedOutcome({ kind: "returned", ...settled }),
     );
   } catch (error) {
-    // A throw never reaches the usage fold. onChildUsage already metered any tokens.
-    const outcome = toStartedOutcome({ kind: "thrown", error, signal: opts.signal });
-    if (outcome.status === "failed") emit({ type: "error", error: outcome.summary });
+    const outcome = toStartedOutcome({
+      kind: "thrown",
+      error,
+      signal: opts.signal,
+      usage: spent.usage,
+      toolCallsMade: spent.toolCallsMade,
+    });
+    try {
+      if (outcome.status === "failed") emit({ type: "error", error: outcome.summary });
+      else emit({ type: "done", reason: "aborted" });
+    } catch (emitError) {
+      void emitError;
+    }
     return startedRow(id, spec.name, goal, identity, outcome);
   }
 }
