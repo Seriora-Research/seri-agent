@@ -60,7 +60,6 @@ export function toolCallChunks(
   ];
 }
 
-/** Raw argument text that is not JSON. Matches a stream cut off mid tool-call. */
 export const TRUNCATED_TOOL_INPUT = '{"path": "UNTERM_TOOL_ARG.txt", "content": "print(1';
 
 export function truncatedToolCallChunks(
