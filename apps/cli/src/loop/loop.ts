@@ -40,6 +40,7 @@ import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import { closeUnansweredToolCalls } from "../session/closeUnansweredToolCalls";
+import { dropIncompleteToolCalls, isIncompleteToolCallInput } from "../session/incompleteToolCalls";
 import { affordableOutputTokens, streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
@@ -433,6 +434,7 @@ export async function* runLoop(opts: {
   const holdBox = opts.compactionHold ?? { current: OPEN_COMPACTION_HOLD };
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
+  const droppedIncomplete = dropIncompleteToolCalls(messages);
   const closedUnanswered = closeUnansweredToolCalls(messages);
   let estimatedTokens = estimateTokens(windowOf(conversation));
   function appendMessage(message: ModelMessage): void {
@@ -519,7 +521,7 @@ export async function* runLoop(opts: {
   const deniedTargets: string[] = [];
   let stopAfterDestructive = false;
 
-  if (closedUnanswered) yield messagesUpdated();
+  if (droppedIncomplete || closedUnanswered) yield messagesUpdated();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.signal?.aborted) {
@@ -602,6 +604,8 @@ export async function* runLoop(opts: {
               yield { type: "reasoning-delta", text: part.text };
             }
           } else if (part.type === "tool-call") {
+            // `invalid` is also set for an unknown tool or a schema miss whose JSON parsed.
+            if (isIncompleteToolCallInput(part.input)) continue;
             toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
