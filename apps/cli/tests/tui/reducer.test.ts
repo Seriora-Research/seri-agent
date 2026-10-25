@@ -838,6 +838,25 @@ describe("tuiReducer: loop-event", () => {
     });
   });
 
+  test("model-refusal pushes the sentence and then the done line", () => {
+    const state = apply(undefined, {
+      type: "done",
+      reason: "model-refusal",
+      text: "I can't help with that.",
+    });
+    expect(state.transcript).toEqual([
+      { role: "system", text: "I can't help with that." },
+      { role: "system", text: "done: model-refusal", muted: true },
+    ]);
+  });
+
+  test("an empty model-refusal pushes only the done line", () => {
+    const state = apply(undefined, { type: "done", reason: "model-refusal", text: "" });
+    expect(state.transcript).toEqual([
+      { role: "system", text: "done: model-refusal", muted: true },
+    ]);
+  });
+
   test("done flushes streamed text and clears status", () => {
     let state = apply(undefined, { type: "text-delta", text: "the answer" });
     state = apply(state, { type: "done", reason: "no-tool-call" });

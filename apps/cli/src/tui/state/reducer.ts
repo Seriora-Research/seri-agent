@@ -1062,9 +1062,14 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       };
     case "done": {
       const settled = settleReasoning(state, Date.now());
+      const flushed = flushToolActivity(settled);
+      const withSentence =
+        event.reason === "model-refusal" && event.text.length > 0
+          ? pushLine(flushed, event.text)
+          : flushed;
       return {
         ...pushLine(
-          flushToolActivity(settled),
+          withSentence,
           formatDoneLine(event.reason, settled.turn?.tokens),
           "system",
           true,

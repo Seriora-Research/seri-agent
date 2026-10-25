@@ -164,6 +164,7 @@ export function formatDoneLine(
     case "max-iterations":
     case "repeated-denials":
     case "destructive-denied":
+    case "model-refusal":
       head = `done: ${reason}`;
       break;
     default: {

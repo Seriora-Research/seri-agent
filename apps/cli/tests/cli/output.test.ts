@@ -275,6 +275,29 @@ describe("approvalPromptText", () => {
   });
 });
 
+describe("printEvent model-refusal", () => {
+  test("writes the sentence and the done line to stdout, and nothing to stderr", () => {
+    const logs: string[] = [];
+    const errors: string[] = [];
+    const originalLog = console.log;
+    const originalError = console.error;
+    console.log = (msg?: unknown) => {
+      logs.push(String(msg));
+    };
+    console.error = (msg?: unknown) => {
+      errors.push(String(msg));
+    };
+    try {
+      printEvent({ type: "done", reason: "model-refusal", text: "I can't help with that." });
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+    }
+    expect(logs).toEqual(["I can't help with that.", "\n(done: model-refusal)"]);
+    expect(errors).toEqual([]);
+  });
+});
+
 describe("printEvent compaction-held", () => {
   test("writes the hold reason to stderr, not stdout", () => {
     const warns: string[] = [];

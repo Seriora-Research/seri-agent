@@ -61,6 +61,7 @@ export type TrajectoryKind =
         | "destructive-denied"
         | "plan-submitted";
     }
+  | { kind: "done"; reason: "model-refusal"; text: string }
   | { kind: "error"; error: string; errorElided?: Elision }
   | { kind: "retry"; attempt: number }
   | { kind: "tool_allowed"; name: string }

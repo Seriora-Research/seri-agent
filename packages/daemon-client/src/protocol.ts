@@ -47,7 +47,7 @@ export type PublicLoopEvent =
   | { type: "retry"; attempt: number }
   | { type: "tool-allowed"; name: string }
   | { type: "compaction-held"; reason: "yield-low"; message: string }
-  | { type: "done"; reason: string }
+  | { type: "done"; reason: string; text?: string }
   | { type: "error"; error: string };
 
 export type DaemonEvent = {

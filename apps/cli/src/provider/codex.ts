@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { arch, platform } from "node:os";
-import { createOpenAI } from "@ai-sdk/openai";
 import { type LanguageModel, wrapLanguageModel } from "ai";
 import pkg from "../../package.json";
 import { loadUsableCodexGrant } from "../auth/codexAuthStore";
 import { CODEX_BASE_URL_DEFAULT, CODEX_ORIGINATOR } from "../auth/codexOAuth";
 import { type CodexRefreshResult, refreshCodexSubscription } from "../auth/codexRefresh";
 import { getApiKey } from "../config/config";
+import { responsesLanguageModel } from "./responsesModel";
 
 export { CODEX_BASE_URL_DEFAULT };
 export const CODEX_ORIGINATOR_DEFAULT = CODEX_ORIGINATOR;
@@ -68,11 +68,12 @@ export function getCodexSubscriptionModel(
 ): LanguageModel {
   // ChatGPT-plan Responses has no storage; store:false must be a providerOptions value so getArgs also sets include: reasoning.encrypted_content.
   return wrapLanguageModel({
-    model: createOpenAI({
+    model: responsesLanguageModel({
+      modelId,
       apiKey: UNUSED_PLACEHOLDER_KEY,
       baseURL: codexBaseUrl(configDir),
       fetch: codexAuthedFetch(configDir, sessionId, fetchFn) as typeof fetch,
-    })(modelId),
+    }),
     middleware: {
       transformParams: async ({ params }) => ({
         ...params,

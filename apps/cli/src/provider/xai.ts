@@ -4,6 +4,7 @@ import { loadXaiSubscription } from "../auth/xaiAuthStore";
 import { xaiAuthedFetch } from "../auth/xaiRefresh";
 import { getApiKey } from "../config/config";
 import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
+import { responsesLanguageModel } from "./responsesModel";
 
 export const XAI_BASE_URL_DEFAULT = "https://api.x.ai/v1";
 
@@ -74,7 +75,8 @@ export function getXaiSubscriptionModel(
   fetchFn: typeof fetch = fetch,
 ): LanguageModel {
   const authed = xaiAuthedFetch(configDir, fetchFn);
-  return createOpenAI({
+  return responsesLanguageModel({
+    modelId,
     apiKey: UNUSED_PLACEHOLDER_KEY,
     baseURL: grokProxyBaseUrl(configDir),
     fetch: (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -92,5 +94,5 @@ export function getXaiSubscriptionModel(
         },
       });
     }) as typeof fetch,
-  })(modelId);
+  });
 }

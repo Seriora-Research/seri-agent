@@ -36,6 +36,7 @@ import {
   reportFromCatalogPricing,
 } from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
+import { modelRefusalFromProviderMetadata } from "../provider/responsesModel";
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
@@ -107,6 +108,7 @@ export type LoopEvent =
         | "destructive-denied"
         | "plan-submitted";
     }
+  | { type: "done"; reason: "model-refusal"; text: string }
   | { type: "error"; error: string };
 
 export type ApprovalAnswer = "once" | "always" | "no";
@@ -655,14 +657,14 @@ export async function* runLoop(opts: {
           const heldEvent = adoptYield(Math.max(lastInputTokens, estimatedTokens), true);
           if (heldEvent !== undefined) yield heldEvent;
         }
+        const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
+          () => undefined,
+        );
         let cost: CostReport | undefined;
         let servedProvider: string | undefined;
         if (opts.credential === "subscription") {
           cost = reportForSubscription();
         } else if (opts.provider === "openrouter") {
-          const providerMetadata = await Promise.resolve(result.providerMetadata).catch(
-            () => undefined,
-          );
           cost = reportForOpenRouter(resultUsage, providerMetadata);
           servedProvider = openRouterServedProvider(providerMetadata);
         } else if (opts.provider && opts.modelId && opts.catalog) {
@@ -674,6 +676,11 @@ export async function* runLoop(opts: {
           cost,
           ...(servedProvider !== undefined ? { servedProvider } : {}),
         };
+        const refusal = modelRefusalFromProviderMetadata(providerMetadata);
+        if (refusal !== undefined) {
+          yield { type: "done", reason: "model-refusal", text: refusal.text };
+          return;
+        }
       } catch (err) {
         // On cancel, ai@7.0.48 fullStream yields `abort` and closes; `await result.usage` rejects with AbortError.
         if (opts.signal?.aborted) {
