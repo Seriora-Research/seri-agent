@@ -180,4 +180,66 @@ describe("dropIncompleteToolCalls", () => {
     expect(dropIncompleteToolCalls(messages)).toBe(false);
     expect(messages).toEqual(after);
   });
+
+  test("a later object-shaped call that reuses the truncated id is kept", () => {
+    const messages: ModelMessage[] = [
+      ...poisoned(),
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "cut",
+            toolName: "write_file",
+            input: { path: "ok.txt" },
+          },
+        ],
+      },
+      result("cut"),
+    ];
+    expect(dropIncompleteToolCalls(messages)).toBe(true);
+    expect(messages).toEqual([
+      { role: "user", content: "write" },
+      { role: "user", content: "continue" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "cut",
+            toolName: "write_file",
+            input: { path: "ok.txt" },
+          },
+        ],
+      },
+      result("cut"),
+    ]);
+  });
+
+  test("a startIndex leaves an earlier fragment in the compacted prefix", () => {
+    const messages: ModelMessage[] = [
+      { role: "user", content: "old" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "cut",
+            toolName: "write_file",
+            input: TRUNCATED,
+          },
+        ],
+      },
+      result("cut"),
+      { role: "user", content: "recent" },
+      { role: "user", content: "LIVE_QUESTION_KEEP" },
+    ];
+    expect(dropIncompleteToolCalls(messages, 4)).toBe(false);
+    expect(messages).toHaveLength(5);
+    expect(messages[4]).toEqual({ role: "user", content: "LIVE_QUESTION_KEEP" });
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: "cut", input: TRUNCATED }],
+    });
+  });
 });

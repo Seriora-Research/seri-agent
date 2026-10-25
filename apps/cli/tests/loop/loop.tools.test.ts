@@ -11,6 +11,7 @@ import { withAskUser } from "../../src/ask-user/tool";
 import { ASK_USER_TOOL_NAME } from "../../src/ask-user/types";
 import type { ToolCallClassifier } from "../../src/gate/classifier";
 import { createHookRunner } from "../../src/hooks/gate";
+import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { toolDefinitions } from "../../src/provider/tools";
@@ -252,6 +253,59 @@ describe("runLoop", () => {
         ],
       });
       expect(model.doStreamCalls).toHaveLength(1);
+      expect(promptHasTruncatedInput(model, 0)).toBe(false);
+    });
+
+    test("a compacted prefix fragment does not drop later live messages", async () => {
+      const recap: ModelMessage = {
+        role: "user",
+        content:
+          `${COMPACT_HISTORY_PREFIX} 4 earlier messages condensed]\n` +
+          `Goal: g\nProgress: p\nBlockers: b\nNext steps: n`,
+      };
+      const messages: ModelMessage[] = [
+        { role: "user", content: "old" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call_0",
+              toolName: "write_file",
+              input: TRUNCATED_TOOL_INPUT,
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call_0",
+              toolName: "write_file",
+              output: { type: "json", value: "wrote" },
+            },
+          ],
+        },
+        { role: "user", content: "recent-answer" },
+        { role: "user", content: "LIVE_QUESTION_KEEP" },
+      ];
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("ok")),
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages,
+          permissionMode: "auto",
+          compact: { status: "compacted", windowStart: 4, recap },
+        }),
+      );
+
+      expect(events.find((event) => event.type === "error")).toBeUndefined();
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+      expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).toContain("LIVE_QUESTION_KEEP");
       expect(promptHasTruncatedInput(model, 0)).toBe(false);
     });
   });

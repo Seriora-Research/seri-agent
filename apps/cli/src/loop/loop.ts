@@ -54,10 +54,10 @@ import {
 } from "./compaction";
 import {
   COMPACTION_YIELD_LOW_MESSAGE,
+  type CompactionHold,
   noteAutoCompactYield,
   OPEN_COMPACTION_HOLD,
   tickHold,
-  type CompactionHold,
 } from "./compactionHold";
 import {
   applyRecap,
@@ -434,7 +434,9 @@ export async function* runLoop(opts: {
   const holdBox = opts.compactionHold ?? { current: OPEN_COMPACTION_HOLD };
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
-  const droppedIncomplete = dropIncompleteToolCalls(messages);
+  const dropFrom =
+    conversation.compact.status === "compacted" ? conversation.compact.windowStart : 0;
+  const droppedIncomplete = dropIncompleteToolCalls(messages, dropFrom);
   const closedUnanswered = closeUnansweredToolCalls(messages);
   let estimatedTokens = estimateTokens(windowOf(conversation));
   function appendMessage(message: ModelMessage): void {
