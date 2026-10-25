@@ -60,6 +60,25 @@ export function toolCallChunks(
   ];
 }
 
+/** Raw argument text that is not JSON. Matches a stream cut off mid tool-call. */
+export const TRUNCATED_TOOL_INPUT = '{"path": "UNTERM_TOOL_ARG.txt", "content": "print(1';
+
+export function truncatedToolCallChunks(
+  toolCallId: string,
+  toolName: string,
+  input = TRUNCATED_TOOL_INPUT,
+  tokenUsage = usage(10, 8192),
+): LanguageModelV4StreamPart[] {
+  return [
+    { type: "tool-call", toolCallId, toolName, input },
+    {
+      type: "finish",
+      finishReason: { unified: "length", raw: "max_output_tokens" },
+      usage: tokenUsage,
+    },
+  ];
+}
+
 export function multiToolCallChunks(
   calls: readonly { toolCallId: string; toolName: string; input: unknown }[],
   tokenUsage = usage(5, 5),

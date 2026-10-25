@@ -22,8 +22,10 @@ import {
   multiToolCallChunks,
   repeatedWriteCalls,
   streamResult,
+  TRUNCATED_TOOL_INPUT,
   textOnlyChunks,
   toolCallChunks,
+  truncatedToolCallChunks,
   usage,
 } from "./fixtures";
 
@@ -119,6 +121,131 @@ describe("runLoop", () => {
       ],
     });
     expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  describe("truncated tool-call", () => {
+    function promptHasTruncatedInput(model: MockLanguageModelV4, callIndex: number): boolean {
+      return JSON.stringify(model.doStreamCalls[callIndex]?.prompt).includes("UNTERM_TOOL_ARG");
+    }
+
+    test("does not dispatch a call whose arguments were cut off by the output-token limit", async () => {
+      const executed: unknown[] = [];
+      const tools = makeTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(truncatedToolCallChunks("call-1", "write_file")),
+          streamResult(textOnlyChunks("ok")),
+        ],
+      });
+      const events = await collect(
+        runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }),
+      );
+
+      expect(executed).toEqual([]);
+      expect(events.some((event) => event.type === "tool-call")).toBe(false);
+      expect(JSON.stringify(events)).not.toContain("UNTERM_TOOL_ARG");
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    });
+
+    test("does not replay the truncated call on the next model request", async () => {
+      const tools = makeTools(async () => "ok");
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult(truncatedToolCallChunks("call-1", "write_file")),
+          streamResult(textOnlyChunks("ok")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+      for (let i = 0; i < model.doStreamCalls.length; i++) {
+        expect(promptHasTruncatedInput(model, i)).toBe(false);
+      }
+    });
+
+    test("still dispatches a complete sibling call from the same truncated response", async () => {
+      const executed: unknown[] = [];
+      const tools = makeTools(async (input) => {
+        executed.push(input);
+        return "ok";
+      });
+      const model = new MockLanguageModelV4({
+        doStream: [
+          streamResult([
+            {
+              type: "tool-call",
+              toolCallId: "call-ok",
+              toolName: "write_file",
+              input: JSON.stringify({ path: "ok.txt" }),
+            },
+            {
+              type: "tool-call",
+              toolCallId: "call-cut",
+              toolName: "write_file",
+              input: TRUNCATED_TOOL_INPUT,
+            },
+            {
+              type: "finish",
+              finishReason: { unified: "length", raw: "max_output_tokens" },
+              usage: usage(10, 8192),
+            },
+          ]),
+          streamResult(textOnlyChunks("ok")),
+        ],
+      });
+      await collect(runLoop({ model, tools, messages: baseMessages, permissionMode: "auto" }));
+
+      expect(executed).toEqual([{ path: "ok.txt" }]);
+      expect(promptHasTruncatedInput(model, 1)).toBe(false);
+      expect(JSON.stringify(model.doStreamCalls[1]?.prompt)).toContain("ok.txt");
+    });
+
+    test("a later turn on a poisoned transcript drops the truncated call before the request", async () => {
+      const messages: ModelMessage[] = [
+        { role: "user", content: "write demo.py" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "call-1",
+              toolName: "write_file",
+              input: TRUNCATED_TOOL_INPUT,
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: [
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              toolName: "write_file",
+              output: { type: "json", value: "wrote" },
+            },
+          ],
+        },
+        { role: "user", content: "continue" },
+      ];
+      const model = new MockLanguageModelV4({
+        doStream: async () => streamResult(textOnlyChunks("ok")),
+      });
+      const events = await collect(
+        runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages,
+          permissionMode: "auto",
+        }),
+      );
+
+      expect(events.find((event) => event.type === "error")).toBeUndefined();
+      expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+      expect(model.doStreamCalls).toHaveLength(1);
+      expect(promptHasTruncatedInput(model, 0)).toBe(false);
+    });
   });
 
   test("the last message when a tool executes is the assistant message carrying that tool call", async () => {
