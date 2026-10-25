@@ -243,6 +243,14 @@ describe("runLoop", () => {
 
       expect(events.find((event) => event.type === "error")).toBeUndefined();
       expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+      const firstUpdate = events.find((event) => event.type === "messages-updated");
+      expect(firstUpdate).toMatchObject({
+        type: "messages-updated",
+        messages: [
+          { role: "user", content: "write demo.py" },
+          { role: "user", content: "continue" },
+        ],
+      });
       expect(model.doStreamCalls).toHaveLength(1);
       expect(promptHasTruncatedInput(model, 0)).toBe(false);
     });

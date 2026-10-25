@@ -9,7 +9,11 @@ export function dropIncompleteToolCalls(messages: ModelMessage[]): boolean {
   for (const message of messages) {
     if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
     for (const part of message.content) {
-      if (part.type === "tool-call" && isIncompleteToolCallInput(part.input)) {
+      if (
+        part.type === "tool-call" &&
+        typeof part.toolCallId === "string" &&
+        isIncompleteToolCallInput(part.input)
+      ) {
         incomplete.add(part.toolCallId);
       }
     }

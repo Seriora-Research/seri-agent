@@ -604,7 +604,7 @@ export async function* runLoop(opts: {
               yield { type: "reasoning-delta", text: part.text };
             }
           } else if (part.type === "tool-call") {
-            // `invalid` is also set for an unknown tool or a schema miss whose JSON parsed.
+            // Skip fragments. Do not use `part.invalid`; unknown tools and schema misses also set it after JSON parses.
             if (isIncompleteToolCallInput(part.input)) continue;
             toolCalls.push({
               toolCallId: part.toolCallId,
