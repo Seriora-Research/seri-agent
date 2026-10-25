@@ -412,7 +412,12 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
     case "done":
       return {
         ...flushChildStreaming(child),
-        status: event.reason === "aborted" ? "aborted" : "done",
+        status:
+          event.reason === "aborted"
+            ? "aborted"
+            : event.reason === "model-refusal"
+              ? "error"
+              : "done",
       };
     case "usage":
     case "compacted":

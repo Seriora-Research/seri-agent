@@ -1,6 +1,7 @@
+import { createOpenAI } from "@ai-sdk/openai";
 import { describe, expect, test } from "bun:test";
 import { runLoop } from "../../src/loop/loop";
-import { responsesLanguageModel } from "../../src/provider/responsesModel";
+import { withRefusalRecovery } from "../../src/provider/refusal";
 import { baseMessages, collect, makeTools } from "../loop/fixtures";
 
 const SENTENCE = "I can't help with that.";
@@ -58,11 +59,9 @@ function responsesFetch(events: readonly unknown[]): typeof fetch {
 }
 
 async function run(events: readonly unknown[], tools: Parameters<typeof runLoop>[0]["tools"] = {}) {
-  const model = responsesLanguageModel({
-    modelId: "gpt-5",
-    apiKey: "test-key",
-    fetch: responsesFetch(events),
-  });
+  const model = withRefusalRecovery(responsesFetch(events), (fetchImpl) =>
+    createOpenAI({ apiKey: "test-key", fetch: fetchImpl })("gpt-5"),
+  );
   return collect(
     runLoop({
       model,
@@ -180,7 +179,7 @@ describe("responses model refusal", () => {
     );
   });
 
-  test("a refusal part plus nonempty output_text stays no-tool-call", async () => {
+  test("a refusal part plus nonempty output_text is still model-refusal", async () => {
     const events = await run([
       created,
       messageAdded(),
@@ -199,8 +198,8 @@ describe("responses model refusal", () => {
     ]);
 
     expect(events).toContainEqual({ type: "text-delta", text: "a normal answer" });
-    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
-    expect(events.some((event) => event.type === "done" && event.reason === "model-refusal")).toBe(
+    expect(events.at(-1)).toEqual({ type: "done", reason: "model-refusal", text: SENTENCE });
+    expect(events.some((event) => event.type === "done" && event.reason === "no-tool-call")).toBe(
       false,
     );
   });

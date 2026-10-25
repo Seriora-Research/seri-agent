@@ -36,7 +36,7 @@ import {
   reportFromCatalogPricing,
 } from "../provider/cost";
 import { appliedReasoningEffort, buildReasoningProviderOptions } from "../provider/reasoning";
-import { modelRefusalFromProviderMetadata } from "../provider/responsesModel";
+import { modelRefusalFromProviderMetadata } from "../provider/refusal";
 import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
@@ -591,6 +591,7 @@ export async function* runLoop(opts: {
           // ai@7.0.48 defaults onError to console.error of the raw APICallError (body, headers, stack).
           onError: () => {},
         });
+        let streamRefusal: ReturnType<typeof modelRefusalFromProviderMetadata>;
         for await (const part of result.fullStream) {
           while (reportedRetries < modelCallStarts - 1) {
             reportedRetries++;
@@ -609,6 +610,8 @@ export async function* runLoop(opts: {
               toolName: part.toolName,
               input: part.input,
             });
+          } else if (part.type === "finish-step") {
+            streamRefusal ??= modelRefusalFromProviderMetadata(part.providerMetadata);
           } else if (part.type === "error") {
             if (!overflowRetried && isContextOverflowError(part.error)) {
               const overflowOutcome = yield* tryCompact("hard");
@@ -676,7 +679,7 @@ export async function* runLoop(opts: {
           cost,
           ...(servedProvider !== undefined ? { servedProvider } : {}),
         };
-        const refusal = modelRefusalFromProviderMetadata(providerMetadata);
+        const refusal = modelRefusalFromProviderMetadata(providerMetadata) ?? streamRefusal;
         if (refusal !== undefined) {
           yield { type: "done", reason: "model-refusal", text: refusal.text };
           return;

@@ -3,19 +3,10 @@ import type {
   LanguageModelV4StreamPart,
   LanguageModelV4StreamResult,
 } from "@ai-sdk/provider";
-import { createOpenAI } from "@ai-sdk/openai";
-import type { ProviderMetadata } from "ai";
+import { type LanguageModel, type ProviderMetadata, wrapLanguageModel } from "ai";
 
 /** Sentence recovered from a Responses refusal part. `text` may be empty when the part was present and carried no words. */
 export type ModelRefusal = { readonly text: string };
-
-type ResponsesModelConfig = {
-  readonly modelId: string;
-  readonly apiKey: string;
-  readonly baseURL?: string;
-  readonly headers?: Record<string, string>;
-  readonly fetch?: typeof fetch;
-};
 
 type RefusalState = {
   deltas: string;
@@ -204,15 +195,6 @@ function capturingFetch(
   }) as typeof fetch;
 }
 
-function openAIResponses(config: ResponsesModelConfig, fetchImpl: typeof fetch | undefined) {
-  return createOpenAI({
-    apiKey: config.apiKey,
-    ...(config.baseURL !== undefined ? { baseURL: config.baseURL } : {}),
-    ...(config.headers !== undefined ? { headers: config.headers } : {}),
-    ...(fetchImpl !== undefined ? { fetch: fetchImpl as typeof fetch } : {}),
-  })(config.modelId);
-}
-
 function mergeRefusal(
   part: Extract<LanguageModelV4StreamPart, { type: "finish" }>,
   text: string,
@@ -230,12 +212,10 @@ function stampFinish(
   stream: ReadableStream<LanguageModelV4StreamPart>,
   refusal: () => Promise<string | undefined>,
 ): ReadableStream<LanguageModelV4StreamPart> {
-  let sawText = false;
   return stream.pipeThrough(
     new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
       async transform(part, controller) {
-        if (part.type === "text-delta" && part.delta.length > 0) sawText = true;
-        if (part.type !== "finish" || sawText) {
+        if (part.type !== "finish") {
           controller.enqueue(part);
           return;
         }
@@ -250,31 +230,28 @@ function stampFinish(
   );
 }
 
-async function streamWithRefusal(
-  config: ResponsesModelConfig,
-  options: Parameters<LanguageModelV4["doStream"]>[0],
-): Promise<LanguageModelV4StreamResult> {
-  let refusal: Promise<string | undefined> = Promise.resolve(undefined);
-  const model = openAIResponses(
-    config,
-    capturingFetch(config.fetch ?? fetch, (pending) => {
-      refusal = pending;
-    }),
-  );
-  const result = await model.doStream(options);
-  return { ...result, stream: stampFinish(result.stream, () => refusal) };
-}
-
-export function responsesLanguageModel(config: ResponsesModelConfig): LanguageModelV4 {
-  const template = openAIResponses(config, config.fetch);
-  return {
-    specificationVersion: "v4",
-    provider: template.provider,
-    modelId: template.modelId,
-    supportedUrls: template.supportedUrls,
-    doGenerate: (options) => template.doGenerate(options),
-    doStream: (options) => streamWithRefusal(config, options),
-  };
+export function withRefusalRecovery(
+  innerFetch: typeof fetch | undefined,
+  build: (fetchImpl: typeof fetch) => LanguageModelV4,
+): LanguageModel {
+  const baseFetch = innerFetch ?? globalThis.fetch;
+  return wrapLanguageModel({
+    model: build(baseFetch),
+    middleware: {
+      wrapStream: async ({ params }) => {
+        let refusal: Promise<string | undefined> = Promise.resolve(undefined);
+        const result = await build(
+          capturingFetch(baseFetch, (pending) => {
+            refusal = pending;
+          }),
+        ).doStream(params);
+        return {
+          ...result,
+          stream: stampFinish(result.stream, () => refusal),
+        } satisfies LanguageModelV4StreamResult;
+      },
+    },
+  });
 }
 
 export function modelRefusalFromProviderMetadata(

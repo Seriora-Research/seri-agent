@@ -2346,6 +2346,21 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(panel(state).subagents[0]?.status).toBe("done");
   });
 
+  test("a child model-refusal is not an ordinary done card", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "done",
+        reason: "model-refusal",
+        text: "I can't help with that.",
+      }),
+    );
+
+    expect(panel(state).subagents[0]?.status).toBe("error");
+  });
+
   test("a non-dispatch tool-result does not clear the roster", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
