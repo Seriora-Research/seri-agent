@@ -2,6 +2,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { describe, expect, test } from "bun:test";
 import { runLoop } from "../../src/loop/loop";
 import { withRefusalRecovery } from "../../src/provider/refusal";
+import { awaitsReply } from "../../src/session/awaitsReply";
 import { baseMessages, collect, makeTools } from "../loop/fixtures";
 
 const SENTENCE = "I can't help with that.";
@@ -87,6 +88,54 @@ describe("responses model refusal", () => {
     );
     expect(events.some((event) => event.type === "tool-call")).toBe(false);
     expect(events.some((event) => event.type === "error" && event.error === SENTENCE)).toBe(false);
+    const updated = events.find((event) => event.type === "messages-updated");
+    expect(updated?.type).toBe("messages-updated");
+    if (updated?.type === "messages-updated") {
+      expect(awaitsReply(updated.messages)).toBe(false);
+      expect(updated.messages.at(-1)).toEqual({
+        role: "assistant",
+        content: [{ type: "text", text: SENTENCE }],
+      });
+    }
+  });
+
+  test("a last SSE event terminated by one newline is still a refusal", async () => {
+    const body =
+      [created, messageAdded(), completed()]
+        .map((event) => `data: ${JSON.stringify(event)}\n\n`)
+        .join("") +
+      `data: ${JSON.stringify({ type: "response.refusal.done", refusal: SENTENCE })}\n`;
+    const fetchImpl = (async () =>
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })) as unknown as typeof fetch;
+    const events = await collect(
+      runLoop({
+        model: withRefusalRecovery(fetchImpl, (tapped) =>
+          createOpenAI({ apiKey: "test-key", fetch: tapped })("gpt-5"),
+        ),
+        tools: {},
+        messages: baseMessages,
+        permissionMode: "auto",
+      }),
+    );
+    expect(events.at(-1)).toEqual({ type: "done", reason: "model-refusal", text: SENTENCE });
+  });
+
+  test("a nonempty content_part.added is not concatenated onto later deltas", async () => {
+    const events = await run([
+      created,
+      messageAdded(),
+      {
+        type: "response.content_part.added",
+        part: refusalPart(SENTENCE),
+      },
+      { type: "response.refusal.delta", delta: SENTENCE },
+      messageDone(),
+      completed(),
+    ]);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "model-refusal", text: SENTENCE });
   });
 
   test("refusal.done wins over refusal.delta and is not concatenated", async () => {

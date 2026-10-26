@@ -232,7 +232,9 @@ export function printEvent(event: LoopEvent): void {
     case "messages-updated":
       break;
     case "done":
-      if (event.reason === "model-refusal" && event.text.length > 0) console.log(event.text);
+      if (event.reason === "model-refusal" && event.text.length > 0) {
+        console.log(`\n${event.text}`);
+      }
       console.log(`\n(done: ${event.reason})`);
       if (event.reason === "repeated-denials") {
         console.log("Several tool calls were refused in a row, so the run stopped. Run /mode to");

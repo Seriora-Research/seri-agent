@@ -293,8 +293,31 @@ describe("printEvent model-refusal", () => {
       console.log = originalLog;
       console.error = originalError;
     }
-    expect(logs).toEqual(["I can't help with that.", "\n(done: model-refusal)"]);
+    expect(logs).toEqual(["\nI can't help with that.", "\n(done: model-refusal)"]);
     expect(errors).toEqual([]);
+  });
+
+  test("a mixed text-delta then model-refusal keeps the sentence on its own line", () => {
+    const chunks: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    const originalLog = console.log;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      chunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString());
+      return true;
+    }) as typeof process.stdout.write;
+    console.log = (msg?: unknown) => {
+      chunks.push(`${String(msg)}\n`);
+    };
+    try {
+      printEvent({ type: "text-delta", text: "a normal answer" });
+      printEvent({ type: "done", reason: "model-refusal", text: "I can't help with that." });
+    } finally {
+      process.stdout.write = originalWrite;
+      console.log = originalLog;
+    }
+    expect(chunks.join("")).toBe(
+      "a normal answer\nI can't help with that.\n\n(done: model-refusal)\n",
+    );
   });
 });
 

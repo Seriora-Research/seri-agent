@@ -82,7 +82,8 @@ function reduceRefusalEvent(state: RefusalState, event: unknown): RefusalState {
       const refusal = refusalField(event.part);
       // The stream opens the part with an empty string. That is not the sentence.
       if (refusal === undefined || refusal.trim().length === 0) return state;
-      return { ...state, sawDelta: true, deltas: state.deltas + refusal };
+      if (state.done !== undefined) return state;
+      return { ...state, done: refusal };
     }
     case "response.content_part.done": {
       const refusal = refusalField(event.part);
@@ -155,10 +156,10 @@ async function scanRefusal(body: ReadableStream<Uint8Array>): Promise<string | u
       });
     }
     buffer += decoder.decode();
-    if (buffer.length > 0) {
-      if (buffer.startsWith("data:")) data.push(buffer.slice(5).trimStart());
-      flushEvent();
+    if (buffer.length > 0 && buffer.startsWith("data:")) {
+      data.push(buffer.slice(5).trimStart());
     }
+    flushEvent();
   } finally {
     reader.releaseLock();
   }

@@ -681,6 +681,8 @@ export async function* runLoop(opts: {
         };
         const refusal = modelRefusalFromProviderMetadata(providerMetadata) ?? streamRefusal;
         if (refusal !== undefined) {
+          appendMessage({ role: "assistant", content: [{ type: "text", text: refusal.text }] });
+          yield messagesUpdated();
           yield { type: "done", reason: "model-refusal", text: refusal.text };
           return;
         }
