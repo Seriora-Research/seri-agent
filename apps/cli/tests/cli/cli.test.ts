@@ -4966,6 +4966,53 @@ describe("run (/compact)", () => {
     expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
   });
 
+  test("a too-short session with one oversized paste still trims and persists", async () => {
+    const paste = `head${"x".repeat(200_000)}tail-sentinel${"y".repeat(200_000)}`;
+    const session = makeSession([
+      { role: "user", content: "u0" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "u2" },
+      { role: "user", content: paste },
+    ]);
+    saveSession(session, sessionsDir);
+
+    let doGenerateCalls = 0;
+    const model = new MockLanguageModelV4({
+      doGenerate: async () => {
+        doGenerateCalls++;
+        throw new Error("must not be called: this session has too little history to compact");
+      },
+    });
+
+    const logs: string[] = [];
+    const originalLog = console.log;
+    console.log = (msg: string) => logs.push(String(msg));
+    try {
+      await getCompact().run(
+        session,
+        [],
+        { sessionsDir, checkpointsDir, configDir },
+        testPresenter({ sessionsDir }, session),
+        {
+          authConfigDir: configDir,
+          getGroqModel: () => model,
+        },
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(doGenerateCalls).toBe(0);
+    expect(logs.some((line) => line.includes("characters omitted"))).toBe(true);
+    expect(logs).toContain("Not enough history to compact.");
+    const saved = loadSession<ModelMessage>(SESSION_ID, sessionsDir);
+    const last = saved.messages.at(-1);
+    expect(JSON.stringify(last?.content)).toContain("characters omitted");
+    expect(JSON.stringify(last?.content)).toContain("head");
+    expect(JSON.stringify(last?.content)).not.toContain("tail-sentinel");
+    expect(readLog(checkpointStoreDir(checkpointsDir, worktree), SESSION_ID)).toEqual([]);
+  });
+
   test("cancelled compaction is a strict no-op and reports the cancelling signal to the presenter", async () => {
     seedCheckpointLog();
     const session = makeSession(longMessages(30));

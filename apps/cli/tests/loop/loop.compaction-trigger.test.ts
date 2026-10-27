@@ -6,6 +6,7 @@ import {
   COMPACT_HISTORY_PREFIX,
   estimateTokens,
   isContextOverflowError,
+  maxMessageTokens,
   requestOutputCap,
   streamOutputCap,
 } from "../../src/loop/compaction";
@@ -255,7 +256,7 @@ describe("runLoop compaction trigger", () => {
   });
 
   test("compacts on a later iteration when history estimate grows past threshold even though usage inputTokens stay tiny", async () => {
-    const fat = "x".repeat(8_000);
+    const fat = "x".repeat(3_200);
     const tools = makeTools(async () => fat);
     const model = new MockLanguageModelV4({
       doStream: [
@@ -269,7 +270,7 @@ describe("runLoop compaction trigger", () => {
       runLoop({
         model,
         tools,
-        messages: fatHistory(6, 8),
+        messages: fatHistory(6, 200),
         permissionMode: "auto",
         maxIterations: 2,
         contextWindowSize: 2_000,
@@ -284,7 +285,7 @@ describe("runLoop compaction trigger", () => {
   });
 
   test("compacts when assistant text, not a tool result, is what grows the estimate past threshold", async () => {
-    const fatText = "x".repeat(8_000);
+    const fatText = "x".repeat(3_000);
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
       doStream: [
@@ -303,7 +304,7 @@ describe("runLoop compaction trigger", () => {
       runLoop({
         model,
         tools,
-        messages: fatHistory(6, 8),
+        messages: fatHistory(6, 200),
         permissionMode: "auto",
         maxIterations: 2,
         contextWindowSize: 2_000,
@@ -788,5 +789,99 @@ describe("runLoop compaction summary validation", () => {
       ).toBe(false);
     }
     expect(events.at(-1)?.type).toBe("done");
+  });
+});
+
+const OVERSIZED_SENTINEL = "SENTINEL_MIDDLE";
+
+function oversizedPaste(): string {
+  return `${"a".repeat(100_000)}${OVERSIZED_SENTINEL}${"b".repeat(100_000)}`;
+}
+
+function promptText(prompt: unknown): string {
+  return JSON.stringify(prompt);
+}
+
+function updatedTrimmedUser(events: LoopEvent[]): ModelMessage | undefined {
+  const updated = events.filter(
+    (event): event is Extract<LoopEvent, { type: "messages-updated" }> =>
+      event.type === "messages-updated",
+  );
+  const last = updated.at(-1);
+  return last?.messages.find(
+    (entry) =>
+      entry.role === "user" && JSON.stringify(entry.content).includes("characters omitted"),
+  );
+}
+
+function updatedUserText(events: LoopEvent[]): string {
+  const message = updatedTrimmedUser(events);
+  return message === undefined ? "" : JSON.stringify(message.content);
+}
+
+describe("runLoop oversized messages", () => {
+  test("a single user paste larger than the window is trimmed, then the turn finishes", async () => {
+    const paste = oversizedPaste();
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => {
+        throw new Error("summarizer must not run");
+      },
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: [{ role: "user", content: paste }],
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 8_192,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 6_000,
+      }),
+    );
+
+    const trimmed = events.filter((event) => event.type === "message-trimmed");
+    expect(trimmed).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    const kept = updatedTrimmedUser(events);
+    expect(kept).toBeDefined();
+    if (kept !== undefined) {
+      expect(estimateTokens(kept)).toBeLessThanOrEqual(maxMessageTokens(8_192));
+    }
+    expect(updatedUserText(events)).toContain("characters omitted");
+    expect(updatedUserText(events)).not.toContain(OVERSIZED_SENTINEL);
+    expect(promptText(model.doStreamCalls[0]?.prompt)).not.toContain(OVERSIZED_SENTINEL);
+    expect(promptText(model.doStreamCalls[0]?.prompt)).toContain("characters omitted");
+    expect(model.doStreamCalls).toHaveLength(1);
+  });
+
+  test("compaction still runs when the latest user paste is larger than the window", async () => {
+    const paste = oversizedPaste();
+    const model = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("ok")),
+      doGenerate: async () => summaryGenerate(),
+    });
+
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {},
+        messages: [...fatHistory(12, 2_000), { role: "user", content: paste }],
+        permissionMode: "auto",
+        maxIterations: 1,
+        contextWindowSize: 8_192,
+        compactionThreshold: 0.5,
+        preserveRecentTokens: 6_000,
+      }),
+    );
+
+    expect(events.some((event) => event.type === "compacted")).toBe(true);
+    expect(events.filter((event) => event.type === "message-trimmed")).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ type: "done", reason: "no-tool-call" });
+    expect(updatedUserText(events)).toContain("characters omitted");
+    expect(promptText(model.doStreamCalls[0]?.prompt)).not.toContain(OVERSIZED_SENTINEL);
+    expect(promptText(model.doGenerateCalls[0]?.prompt)).not.toContain(OVERSIZED_SENTINEL);
   });
 });

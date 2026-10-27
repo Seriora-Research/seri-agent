@@ -47,6 +47,10 @@ export type PublicLoopEvent =
   | { type: "retry"; attempt: number }
   | { type: "tool-allowed"; name: string }
   | { type: "compaction-held"; reason: "yield-low"; message: string }
+  | {
+      type: "message-trimmed";
+      trims: readonly { index: number; tokensBefore: number; omittedChars: number }[];
+    }
   | { type: "done"; reason: string; text?: string }
   | { type: "error"; error: string };
 

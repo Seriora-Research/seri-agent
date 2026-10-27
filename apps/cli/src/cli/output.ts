@@ -195,6 +195,12 @@ export function toolAllowedLine(name: string): string {
   return `✓ ${escapeControlChars(name)} approved for the rest of this run`;
 }
 
+export function messageTrimLine(trims: readonly { omittedChars: number }[]): string {
+  const omitted = trims.reduce((sum, trim) => sum + trim.omittedChars, 0);
+  const subject = trims.length === 1 ? "a message" : "messages";
+  return `trimmed ${subject} that exceeded the model window (${omitted} characters omitted)`;
+}
+
 export function printEvent(event: LoopEvent): void {
   switch (event.type) {
     case "text-delta":
@@ -222,6 +228,9 @@ export function printEvent(event: LoopEvent): void {
       break;
     case "compaction-held":
       console.warn(event.message);
+      break;
+    case "message-trimmed":
+      console.warn(messageTrimLine(event.trims));
       break;
     // The SDK retry callback is handed neither the error nor the delay, so this line cannot name which of 429 or 5xx it was.
     case "retry":

@@ -344,6 +344,47 @@ describe("printEvent compaction-held", () => {
   });
 });
 
+describe("printEvent message-trimmed", () => {
+  function captureWarn(fn: () => void): string[] {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (msg: string) => lines.push(String(msg));
+    try {
+      fn();
+    } finally {
+      console.warn = original;
+    }
+    return lines;
+  }
+
+  test("writes how many characters were omitted", () => {
+    const lines = captureWarn(() =>
+      printEvent({
+        type: "message-trimmed",
+        trims: [{ index: 0, tokensBefore: 90_000, omittedChars: 120_000 }],
+      }),
+    );
+    expect(lines).toEqual([
+      "trimmed a message that exceeded the model window (120000 characters omitted)",
+    ]);
+  });
+
+  test("pluralizes when more than one message was trimmed", () => {
+    const lines = captureWarn(() =>
+      printEvent({
+        type: "message-trimmed",
+        trims: [
+          { index: 0, tokensBefore: 10, omittedChars: 4 },
+          { index: 2, tokensBefore: 10, omittedChars: 6 },
+        ],
+      }),
+    );
+    expect(lines).toEqual([
+      "trimmed messages that exceeded the model window (10 characters omitted)",
+    ]);
+  });
+});
+
 describe("printEvent file-change", () => {
   test("write_file prints capped hunks from the result", () => {
     const change = buildFileChange("Write a.ts", "old", "new");

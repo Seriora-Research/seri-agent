@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { capToolResult, MAX_TOOL_RESULT_CHARS } from "../src/capToolResult";
+import { capFromBoundedWindows, capToolResult, MAX_TOOL_RESULT_CHARS } from "../src/capToolResult";
 
 describe("capToolResult", () => {
   test("leaves text at or under the cap untouched", () => {
@@ -33,5 +33,13 @@ describe("capToolResult", () => {
     const tail = capToolResult(`x${"\u{1F600}".repeat(20_000)}y`);
     expect(Buffer.from(tail, "utf8").toString("utf8")).toBe(tail);
     expect(tail).not.toContain("�");
+  });
+
+  test("honors a caller-supplied window instead of the tool cap", () => {
+    const text = "a".repeat(10_000);
+    const custom = capFromBoundedWindows(text, text, text.length, 100);
+    expect(custom).toContain("characters omitted");
+    expect(custom.length).toBeLessThan(200);
+    expect(capToolResult(text).length).toBeGreaterThan(custom.length);
   });
 });
