@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import type { ModelMessage } from "ai";
-import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
+import type { LanguageModel, ModelMessage } from "ai";
+import {
+  COMPACT_HISTORY_PREFIX,
+  estimateTokens,
+  maxMessageTokens,
+} from "../../src/loop/compaction";
 import {
   advanceCursor,
   applyOversizedTrim,
   applyRecap,
+  compactConversation,
   createConversation,
   FULL_WINDOW,
   parseCompactCursor,
@@ -130,6 +135,33 @@ describe("applyOversizedTrim", () => {
     }
     expect(JSON.stringify(conversation.archive[2]?.content)).toContain("characters omitted");
     expect(applyOversizedTrim(conversation, 200)).toEqual([]);
+  });
+});
+
+describe("compactConversation", () => {
+  test("trims an oversized paste even when history is too short to compact", async () => {
+    const paste = `head${"x".repeat(200_000)}sentinel${"y".repeat(200_000)}`;
+    const conversation = createConversation([
+      { role: "user", content: "u0" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "u2" },
+      { role: "user", content: paste },
+    ]);
+    const unusedModel = null as unknown as LanguageModel;
+
+    const result = await compactConversation(conversation, unusedModel, undefined, {
+      usableInput: 8_192,
+    });
+
+    expect(result.status).toBe("skipped");
+    expect(result.trims).toHaveLength(1);
+    const kept = conversation.archive[3];
+    expect(kept).toBeDefined();
+    if (kept === undefined) return;
+    expect(JSON.stringify(kept.content)).toContain("characters omitted");
+    expect(JSON.stringify(kept.content)).toContain("head");
+    expect(JSON.stringify(kept.content)).not.toContain("sentinel");
+    expect(estimateTokens(kept)).toBeLessThanOrEqual(maxMessageTokens(8_192));
   });
 });
 

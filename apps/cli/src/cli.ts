@@ -99,7 +99,13 @@ import { decideHooksCommand } from "./hooks/commands";
 import type { HooksLoad } from "./hooks/registry";
 import { type ImageBytes, userContentFrom } from "./imageParts";
 import { findSafeEvictionBoundary } from "./loop/compaction";
-import { compactConversation, createConversation, snapshotOf, windowOf } from "./loop/conversation";
+import {
+  applyOversizedTrim,
+  compactConversation,
+  createConversation,
+  snapshotOf,
+  windowOf,
+} from "./loop/conversation";
 import {
   type ApprovalAnswer,
   type ApprovalDetail,
@@ -152,6 +158,7 @@ import {
   getModelCatalog,
   isCodexPlanCatalogApplied,
   prewarmModelCatalog,
+  snapshotModelCatalog,
 } from "./provider/catalog";
 import type { CostReport } from "./provider/cost";
 import { DEFAULT_PROVIDER, persistDefaultModel, resolveDefaultModel } from "./provider/defaults";
@@ -491,6 +498,29 @@ async function compactCommand(
   deps: CliDeps = {},
 ): Promise<void> {
   const conversation = createConversation(session.messages, session.compact);
+  const configDir = deps.authConfigDir ?? getConfigDir();
+  const requested =
+    session.model === undefined
+      ? resolveDefaultModel(configDir)
+      : { model: session.model, provider: session.provider };
+  const catalog = await snapshotModelCatalog(undefined, printWarning, configDir);
+  const catalogEntry = findCatalogEntry(
+    catalog,
+    requested.model,
+    requested.provider ?? DEFAULT_PROVIDER,
+  );
+  const usableInput = usableInputTokens(
+    catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    catalogEntry?.maxOutputTokens,
+  );
+  const trims = applyOversizedTrim(conversation, usableInput);
+  if (trims.length > 0) {
+    await presenter.sessionUpdated({
+      ...presenter.currentSession(),
+      ...snapshotOf(conversation),
+    });
+    presenter.message(messageTrimLine(trims));
+  }
   const evictBoundary = findSafeEvictionBoundary(
     windowOf(conversation),
     DEFAULT_PRESERVE_RECENT_TOKENS,
@@ -501,22 +531,17 @@ async function compactCommand(
   }
   presenter.message("⚙ compacting…");
 
-  const configDir = deps.authConfigDir ?? getConfigDir();
-  const requested =
-    session.model === undefined
-      ? resolveDefaultModel(configDir)
-      : { model: session.model, provider: session.provider };
-  const { model, route, catalog } = await resolveModelRoute(
+  const { model, route, catalog: liveCatalog } = await resolveModelRoute(
     requested,
     configDir,
     session.id,
     deps,
     printWarning,
   );
-  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
-  const usableInput = usableInputTokens(
-    catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
-    catalogEntry?.maxOutputTokens,
+  const liveEntry = findCatalogEntry(liveCatalog, route.model, route.provider);
+  const liveUsable = usableInputTokens(
+    liveEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    liveEntry?.maxOutputTokens,
   );
 
   const controller = new AbortController();
@@ -531,7 +556,7 @@ async function compactCommand(
     compacted = await compactConversation(conversation, model, controller.signal, {
       stream: route.credential === "subscription" && route.provider === "openai",
       customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
-      usableInput,
+      usableInput: liveUsable,
     });
   } catch (err) {
     if (controller.signal.aborted) {
