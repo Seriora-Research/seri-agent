@@ -93,7 +93,6 @@ export type TrimResult = {
   readonly trims: readonly MessageTrim[];
 };
 
-// Half the usable window, so a second message and a recap still fit beside the largest one.
 export function maxMessageTokens(usableInput: number): MessageTokenCap {
   if (!Number.isFinite(usableInput) || usableInput <= 1) return 1 as MessageTokenCap;
   let cap = Math.max(1, Math.floor(usableInput / 2));

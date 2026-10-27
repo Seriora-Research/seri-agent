@@ -127,7 +127,6 @@ export function applyOversizedTrim(
   usableInput: number,
 ): readonly MessageTrim[] {
   if (!Number.isFinite(usableInput)) return [];
-  // Rows behind the cursor are rewind history. The recap lives on the cursor, not in the archive.
   const start = conversation.compact.status === "compacted" ? conversation.compact.windowStart : 0;
   const live = conversation.archive.slice(start);
   const trimmed = trimOversizedMessages(live, maxMessageTokens(usableInput));
