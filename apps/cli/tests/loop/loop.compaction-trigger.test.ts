@@ -256,7 +256,6 @@ describe("runLoop compaction trigger", () => {
   });
 
   test("compacts on a later iteration when history estimate grows past threshold even though usage inputTokens stay tiny", async () => {
-    // 800 tokens stays under the per-message cap (half of 2_000) and, with the history, crosses 0.5.
     const fat = "x".repeat(3_200);
     const tools = makeTools(async () => fat);
     const model = new MockLanguageModelV4({
@@ -286,7 +285,6 @@ describe("runLoop compaction trigger", () => {
   });
 
   test("compacts when assistant text, not a tool result, is what grows the estimate past threshold", async () => {
-    // Under the per-message cap (half of 2_000) so the growth is what crosses the threshold.
     const fatText = "x".repeat(3_000);
     const tools = makeTools(async () => "ok");
     const model = new MockLanguageModelV4({
