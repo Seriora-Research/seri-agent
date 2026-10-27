@@ -412,7 +412,12 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
     case "done":
       return {
         ...flushChildStreaming(child),
-        status: event.reason === "aborted" ? "aborted" : "done",
+        status:
+          event.reason === "aborted"
+            ? "aborted"
+            : event.reason === "model-refusal"
+              ? "error"
+              : "done",
       };
     case "usage":
     case "compacted":
@@ -1062,9 +1067,14 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
       };
     case "done": {
       const settled = settleReasoning(state, Date.now());
+      const flushed = flushToolActivity(settled);
+      const withSentence =
+        event.reason === "model-refusal" && event.text.length > 0
+          ? pushLine(flushed, event.text)
+          : flushed;
       return {
         ...pushLine(
-          flushToolActivity(settled),
+          withSentence,
           formatDoneLine(event.reason, settled.turn?.tokens),
           "system",
           true,

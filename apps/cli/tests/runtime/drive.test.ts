@@ -1308,6 +1308,17 @@ describe("exitCodeFromDriveResult", () => {
     expect(exitCodeFromDriveResult({ ...base, doneReason: "destructive-denied" })).toBe(1);
   });
 
+  test("model-refusal is failure, and refusedWithoutRunning does not change it", () => {
+    expect(exitCodeFromDriveResult({ ...base, doneReason: "model-refusal" })).toBe(1);
+    expect(
+      exitCodeFromDriveResult({
+        ...base,
+        doneReason: "model-refusal",
+        refusedWithoutRunning: true,
+      }),
+    ).toBe(1);
+  });
+
   test("no-tool-call is success unless every write was declined", () => {
     expect(exitCodeFromDriveResult({ ...base, doneReason: "no-tool-call" })).toBe(0);
     expect(

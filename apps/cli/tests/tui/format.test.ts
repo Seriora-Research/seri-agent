@@ -205,6 +205,11 @@ describe("formatDoneLine", () => {
       reason: "aborted",
       expected: "done: aborted",
     },
+    {
+      name: "model-refusal is a failure line",
+      reason: "model-refusal",
+      expected: "done: model-refusal",
+    },
   ];
 
   for (const row of rows) {

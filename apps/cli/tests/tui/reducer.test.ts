@@ -838,6 +838,25 @@ describe("tuiReducer: loop-event", () => {
     });
   });
 
+  test("model-refusal pushes the sentence and then the done line", () => {
+    const state = apply(undefined, {
+      type: "done",
+      reason: "model-refusal",
+      text: "I can't help with that.",
+    });
+    expect(state.transcript).toEqual([
+      { role: "system", text: "I can't help with that." },
+      { role: "system", text: "done: model-refusal", muted: true },
+    ]);
+  });
+
+  test("an empty model-refusal pushes only the done line", () => {
+    const state = apply(undefined, { type: "done", reason: "model-refusal", text: "" });
+    expect(state.transcript).toEqual([
+      { role: "system", text: "done: model-refusal", muted: true },
+    ]);
+  });
+
   test("done flushes streamed text and clears status", () => {
     let state = apply(undefined, { type: "text-delta", text: "the answer" });
     state = apply(state, { type: "done", reason: "no-tool-call" });
@@ -2325,6 +2344,21 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(panel(state).subagents).toHaveLength(1);
     expect(panel(state).subagents[0]?.id).toBe("t1:0");
     expect(panel(state).subagents[0]?.status).toBe("done");
+  });
+
+  test("a child model-refusal is not an ordinary done card", () => {
+    let state = initialTuiState(session());
+    state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+    state = tuiReducer(
+      state,
+      childEvent("t1:0", "explore", "find a", {
+        type: "done",
+        reason: "model-refusal",
+        text: "I can't help with that.",
+      }),
+    );
+
+    expect(panel(state).subagents[0]?.status).toBe("error");
   });
 
   test("a non-dispatch tool-result does not clear the roster", () => {

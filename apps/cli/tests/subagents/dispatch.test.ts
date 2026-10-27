@@ -1366,6 +1366,41 @@ describe("per-child dispatch outcomes", () => {
     inherited: true,
   };
 
+  test("a child model-refusal settles failed with the sentence", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "model-refusal", text: "I can't help with that." }],
+    }));
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "do the bad thing" }] },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results).toEqual([
+      {
+        ...exploreRow,
+        id: "t1:0",
+        status: "failed",
+        goal: "do the bad thing",
+        summary: "I can't help with that.",
+      },
+    ]);
+  });
+
+  test("an empty child model-refusal settles failed with the fallback sentence", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [{ type: "done", reason: "model-refusal", text: "" }],
+    }));
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "do the bad thing" }] },
+      dispatchOpts("t1"),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toMatchObject({
+      status: "failed",
+      summary: "the model refused",
+    });
+  });
+
   test("a yielded error on child 0 returns failed, succeeded, succeeded with task ids", async () => {
     const { fake } = fakeChildLoop((_opts, index) => {
       if (index === 0) {

@@ -7,6 +7,7 @@ import { loadUsableCodexGrant } from "../auth/codexAuthStore";
 import { CODEX_BASE_URL_DEFAULT, CODEX_ORIGINATOR } from "../auth/codexOAuth";
 import { type CodexRefreshResult, refreshCodexSubscription } from "../auth/codexRefresh";
 import { getApiKey } from "../config/config";
+import { withRefusalRecovery } from "./refusal";
 
 export { CODEX_BASE_URL_DEFAULT };
 export const CODEX_ORIGINATOR_DEFAULT = CODEX_ORIGINATOR;
@@ -67,23 +68,27 @@ export function getCodexSubscriptionModel(
   fetchFn: typeof fetch = fetch,
 ): LanguageModel {
   // ChatGPT-plan Responses has no storage; store:false must be a providerOptions value so getArgs also sets include: reasoning.encrypted_content.
-  return wrapLanguageModel({
-    model: createOpenAI({
-      apiKey: UNUSED_PLACEHOLDER_KEY,
-      baseURL: codexBaseUrl(configDir),
-      fetch: codexAuthedFetch(configDir, sessionId, fetchFn) as typeof fetch,
-    })(modelId),
-    middleware: {
-      transformParams: async ({ params }) => ({
-        ...params,
-        providerOptions: {
-          ...params.providerOptions,
-          openai: {
-            ...params.providerOptions?.openai,
-            store: false,
-          },
+  return withRefusalRecovery(
+    codexAuthedFetch(configDir, sessionId, fetchFn) as typeof fetch,
+    (tapped) =>
+      wrapLanguageModel({
+        model: createOpenAI({
+          apiKey: UNUSED_PLACEHOLDER_KEY,
+          baseURL: codexBaseUrl(configDir),
+          fetch: tapped,
+        })(modelId),
+        middleware: {
+          transformParams: async ({ params }) => ({
+            ...params,
+            providerOptions: {
+              ...params.providerOptions,
+              openai: {
+                ...params.providerOptions?.openai,
+                store: false,
+              },
+            },
+          }),
         },
       }),
-    },
-  });
+  );
 }

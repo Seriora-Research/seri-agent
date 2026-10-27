@@ -234,7 +234,12 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       return;
     }
     if (event.type === "done") {
-      writeRecord({ kind: "done", reason: event.reason }, actor);
+      writeRecord(
+        event.reason === "model-refusal"
+          ? { kind: "done", reason: event.reason, text: event.text }
+          : { kind: "done", reason: event.reason },
+        actor,
+      );
       return;
     }
     if (event.type === "error") {

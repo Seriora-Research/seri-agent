@@ -36,7 +36,7 @@ const CANCELLED_SUMMARY = "cancelled before it produced a summary";
 const OVERFLOW_SUMMARY = `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`;
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
-type FinishedReason = Exclude<DoneReason, "aborted">;
+type FinishedReason = Exclude<DoneReason, "aborted" | "model-refusal">;
 
 export type SubagentUsage = {
   inputTokens?: number;
@@ -186,6 +186,7 @@ function fallbackSummary(
   containmentDenied: boolean,
 ): string {
   if (doneReason === "aborted") return CANCELLED_SUMMARY;
+  if (doneReason === "model-refusal") return "the model refused";
   if (deniedCount > 0) {
     if (containmentDenied) {
       return (
@@ -309,6 +310,7 @@ export async function runSubagent(opts: {
       lastError = event.error;
     } else if (event.type === "done") {
       doneReason = event.reason;
+      if (event.reason === "model-refusal") segment = event.text;
     }
     if (opts.child && runtime.onChildEvent && shouldForwardChildEvent(event)) {
       runtime.onChildEvent({
@@ -424,7 +426,7 @@ function toStartedOutcome(settlement: ChildSettlement): StartedOutcome {
   if (doneReason === "aborted") {
     return { status: "cancelled", summary, usage, toolCallsMade };
   }
-  if (doneReason === undefined) {
+  if (doneReason === undefined || doneReason === "model-refusal") {
     return { status: "failed", summary, usage, toolCallsMade };
   }
   return { status: "succeeded", doneReason, summary, usage, toolCallsMade };
