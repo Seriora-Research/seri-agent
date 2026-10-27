@@ -40,6 +40,7 @@ import type { RouteCredential } from "../provider/routing";
 import { resolveSampling, samplingCallFields } from "../provider/sampling";
 import { classifyBuiltin, READ_ONLY_TOOL_NAMES } from "../provider/tools";
 import { closeUnansweredToolCalls } from "../session/closeUnansweredToolCalls";
+import { dropIncompleteToolCalls, isIncompleteToolCallInput } from "../session/incompleteToolCalls";
 import { affordableOutputTokens, streamErrorText } from "../usage/quotaNotice";
 import {
   type CompactionSummary,
@@ -53,10 +54,10 @@ import {
 } from "./compaction";
 import {
   COMPACTION_YIELD_LOW_MESSAGE,
+  type CompactionHold,
   noteAutoCompactYield,
   OPEN_COMPACTION_HOLD,
   tickHold,
-  type CompactionHold,
 } from "./compactionHold";
 import {
   applyRecap,
@@ -433,6 +434,9 @@ export async function* runLoop(opts: {
   const holdBox = opts.compactionHold ?? { current: OPEN_COMPACTION_HOLD };
   const conversation = createConversation(opts.messages, opts.compact);
   const messages = conversation.archive;
+  const dropFrom =
+    conversation.compact.status === "compacted" ? conversation.compact.windowStart : 0;
+  const droppedIncomplete = dropIncompleteToolCalls(messages, dropFrom);
   const closedUnanswered = closeUnansweredToolCalls(messages);
   let estimatedTokens = estimateTokens(windowOf(conversation));
   function appendMessage(message: ModelMessage): void {
@@ -519,7 +523,7 @@ export async function* runLoop(opts: {
   const deniedTargets: string[] = [];
   let stopAfterDestructive = false;
 
-  if (closedUnanswered) yield messagesUpdated();
+  if (droppedIncomplete || closedUnanswered) yield messagesUpdated();
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.signal?.aborted) {
@@ -602,6 +606,8 @@ export async function* runLoop(opts: {
               yield { type: "reasoning-delta", text: part.text };
             }
           } else if (part.type === "tool-call") {
+            // Do not use `part.invalid`; unknown tools and schema misses also set it after JSON parses.
+            if (isIncompleteToolCallInput(part.input)) continue;
             toolCalls.push({
               toolCallId: part.toolCallId,
               toolName: part.toolName,
