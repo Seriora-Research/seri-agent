@@ -531,13 +531,11 @@ async function compactCommand(
   }
   presenter.message("⚙ compacting…");
 
-  const { model, route, catalog: liveCatalog } = await resolveModelRoute(
-    requested,
-    configDir,
-    session.id,
-    deps,
-    printWarning,
-  );
+  const {
+    model,
+    route,
+    catalog: liveCatalog,
+  } = await resolveModelRoute(requested, configDir, session.id, deps, printWarning);
   const liveEntry = findCatalogEntry(liveCatalog, route.model, route.provider);
   const liveUsable = usableInputTokens(
     liveEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
