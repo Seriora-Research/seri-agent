@@ -1,6 +1,14 @@
-import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
+import type {
+  AssistantContent,
+  LanguageModel,
+  LanguageModelUsage,
+  ModelMessage,
+  ToolContent,
+  UserContent,
+} from "ai";
 import { generateText, streamText, wrapLanguageModel } from "ai";
 import { z } from "zod";
+import { capFromBoundedWindows, omissionMarker } from "../capToolResult";
 
 function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cc}\p{Cf}]/u.test(text);
@@ -70,6 +78,361 @@ function estimatePartTokens(part: unknown): number {
     }
   }
   return 0;
+}
+
+export type MessageTokenCap = number & { readonly __brand: "MessageTokenCap" };
+
+export type MessageTrim = {
+  readonly index: number;
+  readonly tokensBefore: number;
+  readonly omittedChars: number;
+};
+
+export type TrimResult = {
+  readonly messages: ModelMessage[];
+  readonly trims: readonly MessageTrim[];
+};
+
+// Half the usable window, so a second message and a recap still fit beside the largest one.
+export function maxMessageTokens(usableInput: number): MessageTokenCap {
+  if (!Number.isFinite(usableInput) || usableInput <= 1) return 1 as MessageTokenCap;
+  let cap = Math.max(1, Math.floor(usableInput / 2));
+  if (cap >= usableInput) cap = Math.floor(usableInput) - 1;
+  return cap as MessageTokenCap;
+}
+
+type TextCarrier = { type: "text"; text: string };
+
+function isTextPart(part: unknown): part is TextCarrier {
+  if (part === null || typeof part !== "object") return false;
+  const record = part as { type?: unknown; text?: unknown };
+  return record.type === "text" && typeof record.text === "string";
+}
+
+function isMediaPart(part: unknown): part is Record<string, unknown> {
+  if (part === null || typeof part !== "object" || Array.isArray(part)) return false;
+  const type = (part as { type?: unknown }).type;
+  return type === "file" || type === "image" || type === "reasoning-file";
+}
+
+function partsTokens(parts: readonly unknown[]): number {
+  return estimateMessageTokens({ role: "user", content: parts as UserContent });
+}
+
+function capStringToTokens(text: string, allowedTokens: number): { text: string; omitted: number } {
+  const allowed = Math.floor(allowedTokens);
+  if (charsToTokens(text) <= allowed) return { text, omitted: 0 };
+  if (allowed <= 0) return { text: "", omitted: text.length };
+  const room = omissionMarker(text.length).length;
+  const maxChars = Math.max(0, allowed * 4 - room);
+  const next = capFromBoundedWindows(text, text, text.length, maxChars);
+  if (charsToTokens(next) > allowed || next.length >= text.length) {
+    return { text: "", omitted: text.length };
+  }
+  const match = /\[(\d+) characters omitted\]/.exec(next);
+  const omitted = match?.[1] !== undefined ? Number(match[1]) : text.length - next.length;
+  return { text: next, omitted };
+}
+
+function shrinkTextParts(parts: unknown[], cap: number): number {
+  let omitted = 0;
+  for (let guard = 0; guard < parts.length + 1; guard++) {
+    if (partsTokens(parts) <= cap) return omitted;
+    let index = -1;
+    let largest = 0;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!isTextPart(part) || part.text.length <= largest) continue;
+      largest = part.text.length;
+      index = i;
+    }
+    if (index < 0) return omitted;
+    const part = parts[index] as TextCarrier;
+    const allowed = cap - (partsTokens(parts) - estimatePartTokens(part));
+    const capped = capStringToTokens(part.text, allowed);
+    if (capped.text === part.text) return omitted;
+    parts[index] = { ...part, text: capped.text };
+    omitted += capped.omitted;
+  }
+  return omitted;
+}
+
+type StringSite = {
+  readonly key: string;
+  readonly value: string;
+  apply: (parts: unknown[], next: string) => void;
+};
+
+function isProtectedKey(key: string | number): boolean {
+  return key === "type" || key === "toolCallId" || key === "toolName";
+}
+
+function visitStrings(
+  value: unknown,
+  path: (string | number)[],
+  onString: (path: (string | number)[], text: string) => void,
+): void {
+  if (typeof value === "string") {
+    onString(path, value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) visitStrings(value[i], [...path, i], onString);
+    return;
+  }
+  if (value === null || typeof value !== "object" || value instanceof Uint8Array) return;
+  for (const [key, child] of Object.entries(value)) {
+    visitStrings(child, [...path, key], onString);
+  }
+}
+
+function cloneValue(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  if (value instanceof Uint8Array || value instanceof URL) return value;
+  if (Array.isArray(value)) return value.map((item) => cloneValue(item));
+  const copy: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value)) copy[key] = cloneValue(child);
+  return copy;
+}
+
+function setAtPath(root: unknown, path: readonly (string | number)[], next: string): void {
+  const last = path[path.length - 1];
+  if (last === undefined) return;
+  let current = root;
+  for (let i = 0; i < path.length - 1; i++) {
+    const key = path[i];
+    if (key === undefined || current === null || typeof current !== "object") return;
+    current = (current as Record<string | number, unknown>)[key];
+  }
+  if (current === null || typeof current !== "object") return;
+  (current as Record<string | number, unknown>)[last] = next;
+}
+
+function largestShrinkableString(
+  parts: readonly unknown[],
+  skipped: ReadonlySet<string>,
+): StringSite | undefined {
+  let best: StringSite | undefined;
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index];
+    visitStrings(part, [], (path, value) => {
+      if (value.length === 0 || path.some((key) => isProtectedKey(key))) return;
+      if (isTextPart(part) && path.length === 1 && path[0] === "text") return;
+      const key = `${index}:${path.map(String).join("/")}`;
+      if (skipped.has(key)) return;
+      if (best !== undefined && value.length <= best.value.length) return;
+      const captured = path.slice();
+      best = {
+        key,
+        value,
+        apply: (draft, next) => {
+          if (captured.length === 0) {
+            draft[index] = next;
+            return;
+          }
+          const cloned = cloneValue(draft[index]);
+          setAtPath(cloned, captured, next);
+          draft[index] = cloned;
+        },
+      };
+    });
+  }
+  return best;
+}
+
+function shrinkStringyFields(parts: unknown[], cap: number): number {
+  const skipped = new Set<string>();
+  let omitted = 0;
+  for (let guard = 0; guard < 16; guard++) {
+    if (partsTokens(parts) <= cap) return omitted;
+    const hit = largestShrinkableString(parts, skipped);
+    if (hit === undefined) return omitted;
+    const before = partsTokens(parts);
+    const allowed = charsToTokens(hit.value) - (before - cap) - 4;
+    const capped = capStringToTokens(hit.value, allowed);
+    if (capped.text === hit.value) {
+      skipped.add(hit.key);
+      continue;
+    }
+    const snapshot = parts.slice();
+    hit.apply(parts, capped.text);
+    if (partsTokens(parts) >= before) {
+      for (let i = 0; i < parts.length; i++) parts[i] = snapshot[i];
+      skipped.add(hit.key);
+      continue;
+    }
+    omitted += capped.omitted;
+  }
+  return omitted;
+}
+
+function mediaTypeOf(part: Record<string, unknown>): string {
+  if (typeof part.mediaType === "string" && part.mediaType.length > 0) return part.mediaType;
+  if (part.type === "image") return "image";
+  return "file";
+}
+
+function mediaMarker(mediaType: string): string {
+  return `... [${mediaType} omitted] ...`;
+}
+
+function payloadTokens(value: unknown): number {
+  if (typeof value === "string") return charsToTokens(value);
+  if (value instanceof Uint8Array) return Math.ceil(value.byteLength / 4);
+  if (value === null || typeof value !== "object") return 0;
+  const record = value as Record<string, unknown>;
+  if ("data" in record) return payloadTokens(record.data);
+  if ("image" in record) return payloadTokens(record.image);
+  return 0;
+}
+
+function mediaPayloadExceeds(value: unknown, cap: number): boolean {
+  if (isMediaPart(value)) return payloadTokens(value) > cap;
+  if (Array.isArray(value)) return value.some((item) => mediaPayloadExceeds(item, cap));
+  if (value === null || typeof value !== "object" || value instanceof Uint8Array) return false;
+  return Object.values(value as Record<string, unknown>).some((child) =>
+    mediaPayloadExceeds(child, cap),
+  );
+}
+
+function replaceMediaValue(
+  value: unknown,
+  cap: number,
+): { value: unknown; omitted: number; changed: boolean } {
+  if (isMediaPart(value) && payloadTokens(value) > cap) {
+    const marker = mediaMarker(mediaTypeOf(value));
+    const text = charsToTokens(marker) <= cap ? marker : "";
+    return { value: { type: "text", text }, omitted: payloadChars(value), changed: true };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    let omitted = 0;
+    const next = value.map((item) => {
+      const child = replaceMediaValue(item, cap);
+      if (!child.changed) return item;
+      changed = true;
+      omitted += child.omitted;
+      return child.value;
+    });
+    return { value: changed ? next : value, omitted, changed };
+  }
+  if (value === null || typeof value !== "object" || value instanceof Uint8Array) {
+    return { value, omitted: 0, changed: false };
+  }
+  const record = value as Record<string, unknown>;
+  if (record.type === "tool-call" || record.type === "tool-result") {
+    let changed = false;
+    let omitted = 0;
+    const next: Record<string, unknown> = { ...record };
+    for (const key of ["input", "args", "output", "result"] as const) {
+      if (!(key in record)) continue;
+      const child = replaceMediaValue(record[key], cap);
+      if (!child.changed) continue;
+      changed = true;
+      omitted += child.omitted;
+      next[key] = child.value;
+    }
+    return { value: changed ? next : value, omitted, changed };
+  }
+  return { value, omitted: 0, changed: false };
+}
+
+function payloadChars(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (value instanceof Uint8Array) return value.byteLength;
+  if (value === null || typeof value !== "object") return 0;
+  const record = value as Record<string, unknown>;
+  if (typeof record.data === "string" || record.data instanceof Uint8Array)
+    return payloadChars(record.data);
+  if ("data" in record) return payloadChars(record.data);
+  if ("image" in record) return payloadChars(record.image);
+  return 0;
+}
+
+function replaceMediaParts(parts: unknown[], cap: number): number {
+  if (!parts.some((part) => mediaPayloadExceeds(part, cap))) return 0;
+  let omitted = 0;
+  let changed = false;
+  const next = parts.map((part) => {
+    const replaced = replaceMediaValue(part, cap);
+    if (!replaced.changed) return part;
+    changed = true;
+    omitted += replaced.omitted;
+    return replaced.value;
+  });
+  if (!changed || partsTokens(next) > cap) return 0;
+  for (let i = 0; i < parts.length; i++) parts[i] = next[i];
+  return omitted;
+}
+
+function trimParts(
+  parts: readonly unknown[],
+  cap: number,
+): { parts: unknown[]; omitted: number } | undefined {
+  const next = parts.slice();
+  let omitted = shrinkTextParts(next, cap);
+  omitted += shrinkStringyFields(next, cap);
+  omitted += replaceMediaParts(next, cap);
+  if (partsTokens(next) > cap) omitted += shrinkTextParts(next, cap);
+  const changed = next.some((part, index) => part !== parts[index]);
+  if (!changed) return undefined;
+  return { parts: next, omitted };
+}
+
+function withContent(message: ModelMessage, content: string | readonly unknown[]): ModelMessage {
+  if (typeof content === "string") {
+    if (message.role === "tool") return message;
+    return { ...message, content };
+  }
+  if (message.role === "user") return { ...message, content: content as UserContent };
+  if (message.role === "assistant") return { ...message, content: content as AssistantContent };
+  if (message.role === "tool") return { ...message, content: content as ToolContent };
+  return message;
+}
+
+function trimMessage(
+  message: ModelMessage,
+  cap: number,
+): { message: ModelMessage; omittedChars: number } | undefined {
+  const overEstimate = estimateTokens(message) > cap;
+  const overMedia = mediaPayloadExceeds(message.content, cap);
+  if (!overEstimate && !overMedia) return undefined;
+  const content = message.content;
+  if (typeof content === "string") {
+    const capped = capStringToTokens(content, cap);
+    if (capped.text === content) return undefined;
+    return { message: withContent(message, capped.text), omittedChars: capped.omitted };
+  }
+  if (!Array.isArray(content)) return undefined;
+  const trimmed = trimParts(content, cap);
+  if (trimmed === undefined) return undefined;
+  return { message: withContent(message, trimmed.parts), omittedChars: trimmed.omitted };
+}
+
+export function trimOversizedMessages(
+  messages: readonly ModelMessage[],
+  cap: MessageTokenCap,
+): TrimResult {
+  const trims: MessageTrim[] = [];
+  const next: ModelMessage[] = [];
+  let changed = false;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages.at(index);
+    if (message === undefined) continue;
+    const trimmed = trimMessage(message, cap);
+    if (trimmed === undefined) {
+      next.push(message);
+      continue;
+    }
+    changed = true;
+    next.push(trimmed.message);
+    trims.push({
+      index,
+      tokensBefore: estimateTokens(message),
+      omittedChars: trimmed.omittedChars,
+    });
+  }
+  return { messages: changed ? next : (messages as ModelMessage[]), trims };
 }
 
 // ai@7.0.48 defaults maxRetries to 2 with a 2s first backoff and honours a shorter retry-after / retry-after-ms header.

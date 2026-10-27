@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { join } from "node:path";
 import type { ModelCatalogEntry } from "@seri/model-catalog";
 import type { ModelMessage } from "ai";
+import { buildFileChange } from "../../src/fileChange";
 import { COMPACTION_YIELD_LOW_MESSAGE } from "../../src/loop/compactionHold";
 import type { LoopEvent } from "../../src/loop/loop";
 import type { McpPanelRow } from "../../src/mcp/commands";
@@ -15,12 +16,11 @@ import type {
   SetupProviderRow,
 } from "../../src/tui/state/commands";
 import { initialTuiState, type TuiState, tuiReducer } from "../../src/tui/state/reducer";
-import { MAX_LIVE_TRANSCRIPT_ROWS } from "../../src/tui/util/liveTranscript";
 import { renderLiveToolActivity, summarizeArgs } from "../../src/tui/state/toolActivity";
-import { buildFileChange } from "../../src/fileChange";
 import { TOOL_INDENT } from "../../src/tui/theme/spacing";
 import { ERROR_MARK, TREE_BRANCH, WARNING_MARK } from "../../src/tui/theme/theme";
 import { estimateTokens, formatTokenProgress, type TokenProgress } from "../../src/tui/util/format";
+import { MAX_LIVE_TRANSCRIPT_ROWS } from "../../src/tui/util/liveTranscript";
 
 function session(overrides: Partial<SessionState<ModelMessage>> = {}): SessionState<ModelMessage> {
   return {
@@ -712,6 +712,18 @@ describe("tuiReducer: loop-event", () => {
     expect(state.transcript.at(-1)?.text).toBe(`${WARNING_MARK}${COMPACTION_YIELD_LOW_MESSAGE}`);
     expect(state.status).toBe("");
     expect(state.transcript.at(-1)?.text.startsWith(ERROR_MARK)).toBe(false);
+  });
+
+  test("message-trimmed is a system warning naming the omitted characters", () => {
+    const state = apply(undefined, {
+      type: "message-trimmed",
+      trims: [{ index: 1, tokensBefore: 40_000, omittedChars: 80_000 }],
+    });
+    expect(state.transcript.at(-1)?.role).toBe("system");
+    expect(state.transcript.at(-1)?.text).toBe(
+      `${WARNING_MARK}trimmed a message that exceeded the model window (80000 characters omitted)`,
+    );
+    expect(state.status).toBe("");
   });
 
   test("a hosted quota hard-stop stays unmarked and tagged, not an ERROR_MARK line", () => {

@@ -48,6 +48,7 @@ import {
   archivistLine,
   archivistStagedLines,
   archivistStatsLine,
+  messageTrimLine,
   printCost,
   printEvent,
   printGrantPersisted,
@@ -103,9 +104,11 @@ import {
   type ApprovalAnswer,
   type ApprovalDetail,
   type ApprovalPrompt,
+  DEFAULT_CONTEXT_WINDOW_SIZE,
   DEFAULT_PRESERVE_RECENT_TOKENS,
   type LoopEvent,
   type runLoop as runLoopReal,
+  usableInputTokens,
 } from "./loop/loop";
 import { closeMcpClients, createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
 import {
@@ -503,12 +506,17 @@ async function compactCommand(
     session.model === undefined
       ? resolveDefaultModel(configDir)
       : { model: session.model, provider: session.provider };
-  const { model, route } = await resolveModelRoute(
+  const { model, route, catalog } = await resolveModelRoute(
     requested,
     configDir,
     session.id,
     deps,
     printWarning,
+  );
+  const catalogEntry = findCatalogEntry(catalog, route.model, route.provider);
+  const usableInput = usableInputTokens(
+    catalogEntry?.contextWindow ?? DEFAULT_CONTEXT_WINDOW_SIZE,
+    catalogEntry?.maxOutputTokens,
   );
 
   const controller = new AbortController();
@@ -523,6 +531,7 @@ async function compactCommand(
     compacted = await compactConversation(conversation, model, controller.signal, {
       stream: route.credential === "subscription" && route.provider === "openai",
       customInstructions: customInstructions.length > 0 ? customInstructions : undefined,
+      usableInput,
     });
   } catch (err) {
     if (controller.signal.aborted) {
@@ -535,6 +544,13 @@ async function compactCommand(
   }
 
   if (compacted.status === "skipped") {
+    if (compacted.trims.length > 0) {
+      await presenter.sessionUpdated({
+        ...presenter.currentSession(),
+        ...snapshotOf(conversation),
+      });
+      presenter.message(messageTrimLine(compacted.trims));
+    }
     presenter.message("Not enough history to compact.");
     return;
   }
@@ -553,6 +569,7 @@ async function compactCommand(
     );
   }
   presenter.usageAccrued(compacted.usage);
+  if (compacted.trims.length > 0) presenter.message(messageTrimLine(compacted.trims));
   presenter.message(`⚙ compacted ${compacted.evictedCount} messages`);
 }
 

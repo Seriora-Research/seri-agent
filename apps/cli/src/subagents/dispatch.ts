@@ -219,6 +219,7 @@ function shouldForwardChildEvent(event: LoopEvent): boolean {
     case "tool-allowed":
     case "reasoning-delta":
     case "compaction-held":
+    case "message-trimmed":
       return false;
     default: {
       const _exhaustive: never = event;

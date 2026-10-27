@@ -51,6 +51,7 @@ import {
   findSafeEvictionBoundary,
   isContextOverflowError,
   MAX_RETRIES,
+  type MessageTrim,
   requestOutputCap,
 } from "./compaction";
 import {
@@ -61,6 +62,7 @@ import {
   tickHold,
 } from "./compactionHold";
 import {
+  applyOversizedTrim,
   applyRecap,
   type CompactCursor,
   createConversation,
@@ -98,6 +100,7 @@ export type LoopEvent =
   // Emitted when an always-grant is added to the live Set, before that tool runs.
   | { type: "tool-allowed"; name: string }
   | { type: "compaction-held"; reason: "yield-low"; message: string }
+  | { type: "message-trimmed"; trims: readonly MessageTrim[] }
   // "aborted" is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
@@ -448,6 +451,13 @@ export async function* runLoop(opts: {
   function messagesUpdated(): Extract<LoopEvent, { type: "messages-updated" }> {
     return { type: "messages-updated", ...snapshotOf(conversation) };
   }
+  function* trimOversizedArchive(): Generator<LoopEvent> {
+    const trims = applyOversizedTrim(conversation, usableInput);
+    if (trims.length === 0) return;
+    estimatedTokens = estimateTokens(windowOf(conversation));
+    yield { type: "message-trimmed", trims };
+    yield messagesUpdated();
+  }
   let compactedThisIteration = false;
   function adoptYield(
     windowTokens: number,
@@ -534,6 +544,7 @@ export async function* runLoop(opts: {
     }
 
     compactedThisIteration = false;
+    yield* trimOversizedArchive();
     holdBox.current = tickHold(holdBox.current, estimatedTokens, usableInput);
     const tokens = Math.max(lastInputTokens, estimatedTokens);
     if (tokens / usableInput >= compactionThreshold) {
@@ -577,6 +588,7 @@ export async function* runLoop(opts: {
       reportedRetries = 0;
 
       try {
+        yield* trimOversizedArchive();
         const outbound = dropUnsupportedImages(windowOf(conversation), catalogEntry);
         for (const warning of outbound.warnings) yield { type: "error", error: warning };
         const result = streamText({

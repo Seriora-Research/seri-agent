@@ -5,6 +5,9 @@ import {
   DEFAULT_PRESERVE_RECENT_TOKENS,
   findSafeEvictionBoundary,
   isCompactSummaryMessage,
+  type MessageTrim,
+  maxMessageTokens,
+  trimOversizedMessages,
 } from "./compaction";
 
 export type CompactCursor =
@@ -119,6 +122,27 @@ export function truncateArchive(conversation: Conversation, endExclusive: number
   conversation.archive.splice(endExclusive);
 }
 
+export function applyOversizedTrim(
+  conversation: Conversation,
+  usableInput: number,
+): readonly MessageTrim[] {
+  if (!Number.isFinite(usableInput)) return [];
+  // Rows behind the cursor are rewind history. The recap lives on the cursor, not in the archive.
+  const start = conversation.compact.status === "compacted" ? conversation.compact.windowStart : 0;
+  const live = conversation.archive.slice(start);
+  const trimmed = trimOversizedMessages(live, maxMessageTokens(usableInput));
+  if (trimmed.trims.length === 0) return trimmed.trims;
+  for (let index = 0; index < live.length; index++) {
+    const next = trimmed.messages[index];
+    const slot = start + index;
+    if (next !== undefined && next !== conversation.archive[slot]) {
+      conversation.archive[slot] = next;
+    }
+  }
+  if (start === 0) return trimmed.trims;
+  return trimmed.trims.map((trim) => ({ ...trim, index: trim.index + start }));
+}
+
 export async function compactConversation(
   conversation: Conversation,
   model: LanguageModel,
@@ -130,9 +154,10 @@ export async function compactConversation(
     temperature?: number;
     seed?: number;
     onBeforeCompact?: () => Promise<void>;
+    usableInput?: number;
   } = {},
 ): Promise<
-  | { status: "skipped" }
+  | { status: "skipped"; trims: readonly MessageTrim[] }
   | {
       status: "ok";
       summary: CompactionSummary;
@@ -140,12 +165,15 @@ export async function compactConversation(
       usage: LanguageModelUsage;
       retries: number;
       tokensBefore: number;
+      trims: readonly MessageTrim[];
     }
 > {
+  const trims =
+    opts.usableInput === undefined ? [] : applyOversizedTrim(conversation, opts.usableInput);
   const preserveRecentTokens = opts.preserveRecentTokens ?? DEFAULT_PRESERVE_RECENT_TOKENS;
   const window = windowOf(conversation);
   const evictBoundary = findSafeEvictionBoundary(window, preserveRecentTokens);
-  if (evictBoundary === null) return { status: "skipped" };
+  if (evictBoundary === null) return { status: "skipped", trims };
   if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
   const compacted = await compactMessages(window, model, evictBoundary, signal, {
     stream: opts.stream,
@@ -165,5 +193,6 @@ export async function compactConversation(
     usage: compacted.usage,
     retries: compacted.retries,
     tokensBefore: compacted.tokensBefore,
+    trims,
   };
 }

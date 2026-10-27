@@ -3,6 +3,7 @@ import type { ModelMessage } from "ai";
 import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
 import {
   advanceCursor,
+  applyOversizedTrim,
   applyRecap,
   createConversation,
   FULL_WINDOW,
@@ -105,6 +106,30 @@ describe("applyRecap", () => {
     conversation.archive.push({ role: "assistant", content: "tool call" });
     expect(rewindToOf(conversation)).toBe(8);
     expect(windowOf(conversation)).toHaveLength(6);
+  });
+});
+
+describe("applyOversizedTrim", () => {
+  test("trims the live tail and leaves the compacted prefix and recap", () => {
+    const prefix = { role: "user" as const, content: "p".repeat(2_000) };
+    const live = { role: "user" as const, content: "q".repeat(2_000) };
+    const summary = recap(1);
+    const conversation = createConversation([prefix, { role: "assistant", content: "a" }, live], {
+      status: "compacted",
+      windowStart: 2,
+      recap: summary,
+    });
+
+    const trims = applyOversizedTrim(conversation, 200);
+
+    expect(trims.map((trim) => trim.index)).toEqual([2]);
+    expect(conversation.archive[0]).toBe(prefix);
+    expect(conversation.compact.status).toBe("compacted");
+    if (conversation.compact.status === "compacted") {
+      expect(conversation.compact.recap).toBe(summary);
+    }
+    expect(JSON.stringify(conversation.archive[2]?.content)).toContain("characters omitted");
+    expect(applyOversizedTrim(conversation, 200)).toEqual([]);
   });
 });
 

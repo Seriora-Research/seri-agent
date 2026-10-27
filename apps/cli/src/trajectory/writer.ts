@@ -149,7 +149,8 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       event.type === "text-delta" ||
       event.type === "reasoning-delta" ||
       event.type === "messages-updated" ||
-      event.type === "compaction-held"
+      event.type === "compaction-held" ||
+      event.type === "message-trimmed"
     ) {
       return;
     }
@@ -254,7 +255,10 @@ export function createTrajectoryWriter(opts: WriterOpts): TrajectoryWriter {
       );
       const status = classifyEditError(event.error);
       if (status !== "error") writeRecord({ kind: "edit_outcome", status }, actor);
+      return;
     }
+    const _unhandled: never = event;
+    void _unhandled;
   }
 
   return {

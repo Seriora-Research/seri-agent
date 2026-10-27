@@ -1,30 +1,30 @@
-import { isQuotaExhaustedNotice } from "@seri/plans";
 import type { ModelProvider } from "@seri/model-catalog";
+import { isQuotaExhaustedNotice } from "@seri/plans";
+import type { LanguageModelUsage, ModelMessage } from "ai";
+import type { AskPrompt } from "../../ask-user/types";
+import { messageTrimLine, toolAllowedLine } from "../../cli/output";
+import { fileChangeFromTool, fileChangePlainText, sameHunk } from "../../fileChange";
+import type { LoopEvent } from "../../loop/loop";
+import type { McpPanelRow } from "../../mcp/commands";
+import type { MemoryPanelRow } from "../../memory/commands";
 import {
   PLAN_OVERLAY_OFF,
   type PlanOverlay,
   type PlanQuestion,
   type SubmittedPlan,
 } from "../../plan/mode";
-import type { AskPrompt } from "../../ask-user/types";
-import type { LanguageModelUsage, ModelMessage } from "ai";
-import { toolAllowedLine } from "../../cli/output";
-import type { LoopEvent } from "../../loop/loop";
-import type { McpPanelRow } from "../../mcp/commands";
-import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { SessionState } from "../../session/session";
+import type { ChildEventPayload } from "../../subagents/dispatch";
 import {
   parseTodoList,
   TODO_TOOL_NAME,
-  todoListFromMessages,
   type TodoList,
+  todoListFromMessages,
 } from "../../todo/list";
 import type { UsageReport } from "../../usage/report";
 import type { ChromeTabId } from "../chrome/tabs";
-import type { ChildEventPayload } from "../../subagents/dispatch";
 import { ERROR_MARK, WARNING_MARK } from "../theme/theme";
-import { fileChangeFromTool, fileChangePlainText, sameHunk } from "../../fileChange";
 import {
   estimateTokens,
   formatDoneLine,
@@ -425,6 +425,7 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
     case "retry":
     case "tool-allowed":
     case "compaction-held":
+    case "message-trimmed":
       return child;
     default: {
       const _exhaustive: never = event;
@@ -1044,6 +1045,11 @@ function applyLoopEvent(state: TuiState, event: LoopEvent): TuiState {
     case "compaction-held":
       return {
         ...pushLine(state, `${WARNING_MARK}${event.message}`),
+        status: "",
+      };
+    case "message-trimmed":
+      return {
+        ...pushLine(state, `${WARNING_MARK}${messageTrimLine(event.trims)}`),
         status: "",
       };
     case "retry":
