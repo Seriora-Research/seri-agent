@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { streamText } from "ai";
+import { type ModelMessage, streamText } from "ai";
 import { compactMessages } from "../../src/loop/compaction";
 import { codexAuthedFetch, getCodexSubscriptionModel } from "../../src/provider/codex";
 
@@ -180,19 +180,14 @@ describe("getCodexSubscriptionModel", () => {
       body = String(init?.body);
       return new Response("nope", { status: 400 });
     }) as unknown as typeof fetch);
+    const transcript: ModelMessage[] = [
+      { role: "user", content: "do the task" },
+      { role: "assistant", content: "working" },
+      { role: "user", content: "status" },
+      { role: "user", content: "keep me, recent tail" },
+    ];
     await expect(
-      compactMessages(
-        [
-          { role: "user", content: "do the task" },
-          { role: "assistant", content: "working" },
-          { role: "user", content: "status" },
-          { role: "user", content: "keep me, recent tail" },
-        ],
-        model,
-        3,
-        undefined,
-        { stream: true },
-      ),
+      compactMessages(transcript, model, 3, transcript, undefined, { stream: true }),
     ).rejects.toBeDefined();
     const payload = JSON.parse(body) as Record<string, unknown>;
     expect(payload.store).toBe(false);

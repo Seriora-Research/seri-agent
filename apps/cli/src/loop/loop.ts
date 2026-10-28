@@ -494,11 +494,18 @@ export async function* runLoop(opts: {
     if (evictBoundary === null) return "skipped";
     if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
     try {
-      const compacted = await compactMessages(window, opts.model, evictBoundary, opts.signal, {
-        stream: opts.credential === "subscription" && opts.provider === "openai",
-        maxOutputTokens,
-        ...samplingFields,
-      });
+      const compacted = await compactMessages(
+        window,
+        opts.model,
+        evictBoundary,
+        conversation.archive,
+        opts.signal,
+        {
+          stream: opts.credential === "subscription" && opts.provider === "openai",
+          maxOutputTokens,
+          ...samplingFields,
+        },
+      );
       const recap = compacted.messages[0];
       if (recap === undefined) throw new Error("compactMessages returned an empty window");
       applyRecap(conversation, recap, compacted.evictedCount);

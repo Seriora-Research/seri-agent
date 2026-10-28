@@ -371,7 +371,9 @@ describe("runLoop compaction trigger", () => {
         maxIterations: laterTurns + 1,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentTokens: 3_500,
+        // The recap repeats the latest user turn. 3_000 keeps that pin under the
+        // watermark. 3_500 plus the pin arms the low-yield hold.
+        preserveRecentTokens: 3_000,
       }),
     );
 

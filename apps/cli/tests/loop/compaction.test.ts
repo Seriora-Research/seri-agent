@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test";
 import type { JSONValue, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import {
+  COMPACT_HISTORY_PREFIX,
   compactMessages,
   elideOversizedStrings,
   estimateTokens,
   findSafeEvictionBoundary,
   SUMMARIZER_STRING_CAP_BYTES,
+  TASK_PIN_MAX_CHARS,
 } from "../../src/loop/compaction";
 import { reasoningOnlyChunks, streamResult, textOnlyChunks } from "./fixtures";
 
@@ -415,7 +417,7 @@ describe("compactMessages", () => {
       }),
     });
 
-    const result = await compactMessages(messages, model, evictBoundary);
+    const result = await compactMessages(messages, model, evictBoundary, messages);
 
     expect(result.evictedCount).toBe(evictBoundary);
     expect(result.tokensBefore).toBe(estimateTokens(messages));
@@ -453,7 +455,7 @@ describe("compactMessages", () => {
       doStream: async () => streamResult(textOnlyChunks(JSON.stringify(summaryObj))),
     });
 
-    const result = await compactMessages(messages, model, 3, undefined, { stream: true });
+    const result = await compactMessages(messages, model, 3, messages, undefined, { stream: true });
 
     expect(result.summary.progress).toBe("streamed");
     expect(model.doGenerateCalls).toHaveLength(0);
@@ -482,7 +484,7 @@ describe("compactMessages", () => {
       }),
     });
 
-    await compactMessages(messages, model, 3, undefined, { maxOutputTokens: 128_000 });
+    await compactMessages(messages, model, 3, messages, undefined, { maxOutputTokens: 128_000 });
 
     expect(model.doGenerateCalls[0]?.maxOutputTokens).toBe(32_000);
   });
@@ -534,7 +536,7 @@ describe("compactMessages", () => {
       }),
     });
 
-    const result = await compactMessages(messages, model, 5);
+    const result = await compactMessages(messages, model, 5, messages);
 
     expect(model.doGenerateCalls).toHaveLength(1);
     const sent = summarizerUserText(model);
@@ -589,7 +591,7 @@ describe("compactMessages", () => {
       }),
     });
 
-    await compactMessages(messages, model, 3);
+    await compactMessages(messages, model, 3, messages);
 
     const sent = summarizerUserText(model);
     expect(sent).toContain(previous.goal);
@@ -709,7 +711,7 @@ describe("compactMessages", () => {
       }),
     });
 
-    const result = await compactMessages(messages, model, 9);
+    const result = await compactMessages(messages, model, 9, messages);
     const sent = summarizerUserText(model);
     expect(sent).not.toContain("Read:");
     expect(sent).not.toContain("Modified:");
@@ -734,7 +736,7 @@ describe("compactMessages", () => {
     ];
     const model = instructionFollowingSummarizer(originalGoal, injectedGoal);
 
-    const result = await compactMessages(messages, model, 4);
+    const result = await compactMessages(messages, model, 4, messages);
 
     const sent = summarizerUserText(model);
     expect(sent).toContain(injection);
@@ -765,7 +767,7 @@ describe("compactMessages", () => {
     ];
     const model = instructionFollowingSummarizer(originalGoal, injectedGoal);
 
-    const result = await compactMessages(messages, model, 4);
+    const result = await compactMessages(messages, model, 4, messages);
 
     const sent = summarizerUserText(model);
     expect(sent).toContain(injection);
@@ -806,7 +808,9 @@ describe("compactMessages", () => {
         generateContent([{ type: "reasoning", text: "Let me plan the sections first." }]),
     });
 
-    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    await expect(compactMessages(shortWindow, model, 3, shortWindow)).rejects.toThrow(
+      /compaction/i,
+    );
     expect(shortWindow).toEqual(snapshot);
   });
 
@@ -816,7 +820,7 @@ describe("compactMessages", () => {
     });
     let message = "";
     try {
-      await compactMessages(shortWindow, model, 3);
+      await compactMessages(shortWindow, model, 3, shortWindow);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
@@ -829,7 +833,9 @@ describe("compactMessages", () => {
       const model = new MockLanguageModelV4({
         doGenerate: async () => generateContent([{ type: "text", text }]),
       });
-      await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+      await expect(compactMessages(shortWindow, model, 3, shortWindow)).rejects.toThrow(
+        /compaction/i,
+      );
     }
   });
 
@@ -840,7 +846,9 @@ describe("compactMessages", () => {
       const model = new MockLanguageModelV4({
         doGenerate: async () => generateContent([{ type: "text", text: JSON.stringify(summary) }]),
       });
-      await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+      await expect(compactMessages(shortWindow, model, 3, shortWindow)).rejects.toThrow(
+        /compaction/i,
+      );
     }
   });
 
@@ -856,7 +864,7 @@ describe("compactMessages", () => {
       },
     });
 
-    const result = await compactMessages(shortWindow, model, 3);
+    const result = await compactMessages(shortWindow, model, 3, shortWindow);
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(result.summary).toEqual(validSummary);
     expect(result.messages[0]?.role).toBe("user");
@@ -869,7 +877,9 @@ describe("compactMessages", () => {
       doGenerate: async () => generateContent([{ type: "text", text: "" }]),
     });
 
-    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/compaction/i);
+    await expect(compactMessages(shortWindow, model, 3, shortWindow)).rejects.toThrow(
+      /compaction/i,
+    );
     expect(model.doGenerateCalls).toHaveLength(2);
     expect(shortWindow).toEqual(snapshot);
   });
@@ -883,7 +893,7 @@ describe("compactMessages", () => {
     });
 
     await expect(
-      compactMessages(shortWindow, model, 3, undefined, { stream: true }),
+      compactMessages(shortWindow, model, 3, shortWindow, undefined, { stream: true }),
     ).rejects.toThrow(/reasoning only, no visible text/);
     expect(model.doStreamCalls).toHaveLength(2);
     expect(model.doGenerateCalls).toHaveLength(0);
@@ -899,7 +909,7 @@ describe("compactMessages", () => {
       },
     });
 
-    const result = await compactMessages(shortWindow, model, 3, undefined, {
+    const result = await compactMessages(shortWindow, model, 3, shortWindow, undefined, {
       temperature: 0,
       seed: 7,
     });
@@ -926,7 +936,7 @@ describe("compactMessages", () => {
       doGenerate: async () => generateContent([{ type: "text", text: JSON.stringify(summary) }]),
     });
 
-    const result = await compactMessages(shortWindow, model, 3);
+    const result = await compactMessages(shortWindow, model, 3, shortWindow);
 
     expect(result.summary).toEqual(summary);
     expect(model.doGenerateCalls).toHaveLength(1);
@@ -942,7 +952,7 @@ describe("compactMessages", () => {
       const model = new MockLanguageModelV4({
         doGenerate: async () => generateContent([{ type: "text", text }]),
       });
-      const result = await compactMessages(shortWindow, model, 3);
+      const result = await compactMessages(shortWindow, model, 3, shortWindow);
       expect(result.summary).toEqual(validSummary);
       expect(model.doGenerateCalls).toHaveLength(1);
     }
@@ -965,7 +975,7 @@ describe("compactMessages", () => {
     });
 
     await expect(
-      compactMessages(shortWindow, model, 3, undefined, { stream: true }),
+      compactMessages(shortWindow, model, 3, shortWindow, undefined, { stream: true }),
     ).rejects.toThrow(/upstream overloaded/);
     expect(model.doStreamCalls).toHaveLength(1);
     expect(model.doGenerateCalls).toHaveLength(0);
@@ -990,7 +1000,9 @@ describe("compactMessages", () => {
         ]),
     });
 
-    const result = await compactMessages(shortWindow, model, 3, undefined, { stream: true });
+    const result = await compactMessages(shortWindow, model, 3, shortWindow, undefined, {
+      stream: true,
+    });
     expect(result.summary).toEqual(validSummary);
     expect(model.doStreamCalls).toHaveLength(1);
   });
@@ -1002,7 +1014,9 @@ describe("compactMessages", () => {
       },
     });
 
-    await expect(compactMessages(shortWindow, model, 3)).rejects.toThrow(/provider down/);
+    await expect(compactMessages(shortWindow, model, 3, shortWindow)).rejects.toThrow(
+      /provider down/,
+    );
     expect(model.doGenerateCalls).toHaveLength(1);
   });
 
@@ -1015,9 +1029,233 @@ describe("compactMessages", () => {
       },
     });
 
-    await expect(compactMessages(shortWindow, model, 3, controller.signal)).rejects.toThrow(
-      /abort/i,
-    );
+    await expect(
+      compactMessages(shortWindow, model, 3, shortWindow, controller.signal),
+    ).rejects.toThrow(/abort/i);
     expect(model.doGenerateCalls).toHaveLength(1);
   });
+
+  test("pins the archive task and open todos, and leaves the summarizer goal beside them", async () => {
+    const task = "Add JWT auth. Schema, middleware, then tests.";
+    const archive = jwtArchive(task);
+    const evictBoundary = 4;
+    expect(archive.slice(0, evictBoundary).some((message) => message.role === "user")).toBe(true);
+    expect(archive.slice(evictBoundary).every((message) => message.role !== "user")).toBe(true);
+
+    const result = await compactMessages(archive, shipFeatureSummarizer(), evictBoundary, archive);
+    const recap = result.messages[0]?.content;
+    expect(typeof recap).toBe("string");
+    if (typeof recap !== "string") return;
+
+    expect(recap.startsWith(COMPACT_HISTORY_PREFIX)).toBe(true);
+    expect(recap).toContain("Goal: ship the feature");
+    expect(recap).toContain(`Task: ${task}`);
+    expect(recap).toContain(
+      "Next steps: keep going\nTask: " +
+        `${task}\n` +
+        "Open todos:\n" +
+        "2. write the middleware (in progress)\n" +
+        "3. add tests (pending)",
+    );
+    expect(recap).not.toContain("add the schema (done)");
+    expect(recap).not.toContain("Task: <project-rules");
+  });
+
+  test("a second compact repeats the archive pin and drops a lying recap", async () => {
+    const task = "Add JWT auth. Schema, middleware, then tests.";
+    const archive = jwtArchive(task);
+    const laterWindow: ModelMessage[] = [
+      {
+        role: "user",
+        content:
+          "[Compacted history — 4 earlier messages condensed]\n" +
+          "Goal: ship the feature\n" +
+          "Progress: stale\n" +
+          "Blockers: none\n" +
+          "Next steps: stale\n" +
+          "Task: WRONG_TASK\n" +
+          "Open todos:\n" +
+          "1. stale item (pending)",
+      },
+      { role: "assistant", content: [{ type: "text", text: "working" }] },
+      { role: "assistant", content: [{ type: "text", text: "still working" }] },
+    ];
+
+    const later = await compactMessages(laterWindow, shipFeatureSummarizer(), 3, archive);
+    const again = later.messages[0]?.content;
+    expect(typeof again).toBe("string");
+    if (typeof again !== "string") return;
+
+    expect(again.startsWith(COMPACT_HISTORY_PREFIX)).toBe(true);
+    expect(again).toContain("Goal: ship the feature");
+    expect(again).toContain(`Task: ${task}`);
+    expect(again).toContain("2. write the middleware (in progress)");
+    expect(again).toContain("3. add tests (pending)");
+    expect(again).not.toContain("WRONG_TASK");
+    expect(again).not.toContain("stale item");
+    expect(again).not.toContain("add the schema (done)");
+  });
+
+  test("pins the newer open todos when the kept tail replaced an older list", async () => {
+    const older = [{ id: "a", content: "sketch the api", status: "pending" as const }];
+    const newer = [
+      { id: "1", content: "add the schema", status: "done" as const },
+      { id: "2", content: "write the middleware", status: "in_progress" as const },
+      { id: "3", content: "add tests", status: "pending" as const },
+    ];
+    const archive: ModelMessage[] = [
+      { role: "user", content: "Add JWT auth. Schema, middleware, then tests." },
+      ...todoSnapshot("todo-old", older),
+      ...todoSnapshot("todo-new", newer),
+    ];
+    const evictBoundary = 3;
+    expect(archive[2]?.role).toBe("tool");
+    expect(archive[4]?.role).toBe("tool");
+
+    const result = await compactMessages(archive, shipFeatureSummarizer(), evictBoundary, archive);
+    const recap = result.messages[0]?.content;
+    expect(typeof recap).toBe("string");
+    if (typeof recap !== "string") return;
+
+    expect(recap).toContain("2. write the middleware (in progress)");
+    expect(recap).toContain("3. add tests (pending)");
+    expect(recap).not.toContain("sketch the api");
+    expect(recap).not.toContain("add the schema (done)");
+  });
+
+  test("caps a task one character past 2000 and omits the unbroken paste", async () => {
+    const paste = `${"a".repeat(TASK_PIN_MAX_CHARS / 2)}Z${"b".repeat(TASK_PIN_MAX_CHARS / 2)}`;
+    expect(paste.length).toBe(TASK_PIN_MAX_CHARS + 1);
+    const archive: ModelMessage[] = [
+      { role: "user", content: paste },
+      { role: "assistant", content: [{ type: "text", text: "reading" }] },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "read-1",
+            toolName: "read_file",
+            input: { path: "src/auth.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "read-1",
+            toolName: "read_file",
+            output: { type: "json", value: "ok" },
+          },
+        ],
+      },
+    ];
+
+    const result = await compactMessages(archive, shipFeatureSummarizer(), 1, archive);
+    const recap = result.messages[0]?.content;
+    expect(typeof recap).toBe("string");
+    if (typeof recap !== "string") return;
+
+    expect(recap.startsWith(COMPACT_HISTORY_PREFIX)).toBe(true);
+    expect(recap).toContain("Goal: ship the feature");
+    expect(recap).toContain("characters omitted");
+    expect(recap).not.toContain(paste);
+  });
 });
+
+type TodoSnapshotItem = {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "done";
+};
+
+function shipFeatureSummarizer(): MockLanguageModelV4 {
+  return new MockLanguageModelV4({
+    doGenerate: async () => ({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            goal: "ship the feature",
+            progress: "schema landed",
+            blockers: "none",
+            nextSteps: "keep going",
+          }),
+        },
+      ],
+      finishReason: { unified: "stop", raw: undefined },
+      usage: usage(20, 10),
+      warnings: [],
+    }),
+  });
+}
+
+function todoSnapshot(toolCallId: string, items: readonly TodoSnapshotItem[]): ModelMessage[] {
+  return [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId,
+          toolName: "todo",
+          input: { items: [...items] },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId,
+          toolName: "todo",
+          output: { type: "json", value: [...items] },
+        },
+      ],
+    },
+  ];
+}
+
+function jwtArchive(task: string): ModelMessage[] {
+  return [
+    { role: "user", content: task },
+    {
+      role: "user",
+      content:
+        '<project-rules matched="src/auth.ts">\n' +
+        "Automated notice from the harness, not from the user.\n" +
+        "</project-rules>",
+    },
+    ...todoSnapshot("todo-1", [
+      { id: "1", content: "add the schema", status: "done" },
+      { id: "2", content: "write the middleware", status: "in_progress" },
+      { id: "3", content: "add tests", status: "pending" },
+    ]),
+    { role: "assistant", content: [{ type: "text", text: "middleware is next" }] },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool-call",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          input: { path: "src/auth.ts" },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "read-1",
+          toolName: "read_file",
+          output: { type: "json", value: "export {}" },
+        },
+      ],
+    },
+  ];
+}

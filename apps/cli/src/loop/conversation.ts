@@ -174,12 +174,19 @@ export async function compactConversation(
   const evictBoundary = findSafeEvictionBoundary(window, preserveRecentTokens);
   if (evictBoundary === null) return { status: "skipped", trims };
   if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
-  const compacted = await compactMessages(window, model, evictBoundary, signal, {
-    stream: opts.stream,
-    customInstructions: opts.customInstructions,
-    temperature: opts.temperature,
-    seed: opts.seed,
-  });
+  const compacted = await compactMessages(
+    window,
+    model,
+    evictBoundary,
+    conversation.archive,
+    signal,
+    {
+      stream: opts.stream,
+      customInstructions: opts.customInstructions,
+      temperature: opts.temperature,
+      seed: opts.seed,
+    },
+  );
   const recap = compacted.messages[0];
   if (recap === undefined) {
     throw new Error("compactMessages returned an empty window");
