@@ -10,7 +10,7 @@ import { generateText, streamText, wrapLanguageModel } from "ai";
 import { z } from "zod";
 import { capFromBoundedWindows, omissionMarker } from "../capToolResult";
 import { RULE_MARKER_OPEN } from "../rules/match";
-import { formatTodoLines, todoListFromMessages } from "../todo/list";
+import { formatOpenTodoLines, todoListFromMessages } from "../todo/list";
 
 function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cc}\p{Cf}]/u.test(text);
@@ -600,8 +600,6 @@ function formatFileListLines(lists: { read: string[]; modified: string[] }): str
   return lines.length > 0 ? `\n${lines.join("\n")}` : "";
 }
 
-// UTF-16 units, the same count capFromBoundedWindows uses. SUMMARIZER_STRING_CAP_BYTES
-// is bytes and replaces the whole string.
 export const TASK_PIN_MAX_CHARS = 2_000;
 
 type LivePin = {
@@ -620,7 +618,6 @@ function userText(message: ModelMessage): string {
   return text;
 }
 
-// lastUserText keeps project-rules notices and leaves the text uncapped.
 function livePinFromArchive(archive: readonly ModelMessage[]): LivePin {
   let task: string | undefined;
   for (let i = archive.length - 1; i >= 0; i--) {
@@ -637,17 +634,7 @@ function livePinFromArchive(archive: readonly ModelMessage[]): LivePin {
     break;
   }
 
-  const list = todoListFromMessages(archive);
-  const numbered = formatTodoLines(list);
-  // Number the full checklist first. Dropping done rows earlier would restart
-  // the open items at 1 and disagree with the TUI.
-  const openTodoLines: string[] = [];
-  for (let i = 0; i < list.length; i++) {
-    const item = list[i];
-    const line = numbered[i];
-    if (item === undefined || line === undefined || item.status === "done") continue;
-    openTodoLines.push(line);
-  }
+  const openTodoLines = formatOpenTodoLines(todoListFromMessages(archive));
   return task === undefined ? { openTodoLines } : { task, openTodoLines };
 }
 
@@ -919,8 +906,6 @@ export async function compactMessages(
     usage = usage === undefined ? reply.usage : addUsage(usage, reply.usage);
     const verdict = parseSummaryReply(reply);
     if (verdict.ok) {
-      // File lists stay on the evicted window. The pin reads the archive, because
-      // a later compact's window no longer holds the opening task.
       const pin = livePinFromArchive(archive);
       return {
         messages: [

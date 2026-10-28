@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ModelMessage } from "ai";
 import {
+  formatOpenTodoLines,
   formatTodoLines,
   parseTodoList,
   TODO_TOOL_NAME,
@@ -209,6 +210,15 @@ describe("formatTodoLines", () => {
   test("matches the issue example", () => {
     expect(formatTodoLines([COMPILE, MINIFY, SIZE])).toEqual([
       "1. find compile flags (done)",
+      "2. add --minify (in progress)",
+      "3. add a size test (pending)",
+    ]);
+  });
+});
+
+describe("formatOpenTodoLines", () => {
+  test("keeps formatTodoLines indexes after dropping done rows", () => {
+    expect(formatOpenTodoLines([COMPILE, MINIFY, SIZE])).toEqual([
       "2. add --minify (in progress)",
       "3. add a size test (pending)",
     ]);
