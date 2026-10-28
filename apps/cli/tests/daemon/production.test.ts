@@ -13,7 +13,7 @@ import { delimiter, join } from "node:path";
 import { DaemonClient, isLoopDaemonEvent, snapshotProcessEnv } from "@seri/daemon-client";
 import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
-import { profileDir } from "../../src/config/paths";
+import { MEMORIES_DIRNAME, profileDir } from "../../src/config/paths";
 import { startDaemon } from "../../src/daemon/server";
 import type { runLoop } from "../../src/loop/loop";
 import * as mcpClient from "../../src/mcp/client";
@@ -169,6 +169,54 @@ describe("production daemon wiring", () => {
     expect(capture()?.permissionMode).toBe("read-only");
     const runs = (await client.scheduleRuns(created.id)) as { runs: { response: string }[] };
     expect(runs.runs[0]?.response).toBe("ok");
+  });
+
+  test("default runScheduled loads AGENTS.md and USER.md edited after create", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const cwd = makeDir();
+    const memoriesDir = join(configDir, MEMORIES_DIRNAME);
+    mkdirSync(memoriesDir);
+    writeFileSync(join(cwd, "AGENTS.md"), "sched-agents-v1\n");
+    writeFileSync(join(memoriesDir, "USER.md"), "sched-memory-v1\n");
+    const { fake, capture } = fakeRunLoop([
+      { type: "text-delta", text: "ok" },
+      { type: "done", reason: "no-tool-call" },
+    ]);
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      now: () => now,
+      tickMs: 60_000,
+      executeTurn: async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      deps: {
+        runLoop: fake,
+        getGroqModel: () =>
+          new MockLanguageModelV4({
+            doStream: async () => streamResult(textOnlyChunks("ok")),
+          }),
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    await client.createSchedule({
+      task: "report",
+      cwd,
+      timing: { kind: "once", at: "2026-01-01T00:00:00.000Z" },
+      allowModelReads: true,
+    });
+    writeFileSync(join(cwd, "AGENTS.md"), "sched-agents-v2\n");
+    writeFileSync(join(memoriesDir, "USER.md"), "sched-memory-v2\n");
+    await daemon.scheduler.tick();
+    const system = capture()?.system;
+    expect(system).toContain("sched-agents-v2");
+    expect(system).toContain("sched-memory-v2");
+    expect(system).not.toContain("sched-agents-v1");
+    expect(system).not.toContain("sched-memory-v1");
   });
 
   test("default idle flush advances the archivist cursor before eviction", async () => {
