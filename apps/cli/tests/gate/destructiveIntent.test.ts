@@ -5,6 +5,9 @@ import {
   catastrophicOf,
   destructiveIntentOf,
   followUpBlocked,
+  locationForShellCall,
+  namedPathDenialCovers,
+  namedShellPaths,
   treesOverlap,
   writeFileDenialCovers,
 } from "../../src/gate/destructiveIntent";
@@ -119,6 +122,55 @@ describe("writeFileDenialCovers", () => {
     expect(writeFileDenialCovers([{ tool: "write_file", pattern: ".env" }], intent, cwd)).toBe(
       true,
     );
+  });
+});
+
+describe("namedShellPaths", () => {
+  test("test -f of an absolute path is a named path, echo hi is not", () => {
+    const paths = namedShellPaths("bash", { command: "test -f /secret/key && echo yes" }, cwd);
+    expect(paths.some((path) => path.replaceAll("\\", "/").endsWith("/secret/key"))).toBe(true);
+    expect(namedShellPaths("bash", { command: "echo hi" }, cwd)).toEqual([]);
+  });
+
+  test("a URL and an env assignment are not named paths", () => {
+    expect(namedShellPaths("bash", { command: "curl https://example.com" }, cwd)).toEqual([]);
+    expect(namedShellPaths("bash", { command: "PATH=/usr/bin echo hi" }, cwd)).toEqual([]);
+  });
+
+  test("a glob deny covers test -f of that tree", () => {
+    const secret = "/tmp/secret/key";
+    expect(
+      namedPathDenialCovers(
+        ["/tmp/secret/**"],
+        namedShellPaths("bash", { command: `test -f ${secret} && echo yes` }, cwd),
+        cwd,
+      ),
+    ).toBe(true);
+  });
+
+  test("test -f of an outside path is outside, echo hi is nopath", () => {
+    expect(
+      locationForShellCall(
+        cwd,
+        namedShellPaths("bash", { command: "test -f /etc/passwd && echo yes" }, cwd),
+      ),
+    ).toBe("outside");
+    expect(locationForShellCall(cwd, namedShellPaths("bash", { command: "echo hi" }, cwd))).toBe(
+      "nopath",
+    );
+  });
+
+  test("a slashed argv0 is not a named path", () => {
+    const paths = namedShellPaths("bash", { command: "/usr/bin/test -f ./ok" }, cwd);
+    expect(paths.some((path) => path.replaceAll("\\", "/").includes("/usr/bin/test"))).toBe(false);
+    expect(paths.some((path) => path.replaceAll("\\", "/").endsWith("/ok"))).toBe(true);
+    expect(locationForShellCall(cwd, paths)).toBe("inside");
+  });
+
+  test("a git-scp host is not a named path", () => {
+    expect(
+      namedShellPaths("bash", { command: "git clone git@github.com:org/repo.git" }, cwd),
+    ).toEqual([]);
   });
 });
 
