@@ -10,7 +10,12 @@ import {
   requestOutputCap,
   streamOutputCap,
 } from "../../src/loop/compaction";
-import { COMPACTION_YIELD_LOW_MESSAGE, OPEN_COMPACTION_HOLD } from "../../src/loop/compactionHold";
+import {
+  COMPACTION_YIELD_LOW_MESSAGE,
+  OPEN_COMPACTION_HOLD,
+  triggerTokens,
+  watermarkTokens,
+} from "../../src/loop/compactionHold";
 import { createConversation, FULL_WINDOW, windowOf } from "../../src/loop/conversation";
 import { type LoopEvent, runLoop, usableInputTokens } from "../../src/loop/loop";
 import {
@@ -371,7 +376,7 @@ describe("runLoop compaction trigger", () => {
         maxIterations: laterTurns + 1,
         contextWindowSize: 10_000,
         compactionThreshold: 0.5,
-        preserveRecentTokens: 3_500,
+        preserveRecentTokens: watermarkTokens(triggerTokens(10_000, 0.5)) - 1_000,
       }),
     );
 

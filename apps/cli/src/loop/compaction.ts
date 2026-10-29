@@ -9,6 +9,8 @@ import type {
 import { generateText, streamText, wrapLanguageModel } from "ai";
 import { z } from "zod";
 import { capFromBoundedWindows, omissionMarker } from "../capToolResult";
+import { RULE_MARKER_OPEN } from "../rules/match";
+import { formatOpenTodoLines, todoListFromMessages } from "../todo/list";
 
 function hasVisibleText(text: string): boolean {
   return /[^\s\p{Cc}\p{Cf}]/u.test(text);
@@ -598,6 +600,51 @@ function formatFileListLines(lists: { read: string[]; modified: string[] }): str
   return lines.length > 0 ? `\n${lines.join("\n")}` : "";
 }
 
+export const TASK_PIN_MAX_CHARS = 2_000;
+
+type LivePin = {
+  readonly task?: string;
+  readonly openTodoLines: readonly string[];
+};
+
+function userText(message: ModelMessage): string {
+  if (message.role !== "user") return "";
+  const content = message.content;
+  if (typeof content === "string") return content;
+  let text = "";
+  for (const part of content) {
+    if (part.type === "text") text += part.text;
+  }
+  return text;
+}
+
+function livePinFromArchive(archive: readonly ModelMessage[]): LivePin {
+  let task: string | undefined;
+  for (let i = archive.length - 1; i >= 0; i--) {
+    const message = archive[i];
+    if (message === undefined || message.role !== "user") continue;
+    if (isCompactSummaryMessage(message)) continue;
+    const text = userText(message);
+    if (text.startsWith(RULE_MARKER_OPEN)) continue;
+    if (!hasVisibleText(text)) continue;
+    task =
+      text.length > TASK_PIN_MAX_CHARS
+        ? capFromBoundedWindows(text, text, text.length, TASK_PIN_MAX_CHARS)
+        : text;
+    break;
+  }
+
+  const openTodoLines = formatOpenTodoLines(todoListFromMessages(archive));
+  return task === undefined ? { openTodoLines } : { task, openTodoLines };
+}
+
+function formatLivePinLines(pin: LivePin): string {
+  const lines: string[] = [];
+  if (pin.task !== undefined) lines.push(`Task: ${pin.task}`);
+  if (pin.openTodoLines.length > 0) lines.push("Open todos:", ...pin.openTodoLines);
+  return lines.length === 0 ? "" : `\n${lines.join("\n")}`;
+}
+
 function buildSummarizerPrompt(
   evicted: ModelMessage[],
   customInstructions?: string,
@@ -770,6 +817,7 @@ function buildRecapMessage(
   summary: CommittableSummary,
   evictBoundary: number,
   evicted: readonly ModelMessage[],
+  pin: LivePin,
 ): ModelMessage {
   return {
     role: "user",
@@ -779,7 +827,8 @@ function buildRecapMessage(
       `Progress: ${summary.progress}\n` +
       `Blockers: ${summary.blockers}\n` +
       `Next steps: ${summary.nextSteps}` +
-      formatFileListLines(extractFileLists(evicted)),
+      formatFileListLines(extractFileLists(evicted)) +
+      formatLivePinLines(pin),
   };
 }
 
@@ -787,6 +836,7 @@ export async function compactMessages(
   messages: ModelMessage[],
   model: LanguageModel,
   evictBoundary: number,
+  archive: readonly ModelMessage[],
   signal?: AbortSignal,
   opts?: {
     stream?: boolean;
@@ -856,9 +906,10 @@ export async function compactMessages(
     usage = usage === undefined ? reply.usage : addUsage(usage, reply.usage);
     const verdict = parseSummaryReply(reply);
     if (verdict.ok) {
+      const pin = livePinFromArchive(archive);
       return {
         messages: [
-          buildRecapMessage(verdict.summary, evictBoundary, evicted),
+          buildRecapMessage(verdict.summary, evictBoundary, evicted, pin),
           ...messages.slice(evictBoundary),
         ],
         summary: verdict.summary,

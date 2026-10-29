@@ -78,3 +78,7 @@ export function formatTodoLine(index: number, item: TodoItem): string {
 export function formatTodoLines(list: TodoList): string[] {
   return list.map((item, i) => formatTodoLine(i + 1, item));
 }
+
+export function formatOpenTodoLines(list: TodoList): string[] {
+  return formatTodoLines(list).filter((_, i) => list[i]?.status !== "done");
+}
