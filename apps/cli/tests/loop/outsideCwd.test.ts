@@ -302,6 +302,37 @@ describe("runLoop outside-cwd FS policy", () => {
     expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
   });
 
+  test("standing deny does not treat a slashed argv0 as an outside path", async () => {
+    const executed: string[] = [];
+    const events = await collect(
+      runLoop({
+        model: new MockLanguageModelV4({
+          doStream: [
+            streamResult(toolCallChunks("call-1", "bash", { command: "/usr/bin/test -f ./ok" })),
+            streamResult(textOnlyChunks("Done")),
+          ],
+        }),
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async ({ command }) => {
+              executed.push(command);
+              return "ok";
+            },
+          }),
+        },
+        messages: baseMessages,
+        permissionMode: "auto",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        blockReadsOutsideWorkingDirectories: true,
+      }),
+    );
+    expect(executed).toEqual(["/usr/bin/test -f ./ok"]);
+    expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+  });
+
   test("standing deny does not block bash echo with no path argument", async () => {
     const executed: string[] = [];
     const model = new MockLanguageModelV4({

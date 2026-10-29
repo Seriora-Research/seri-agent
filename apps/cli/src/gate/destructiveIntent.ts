@@ -66,9 +66,13 @@ function isUrl(token: string): boolean {
   return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(token);
 }
 
+function isGitScp(token: string): boolean {
+  return /^[^/\\]+@[^/\\]+:/.test(token);
+}
+
 function looksLikeFsPath(token: string): boolean {
   if (token.length === 0 || /\s/.test(token)) return false;
-  if (isEnvAssignment(token) || isUrl(token)) return false;
+  if (isEnvAssignment(token) || isUrl(token) || isGitScp(token)) return false;
   if (/^\/[A-Za-z]{1,8}$/.test(token)) return false;
   if (token.startsWith("-") && !token.includes("/") && !/^[A-Za-z]:/.test(token)) {
     return false;
@@ -129,6 +133,93 @@ function collectBare(command: string): PathToken[] {
     .split(/\s+/)
     .filter(looksLikePath)
     .map((raw) => ({ raw, quotingWidened: false }));
+}
+
+function splitSimpleCommands(command: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote !== null) {
+      if (quote === '"' && ch === "\\") {
+        i++;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch === "\n" || ch === ";") {
+      segments.push(command.slice(start, i));
+      start = i + 1;
+      continue;
+    }
+    if (ch === "&" && command[i + 1] === "&") {
+      segments.push(command.slice(start, i));
+      start = i + 2;
+      i++;
+      continue;
+    }
+    if (ch === "|" && command[i + 1] === "|") {
+      segments.push(command.slice(start, i));
+      start = i + 2;
+      i++;
+      continue;
+    }
+    if (ch === "|") {
+      segments.push(command.slice(start, i));
+      start = i + 1;
+      continue;
+    }
+    if (ch === "&") {
+      const prev = i > 0 ? command[i - 1] : "";
+      if (prev === ">" || prev === "<") continue;
+      segments.push(command.slice(start, i));
+      start = i + 1;
+    }
+  }
+  segments.push(command.slice(start));
+  return segments.map((segment) => segment.trim()).filter((segment) => segment.length > 0);
+}
+
+function tokensInOrder(segment: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < segment.length) {
+    while (i < segment.length && isBlank(segment[i])) i++;
+    if (i >= segment.length) break;
+    const ch = segment[i];
+    if (ch === "'" || ch === '"') {
+      const closer = ch;
+      i++;
+      let raw = "";
+      while (i < segment.length) {
+        const next = segment[i];
+        if (closer === '"' && next === "\\") {
+          raw += segment[i + 1] ?? "";
+          i += 2;
+          continue;
+        }
+        if (next === closer) {
+          i++;
+          break;
+        }
+        raw += next;
+        i++;
+      }
+      tokens.push(raw);
+      continue;
+    }
+    let end = i;
+    while (end < segment.length && !isBlank(segment[end])) end++;
+    tokens.push(segment.slice(i, end));
+    i = end;
+  }
+  return tokens;
 }
 
 type HeredocOp = {
@@ -479,14 +570,14 @@ export function namedShellPaths(toolName: string, input: unknown, cwd: string): 
   const command = commandOf(input);
   if (command === undefined) return [];
   const scanned = maskHeredocBodies(command);
-  const tokens = [...collectQuoted(scanned), ...collectBare(scanned)];
-  return [
-    ...new Set(
-      tokens
-        .filter((token) => looksLikeFsPath(token.raw))
-        .map((token) => resolveTarget(cwd, token.raw, toolName)),
-    ),
-  ];
+  const named: string[] = [];
+  for (const segment of splitSimpleCommands(scanned)) {
+    for (const token of tokensInOrder(segment).slice(1)) {
+      if (!looksLikeFsPath(token)) continue;
+      named.push(resolveTarget(cwd, token, toolName));
+    }
+  }
+  return [...new Set(named)];
 }
 
 export function namedPathDenialCovers(
