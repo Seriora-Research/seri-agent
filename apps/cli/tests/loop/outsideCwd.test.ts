@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { resolve } from "node:path";
-import { tool, type ToolSet } from "ai";
+import { type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
-import { type ApprovalAnswer, runLoop } from "../../src/loop/loop";
 import type { Consent } from "../../src/gate/fsBoundary";
+import { type ApprovalAnswer, runLoop } from "../../src/loop/loop";
 import {
   baseMessages,
   collect,
@@ -176,6 +176,162 @@ describe("runLoop outside-cwd FS policy", () => {
       { type: "permission-denied", name: "read_file", reason: "blocked" },
     ]);
     expect(events.find((e) => e.type === "tool-call")).toBeUndefined();
+  });
+
+  test("standing deny blocks bash test -f of an outside path without calling the prompt", async () => {
+    const executed: string[] = [];
+    let prompted = false;
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(
+          toolCallChunks("call-1", "bash", { command: "test -f /etc/passwd && echo yes" }),
+        ),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async ({ command }) => {
+              executed.push(command);
+              return "yes";
+            },
+          }),
+        },
+        messages: baseMessages,
+        permissionMode: "auto",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        blockReadsOutsideWorkingDirectories: true,
+        approvalPrompt: async () => {
+          prompted = true;
+          return "once";
+        },
+      }),
+    );
+    expect(prompted).toBe(false);
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "bash",
+      reason: "blocked",
+    });
+  });
+
+  test("standing deny blocks bash cat of an outside path", async () => {
+    const executed: string[] = [];
+    const events = await collect(
+      runLoop({
+        model: new MockLanguageModelV4({
+          doStream: [
+            streamResult(toolCallChunks("call-1", "bash", { command: "cat /etc/passwd" })),
+            streamResult(textOnlyChunks("Done")),
+          ],
+        }),
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async ({ command }) => {
+              executed.push(command);
+              return "root";
+            },
+          }),
+        },
+        messages: baseMessages,
+        permissionMode: "auto",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        blockReadsOutsideWorkingDirectories: true,
+      }),
+    );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "bash",
+      reason: "blocked",
+    });
+  });
+
+  test("standing deny does not treat a URL or env assignment as an outside path", async () => {
+    const executed: string[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(
+          multiToolCallChunks([
+            {
+              toolCallId: "call-1",
+              toolName: "bash",
+              input: { command: "curl https://example.com" },
+            },
+            {
+              toolCallId: "call-2",
+              toolName: "bash",
+              input: { command: "PATH=/usr/bin echo hi" },
+            },
+          ]),
+        ),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async ({ command }) => {
+              executed.push(command);
+              return "ok";
+            },
+          }),
+        },
+        messages: baseMessages,
+        permissionMode: "auto",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        blockReadsOutsideWorkingDirectories: true,
+      }),
+    );
+    expect(executed).toEqual(["curl https://example.com", "PATH=/usr/bin echo hi"]);
+    expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
+  });
+
+  test("standing deny does not block bash echo with no path argument", async () => {
+    const executed: string[] = [];
+    const model = new MockLanguageModelV4({
+      doStream: [
+        streamResult(toolCallChunks("call-1", "bash", { command: "echo hi" })),
+        streamResult(textOnlyChunks("Done")),
+      ],
+    });
+    const events = await collect(
+      runLoop({
+        model,
+        tools: {
+          bash: tool({
+            description: "run bash",
+            inputSchema: z.object({ command: z.string() }),
+            execute: async ({ command }) => {
+              executed.push(command);
+              return "hi";
+            },
+          }),
+        },
+        messages: baseMessages,
+        permissionMode: "auto",
+        workingDirectory: cwd,
+        askOutsideFs: true,
+        blockReadsOutsideWorkingDirectories: true,
+      }),
+    );
+    expect(executed).toEqual(["echo hi"]);
+    expect(events.find((e) => e.type === "permission-denied")).toBeUndefined();
   });
 
   test("standing deny blocks without calling the prompt", async () => {

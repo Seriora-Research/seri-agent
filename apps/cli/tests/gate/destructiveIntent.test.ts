@@ -5,6 +5,9 @@ import {
   catastrophicOf,
   destructiveIntentOf,
   followUpBlocked,
+  locationForShellCall,
+  namedPathDenialCovers,
+  namedShellPaths,
   treesOverlap,
   writeFileDenialCovers,
 } from "../../src/gate/destructiveIntent";
@@ -118,6 +121,42 @@ describe("writeFileDenialCovers", () => {
     const intent = destructiveIntentOf("bash", { command }, cwd);
     expect(writeFileDenialCovers([{ tool: "write_file", pattern: ".env" }], intent, cwd)).toBe(
       true,
+    );
+  });
+});
+
+describe("namedShellPaths", () => {
+  test("test -f of an absolute path is a named path, echo hi is not", () => {
+    const paths = namedShellPaths("bash", { command: "test -f /secret/key && echo yes" }, cwd);
+    expect(paths.some((path) => path.replaceAll("\\", "/").endsWith("/secret/key"))).toBe(true);
+    expect(namedShellPaths("bash", { command: "echo hi" }, cwd)).toEqual([]);
+  });
+
+  test("a URL and an env assignment are not named paths", () => {
+    expect(namedShellPaths("bash", { command: "curl https://example.com" }, cwd)).toEqual([]);
+    expect(namedShellPaths("bash", { command: "PATH=/usr/bin echo hi" }, cwd)).toEqual([]);
+  });
+
+  test("a glob deny covers test -f of that tree", () => {
+    const secret = "/tmp/secret/key";
+    expect(
+      namedPathDenialCovers(
+        [{ tool: "glob", pattern: "/tmp/secret/**" }],
+        namedShellPaths("bash", { command: `test -f ${secret} && echo yes` }, cwd),
+        cwd,
+      ),
+    ).toBe(true);
+  });
+
+  test("test -f of an outside path is outside, echo hi is nopath", () => {
+    expect(
+      locationForShellCall(
+        cwd,
+        namedShellPaths("bash", { command: "test -f /etc/passwd && echo yes" }, cwd),
+      ),
+    ).toBe("outside");
+    expect(locationForShellCall(cwd, namedShellPaths("bash", { command: "echo hi" }, cwd))).toBe(
+      "nopath",
     );
   });
 });

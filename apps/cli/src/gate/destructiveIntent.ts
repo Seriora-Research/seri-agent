@@ -3,6 +3,7 @@ import { dirname, join, parse, resolve, sep } from "node:path";
 import { foldsCase } from "../caseFold";
 import { type PathDenial, pathMatchesDenial } from "./gate";
 import {
+  type CallLocation,
   canonicalizeAgainstCwd,
   canonicalizeEntryAgainstCwd,
   canonicalizeEntryResolvedAgainstCwd,
@@ -57,22 +58,35 @@ function isVerbToken(token: string): boolean {
   return REMOVE_VERB.test(token) || MOVE_VERB.test(token) || ROBOCOPY.test(token);
 }
 
-function looksLikePath(token: string): boolean {
+function isEnvAssignment(token: string): boolean {
+  // `PATH=/usr/bin` contains `/` but is an assignment, not a path argument.
+  return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
+}
+
+function isUrl(token: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(token);
+}
+
+function looksLikeFsPath(token: string): boolean {
   if (token.length === 0 || /\s/.test(token)) return false;
+  if (isEnvAssignment(token) || isUrl(token)) return false;
   if (/^\/[A-Za-z]{1,8}$/.test(token)) return false;
   if (token.startsWith("-") && !token.includes("/") && !/^[A-Za-z]:/.test(token)) {
     return false;
   }
   if (isVerbToken(token) || SHELL_WORDS.test(token)) return false;
   if (token === "~" || token.startsWith("~/") || token.startsWith("~\\")) return true;
-  if (
-    token.includes("/") ||
-    token.includes("\\") ||
-    /^[A-Za-z]:/.test(token) ||
-    token.startsWith(".")
-  ) {
-    return true;
-  }
+  return (
+    token.includes("/") || token.includes("\\") || /^[A-Za-z]:/.test(token) || token.startsWith(".")
+  );
+}
+
+function looksLikePath(token: string): boolean {
+  if (looksLikeFsPath(token)) return true;
+  if (token.length === 0 || /\s/.test(token)) return false;
+  if (isEnvAssignment(token) || isUrl(token)) return false;
+  if (isVerbToken(token) || SHELL_WORDS.test(token)) return false;
+  if (token.startsWith("-")) return false;
   return /^[\w][\w.+-]*$/.test(token);
 }
 
@@ -459,4 +473,37 @@ export function writeFileDenialCovers(
     if (intent.targets.length === 0) return true;
     return intent.targets.some((target) => pathMatchesDenial(denial.pattern, target, cwd));
   });
+}
+
+export function namedShellPaths(toolName: string, input: unknown, cwd: string): readonly string[] {
+  if (toolName !== "bash" && toolName !== "powershell") return [];
+  const command = commandOf(input);
+  if (command === undefined) return [];
+  const scanned = maskHeredocBodies(command);
+  const tokens = [...collectQuoted(scanned), ...collectBare(scanned)];
+  return [
+    ...new Set(
+      tokens
+        .filter((token) => looksLikeFsPath(token.raw))
+        .map((token) => resolveTarget(cwd, token.raw, toolName)),
+    ),
+  ];
+}
+
+export function namedPathDenialCovers(
+  denials: readonly PathDenial[] | undefined,
+  paths: readonly string[],
+  cwd: string | undefined,
+): boolean {
+  // Shell tools are not deniable by name, so a secrets-path deny of any FS tool covers a probe of that path.
+  if (denials === undefined || denials.length === 0 || paths.length === 0) return false;
+  return paths.some((path) =>
+    denials.some((denial) => pathMatchesDenial(denial.pattern, path, cwd)),
+  );
+}
+
+export function locationForShellCall(cwd: string, paths: readonly string[]): CallLocation {
+  if (paths.length === 0) return "nopath";
+  if (cwd === "") return "outside";
+  return paths.some((path) => !isInsideWorkingDir(cwd, path)) ? "outside" : "inside";
 }
