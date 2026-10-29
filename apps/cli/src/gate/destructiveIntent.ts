@@ -59,7 +59,6 @@ function isVerbToken(token: string): boolean {
 }
 
 function isEnvAssignment(token: string): boolean {
-  // `PATH=/usr/bin` contains `/` but is an assignment, not a path argument.
   return /^[A-Za-z_][A-Za-z0-9_]*=/.test(token);
 }
 
@@ -491,15 +490,12 @@ export function namedShellPaths(toolName: string, input: unknown, cwd: string): 
 }
 
 export function namedPathDenialCovers(
-  denials: readonly PathDenial[] | undefined,
+  patterns: readonly string[] | undefined,
   paths: readonly string[],
   cwd: string | undefined,
 ): boolean {
-  // Shell tools are not deniable by name, so a secrets-path deny of any FS tool covers a probe of that path.
-  if (denials === undefined || denials.length === 0 || paths.length === 0) return false;
-  return paths.some((path) =>
-    denials.some((denial) => pathMatchesDenial(denial.pattern, path, cwd)),
-  );
+  if (patterns === undefined || patterns.length === 0 || paths.length === 0) return false;
+  return paths.some((path) => patterns.some((pattern) => pathMatchesDenial(pattern, path, cwd)));
 }
 
 export function locationForShellCall(cwd: string, paths: readonly string[]): CallLocation {

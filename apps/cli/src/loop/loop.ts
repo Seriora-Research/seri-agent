@@ -899,7 +899,7 @@ export async function* runLoop(opts: {
         denialBlocks(opts.pathDenials, subject, call.input, opts.cwd) ||
         writeFileDenialCovers(opts.pathDenials, intent, opts.cwd) ||
         namedPathDenialCovers(
-          opts.pathDenials,
+          opts.pathDenials?.map((denial) => denial.pattern),
           namedShellPaths(call.toolName, call.input, opts.cwd ?? "."),
           opts.cwd,
         );

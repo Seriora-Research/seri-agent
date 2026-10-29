@@ -141,7 +141,7 @@ describe("namedShellPaths", () => {
     const secret = "/tmp/secret/key";
     expect(
       namedPathDenialCovers(
-        [{ tool: "glob", pattern: "/tmp/secret/**" }],
+        ["/tmp/secret/**"],
         namedShellPaths("bash", { command: `test -f ${secret} && echo yes` }, cwd),
         cwd,
       ),
