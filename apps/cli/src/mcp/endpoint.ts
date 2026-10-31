@@ -14,7 +14,6 @@ export class McpEndpoint {
     this.#wire = wire;
   }
 
-  /** Undefined when `new URL(raw)` throws. Does not require https. */
   static tryParse(raw: string): McpEndpoint | undefined {
     try {
       new URL(raw);
@@ -143,8 +142,6 @@ function isTokenBoundary(char: string): boolean {
   return char === '"' || char === "'" || char === "<" || char === ">" || /\s/.test(char);
 }
 
-// `new URL` throws once a warning quotes the raw text. The same userinfo and query spans
-// are still recognizable there, and running the edit again leaves `REDACTED` in place.
 function redactMcpText(text: string): string {
   const stripped = stripUserinfo(text);
   let out = "";
