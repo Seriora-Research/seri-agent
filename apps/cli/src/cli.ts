@@ -201,6 +201,7 @@ import { configDirForStore, SessionDatabase } from "./session/database";
 import { type SessionState, saveSession } from "./session/session";
 import { deliverSignal, onSignalCancel, raiseSignal } from "./signals";
 import { decideSkillsCommand, skillsPanelRows } from "./skills/commands";
+import { refreshPreparedSkills } from "./skills/refresh";
 import { loadSkill, type SkillRegistry } from "./skills/registry";
 import type { AgentRegistry, AgentSpec } from "./subagents/registry";
 import { grep as grepReal } from "./tools/grep";
@@ -2053,6 +2054,7 @@ async function runTui(
       }
       return;
     }
+    refreshPreparedSkills(prepared, configDir, (message) => printWarning(message));
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     const spec = commandByName(name);
     if (
