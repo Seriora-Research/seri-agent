@@ -11,29 +11,36 @@ import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
 import {
+  ARCHIVIST_TOOL_CALL_INTERVAL,
   createArchivistState,
   drainArchivist,
-  ARCHIVIST_TOOL_CALL_INTERVAL,
 } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
-import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
+
+function mcpEndpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
 
@@ -823,7 +830,7 @@ describe("driveLoop mcp composition", () => {
         {
           spec: {
             name: "exa",
-            url: "https://mcp.exa.ai/mcp",
+            url: mcpEndpoint("https://mcp.exa.ai/mcp"),
             headers: {},
             source: "project" as const,
             filePath: "x",
