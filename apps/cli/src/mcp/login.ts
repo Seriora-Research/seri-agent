@@ -62,7 +62,7 @@ export async function loginMcpServer(
       timeoutMs,
       signal,
     });
-    if (waited.kind === "denied") return { status: "denied", message: waited.message };
+    if (waited.kind === "denied") return { status: "denied", message: mcpLine`${waited.message}` };
     if (waited.kind === "timeout") return { status: "timeout" };
     if (waited.kind === "aborted") return { status: "aborted" };
 

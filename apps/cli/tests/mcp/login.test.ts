@@ -144,6 +144,24 @@ describe("every other ending maps to its own status, and closes the listener", (
     expect(closes).toHaveLength(1);
   });
 
+  test("a denied message does not keep credentials from an endpoint url", async () => {
+    const { listen, closes } = fakeListen({
+      kind: "denied",
+      message: "denied https://host/mcp?token=SECRET",
+    });
+    const result = await loginMcpServer(SPEC, makeConfigDir(), {
+      listen,
+      authFn: fakeAuth(["REDIRECT"]).authFn,
+      openUrl: () => {},
+    });
+
+    expect(result.status).toBe("denied");
+    if (result.status !== "denied") return;
+    expect(result.message).toContain("REDACTED");
+    expect(result.message).not.toContain("SECRET");
+    expect(closes).toHaveLength(1);
+  });
+
   test("timeout", async () => {
     const { listen, closes } = fakeListen({ kind: "timeout" });
     const result = await loginMcpServer(SPEC, makeConfigDir(), {

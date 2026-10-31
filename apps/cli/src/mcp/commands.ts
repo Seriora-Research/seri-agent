@@ -1,6 +1,5 @@
 import { join, relative } from "node:path";
 import { getMcpDir } from "../config/paths";
-import { messageOf } from "../errors";
 import type { ExtensionSource } from "../extensions/discovery";
 import { truncate } from "../truncate";
 import { clearMcpServerAuth } from "./authStore";
@@ -150,7 +149,7 @@ function addResult(
   try {
     addServerToFile(filePath, { name, url: endpoint.wireHref(), headers: {} });
   } catch (err) {
-    return { lines: [messageOf(err)] };
+    return { lines: [mcpLine`${err}`] };
   }
 
   return {
@@ -174,7 +173,7 @@ function removeResult(
   try {
     removed = removeServerFromFile(entry.spec.filePath, name);
   } catch (err) {
-    return { lines: [messageOf(err)] };
+    return { lines: [mcpLine`${err}`] };
   }
   if (!removed) return { lines: [`No MCP server named "${name}".`] };
 

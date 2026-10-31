@@ -1,7 +1,6 @@
 // listTools/callTool, not toolsFromDefinitions: @ai-sdk/mcp and ai pin different @ai-sdk/provider-utils copies whose schemaSymbol unique symbols do not unify.
 import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
 import { capToolResult } from "../capToolResult";
-import { messageOf } from "../errors";
 import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
 import { mcpLine } from "./endpoint";
 import { serverIdentity } from "./registry";
@@ -165,7 +164,7 @@ export async function callMcpTool(
   try {
     return await handle.callTool(remoteTool, args, { signal });
   } catch (err) {
-    throw new Error(`MCP server "${spec.name}" tool "${remoteTool}" failed: ${messageOf(err)}`);
+    throw new Error(mcpLine`MCP server "${spec.name}" tool "${remoteTool}" failed: ${err}`);
   }
 }
 
@@ -227,7 +226,7 @@ export async function closeMcpClients(
       slot.handle.then((client) => client.close()),
       timeoutMs,
     ).catch((err: unknown) =>
-      onWarning(`could not close MCP server "${slot.server}": ${messageOf(err)}`),
+      onWarning(mcpLine`could not close MCP server "${slot.server}": ${err}`),
     ),
   );
   clients.handles.clear();

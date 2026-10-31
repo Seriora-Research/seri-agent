@@ -3,7 +3,6 @@ import { messageOf } from "../errors";
 
 declare const mcpLineBrand: unique symbol;
 
-/** Printed MCP text. A plain string is not assignable to this. */
 export type McpLine = string & { readonly [mcpLineBrand]: true };
 
 const MARKER = "REDACTED";

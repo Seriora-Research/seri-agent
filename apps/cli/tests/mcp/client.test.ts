@@ -377,6 +377,27 @@ describe("fetchCatalog", () => {
     }
   });
 
+  test("a tool failure does not keep credentials from an endpoint url", async () => {
+    const handle = fakeHandle({
+      callTool: async () => {
+        throw new Error("failed https://host/mcp?token=SECRET");
+      },
+    });
+    const clients = createMcpClients(async () => handle);
+    let thrown: unknown;
+    try {
+      await callMcpTool(clients, spec("exa"), "web_search", {});
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    if (!(thrown instanceof Error)) return;
+    expect(thrown.message).toContain("REDACTED");
+    expect(thrown.message).not.toContain("SECRET");
+    expect(JSON.stringify(thrown)).not.toContain("SECRET");
+    expect(inspect(thrown)).not.toContain("SECRET");
+  });
+
   test("catalog identity hashes the configured url, query included", async () => {
     const raw = "https://mcp.exa.ai/mcp?token=SECRET";
     const catalog = await fetchCatalog(
@@ -507,6 +528,23 @@ describe("closeMcpClients", () => {
     const warnings: string[] = [];
     await closeMcpClients(clients, (m) => warnings.push(m));
     expect(warnings.some((w) => w.includes("exa") && w.includes("stuck"))).toBe(true);
+  });
+
+  test("a close failure does not keep credentials from an endpoint url", async () => {
+    const handle = fakeHandle({
+      close: async () => {
+        throw new Error("stuck https://host/mcp?token=SECRET");
+      },
+    });
+    const clients = createMcpClients(async () => handle);
+    await callMcpTool(clients, spec("exa"), "web_search", {});
+
+    const warnings: string[] = [];
+    await closeMcpClients(clients, (m) => warnings.push(m));
+    const text = warnings.join("\n");
+    expect(text).toContain("exa");
+    expect(text).toContain("REDACTED");
+    expect(text).not.toContain("SECRET");
   });
 
   test("a hung close warns and resolves rather than waiting forever", async () => {
