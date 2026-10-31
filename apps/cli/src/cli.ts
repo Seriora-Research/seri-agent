@@ -2055,6 +2055,12 @@ async function runTui(
       return;
     }
     refreshPreparedSkills(prepared, configDir, (message) => printWarning(message));
+    if (liveState.session.systemPrompt !== prepared.session.systemPrompt) {
+      dispatch({
+        type: "session-updated",
+        session: { ...liveState.session, systemPrompt: prepared.session.systemPrompt },
+      });
+    }
     const [name = "", ...args] = trimmed.split(/\s+/).filter(Boolean);
     const spec = commandByName(name);
     if (

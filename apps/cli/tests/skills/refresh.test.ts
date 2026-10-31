@@ -62,15 +62,29 @@ describe("refreshPreparedSkills", () => {
       ".seri/skills/hot/SKILL.md",
       '---\nname: hot\ndescription: "Loads a new procedure."\n---\n\nBODY-v1\n',
     );
+    refreshPreparedSkills(prepared, configDir, () => {});
+    const before = prepared.session.systemPrompt;
+    refreshPreparedSkills(prepared, configDir, () => {});
+    expect(prepared.session.systemPrompt).toBe(before);
+  });
+
+  test("a stale session prompt is rebuilt even when the map already matches disk", () => {
+    const { worktree, configDir, prepared } = makeTarget();
+    writeSkill(
+      worktree,
+      ".seri/skills/hot/SKILL.md",
+      '---\nname: hot\ndescription: "Loads a new procedure."\n---\n\nBODY-v1\n',
+    );
     prepared.skills = loadSkillRegistry({
       worktree,
       configDir,
       onWarning: () => {},
       announce: false,
     });
-    const before = prepared.session.systemPrompt;
+    prepared.session = { cwd: worktree, systemPrompt: "frozen-prompt" };
     refreshPreparedSkills(prepared, configDir, () => {});
-    expect(prepared.session.systemPrompt).toBe(before);
+    expect(prepared.session.systemPrompt).toContain("hot: Loads a new procedure.");
+    expect(prepared.session.systemPrompt).not.toBe("frozen-prompt");
   });
 
   test("a description edit rebuilds the listing", () => {

@@ -1379,7 +1379,6 @@ describe("driveLoop skill rescan", () => {
       configDir: prepared.session.cwd,
       onWarning: () => {},
     });
-    const promptBefore = prepared.session.systemPrompt;
 
     const first = fakeRunLoop();
     await driveLoop(
@@ -1396,7 +1395,8 @@ describe("driveLoop skill rescan", () => {
       { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
     );
     expect(String(await runSkillTool(first.capture()?.tools, "hot"))).toContain("HOT-BODY-v1");
-    expect(prepared.session.systemPrompt).toBe(promptBefore);
+    expect(prepared.session.systemPrompt).toContain("hot: Loads a new procedure.");
+    const listingPrompt = prepared.session.systemPrompt;
 
     writeFileSync(
       path,
@@ -1418,8 +1418,38 @@ describe("driveLoop skill rescan", () => {
       { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
     );
     expect(String(await runSkillTool(second.capture()?.tools, "hot"))).toContain("HOT-BODY-v2");
-    expect(prepared.session.systemPrompt).toBe(promptBefore);
+    expect(prepared.session.systemPrompt).toBe(listingPrompt);
     expect(second.capture()?.system).toBe(first.capture()?.system);
+  });
+
+  test("driveLoop heals a session object whose prompt lagged a prior map refresh", async () => {
+    const prepared = preparedStub();
+    writeProjectSkill(prepared.worktree, "hot", "Loads a new procedure.", "HOT-BODY-v1");
+    prepared.skills = loadSkillRegistry({
+      worktree: prepared.worktree,
+      configDir: prepared.session.cwd,
+      onWarning: () => {},
+    });
+    const liveSession = { ...prepared.session, systemPrompt: "sys" };
+    const turnPrepared = { ...prepared, session: liveSession };
+    const capture = fakeRunLoop();
+    await driveLoop(
+      turnPrepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(liveSession),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(SKILL_TOOL_NAME in (capture.capture()?.tools ?? {})).toBe(true);
+    expect(capture.capture()?.system).toContain("hot: Loads a new procedure.");
+    expect(liveSession.systemPrompt).toContain("hot: Loads a new procedure.");
+    expect(prepared.session.systemPrompt).toBe("sys");
   });
 
   test("refreshSkills false leaves a new on-disk skill out of the tool list", async () => {

@@ -131,7 +131,6 @@ export type DriveLoopOptions = {
   composeAskUser?: boolean;
   askOutsideFs?: boolean;
   onArchivist?: (report: ArchivistReport) => void;
-  /** Default true. Scheduled runs set false so on-disk skills cannot appear on the unattended path. */
   refreshSkills?: boolean;
 };
 

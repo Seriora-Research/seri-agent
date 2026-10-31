@@ -35,7 +35,6 @@ export function loadSkillRegistry(opts: {
   worktree: string;
   configDir: string;
   onWarning: (message: string) => void;
-  /** When false, skip the per-scope "skills from …" summary. Mid-session rescans use this so a quiet turn does not reprint the session-start list. */
   announce?: boolean;
 }): SkillRegistry {
   const skills = new Map<string, SkillSpec>();
@@ -129,7 +128,6 @@ export function renderSkillsTier(skills: readonly SkillSpec[]): string {
   ].join("\n");
 }
 
-/** Skills and agents load separately, so a shared name is warned here; `/name` dispatches the agent. */
 export function warnOnNameCollisions(
   skills: SkillRegistry,
   agents: { has(name: string): boolean },

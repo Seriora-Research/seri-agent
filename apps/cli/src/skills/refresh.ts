@@ -19,11 +19,10 @@ export type SkillRefreshTarget = {
   agents: { has(name: string): boolean };
 };
 
-/**
- * Reload skills from disk into `prepared` and, when the model-visible listing changed, rebuild
- * `session.systemPrompt`. Bodies are not copied: `loadSkill` still reads the file at invoke time.
- * Callers that must keep an empty registry (scheduled runs) skip this entirely.
- */
+function promptCarriesListing(prompt: string, listing: string): boolean {
+  return listing === "" ? !prompt.includes("# Skills\n") : prompt.includes(listing);
+}
+
 export function refreshPreparedSkills(
   prepared: SkillRefreshTarget,
   configDir: string,
@@ -43,7 +42,9 @@ export function refreshPreparedSkills(
     warnOnNameCollisions(skills, prepared.agents, onWarning);
   }
   const listing = renderSkillsTier([...skills.values()]);
-  if (listing === previousListing) return;
+  if (listing === previousListing && promptCarriesListing(prepared.session.systemPrompt, listing)) {
+    return;
+  }
   prepared.session.systemPrompt = buildSystemPrompt({
     agentsContent: loadAgentsFile(prepared.session.cwd),
     skills: [...skills.values()],
