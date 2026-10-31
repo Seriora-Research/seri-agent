@@ -35,6 +35,8 @@ export function loadSkillRegistry(opts: {
   worktree: string;
   configDir: string;
   onWarning: (message: string) => void;
+  /** When false, skip the per-scope "skills from …" summary. Mid-session rescans use this so a quiet turn does not reprint the session-start list. */
+  announce?: boolean;
 }): SkillRegistry {
   const skills = new Map<string, SkillSpec>();
   const scopes = extensionScopes({
@@ -74,7 +76,9 @@ export function loadSkillRegistry(opts: {
       loaded.push(outcome.spec.name);
     }
 
-    if (loaded.length > 0) opts.onWarning(`skills from ${scope.dir}: ${loaded.join(", ")}`);
+    if (opts.announce !== false && loaded.length > 0) {
+      opts.onWarning(`skills from ${scope.dir}: ${loaded.join(", ")}`);
+    }
   }
   return skills;
 }
@@ -123,4 +127,19 @@ export function renderSkillsTier(skills: readonly SkillSpec[]): string {
         `- ${skill.name}${skill.argumentHint === undefined ? "" : ` ${skill.argumentHint}`}: ${skill.description}`,
     ),
   ].join("\n");
+}
+
+/** Skills and agents load separately, so a shared name is warned here; `/name` dispatches the agent. */
+export function warnOnNameCollisions(
+  skills: SkillRegistry,
+  agents: { has(name: string): boolean },
+  onWarning: (message: string) => void,
+): void {
+  for (const name of skills.keys()) {
+    if (agents.has(name)) {
+      onWarning(
+        `"${name}" names both an agent and a skill; /${name} runs the agent. The skill is still reachable through the skill tool.`,
+      );
+    }
+  }
 }
