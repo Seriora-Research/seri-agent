@@ -240,7 +240,8 @@ describe("/skills review subcommands", () => {
     const staged = stagePendingSkill(INPUT, ctx, new Date());
     const { lines } = decideSkillsCommand(["approve", staged.id], ctx);
     expect(lines[0]).toContain("Approved");
-    expect(lines[0]).toContain("next session");
+    expect(lines[0]).toContain("next turn");
+    expect(lines[0]).not.toContain("next session");
   });
 
   test("an unmatched id says so instead of acting on something else", () => {

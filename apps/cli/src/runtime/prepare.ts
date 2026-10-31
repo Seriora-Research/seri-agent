@@ -25,8 +25,8 @@ import {
 } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
-import { OPEN_COMPACTION_HOLD, type CompactionHold } from "../loop/compactionHold";
 import { type HooksLoad, loadHookRegistry } from "../hooks/registry";
+import { type CompactionHold, OPEN_COMPACTION_HOLD } from "../loop/compactionHold";
 import {
   closeMcpClients,
   createMcpClients,
@@ -69,7 +69,7 @@ import {
   saveSession,
 } from "../session/session";
 import { listPendingSkills } from "../skills/pending";
-import { loadSkillRegistry, type SkillRegistry } from "../skills/registry";
+import { loadSkillRegistry, type SkillRegistry, warnOnNameCollisions } from "../skills/registry";
 import { type AgentRegistry, loadAgentRegistry } from "../subagents/registry";
 import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import { buildRunManifest, collectContextFiles } from "../trajectory/manifest";
@@ -343,21 +343,6 @@ export function buildCheckpointedTools(opts: {
     { ...opts.verifyConfig, env: opts.env },
   );
   return { checkpointer, tools };
-}
-
-/** Skills and agents load separately, so a shared name is warned here; `/name` dispatches the agent. */
-export function warnOnNameCollisions(
-  skills: SkillRegistry,
-  agents: AgentRegistry,
-  onWarning: (message: string) => void,
-): void {
-  for (const name of skills.keys()) {
-    if (agents.has(name)) {
-      onWarning(
-        `"${name}" names both an agent and a skill; /${name} runs the agent. The skill is still reachable through the skill tool.`,
-      );
-    }
-  }
 }
 
 function filterMcpGrants(

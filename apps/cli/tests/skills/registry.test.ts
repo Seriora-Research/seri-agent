@@ -152,6 +152,22 @@ describe("loadSkillRegistry", () => {
       true,
     );
   });
+
+  test("announce false keeps parse warnings and drops the per-scope summary", () => {
+    const { worktree, configDir } = makeTree({
+      "project/.seri/skills/reviewer/SKILL.md": SIMPLE,
+      "project/.seri/skills/broken/SKILL.md": "---\nname: [unclosed\n---\n\nbody\n",
+    });
+    const warnings: string[] = [];
+    loadSkillRegistry({
+      worktree,
+      configDir,
+      onWarning: (message) => warnings.push(message),
+      announce: false,
+    });
+    expect(warnings.some((w) => w.startsWith("skills from "))).toBe(false);
+    expect(warnings.some((w) => w.includes("broken") && w.includes("not valid YAML"))).toBe(true);
+  });
 });
 
 describe("readSkillBody", () => {

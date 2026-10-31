@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { findCatalogEntry, type ModelProvider } from "@seri/model-catalog";
 import type { LanguageModel, LanguageModelUsage, ModelMessage } from "ai";
 import { buildVolatileTier, joinTiers } from "../agents/systemPrompt";
+import { ASK_USER_OVERLAY } from "../ask-user/prompt";
+import { withAskUser } from "../ask-user/tool";
+import type { AskUserPresenter } from "../ask-user/types";
+import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
 import { appendBarrier } from "../checkpoint/checkpoint";
 import type { CliDeps, PreparedRun, RunContext } from "../cli";
 import { printGrantPersisted, printWarning, type RunUsage } from "../cli/output";
@@ -14,7 +18,6 @@ import {
   standingDenyReadsOutside,
 } from "../config/config";
 import { loadContainmentExpected } from "../containment/escape";
-import { loadSamplingConfig } from "../provider/sampling";
 import { messageOf } from "../errors";
 import type { PermissionMode } from "../gate/gate";
 import { createHookRunner } from "../hooks/gate";
@@ -36,29 +39,26 @@ import {
   runArchivist,
 } from "../memory/archivist";
 import { rememberGrant } from "../permissions/store";
-import type { CostReport } from "../provider/cost";
-import { effectiveHostedPlan, hostedPlanUsable } from "../auth/seriIgnore";
-import { configuredProviders } from "../provider/keys";
-import { dispatchModel } from "../provider/model";
-import { resolveReasoningEffort } from "../provider/reasoning";
-import { subscribedProviders } from "../provider/subscriptions";
-import { DISPATCH_TOOL_NAME } from "../provider/tools";
-import { createRuleInjector } from "../rules/match";
-import type { SessionState } from "../session/session";
-import { onSignalCancel } from "../signals";
-import { withSkills } from "../skills/tool";
-import { ASK_USER_OVERLAY } from "../ask-user/prompt";
-import { withAskUser } from "../ask-user/tool";
-import type { AskUserPresenter } from "../ask-user/types";
-import { withTodo } from "../todo/tool";
-import { PLAN_MODE_OVERLAY } from "../plan/prompt";
 import {
   isSubmittedPlan,
   type PlanAnswers,
   type PlanQuestion,
   type SubmittedPlan,
 } from "../plan/mode";
+import { PLAN_MODE_OVERLAY } from "../plan/prompt";
 import { SUBMIT_PLAN_TOOL_NAME, stripWriteTools, withPlanTools } from "../plan/tools";
+import type { CostReport } from "../provider/cost";
+import { configuredProviders } from "../provider/keys";
+import { dispatchModel } from "../provider/model";
+import { resolveReasoningEffort } from "../provider/reasoning";
+import { loadSamplingConfig } from "../provider/sampling";
+import { subscribedProviders } from "../provider/subscriptions";
+import { DISPATCH_TOOL_NAME } from "../provider/tools";
+import { createRuleInjector } from "../rules/match";
+import type { SessionState } from "../session/session";
+import { onSignalCancel } from "../signals";
+import { refreshPreparedSkills } from "../skills/refresh";
+import { withSkills } from "../skills/tool";
 import { type ChildEventPayload, dispatchDirect, withSubagents } from "../subagents/dispatch";
 import type { AgentSpec } from "../subagents/registry";
 import {
@@ -71,6 +71,7 @@ import {
   roleConstructionWarning,
   type TaskRouteRequest,
 } from "../subagents/routes";
+import { withTodo } from "../todo/tool";
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
 
@@ -130,6 +131,7 @@ export type DriveLoopOptions = {
   composeAskUser?: boolean;
   askOutsideFs?: boolean;
   onArchivist?: (report: ArchivistReport) => void;
+  refreshSkills?: boolean;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -202,6 +204,9 @@ export async function driveLoop(
   let doneReason: DoneReason | undefined;
   const usage: RunUsage = { inputTokens: undefined, outputTokens: undefined };
   let cost: CostReport | undefined;
+  if (driveOpts.refreshSkills !== false) {
+    refreshPreparedSkills(prepared, ctx.configDir, printWarning);
+  }
   const system = joinTiers(
     session.systemPrompt,
     buildVolatileTier(route.model, route.provider, catalogEntry?.displayName, memory, {
