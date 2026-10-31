@@ -6,6 +6,7 @@ import { truncate } from "../truncate";
 import { clearMcpServerAuth } from "./authStore";
 import type { McpClients, McpServerStatus } from "./client";
 import { mcpServerStatus } from "./client";
+import { McpEndpoint, mcpLine } from "./endpoint";
 import type { McpLoginResult } from "./login";
 import {
   addServerToFile,
@@ -137,19 +138,17 @@ function addResult(
       ],
     };
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(url ?? "");
-  } catch {
-    return { lines: [`"${url ?? ""}" is not a valid URL.`] };
+  const endpoint = McpEndpoint.tryParse(url ?? "");
+  if (endpoint === undefined) {
+    return { lines: [mcpLine`"${url ?? ""}" is not a valid URL.`] };
   }
-  if (parsed.protocol !== "https:") {
-    return { lines: [`"${url}" must be an https URL.`] };
+  if (endpoint.protocol !== "https:") {
+    return { lines: [mcpLine`"${url ?? ""}" must be an https URL.`] };
   }
 
   const filePath = join(getMcpDir(deps.configDir), SERVERS_FILENAME);
   try {
-    addServerToFile(filePath, { name, url: url as string, headers: {} });
+    addServerToFile(filePath, { name, url: endpoint.wireHref(), headers: {} });
   } catch (err) {
     return { lines: [messageOf(err)] };
   }
@@ -158,7 +157,7 @@ function addResult(
     lines: [`Added "${name}". Connect it from /mcp to preview and trust its tools.`],
     change: {
       kind: "added",
-      entry: { spec: { name, url: url as string, headers: {}, source: "user", filePath } },
+      entry: { spec: { name, url: endpoint, headers: {}, source: "user", filePath } },
     },
   };
 }

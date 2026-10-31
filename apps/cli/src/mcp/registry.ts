@@ -7,6 +7,7 @@ import { getMcpDir, MCP_DIRNAME } from "../config/paths";
 import { messageOf } from "../errors";
 import { type ExtensionSource, extensionScopes } from "../extensions/discovery";
 import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
+import { McpEndpoint, mcpLine } from "./endpoint";
 import type { McpCatalog, McpEntry, McpRegistry, McpServerSpec, McpToolInfo } from "./types";
 
 export type { McpEntry, McpRegistry } from "./types";
@@ -40,7 +41,7 @@ function parseOneServer(opts: {
   const { name, filePath } = opts;
   const skip = (reason: string) => ({
     spec: undefined,
-    warning: `${filePath}: server "${name}" was skipped: ${reason}`,
+    warning: mcpLine`${filePath}: server "${name}" was skipped: ${reason}`,
   });
 
   if (!NAME_SHAPE.test(name)) {
@@ -61,13 +62,11 @@ function parseOneServer(opts: {
   if (urlVar !== undefined) {
     return skip(`"url" references unset environment variable "${urlVar}"`);
   }
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(url);
-  } catch {
+  const endpoint = McpEndpoint.tryParse(url);
+  if (endpoint === undefined) {
     return skip(`"${rawUrl}" is not a valid URL`);
   }
-  if (parsedUrl.protocol !== "https:") {
+  if (endpoint.protocol !== "https:") {
     return skip(`"${rawUrl}" must be an https URL`);
   }
 
@@ -91,7 +90,7 @@ function parseOneServer(opts: {
   }
 
   return {
-    spec: { name, url, headers, source: opts.source, filePath },
+    spec: { name, url: endpoint, headers, source: opts.source, filePath },
     warning: undefined,
   };
 }
@@ -201,7 +200,9 @@ function catalogForSpec(
   onWarning: (message: string) => void,
 ): McpCatalog | undefined {
   if (catalog === undefined) return undefined;
-  if (catalogMatchesSpec(catalog, spec)) return catalog;
+  if (catalogMatchesSpec(catalog, { url: spec.url.wireHref(), headers: spec.headers })) {
+    return catalog;
+  }
   if (catalog.identity === undefined) {
     onWarning(
       `MCP server "${spec.name}" was not started: its cached catalog is not bound to a URL. /mcp to preview and trust it again.`,

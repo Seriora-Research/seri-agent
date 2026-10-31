@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { createServer } from "node:http";
+import { inspect } from "node:util";
 import { UnauthorizedError } from "@ai-sdk/mcp";
 import { McpLoginRequiredError } from "../../src/mcp/authProvider";
 import {
@@ -11,11 +13,24 @@ import {
   type McpClientHandle,
   mcpServerStatus,
 } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { serverIdentity } from "../../src/mcp/registry";
 import type { McpServerSpec } from "../../src/mcp/types";
 
+function endpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
+
 function spec(name = "exa"): McpServerSpec {
-  return { name, url: `https://mcp.${name}.ai/mcp`, headers: {}, source: "project", filePath: "x" };
+  return {
+    name,
+    url: endpoint(`https://mcp.${name}.ai/mcp`),
+    headers: {},
+    source: "project",
+    filePath: "x",
+  };
 }
 
 function fakeHandle(overrides: Partial<McpClientHandle> = {}): McpClientHandle {
@@ -271,7 +286,10 @@ describe("fetchCatalog", () => {
     expect(poolDialCount).toBe(0);
     expect(mcpServerStatus(clients, "exa")).toEqual({ state: "idle" });
     expect(catalog.server).toBe("exa");
-    expect(catalog.identity).toBe(serverIdentity(spec("exa")));
+    const exa = spec("exa");
+    expect(catalog.identity).toBe(
+      serverIdentity({ url: exa.url.wireHref(), headers: exa.headers }),
+    );
     expect(typeof catalog.fetchedAt).toBe("string");
     expect(catalog.tools).toEqual([
       {
@@ -297,12 +315,86 @@ describe("fetchCatalog", () => {
     await expect(fetchCatalog(spec("exa"), undefined, async () => handle)).rejects.toThrow();
     expect(closed).toBe(true);
   });
+
+  test("a real listTools failure keeps the query token on the wire and out of the error", async () => {
+    const hits: string[] = [];
+    const server = createServer((req, res) => {
+      hits.push(req.url ?? "");
+      res.writeHead(500, { "content-type": "text/plain" });
+      res.end("nope");
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    const port = typeof address === "object" && address !== null ? address.port : 0;
+    const url = `http://127.0.0.1:${port}/mcp?token=SECRET`;
+    const leaked: McpServerSpec = {
+      name: "probe",
+      url: endpoint(url),
+      headers: {},
+      source: "user",
+      filePath: "x",
+    };
+    try {
+      let thrown: unknown;
+      try {
+        await fetchCatalog(leaked);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(hits.some((hit) => hit.includes("/mcp") && hit.includes("token=SECRET"))).toBe(true);
+      expect(thrown).toBeInstanceOf(Error);
+      if (!(thrown instanceof Error)) return;
+      expect(thrown.message).not.toContain("SECRET");
+      expect(JSON.stringify(thrown)).not.toContain("SECRET");
+      expect(inspect(thrown)).not.toContain("SECRET");
+
+      hits.length = 0;
+      const clients = createMcpClients();
+      let callThrown: unknown;
+      try {
+        await callMcpTool(clients, leaked, "t", {});
+      } catch (err) {
+        callThrown = err;
+      }
+      expect(hits.some((hit) => hit.includes("/mcp") && hit.includes("token=SECRET"))).toBe(true);
+      expect(callThrown).toBeInstanceOf(Error);
+      if (!(callThrown instanceof Error)) return;
+      expect(callThrown.message).not.toContain("SECRET");
+      expect(JSON.stringify(callThrown)).not.toContain("SECRET");
+      expect(inspect(callThrown)).not.toContain("SECRET");
+      const status = mcpServerStatus(clients, "probe");
+      expect(status.state).toBe("failed");
+      if (status.state === "failed") {
+        expect(status.message).not.toContain("SECRET");
+        expect(status.message.length).toBeGreaterThan(0);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  test("catalog identity hashes the configured url, query included", async () => {
+    const raw = "https://mcp.exa.ai/mcp?token=SECRET";
+    const catalog = await fetchCatalog(
+      { name: "exa", url: endpoint(raw), headers: {}, source: "project", filePath: "x" },
+      undefined,
+      async () => fakeHandle(),
+    );
+    expect(catalog.identity).toBe(serverIdentity({ url: raw, headers: {} }));
+    expect(catalog.identity).not.toBe(
+      serverIdentity({ url: "https://mcp.exa.ai/mcp?token=REDACTED", headers: {} }),
+    );
+  });
 });
 
 function headed(authorization: string, url = "https://mcp.exa.ai/mcp"): McpServerSpec {
   return {
     name: "exa",
-    url,
+    url: endpoint(url),
     headers: { Authorization: authorization },
     source: "project",
     filePath: "x",
@@ -327,13 +419,13 @@ describe("the pool key is the name plus the expanded server", () => {
     let dialCount = 0;
     const dial: DialFn = async (next) => {
       dialCount++;
-      return fakeHandle({ callTool: async () => next.url });
+      return fakeHandle({ callTool: async () => next.url.wireHref() });
     };
     const clients = createMcpClients(dial);
     const first = spec("exa");
-    const second = { ...spec("exa"), url: "https://mcp.other.ai/mcp" };
-    expect(await callMcpTool(clients, first, "web_search", {})).toBe(first.url);
-    expect(await callMcpTool(clients, second, "web_search", {})).toBe(second.url);
+    const second = { ...spec("exa"), url: endpoint("https://mcp.other.ai/mcp") };
+    expect(await callMcpTool(clients, first, "web_search", {})).toBe(first.url.wireHref());
+    expect(await callMcpTool(clients, second, "web_search", {})).toBe(second.url.wireHref());
     expect(dialCount).toBe(2);
   });
 

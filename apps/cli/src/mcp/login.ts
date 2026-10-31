@@ -1,7 +1,7 @@
 import { auth } from "@ai-sdk/mcp";
 import { openBrowser } from "../auth/browser";
-import { messageOf } from "../errors";
 import { createMcpAuthProvider } from "./authProvider";
+import { mcpLine } from "./endpoint";
 import { type CallbackServer, type StartCallbackServer, startCallbackServer } from "./loopback";
 import type { McpServerSpec } from "./types";
 
@@ -53,7 +53,7 @@ export async function loginMcpServer(
       },
     });
 
-    if ((await authFn(provider, { serverUrl: spec.url, fetchFn })) === "AUTHORIZED") {
+    if ((await authFn(provider, { serverUrl: spec.url.wireHref(), fetchFn })) === "AUTHORIZED") {
       return { status: "success" };
     }
 
@@ -67,7 +67,7 @@ export async function loginMcpServer(
     if (waited.kind === "aborted") return { status: "aborted" };
 
     const exchanged = await authFn(provider, {
-      serverUrl: spec.url,
+      serverUrl: spec.url.wireHref(),
       authorizationCode: waited.code,
       callbackState: waited.state,
       callbackIssuer: waited.iss,
@@ -77,7 +77,7 @@ export async function loginMcpServer(
       ? { status: "success" }
       : { status: "error", message: `authenticating "${spec.name}" did not complete` };
   } catch (err) {
-    return { status: "error", message: messageOf(err) };
+    return { status: "error", message: mcpLine`${err}` };
   } finally {
     server?.close();
   }

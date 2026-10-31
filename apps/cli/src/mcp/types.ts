@@ -1,11 +1,12 @@
 // Type-only imports only: a runtime import here would cycle with permissions/store.ts → config/paths.ts.
 import type { ExtensionSource } from "../extensions/discovery";
+import type { McpEndpoint } from "./endpoint";
 
 export const MCP_TOOL_PREFIX = "mcp_";
 
 export type McpServerSpec = {
   readonly name: string;
-  readonly url: string;
+  readonly url: McpEndpoint;
   readonly headers: Readonly<Record<string, string>>;
   readonly source: ExtensionSource;
   readonly filePath: string;

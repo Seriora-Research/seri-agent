@@ -37,9 +37,10 @@ export function createMcpAuthProvider(opts: {
   interaction: McpAuthInteraction;
 }): OAuthClientProvider {
   const { spec, configDir, interaction } = opts;
-  const load = (): McpServerAuth | undefined => loadMcpServerAuth(configDir, spec.name, spec.url);
+  const serverUrl = spec.url.wireHref();
+  const load = (): McpServerAuth | undefined => loadMcpServerAuth(configDir, spec.name, serverUrl);
   const save = (patch: Partial<Omit<McpServerAuth, "serverUrl">>): void => {
-    saveMcpServerAuth(configDir, spec.name, patch, spec.url);
+    saveMcpServerAuth(configDir, spec.name, patch, serverUrl);
   };
 
   let codeVerifier: string | undefined;

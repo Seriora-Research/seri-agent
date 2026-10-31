@@ -15,6 +15,7 @@ import {
   type DialFn,
   type McpClientHandle,
 } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { serverIdentity, toolFingerprint, writeCatalogCache } from "../../src/mcp/registry";
 import { type McpToolInfo, mcpGrantKey } from "../../src/mcp/types";
 import { permissionsPath } from "../../src/permissions/store";
@@ -518,11 +519,13 @@ describe("bindSession + mcp", () => {
       return handle;
     };
     const warmClients = createMcpClients(dial);
+    const ghostUrl = McpEndpoint.tryParse("https://127.0.0.1:1/mcp");
+    if (ghostUrl === undefined) throw new Error("expected the test url to parse");
     await callMcpTool(
       warmClients,
       {
         name: "ghost",
-        url: "https://127.0.0.1:1/mcp",
+        url: ghostUrl,
         headers: {},
         source: "project",
         filePath: "x",
