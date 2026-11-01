@@ -311,14 +311,9 @@ export type ScheduleRunRecord = {
   finishedAt: string | null;
 };
 
-/**
- * Values of `schedules.running`. A restart retries only `claimed`, because a `firing` row moved
- * `next_run_at_ms` past its slot in the same transaction that wrote its run row.
- */
 const SchedulePhase = { idle: 0, claimed: 1, firing: 2 } as const;
 
 declare const slotAtMsBrand: unique symbol;
-/** `next_run_at_ms` as `claimSchedule` read it. Only `claimSchedule` constructs one. */
 export type SlotAtMs = number & { readonly [slotAtMsBrand]: true };
 
 export type ScheduleSlot = { readonly scheduleId: string; readonly atMs: SlotAtMs };
@@ -327,10 +322,6 @@ export type ScheduleClaim = ScheduleRecord & { readonly slot: ScheduleSlot };
 
 const nextRunAtMsAfterBegin = Symbol("nextRunAtMsAfterBegin");
 
-/**
- * Commit applies its cadence only while the row still holds the pointer begin wrote, so a
- * disable during the turn wins. The key is module-private so only `beginScheduleFire` can make one.
- */
 export type ScheduleFiring = {
   readonly slot: ScheduleSlot;
   readonly runId: string;
@@ -991,11 +982,6 @@ export class SessionDatabase {
       .run(SchedulePhase.idle, id);
   }
 
-  /**
-   * Consumes `slot` and writes its run row in one transaction, so no crash can leave a run row
-   * whose slot is still pending. Returns `undefined`, writing nothing, when the row is no longer
-   * claimed on exactly this slot. The caller must not run the turn then.
-   */
   beginScheduleFire(
     slot: ScheduleSlot,
     run: { runId: string; sessionId: string; startedAt: string },
