@@ -641,6 +641,37 @@ describe("a schedule slot that began", () => {
     });
   });
 
+  test("a commit that fails after the turn does not refire the slot on the next tick", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 60_000;
+    const fired: string[] = [];
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        fired.push(input.scheduleId);
+        return { response: "ok" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: interval,
+      allowModelReads: true,
+    });
+    now = created.nextRunAtMs!;
+    const commit = database.commitScheduleFire.bind(database);
+    database.commitScheduleFire = () => {
+      throw new Error("database is locked");
+    };
+    await expect(scheduler.tick()).rejects.toThrow("database is locked");
+    database.commitScheduleFire = commit;
+    await scheduler.tick();
+    expect(fired).toEqual([created.id]);
+    expect(database.listScheduleRuns(created.id)).toHaveLength(1);
+  });
+
   test("an interval disabled during its turn stays disabled after the turn commits", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);
