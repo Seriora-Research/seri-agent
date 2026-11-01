@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DaemonClient } from "@seri/daemon-client";
+import { DaemonClient, type ScheduleTiming } from "@seri/daemon-client";
 import {
   assertScheduledToolset,
   parseScheduleRequest,
@@ -15,6 +15,8 @@ import { createScheduledToolDefinitions, createToolDefinitions } from "../../src
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { SessionDatabase } from "../../src/session/database";
 import { withTodo } from "../../src/todo/tool";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -30,6 +32,59 @@ function openDatabase(configDir: string): SessionDatabase {
   const database = new SessionDatabase(configDir);
   openDatabases.push(database);
   return database;
+}
+
+async function crashAfterBegin(
+  configDir: string,
+  createdAtMs: number,
+  timing: ScheduleTiming,
+): Promise<{ scheduleId: string; sessionId: string; slotMs: number }> {
+  let now = createdAtMs;
+  const entered = Promise.withResolvers<string>();
+  const scheduler = new Scheduler(
+    openDatabase(configDir),
+    (input) => {
+      entered.resolve(input.session.id);
+      return new Promise(() => {});
+    },
+    () => now,
+  );
+  const created = scheduler.create({
+    task: "crash",
+    cwd: configDir,
+    timing,
+    allowModelReads: true,
+  });
+  now = created.nextRunAtMs!;
+  void scheduler.tick();
+  return { scheduleId: created.id, sessionId: await entered.promise, slotMs: now };
+}
+
+async function restartAndTick(
+  configDir: string,
+  now: number,
+): Promise<{ database: SessionDatabase; fired: string[] }> {
+  const database = openDatabase(configDir);
+  const fired: string[] = [];
+  const scheduler = new Scheduler(
+    database,
+    async (input) => {
+      fired.push(input.scheduleId);
+      return { response: "ran" };
+    },
+    () => now,
+  );
+  scheduler.start();
+  scheduler.stop();
+  await scheduler.tick();
+  return { database, fired };
+}
+
+function pruneAgedSession(configDir: string, sessionId: string, now: number): string[] {
+  const raw = new Database(join(configDir, "seri.db"));
+  raw.query("UPDATE sessions SET updated_at_ms = ? WHERE id = ?").run(now - 31 * DAY_MS, sessionId);
+  raw.close();
+  return openDatabase(configDir).pruneDaemonRetention(now - 30 * DAY_MS);
 }
 
 afterEach(async () => {
@@ -512,6 +567,134 @@ describe("Scheduler", () => {
     await scheduler.tick();
     expect(database.listScheduleRuns(created.id)).toHaveLength(1);
     expect(database.listScheduleRuns(created.id)[0]?.status).toBe("complete");
+  });
+});
+
+describe("a schedule slot that began", () => {
+  const interval: ScheduleTiming = { kind: "interval", everySeconds: 60 };
+
+  test("a crash after the run row is written does not refire a once schedule on restart", async () => {
+    const configDir = makeDir();
+    const { scheduleId, slotMs } = await crashAfterBegin(configDir, 60_000, {
+      kind: "once",
+      at: "1970-01-01T00:01:00.000Z",
+    });
+    const { database, fired } = await restartAndTick(configDir, slotMs);
+    expect(fired).toEqual([]);
+    expect(database.listScheduleRuns(scheduleId)).toHaveLength(1);
+    expect(database.getSchedule(scheduleId)?.enabled).toBe(false);
+  });
+
+  test("a crash after the run row is written does not refire an interval slot on restart", async () => {
+    const configDir = makeDir();
+    const { scheduleId, slotMs } = await crashAfterBegin(configDir, 60_000, interval);
+    const { database, fired } = await restartAndTick(configDir, slotMs);
+    expect(fired).toEqual([]);
+    expect(database.listScheduleRuns(scheduleId)).toHaveLength(1);
+    expect(database.getSchedule(scheduleId)).toMatchObject({
+      enabled: true,
+      nextRunAtMs: slotMs + 60_000,
+      consecutiveFailures: 0,
+    });
+  });
+
+  test("a restart after the next interval slot is overdue fires nothing and lands on the grid", async () => {
+    const configDir = makeDir();
+    const { scheduleId, slotMs } = await crashAfterBegin(configDir, 60_000, interval);
+    const { database, fired } = await restartAndTick(configDir, slotMs + 150_000);
+    expect(fired).toEqual([]);
+    expect(database.listScheduleRuns(scheduleId)).toHaveLength(1);
+    expect(database.getSchedule(scheduleId)).toMatchObject({
+      enabled: true,
+      nextRunAtMs: slotMs + 180_000,
+    });
+  });
+
+  test("a once slot whose crashed session was pruned does not refire on restart", async () => {
+    const configDir = makeDir();
+    const now = Date.parse("2026-09-11T00:00:00.000Z");
+    const { scheduleId, sessionId } = await crashAfterBegin(configDir, now, {
+      kind: "once",
+      at: "2026-09-11T00:00:00.000Z",
+    });
+    expect(pruneAgedSession(configDir, sessionId, now)).toEqual([sessionId]);
+    const { database, fired } = await restartAndTick(configDir, now);
+    expect(fired).toEqual([]);
+    expect(database.listScheduleRuns(scheduleId)).toEqual([]);
+    expect(database.getSchedule(scheduleId)?.enabled).toBe(false);
+  });
+
+  test("an interval slot whose crashed session was pruned does not refire on restart", async () => {
+    const configDir = makeDir();
+    const { scheduleId, sessionId, slotMs } = await crashAfterBegin(
+      configDir,
+      Date.parse("2026-09-11T00:00:00.000Z"),
+      interval,
+    );
+    expect(pruneAgedSession(configDir, sessionId, slotMs)).toEqual([sessionId]);
+    const { database, fired } = await restartAndTick(configDir, slotMs);
+    expect(fired).toEqual([]);
+    expect(database.listScheduleRuns(scheduleId)).toEqual([]);
+    expect(database.getSchedule(scheduleId)).toMatchObject({
+      enabled: true,
+      nextRunAtMs: slotMs + 60_000,
+    });
+  });
+
+  test("an interval disabled during its turn stays disabled after the turn commits", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 60_000;
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        database.disableSchedule(input.scheduleId);
+        return { response: "ok" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: interval,
+      allowModelReads: true,
+    });
+    now = created.nextRunAtMs!;
+    await scheduler.tick();
+    expect(database.getSchedule(created.id)).toMatchObject({ enabled: false, nextRunAtMs: null });
+    expect(database.listScheduleRuns(created.id).map((row) => row.status)).toEqual(["complete"]);
+  });
+
+  test("beginScheduleFire refuses a slot that already began and writes no second row", () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 60_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "ok" }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: interval,
+      allowModelReads: true,
+    });
+    now = created.nextRunAtMs!;
+    database.saveSession({
+      id: "fire",
+      cwd: configDir,
+      systemPrompt: "",
+      permissionMode: "read-only",
+      messages: [],
+    });
+    const claim = database.claimSchedule(created.id, now)!;
+    const run = { runId: "first", sessionId: "fire", startedAt: new Date(now).toISOString() };
+    expect(database.beginScheduleFire(claim.slot, run, now)).toBeDefined();
+    expect(
+      database.beginScheduleFire(claim.slot, { ...run, runId: "second" }, now),
+    ).toBeUndefined();
+    expect(database.listScheduleRuns(created.id).map((row) => row.id)).toEqual(["first"]);
   });
 });
 
