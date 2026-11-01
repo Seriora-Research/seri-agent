@@ -21,6 +21,13 @@ describe("consumeSlot", () => {
       nextRunAtMs: 280_000,
     });
   });
+
+  test("an interval still leaves a slot when now is earlier than that slot", () => {
+    expect(consumeSlot(interval, 100_000, 90_000)).toEqual({
+      enabled: true,
+      nextRunAtMs: 160_000,
+    });
+  });
 });
 
 describe("cadenceAfterFire", () => {
@@ -97,6 +104,40 @@ describe("cadenceAfterFire", () => {
       nextRunAtMs: null,
       enabled: false,
       runStatus: "paused",
+    });
+  });
+
+  test("an interval success still leaves the slot when now is earlier than that slot", () => {
+    expect(
+      cadenceAfterFire({
+        timing: interval,
+        consecutiveFailures: 0,
+        slotMs: 100_000,
+        failed: false,
+        error: null,
+        nowMs: 90_000,
+      }),
+    ).toMatchObject({
+      nextRunAtMs: 160_000,
+      enabled: true,
+      runStatus: "complete",
+    });
+  });
+
+  test("the first interval failure still leaves the slot when now is earlier than that slot", () => {
+    expect(
+      cadenceAfterFire({
+        timing: interval,
+        consecutiveFailures: 0,
+        slotMs: 100_000,
+        failed: true,
+        error: "401 unauthorized",
+        nowMs: 90_000,
+      }),
+    ).toMatchObject({
+      nextRunAtMs: 160_000,
+      enabled: true,
+      runStatus: "error",
     });
   });
 

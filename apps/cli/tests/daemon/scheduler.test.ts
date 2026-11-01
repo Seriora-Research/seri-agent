@@ -641,6 +641,36 @@ describe("a schedule slot that began", () => {
     });
   });
 
+  test("a backward clock step during an interval turn does not restore the slot", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 60_000;
+    const fired: string[] = [];
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        fired.push(input.scheduleId);
+        now -= 6_000;
+        return { response: "ok" };
+      },
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "interval",
+      cwd: configDir,
+      timing: interval,
+      allowModelReads: true,
+    });
+    now = created.nextRunAtMs!;
+    const slot = now;
+    await scheduler.tick();
+    expect(database.getSchedule(created.id)?.nextRunAtMs).toBeGreaterThan(slot);
+    now = slot;
+    await scheduler.tick();
+    expect(fired).toEqual([created.id]);
+    expect(database.listScheduleRuns(created.id)).toHaveLength(1);
+  });
+
   test("a commit that fails after the turn does not refire the slot on the next tick", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);
