@@ -1000,11 +1000,11 @@ export class SessionDatabase {
           );
       }
       const schedule = this.getSchedule(row.scheduleId);
-      if (schedule === undefined) return;
+      if (schedule === undefined || schedule.nextRunAtMs === null) return;
       const cadence = cadenceAfterFire({
         timing: schedule.timing,
         consecutiveFailures: schedule.consecutiveFailures,
-        nextRunAtMs: schedule.nextRunAtMs,
+        slotMs: schedule.nextRunAtMs,
         failed: row.status !== "complete",
         error: row.error,
         nowMs,

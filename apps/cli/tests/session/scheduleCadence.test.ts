@@ -1,7 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { cadenceAfterFire } from "../../src/session/scheduleCadence";
+import { cadenceAfterFire, consumeSlot } from "../../src/session/scheduleCadence";
 
 const interval = { kind: "interval" as const, everySeconds: 60 };
+
+describe("consumeSlot", () => {
+  test("a once schedule disables", () => {
+    expect(consumeSlot({ kind: "once", at: "1970-01-01T00:00:00.000Z" }, 0, 5_000)).toEqual({
+      enabled: false,
+      nextRunAtMs: null,
+    });
+  });
+
+  test("an interval moves to the first slot on its grid after now", () => {
+    expect(consumeSlot(interval, 100_000, 100_000)).toEqual({
+      enabled: true,
+      nextRunAtMs: 160_000,
+    });
+    expect(consumeSlot(interval, 100_000, 250_000)).toEqual({
+      enabled: true,
+      nextRunAtMs: 280_000,
+    });
+  });
+});
 
 describe("cadenceAfterFire", () => {
   test("an interval success resets the failure count and keeps the original delay", () => {
@@ -9,7 +29,7 @@ describe("cadenceAfterFire", () => {
       cadenceAfterFire({
         timing: interval,
         consecutiveFailures: 2,
-        nextRunAtMs: 100_000,
+        slotMs: 100_000,
         failed: false,
         error: null,
         nowMs: 100_000,
@@ -28,7 +48,7 @@ describe("cadenceAfterFire", () => {
       cadenceAfterFire({
         timing: interval,
         consecutiveFailures: 0,
-        nextRunAtMs: 100_000,
+        slotMs: 100_000,
         failed: true,
         error: "401 unauthorized",
         nowMs: 100_000,
@@ -47,7 +67,7 @@ describe("cadenceAfterFire", () => {
       cadenceAfterFire({
         timing: interval,
         consecutiveFailures: 1,
-        nextRunAtMs: 160_000,
+        slotMs: 160_000,
         failed: true,
         error: "401 unauthorized",
         nowMs: 160_000,
@@ -66,7 +86,7 @@ describe("cadenceAfterFire", () => {
       cadenceAfterFire({
         timing: interval,
         consecutiveFailures: 2,
-        nextRunAtMs: 280_000,
+        slotMs: 280_000,
         failed: true,
         error: "401 unauthorized",
         nowMs: 280_000,
@@ -85,7 +105,7 @@ describe("cadenceAfterFire", () => {
       cadenceAfterFire({
         timing: { kind: "once", at: "1970-01-01T00:00:00.000Z" },
         consecutiveFailures: 0,
-        nextRunAtMs: 0,
+        slotMs: 0,
         failed: true,
         error: "401 unauthorized",
         nowMs: 0,
