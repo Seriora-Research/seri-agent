@@ -14,8 +14,8 @@ export type ScheduleCadence = {
 };
 
 export function advanceInterval(nextRunAtMs: number, everyMs: number, nowMs: number): number {
-  if (nextRunAtMs > nowMs) return nextRunAtMs;
-  return nextRunAtMs + (Math.floor((nowMs - nextRunAtMs) / everyMs) + 1) * everyMs;
+  const steps = Math.floor((nowMs - nextRunAtMs) / everyMs) + 1;
+  return nextRunAtMs + Math.max(1, steps) * everyMs;
 }
 
 export function scheduleFailureDelayMs(everySeconds: number, consecutiveFailures: number): number {
