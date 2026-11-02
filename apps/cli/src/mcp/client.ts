@@ -131,8 +131,6 @@ export function dialPooledClient(
     .then(async (handle) => {
       try {
         const tools = await handle.listTools();
-        // A reload may have dropped this slot while the dial was in flight. Applying the
-        // list then would resurrect a server the host already forgot.
         if (clients.handles.get(key) !== slot) {
           try {
             await handle.close();

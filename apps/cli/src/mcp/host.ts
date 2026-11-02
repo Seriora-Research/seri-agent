@@ -1,8 +1,3 @@
-// One session's MCP config, trust, listings, and connections.
-// A tool reaches the model only when its remote name is in the trust ledger.
-// A live listing supplies description and inputSchema for those names, and can drop one.
-// Only trust() adds a name. A fingerprint change of an already-trusted name writes that
-// name's new schema through the catalog. Arrivals and removals are not written.
 import { messageOf } from "../errors";
 import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import {
@@ -49,7 +44,6 @@ export function diskMcpStore(opts: {
   };
 }
 
-/** For runs with no MCP surface. Trust is unreachable there. */
 export const EMPTY_MCP_STORE: McpStore = {
   load: () => new Map(),
   writeTrust: () => {
@@ -154,7 +148,6 @@ function judgeServer(entry: McpEntry, listing: Listing | undefined): ServerJudge
       dropped.push(tool.name);
       continue;
     }
-    // The stored toolName stays. The listing supplies the bytes the model and the grant see.
     const info: McpToolInfo = { ...toToolInfo(entry.spec.name, live), toolName: tool.toolName };
     exposed.push(expose(entry.spec.name, info));
   }
@@ -298,7 +291,6 @@ export function createMcpHost(opts: {
   }
 
   function observe(key: McpPoolKey, issued: number, remote: readonly RemoteTool[]): boolean {
-    // Request order, not arrival order. A slow reply must not overwrite a newer list.
     if ((listings.get(key)?.stamp ?? -1) >= issued) return false;
     const byRemoteName = new Map<string, RemoteTool>();
     for (const tool of remote) byRemoteName.set(tool.name, tool);
@@ -397,7 +389,6 @@ export function createMcpHost(opts: {
               ? { state: "needs-auth" }
               : { state: "failed", message: messageOf(err) },
           );
-          // The listing stays. The next call dials again, which is reconnect.
           void closeBounded(handle.close(), MCP_CLOSE_TIMEOUT_MS).catch((closeErr: unknown) => {
             opts.onWarning(`could not close MCP server "${slot.server}": ${messageOf(closeErr)}`);
           });
@@ -531,7 +522,6 @@ export function createMcpHost(opts: {
       reload();
       const entry = registry.get(catalog.server);
       if (entry?.catalog === undefined) return;
-      // The preview is newer than any list taken before the user trusted these names.
       observe(
         mcpPoolKey(entry.spec),
         ++stamp,
