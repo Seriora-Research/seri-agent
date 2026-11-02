@@ -4,8 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   addServerToFile,
-  findMcpTool,
-  grantFingerprint,
   loadMcpRegistry,
   parseServersFile,
   pendingMcpNames,
@@ -551,34 +549,6 @@ describe("MCP config expands from the turn env", () => {
   });
 });
 
-describe("findMcpTool", () => {
-  const tool: McpToolInfo = {
-    name: "web_search",
-    toolName: "mcp_exa_web_search",
-    description: "Search the web.",
-    inputSchema: { type: "object" },
-  };
-  const entry: McpEntry = {
-    spec: {
-      name: "exa",
-      url: "https://mcp.exa.ai/mcp",
-      headers: {},
-      source: "project",
-      filePath: "x",
-    },
-    catalog: { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool] },
-  };
-  const registry: McpRegistry = new Map([["exa", entry]]);
-
-  test("resolves a known composed name", () => {
-    expect(findMcpTool(registry, "mcp_exa_web_search")).toEqual({ entry, tool });
-  });
-
-  test("returns undefined for an unknown name", () => {
-    expect(findMcpTool(registry, "mcp_exa_not_a_tool")).toBeUndefined();
-  });
-});
-
 describe("toolFingerprint", () => {
   function tool(overrides: Partial<McpToolInfo> = {}): McpToolInfo {
     return {
@@ -600,38 +570,6 @@ describe("toolFingerprint", () => {
     const a = tool({ description: "Search the web." });
     const b = tool({ description: "Search the web, differently." });
     expect(toolFingerprint(a)).not.toBe(toolFingerprint(b));
-  });
-});
-
-describe("grantFingerprint", () => {
-  test("undefined for a name that is not a cataloged MCP tool", () => {
-    const registry: McpRegistry = new Map();
-    expect(grantFingerprint(registry, "mcp_exa_web_search")).toBeUndefined();
-  });
-
-  test("matches toolFingerprint for a resolved tool", () => {
-    const tool: McpToolInfo = {
-      name: "web_search",
-      toolName: "mcp_exa_web_search",
-      description: "Search the web.",
-      inputSchema: {},
-    };
-    const registry: McpRegistry = new Map([
-      [
-        "exa",
-        {
-          spec: {
-            name: "exa",
-            url: "https://mcp.exa.ai/mcp",
-            headers: {},
-            source: "project",
-            filePath: "x",
-          },
-          catalog: { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool] },
-        },
-      ],
-    ]);
-    expect(grantFingerprint(registry, "mcp_exa_web_search")).toBe(toolFingerprint(tool));
   });
 });
 

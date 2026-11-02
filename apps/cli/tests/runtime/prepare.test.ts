@@ -9,15 +9,11 @@ import type { RunContext } from "../../src/cli";
 import { inspectConfig, loadVerifyConfig } from "../../src/config/config";
 import { denialBlocks } from "../../src/gate/gate";
 import type { HooksLoad } from "../../src/hooks/registry";
-import {
-  callMcpTool,
-  createMcpClients,
-  type DialFn,
-  type McpClientHandle,
-} from "../../src/mcp/client";
+import { toToolInfo } from "../../src/mcp/client";
+import { createMcpHost } from "../../src/mcp/host";
 import { serverIdentity, toolFingerprint, writeCatalogCache } from "../../src/mcp/registry";
-import { type McpToolInfo, mcpGrantKey } from "../../src/mcp/types";
-import { permissionsPath } from "../../src/permissions/store";
+import { type McpToolInfo, matchMcpGrants, mcpGrantKey } from "../../src/mcp/types";
+import { effectiveTools, loadGrants, permissionsPath } from "../../src/permissions/store";
 import {
   bindSession,
   buildCheckpointedTools,
@@ -206,16 +202,18 @@ describe("prepareSession + mcp", () => {
     const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
     expect(typeof result).not.toBe("number");
     const prepared = result as PreparedRun;
-    const entry = prepared.mcp.get("ghost");
+    const entry = prepared.mcp.servers().find((server) => server.spec.name === "ghost");
     expect(entry).toBeDefined();
-    expect(entry?.catalog).toBeUndefined();
+    expect(entry?.trusted).toBe(false);
   });
 
   test("an unreviewed MCP server is announced at startup and stays uncataloged", async () => {
     writeGlobalServer("ghost", "https://127.0.0.1:1/mcp");
     const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
     const prepared = result as PreparedRun;
-    expect(prepared.mcp.get("ghost")?.catalog).toBeUndefined();
+    expect(prepared.mcp.servers().find((server) => server.spec.name === "ghost")?.trusted).toBe(
+      false,
+    );
     expect(
       prepared.preMountMessages.some(
         (message) =>
@@ -252,8 +250,10 @@ describe("prepareSession + mcp", () => {
     });
     const result = await prepareSession(baseCtx(makeDir()), deps, false, true);
     const prepared = result as PreparedRun;
-    expect(prepared.mcp.get("exa")?.catalog).toBeDefined();
-    expect(prepared.mcp.get("ghost")?.catalog).toBeUndefined();
+    expect(prepared.mcp.servers().find((server) => server.spec.name === "exa")?.trusted).toBe(true);
+    expect(prepared.mcp.servers().find((server) => server.spec.name === "ghost")?.trusted).toBe(
+      false,
+    );
     const notices = prepared.preMountMessages.filter((message) =>
       message.text.includes("MCP servers pending review"),
     );
@@ -271,7 +271,7 @@ describe("prepareSession + mcp", () => {
     expect(skipped.compactionHold?.current).toEqual({ status: "open" });
   });
 
-  test("a stored MCP grant whose digest matches the session catalog enters allowedTools as the bare name", async () => {
+  test("a stored MCP grant whose digest matches stays out of allowedTools and matches on the turn view", async () => {
     writeGlobalServer("exa", "https://mcp.exa.ai/mcp");
     const tool: McpToolInfo = {
       name: "web_search",
@@ -289,9 +289,10 @@ describe("prepareSession + mcp", () => {
 
     const result = await prepareSession(baseCtx(makeDir()), deps, false, false);
     const prepared = result as PreparedRun;
-    expect(prepared.allowedTools).toContain("mcp_exa_web_search");
-
+    expect(prepared.allowedTools).not.toContain("mcp_exa_web_search");
     expect(prepared.allowedTools.some((entry) => entry.includes("@"))).toBe(false);
+    const grants = effectiveTools(loadGrants(permissionsDir, prepared.worktree));
+    expect(matchMcpGrants(grants, prepared.mcp.tools()).allowed).toEqual(["mcp_exa_web_search"]);
   });
 
   test("a stored MCP grant whose digest no longer matches is dropped and warns", async () => {
@@ -502,35 +503,49 @@ describe("bindSession + mcp", () => {
     return result as PreparedRun;
   }
 
-  test("bindSession closes the previous mcp clients before installing a fresh pool", async () => {
+  test("bindSession closes the previous mcp host before installing a fresh one", async () => {
     const prepared = await freshPrepared();
     let closed = false;
-    let newPoolWhileClosing = false;
-    const dial: DialFn = async () => {
-      const handle: McpClientHandle = {
-        listTools: async () => [],
-        callTool: async () => "",
+    let replacedWhileClosing = false;
+    const spec = {
+      name: "ghost",
+      url: "https://127.0.0.1:1/mcp",
+      headers: {},
+      source: "project" as const,
+      filePath: "x",
+    };
+    const remote = { name: "noop", description: "", inputSchema: {} };
+    const warm = createMcpHost({
+      store: {
+        load: () =>
+          new Map([
+            [
+              "ghost",
+              {
+                spec,
+                catalog: {
+                  server: "ghost",
+                  identity: serverIdentity(spec),
+                  fetchedAt: new Date().toISOString(),
+                  tools: [toToolInfo("ghost", remote)],
+                },
+              },
+            ],
+          ]),
+        writeTrust: () => {},
+      },
+      dial: async () => ({
+        listTools: async () => [remote],
+        callTool: async () => "ok",
         close: async () => {
           await new Promise((resolve) => setTimeout(resolve, 30));
           closed = true;
         },
-      };
-      return handle;
-    };
-    const warmClients = createMcpClients(dial);
-    await callMcpTool(
-      warmClients,
-      {
-        name: "ghost",
-        url: "https://127.0.0.1:1/mcp",
-        headers: {},
-        source: "project",
-        filePath: "x",
-      },
-      "noop",
-      {},
-    );
-    prepared.mcpClients = warmClients;
+      }),
+      onWarning: () => {},
+    });
+    await (await warm.beginTurn(undefined)).call("mcp_ghost_noop", {}, undefined);
+    prepared.mcp = warm;
 
     const rebound = bindSession(
       prepared,
@@ -540,19 +555,19 @@ describe("bindSession + mcp", () => {
       ToolSpawnEnv.inherited,
       () => {},
     );
-    if (prepared.mcpClients !== warmClients && !closed) newPoolWhileClosing = true;
+    if (prepared.mcp !== warm && !closed) replacedWhileClosing = true;
     await rebound;
 
     expect(closed).toBe(true);
-    expect(newPoolWhileClosing).toBe(false);
-    expect(prepared.mcpClients).not.toBe(warmClients);
-    expect(prepared.mcpClients.handles.size).toBe(0);
+    expect(replacedWhileClosing).toBe(false);
+    expect(prepared.mcp).not.toBe(warm);
+    expect(prepared.mcp.servers().find((server) => server.spec.name === "ghost")).toBeUndefined();
   });
 
   test("bindSession reloads the registry and re-derives allowedTools from the persisted grants on disk", async () => {
     const prepared = await freshPrepared();
 
-    expect(prepared.mcp.has("exa")).toBe(false);
+    expect(prepared.mcp.servers().find((server) => server.spec.name === "exa")).toBeUndefined();
 
     const configDir = mcpConfigDirFor(tmpConfigRoot);
     mkdirSync(join(configDir, "mcp"), { recursive: true });
@@ -587,8 +602,11 @@ describe("bindSession + mcp", () => {
       () => {},
     );
 
-    expect(prepared.mcp.get("exa")).toBeDefined();
-    expect(prepared.allowedTools).toContain("mcp_exa_web_search");
+    const exa = prepared.mcp.servers().find((server) => server.spec.name === "exa");
+    expect(exa?.trusted).toBe(true);
+    expect(prepared.allowedTools).not.toContain("mcp_exa_web_search");
+    const grants = effectiveTools(loadGrants(permissionsDir, prepared.worktree));
+    expect(matchMcpGrants(grants, prepared.mcp.tools()).allowed).toEqual(["mcp_exa_web_search"]);
   });
 
   test("bindSession expands MCP headers from the turn env", async () => {
@@ -617,7 +635,10 @@ describe("bindSession + mcp", () => {
         ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "b" }),
         () => {},
       );
-      expect(prepared.mcp.get("probe")?.spec.headers.Authorization).toBe("Bearer b");
+      expect(
+        prepared.mcp.servers().find((server) => server.spec.name === "probe")?.spec.headers
+          .Authorization,
+      ).toBe("Bearer b");
     } finally {
       restoreEnv("SERI_TEST_MCP_TOKEN", original);
     }

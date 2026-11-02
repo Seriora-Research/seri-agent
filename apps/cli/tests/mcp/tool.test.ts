@@ -1,39 +1,32 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolSet } from "ai";
-import { createMcpClients, type DialFn, type McpClientHandle } from "../../src/mcp/client";
+import type { McpTurn } from "../../src/mcp/host";
 import { MCP_TOOL_NAME, mcpCallSubject, withMcp } from "../../src/mcp/tool";
-import type {
-  McpCatalog,
-  McpEntry,
-  McpRegistry,
-  McpServerSpec,
-  McpToolInfo,
-} from "../../src/mcp/types";
+import type { McpToolInfo, McpTrustedTool } from "../../src/mcp/types";
 
-function spec(name = "exa"): McpServerSpec {
-  return { name, url: `https://mcp.${name}.ai/mcp`, headers: {}, source: "project", filePath: "x" };
-}
-
-function toolInfo(server: string, name: string, overrides: Partial<McpToolInfo> = {}): McpToolInfo {
-  return {
+function toolInfo(
+  server: string,
+  name: string,
+  overrides: Partial<McpToolInfo> = {},
+): McpTrustedTool {
+  const info: McpToolInfo = {
     name,
     toolName: `mcp_${server}_${name}`,
     description: "does a thing",
     inputSchema: {},
     ...overrides,
   };
+  return { ...info, server, fingerprint: "fp" };
 }
 
-function catalog(server: string, tools: readonly McpToolInfo[]): McpCatalog {
-  return { server, fetchedAt: "2026-01-01T00:00:00.000Z", tools };
-}
-
-function entry(server: string, tools: readonly McpToolInfo[] | undefined): McpEntry {
-  return { spec: spec(server), catalog: tools === undefined ? undefined : catalog(server, tools) };
-}
-
-function registryOf(entries: Record<string, McpEntry>): McpRegistry {
-  return new Map(Object.entries(entries));
+function turnOf(
+  tools: readonly McpTrustedTool[],
+  withdrawn: readonly string[] = [],
+  call: McpTurn["call"] = async (toolName) => {
+    throw new Error(`no MCP tool named "${toolName}" is available this session`);
+  },
+): McpTurn {
+  return { tools, withdrawn, notices: [], call };
 }
 
 function run(
@@ -55,38 +48,41 @@ function enumOptions(tools: ToolSet): readonly string[] {
 }
 
 describe("withMcp", () => {
-  test("the ToolSet gains exactly one key for a registry of any size", () => {
+  test("the ToolSet gains exactly one key for a turn of any size", () => {
     const tools = Array.from({ length: 30 }, (_, i) => toolInfo("exa", `tool_${i}`));
-    const registry = registryOf({ exa: entry("exa", tools) });
-    const composed = withMcp(
-      {},
-      registry,
-      createMcpClients(async () => fakeHandle()),
-    );
+    const composed = withMcp({}, turnOf(tools));
     expect(Object.keys(composed)).toEqual([MCP_TOOL_NAME]);
   });
 
-  test("is absent entirely for a registry with no cataloged tools", () => {
-    const registry = registryOf({ exa: entry("exa", undefined) });
-    const tools = withMcp(
-      {},
-      registry,
-      createMcpClients(async () => fakeHandle()),
-    );
-    expect(tools).toEqual({});
+  test("is absent entirely when the turn exposes nothing and withdrew nothing", () => {
+    expect(withMcp({}, turnOf([]))).toEqual({});
   });
 
-  test("the enum contains every cataloged tool name and the description carries a line for each", () => {
-    const registry = registryOf({
-      exa: entry("exa", [toolInfo("exa", "web_search", { description: "Search the web." })]),
-      notion: entry("notion", [
-        toolInfo("notion", "search_pages", { description: "Search pages." }),
-      ]),
-    });
+  test("keeps the mcp key when every exposed tool has been withdrawn", async () => {
+    let called = "";
     const composed = withMcp(
       {},
-      registry,
-      createMcpClients(async () => fakeHandle()),
+      turnOf([], ["mcp_exa_web_search"], async (toolName) => {
+        called = toolName;
+        throw new Error(`MCP tool "${toolName}" was removed: server "exa" no longer offers it.`);
+      }),
+    );
+    const description = (composed[MCP_TOOL_NAME] as { description: string }).description;
+    expect(description).toContain("Removed this session (do not call):");
+    expect(description).toContain("mcp_exa_web_search");
+    await expect(run(composed, { tool: "mcp_exa_web_search" })).rejects.toThrow(
+      /no longer offers it/,
+    );
+    expect(called).toBe("mcp_exa_web_search");
+  });
+
+  test("the enum contains every exposed tool name and the description carries a line for each", () => {
+    const composed = withMcp(
+      {},
+      turnOf([
+        toolInfo("exa", "web_search", { description: "Search the web." }),
+        toolInfo("notion", "search_pages", { description: "Search pages." }),
+      ]),
     );
     expect(enumOptions(composed).slice().sort()).toEqual([
       "mcp_exa_web_search",
@@ -97,53 +93,34 @@ describe("withMcp", () => {
     expect(description).toContain("mcp_notion_search_pages — Search pages.");
   });
 
-  test("the key order is stable across two builds from equivalently-ordered registries", () => {
-    const build = () =>
-      registryOf({
-        exa: entry("exa", [toolInfo("exa", "web_search"), toolInfo("exa", "get_contents")]),
-        notion: entry("notion", [toolInfo("notion", "search_pages")]),
-      });
-    const dial = async () => fakeHandle();
-    const first = withMcp({}, build(), createMcpClients(dial));
-    const second = withMcp({}, build(), createMcpClients(dial));
+  test("the key order is the turn's order, stable across two builds", () => {
+    const tools = [
+      toolInfo("exa", "web_search"),
+      toolInfo("exa", "get_contents"),
+      toolInfo("notion", "search_pages"),
+    ];
+    const first = withMcp({}, turnOf(tools));
+    const second = withMcp({}, turnOf(tools));
     expect(enumOptions(first)).toEqual(enumOptions(second));
+    expect(enumOptions(first)).toEqual([
+      "mcp_exa_web_search",
+      "mcp_exa_get_contents",
+      "mcp_notion_search_pages",
+    ]);
     expect((first[MCP_TOOL_NAME] as { description: string }).description).toBe(
       (second[MCP_TOOL_NAME] as { description: string }).description,
     );
   });
 
-  test("sorts by code unit, not by locale", () => {
-    const registry = registryOf({
-      x: entry("x", [
-        toolInfo("x", "n1", { toolName: "mcp_a1" }),
-        toolInfo("x", "n2", { toolName: "mcp_a_b" }),
-        toolInfo("x", "n3", { toolName: "mcp_aa" }),
-        toolInfo("x", "n4", { toolName: "mcp_ab" }),
-      ]),
-    });
+  test("execute forwards the composed name, arguments, and abortSignal to the turn", async () => {
+    let captured: { name: string; args: Record<string, unknown>; signal?: AbortSignal } | undefined;
     const composed = withMcp(
       {},
-      registry,
-      createMcpClients(async () => fakeHandle()),
-    );
-    expect(enumOptions(composed)).toEqual(["mcp_a1", "mcp_a_b", "mcp_aa", "mcp_ab"]);
-  });
-
-  test("execute forwards abortSignal and the remote (unprefixed) name", async () => {
-    let captured: { name: string; args: Record<string, unknown>; signal?: AbortSignal } | undefined;
-    const dial: DialFn = async () => ({
-      listTools: async () => [],
-      callTool: async (name, args, opts) => {
-        captured = { name, args, signal: opts.signal };
+      turnOf([toolInfo("exa", "web_search")], [], async (toolName, args, signal) => {
+        captured = { name: toolName, args, signal };
         return "ok";
-      },
-      close: async () => {},
-    });
-    const registry = registryOf({
-      exa: entry("exa", [toolInfo("exa", "web_search", { description: "Search the web." })]),
-    });
-    const clients = createMcpClients(dial);
-    const composed = withMcp({}, registry, clients);
+      }),
+    );
     const controller = new AbortController();
 
     const result = await run(
@@ -153,20 +130,13 @@ describe("withMcp", () => {
     );
 
     expect(result).toBe("ok");
-    expect(captured?.name).toBe("web_search");
+    expect(captured?.name).toBe("mcp_exa_web_search");
     expect(captured?.args).toEqual({ query: "hi" });
     expect(captured?.signal).toBe(controller.signal);
   });
 
-  test("throws a named error for a tool that is not in the registry", async () => {
-    const registry = registryOf({
-      exa: entry("exa", [toolInfo("exa", "web_search")]),
-    });
-    const composed = withMcp(
-      {},
-      registry,
-      createMcpClients(async () => fakeHandle()),
-    );
+  test("a rejection from the turn reaches the caller", async () => {
+    const composed = withMcp({}, turnOf([toolInfo("exa", "web_search")]));
     await expect(run(composed, { tool: "mcp_notion_search_pages" })).rejects.toThrow(
       /mcp_notion_search_pages/,
     );
@@ -174,8 +144,9 @@ describe("withMcp", () => {
 
   describe("argumentSummary, through the generated description", () => {
     test("renders required and optional params", () => {
-      const registry = registryOf({
-        exa: entry("exa", [
+      const composed = withMcp(
+        {},
+        turnOf([
           toolInfo("exa", "web_search", {
             description: "Search the web and return contents.",
             inputSchema: {
@@ -185,11 +156,6 @@ describe("withMcp", () => {
             },
           }),
         ]),
-      });
-      const composed = withMcp(
-        {},
-        registry,
-        createMcpClients(async () => fakeHandle()),
       );
       const description = (composed[MCP_TOOL_NAME] as { description: string }).description;
       expect(description).toContain(
@@ -198,18 +164,14 @@ describe("withMcp", () => {
     });
 
     test("a schema it cannot read costs one missing hint, not a throw", () => {
-      const registry = registryOf({
-        exa: entry("exa", [
+      const composed = withMcp(
+        {},
+        turnOf([
           toolInfo("exa", "web_search", {
             description: "Search the web.",
             inputSchema: "not a schema",
           }),
         ]),
-      });
-      const composed = withMcp(
-        {},
-        registry,
-        createMcpClients(async () => fakeHandle()),
       );
       const description = (composed[MCP_TOOL_NAME] as { description: string }).description;
       expect(description.trimEnd().endsWith("mcp_exa_web_search — Search the web.")).toBe(true);
@@ -217,14 +179,6 @@ describe("withMcp", () => {
     });
   });
 });
-
-function fakeHandle(): McpClientHandle {
-  return {
-    listTools: async () => [],
-    callTool: async () => "",
-    close: async () => {},
-  };
-}
 
 describe("mcpCallSubject", () => {
   test("resolves a valid call to the inner mcp_* name", () => {

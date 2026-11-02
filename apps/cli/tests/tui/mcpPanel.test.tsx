@@ -32,7 +32,14 @@ function header(scope: "project" | "user", sourceFile: string): McpPanelRow {
 }
 
 function server(name: string, scope: "project" | "user" = "project"): McpPanelRow {
-  return { kind: "server", name, scope, status: { state: "idle" }, toolCount: undefined };
+  return {
+    kind: "server",
+    name,
+    scope,
+    status: { state: "idle" },
+    toolCount: undefined,
+    awaitingReview: 0,
+  };
 }
 
 const rows: McpPanelRow[] = [

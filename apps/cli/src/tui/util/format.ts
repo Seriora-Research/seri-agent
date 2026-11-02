@@ -2,13 +2,13 @@ import { isZeroPriceEntry, type ModelCatalogEntry, type ModelProvider } from "@s
 import { describeCodexSetupStatus } from "../../auth/codexBin";
 import { describeSeriSetupStatus } from "../../auth/seriIgnore";
 import { escapeControlChars } from "../../cli/output";
+import type { FileChangeView } from "../../fileChange";
 import type { PermissionMode } from "../../gate/gate";
 import type { LoopEvent } from "../../loop/loop";
 import { type McpPanelRow, mcpStatusWord } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import type { ResolvedRoute } from "../../provider/routing";
 import type { ModelPickerEntry, SetupProviderRow } from "../state/commands";
-import type { FileChangeView } from "../../fileChange";
 import { ERROR_MARK, theme, WARNING_MARK } from "../theme/theme";
 
 export const LIST_WINDOW_MAX = 10;
@@ -394,11 +394,12 @@ export function formatMcpRow(row: McpPanelRow): string {
         : "";
   const toolsPart =
     row.toolCount === undefined ? "" : ` · ${row.toolCount} tool${row.toolCount === 1 ? "" : "s"}`;
+  const review = row.awaitingReview > 0 ? ` · ${row.awaitingReview} awaiting review` : "";
   const word =
     row.status.state === "idle" && row.toolCount === undefined
       ? "pending review"
       : mcpStatusWord(row.status);
-  return `${row.name} · ${mark}${word}${toolsPart}`;
+  return `${row.name} · ${mark}${word}${toolsPart}${review}`;
 }
 
 export const MEMORY_ACTION_WIDTH = 8;

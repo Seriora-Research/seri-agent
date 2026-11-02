@@ -25,27 +25,12 @@ import {
 } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
-import { OPEN_COMPACTION_HOLD, type CompactionHold } from "../loop/compactionHold";
 import { type HooksLoad, loadHookRegistry } from "../hooks/registry";
-import {
-  closeMcpClients,
-  createMcpClients,
-  createSessionDial,
-  type McpClients,
-} from "../mcp/client";
-import {
-  grantFingerprint,
-  loadMcpRegistry,
-  pendingMcpNames,
-  pendingMcpNotice,
-} from "../mcp/registry";
-import {
-  isMcpToolName,
-  type McpEntry,
-  type McpRegistry,
-  mcpGrantMatches,
-  parseMcpGrantKey,
-} from "../mcp/types";
+import { type CompactionHold, OPEN_COMPACTION_HOLD } from "../loop/compactionHold";
+import { createSessionDial } from "../mcp/client";
+import { createMcpHost, diskMcpStore, type McpHost } from "../mcp/host";
+import { pendingMcpNotice } from "../mcp/registry";
+import { type McpGrantMatch, matchMcpGrants, withoutMcpGrants } from "../mcp/types";
 import { type ArchivistState, createArchivistState } from "../memory/archivist";
 import { listPending } from "../memory/pending";
 import { type LoadedMemory, loadMemory } from "../memory/store";
@@ -275,8 +260,7 @@ export type PreparedRun = {
   rules: RuleRegistry;
   rulesState: RulesState;
   hooks: HooksLoad;
-  mcp: Map<string, McpEntry>;
-  mcpClients: McpClients;
+  mcp: McpHost;
   trajectory: TrajectoryWriter;
   database?: SessionDatabase;
   preMountMessages: PreMountMessage[];
@@ -360,29 +344,19 @@ export function warnOnNameCollisions(
   }
 }
 
-function filterMcpGrants(
-  entries: readonly string[],
-  registry: McpRegistry,
+function settleMcpGrants(
+  grants: ReturnType<typeof loadGrants>,
+  mcp: McpHost,
   onWarning: (message: string) => void,
-): string[] {
-  const result: string[] = [];
-  for (const entry of entries) {
-    if (!isMcpToolName(entry)) {
-      result.push(entry);
-      continue;
-    }
-    const parsed = parseMcpGrantKey(entry);
-    if (parsed === undefined) continue;
-    const fingerprint = grantFingerprint(registry, parsed.toolName);
-    if (fingerprint !== undefined && mcpGrantMatches(entry, fingerprint)) {
-      result.push(parsed.toolName);
-    } else {
-      onWarning(
-        `the saved approval for "${parsed.toolName}" no longer matches this server's current tool, so you will be asked again`,
-      );
-    }
+): { allowedTools: string[]; matched: McpGrantMatch } {
+  const entries = effectiveTools(grants);
+  const matched = matchMcpGrants(entries, mcp.tools());
+  for (const name of matched.stale) {
+    onWarning(
+      `the saved approval for "${name}" no longer matches this server's current tool, so you will be asked again`,
+    );
   }
-  return result;
+  return { allowedTools: withoutMcpGrants(entries), matched };
 }
 
 export async function bindSession(
@@ -427,16 +401,14 @@ export async function bindSession(
     onWarning,
   });
   warnOnNameCollisions(prepared.skills, prepared.agents, onWarning);
-  await closeMcpClients(prepared.mcpClients, onWarning);
-  prepared.mcp = loadMcpRegistry({
-    worktree: prepared.worktree,
-    configDir,
-    env,
+  await prepared.mcp.close(onWarning);
+  prepared.mcp = createMcpHost({
+    store: diskMcpStore({ worktree: prepared.worktree, configDir, env }),
+    dial: createSessionDial(configDir),
     onWarning,
   });
-  prepared.mcpClients = createMcpClients(createSessionDial(configDir));
   const grants = loadGrants(permissionsDir, prepared.worktree, onWarning);
-  prepared.allowedTools = filterMcpGrants(effectiveTools(grants), prepared.mcp, onWarning);
+  prepared.allowedTools = settleMcpGrants(grants, prepared.mcp, onWarning).allowedTools;
   prepared.pathDenials = loadDenials(permissionsDir, onWarning);
   prepared.autoModeOnBlock = loadAutoModeOnBlock(permissionsDir, onWarning);
   prepared.session = session;
@@ -555,30 +527,34 @@ export async function prepareSession(
 
     const { storeDir, worktree } = checkpointTarget(session, dirs(ctx));
 
-    const mcp = loadMcpRegistry({
-      worktree,
-      configDir,
-      env: ctx.env,
-      onWarning: (msg) => printWarning(msg, warnSink),
+    const warn = (msg: string) => printWarning(msg, warnSink);
+    const mcp = createMcpHost({
+      store: diskMcpStore({ worktree, configDir, env: ctx.env }),
+      dial: createSessionDial(configDir),
+      onWarning: warn,
     });
-    const mcpPending = pendingMcpNotice(pendingMcpNames(mcp));
+    const pendingNames = mcp
+      .servers()
+      .filter((server) => !server.trusted)
+      .map((server) => server.spec.name)
+      .sort();
+    const mcpPending = pendingMcpNotice(pendingNames);
     if (mcpPending !== undefined) {
       printWarning(mcpPending, warnSink);
     }
-    const mcpClients = createMcpClients(createSessionDial(configDir));
 
-    const grants = loadGrants(ctx.permissionsDir, worktree, (msg) => printWarning(msg, warnSink));
-    const allowedTools = filterMcpGrants(effectiveTools(grants), mcp, (msg) =>
-      printWarning(msg, warnSink),
-    );
+    const grants = loadGrants(ctx.permissionsDir, worktree, warn);
+    const settled = settleMcpGrants(grants, mcp, warn);
+    const allowedTools = settled.allowedTools;
     const pathDenials = loadDenials(ctx.permissionsDir, (msg) => printWarning(msg, warnSink));
     const permissionMode = skipPermissions ? "auto" : session.permissionMode;
     const loadedAutoModeOnBlock = loadAutoModeOnBlock(ctx.permissionsDir, (msg) =>
       printWarning(msg, warnSink),
     );
     const autoModeOnBlock = isTTY ? loadedAutoModeOnBlock : "deny";
-    if (permissionMode === "approve-each" && allowedTools.length > 0) {
-      printPreApproved(allowedTools, isTTY ? emit : undefined);
+    const preApproved = [...allowedTools, ...settled.matched.allowed];
+    if (permissionMode === "approve-each" && preApproved.length > 0) {
+      printPreApproved(preApproved, isTTY ? emit : undefined);
     }
 
     const inProject = relative(worktree, session.cwd);
@@ -650,7 +626,6 @@ export async function prepareSession(
       rulesState: createRulesState(),
       hooks,
       mcp,
-      mcpClients,
       trajectory,
       database: ctx.database,
       preMountMessages,

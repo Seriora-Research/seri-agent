@@ -7,7 +7,8 @@ import { createCheckpointer } from "../checkpoint/checkpoint";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import { loadVerifyConfig } from "../config/config";
-import { createMcpClients, createSessionDial } from "../mcp/client";
+import { createSessionDial } from "../mcp/client";
+import { createMcpHost, EMPTY_MCP_STORE } from "../mcp/host";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
 import { loadDenials } from "../permissions/store";
@@ -86,8 +87,11 @@ export function createRunScheduled(opts: {
 
       hooks: { registry: new Map() },
 
-      mcp: new Map(),
-      mcpClients: createMcpClients(createSessionDial(opts.configDir)),
+      mcp: createMcpHost({
+        store: EMPTY_MCP_STORE,
+        dial: createSessionDial(opts.configDir),
+        onWarning,
+      }),
       trajectory: createSessionTrajectory(session, opts.configDir, onWarning, opts.database),
       database: opts.database,
       preMountMessages: [],

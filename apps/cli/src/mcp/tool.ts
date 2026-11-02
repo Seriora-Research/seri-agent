@@ -1,9 +1,8 @@
 import type { ToolSet } from "ai";
 import { tool } from "ai";
 import { z } from "zod";
-import { callMcpTool, type McpClients } from "./client";
-import { findMcpTool } from "./registry";
-import { isMcpToolName, type McpRegistry, type McpToolInfo } from "./types";
+import type { McpTurn } from "./host";
+import { isMcpToolName, type McpToolInfo } from "./types";
 
 export const MCP_TOOL_NAME = "mcp";
 
@@ -43,38 +42,25 @@ function describeMcpTool(info: McpToolInfo): string {
     : `${info.toolName} — ${info.description}`;
 }
 
-export function withMcp(tools: ToolSet, registry: McpRegistry, clients: McpClients): ToolSet {
-  const catalogedTools = [...registry.values()]
-    .flatMap((entry) => entry.catalog?.tools ?? [])
-    .sort((a, b) => (a.toolName < b.toolName ? -1 : a.toolName > b.toolName ? 1 : 0));
+export function withMcp(tools: ToolSet, turn: McpTurn): ToolSet {
+  const [first, ...rest] = turn.tools.map((info) => info.toolName);
+  if (first === undefined && turn.withdrawn.length === 0) return tools;
 
-  const [first, ...rest] = catalogedTools.map((info) => info.toolName);
-  if (first === undefined) return tools;
-
-  const description = `${DESCRIPTION_HEADER}\n${catalogedTools.map(describeMcpTool).join("\n")}`;
+  const currentLines = turn.tools.map(describeMcpTool);
+  const removedLines =
+    turn.withdrawn.length === 0 ? [] : ["Removed this session (do not call):", ...turn.withdrawn];
+  const description = `${DESCRIPTION_HEADER}\n${[...currentLines, ...removedLines].join("\n")}`;
+  const toolField = first === undefined ? z.string() : z.enum([first, ...rest]);
 
   return {
     ...tools,
     [MCP_TOOL_NAME]: tool({
       description,
       inputSchema: z.object({
-        tool: z.enum([first, ...rest]),
+        tool: toolField,
         arguments: z.record(z.string(), z.unknown()).optional(),
       }),
-      execute: async (args, { abortSignal }) => {
-        const found = findMcpTool(registry, args.tool);
-        if (found === undefined) {
-          throw new Error(`no MCP tool named "${args.tool}" is available this session`);
-        }
-
-        return callMcpTool(
-          clients,
-          found.entry.spec,
-          found.tool.name,
-          args.arguments ?? {},
-          abortSignal,
-        );
-      },
+      execute: (args, { abortSignal }) => turn.call(args.tool, args.arguments ?? {}, abortSignal),
     }),
   };
 }

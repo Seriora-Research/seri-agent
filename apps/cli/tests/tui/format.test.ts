@@ -471,6 +471,7 @@ describe("formatMcpRow", () => {
       scope: "user",
       status: { state: "connected", toolCount: 4 },
       toolCount: 4,
+      awaitingReview: 0,
     };
     expect(formatMcpRow(row)).toBe("exa · connected · 4 tools");
   });
@@ -482,6 +483,7 @@ describe("formatMcpRow", () => {
       scope: "project",
       status: { state: "needs-auth" },
       toolCount: undefined,
+      awaitingReview: 0,
     };
     expect(formatMcpRow(row)).toBe("vercel · ! needs authentication");
   });
@@ -493,6 +495,7 @@ describe("formatMcpRow", () => {
       scope: "project",
       status: { state: "failed", message: "ECONNREFUSED" },
       toolCount: undefined,
+      awaitingReview: 0,
     };
     expect(formatMcpRow(row)).toBe("supabase · ✕ unreachable");
   });
@@ -504,8 +507,21 @@ describe("formatMcpRow", () => {
       scope: "user",
       status: { state: "idle" },
       toolCount: undefined,
+      awaitingReview: 0,
     };
     expect(formatMcpRow(row)).toBe("notion · pending review");
+  });
+
+  test("a server with tools awaiting review names the count", () => {
+    const row: McpPanelRow = {
+      kind: "server",
+      name: "exa",
+      scope: "user",
+      status: { state: "connected", toolCount: 2 },
+      toolCount: 2,
+      awaitingReview: 1,
+    };
+    expect(formatMcpRow(row)).toBe("exa · connected · 2 tools · 1 awaiting review");
   });
 
   test("a single cached tool is singular, not plural", () => {
@@ -515,6 +531,7 @@ describe("formatMcpRow", () => {
       scope: "user",
       status: { state: "connected", toolCount: 1 },
       toolCount: 1,
+      awaitingReview: 0,
     };
     expect(formatMcpRow(row)).toBe("exa · connected · 1 tool");
   });

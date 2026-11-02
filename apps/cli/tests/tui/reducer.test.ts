@@ -1643,6 +1643,7 @@ describe("tuiReducer: mcp-requested / mcp-closed", () => {
       scope: "project",
       status: { state: "connected", toolCount: 4 },
       toolCount: 4,
+      awaitingReview: 0,
     },
   ];
 

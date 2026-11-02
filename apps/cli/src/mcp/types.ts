@@ -66,3 +66,56 @@ export function mcpGrantMatches(entry: string, currentFingerprint: string): bool
   if (parsed === undefined) return false;
   return parsed.fingerprint === currentFingerprint.slice(0, GRANT_DIGEST_LENGTH);
 }
+
+/**
+ * A tool the model may call this turn. Membership requires a trusted catalog name.
+ * Description and inputSchema come from the live listing when this process has listed,
+ * and from the ledger until then.
+ */
+export type McpTrustedTool = McpToolInfo & {
+  readonly server: string;
+  /** `toolFingerprint` of the bytes exposed now; the digest a saved grant must carry. */
+  readonly fingerprint: string;
+};
+
+export type McpGrantMatch = {
+  /** Composed names whose saved grant carries the fingerprint exposed now. */
+  readonly allowed: readonly string[];
+  /** Composed names exposed now whose saved grant carries a different fingerprint. */
+  readonly stale: readonly string[];
+};
+
+/**
+ * Saved MCP grants that authorize a tool exposed now. A grant authorizes exactly the fingerprint
+ * it was saved with, so a tool that is not exposed can never be authorized.
+ */
+export function matchMcpGrants(
+  entries: readonly string[],
+  tools: readonly McpTrustedTool[],
+): McpGrantMatch {
+  const byName = new Map(tools.map((tool) => [tool.toolName, tool.fingerprint]));
+  const allowed: string[] = [];
+  const stale: string[] = [];
+  for (const entry of entries) {
+    const parsed = parseMcpGrantKey(entry);
+    if (parsed === undefined) continue;
+    const fingerprint = byName.get(parsed.toolName);
+    if (fingerprint === undefined) continue;
+    if (mcpGrantMatches(entry, fingerprint)) allowed.push(parsed.toolName);
+    else stale.push(parsed.toolName);
+  }
+  return { allowed, stale };
+}
+
+/** Session-start grants minus every MCP entry. MCP grants are matched per turn, never cached as bare names. */
+export function withoutMcpGrants(entries: readonly string[]): string[] {
+  return entries.filter((entry) => !isMcpToolName(entry));
+}
+
+/** The digest `rememberGrant` stores for an "always" answer: the fingerprint the turn exposed. */
+export function grantFingerprint(
+  tools: readonly McpTrustedTool[],
+  toolName: string,
+): string | undefined {
+  return tools.find((tool) => tool.toolName === toolName)?.fingerprint;
+}

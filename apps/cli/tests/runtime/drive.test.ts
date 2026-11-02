@@ -10,29 +10,29 @@ import { loadVerifyConfig, setConfigValue } from "../../src/config/config";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
-import { createMcpClients } from "../../src/mcp/client";
+import { createMcpHost, EMPTY_MCP_STORE } from "../../src/mcp/host";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
 import {
+  ARCHIVIST_TOOL_CALL_INTERVAL,
   createArchivistState,
   drainArchivist,
-  ARCHIVIST_TOOL_CALL_INTERVAL,
 } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
-import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -100,8 +100,13 @@ function preparedStub(): PreparedRun {
     rules: new Map(),
     rulesState: { fired: new Set<string>() },
     hooks: { registry: new Map() },
-    mcp: new Map(),
-    mcpClients: createMcpClients(),
+    mcp: createMcpHost({
+      store: EMPTY_MCP_STORE,
+      dial: async () => {
+        throw new Error("not dialed");
+      },
+      onWarning: () => {},
+    }),
     preMountMessages: [],
   };
 }
@@ -841,9 +846,20 @@ describe("driveLoop mcp composition", () => {
     inputSchema: {},
   };
 
+  function hostWith(tool: McpToolInfo) {
+    const registry = mcpRegistryWith(tool);
+    return createMcpHost({
+      store: { load: () => registry, writeTrust: () => {} },
+      dial: async () => {
+        throw new Error("not dialed");
+      },
+      onWarning: () => {},
+    });
+  }
+
   test("composes the mcp tool from prepared.mcp and passes mcpCallSubject as callSubject", async () => {
     const prepared = preparedStub();
-    prepared.mcp = mcpRegistryWith(searchTool);
+    prepared.mcp = hostWith(searchTool);
     const ctx = unusedCtx(prepared.session.cwd);
     const { fake, capture } = fakeRunLoop();
     await driveLoop(
@@ -863,7 +879,7 @@ describe("driveLoop mcp composition", () => {
 
   test("a tool-allowed event persists write_file with no fingerprint and an mcp tool with one", async () => {
     const prepared = preparedStub();
-    prepared.mcp = mcpRegistryWith(searchTool);
+    prepared.mcp = hostWith(searchTool);
     const ctx = unusedCtx(prepared.session.cwd);
     const { fake } = fakeRunLoop([
       { type: "tool-allowed", name: "write_file" },

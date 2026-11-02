@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { McpLoginRequiredError } from "../../src/mcp/authProvider";
 import { mcpAuthPath, saveMcpServerAuth } from "../../src/mcp/authStore";
-import { createMcpClients, type McpServerStatus } from "../../src/mcp/client";
+import type { DialFn, McpServerStatus } from "../../src/mcp/client";
 import {
   decideMcpCommand,
   mcpCommandAccepts,
@@ -12,8 +13,10 @@ import {
   mcpStatusWord,
   mcpTrustWord,
 } from "../../src/mcp/commands";
-import { loadMcpRegistry, writeCatalogCache } from "../../src/mcp/registry";
+import { createMcpHost, diskMcpStore, type McpHost } from "../../src/mcp/host";
+import { loadMcpRegistry, serverIdentity, writeCatalogCache } from "../../src/mcp/registry";
 import type { McpEntry, McpRegistry, McpToolInfo } from "../../src/mcp/types";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 let roots: string[] = [];
 
@@ -71,6 +74,47 @@ function tool(overrides: Partial<McpToolInfo> = {}): McpToolInfo {
   };
 }
 
+function hostFor(registry: McpRegistry, dial?: DialFn): McpHost {
+  return createMcpHost({
+    store: { load: () => registry, writeTrust: () => {} },
+    dial:
+      dial ??
+      (async () => {
+        throw new Error("not dialed");
+      }),
+    onWarning: () => {},
+  });
+}
+
+function diskHost(worktree: string, configDir: string): McpHost {
+  return createMcpHost({
+    store: diskMcpStore({ worktree, configDir, env: ToolSpawnEnv.inherited }),
+    dial: async () => {
+      throw new Error("not dialed");
+    },
+    onWarning: () => {},
+  });
+}
+
+const SEARCH_REMOTE = { name: "web_search", description: "Search the web.", inputSchema: {} };
+
+function trustedExa(statusDial: DialFn): { host: McpHost; registry: McpRegistry } {
+  const spec = entry().spec;
+  const catalog = {
+    server: "exa",
+    identity: serverIdentity(spec),
+    fetchedAt: new Date().toISOString(),
+    tools: [tool()],
+  };
+  const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
+  return { host: hostFor(registry, statusDial), registry };
+}
+
+async function exercise(host: McpHost): Promise<void> {
+  const turn = await host.beginTurn(undefined);
+  await turn.call("mcp_exa_web_search", {}, undefined).catch(() => {});
+}
+
 describe("mcpCommandAccepts", () => {
   test("accepts every documented form", () => {
     expect(mcpCommandAccepts([])).toBe(true);
@@ -109,7 +153,7 @@ describe("mcpPanelRows", () => {
         entry({ name: "exa", source: "project", filePath: "/project/.seri/mcp/servers.yaml" }),
       ],
     ]);
-    const rows = mcpPanelRows(registry, createMcpClients(), worktree);
+    const rows = mcpPanelRows(hostFor(registry), worktree);
     expect(rows).toEqual([
       {
         kind: "header",
@@ -122,6 +166,7 @@ describe("mcpPanelRows", () => {
         scope: "project",
         status: { state: "idle" },
         toolCount: undefined,
+        awaitingReview: 0,
       },
       { kind: "header", scope: "user", sourceFile: "/profile/mcp/servers.yaml" },
       {
@@ -130,6 +175,7 @@ describe("mcpPanelRows", () => {
         scope: "user",
         status: { state: "idle" },
         toolCount: undefined,
+        awaitingReview: 0,
       },
     ]);
   });
@@ -145,7 +191,7 @@ describe("mcpPanelRows", () => {
       throw new Error("fixture did not load both servers");
     }
 
-    const rows = mcpPanelRows(registry, createMcpClients(), worktree);
+    const rows = mcpPanelRows(hostFor(registry), worktree);
     const headers = rows.filter((r) => r.kind === "header");
     const projectHeader = headers.find((h) => h.scope === "project");
     const userHeader = headers.find((h) => h.scope === "user");
@@ -157,7 +203,7 @@ describe("mcpPanelRows", () => {
 
   test("a server never dialled reports idle with an undefined tool count", () => {
     const registry: McpRegistry = new Map([["exa", entry()]]);
-    const rows = mcpPanelRows(registry, createMcpClients(), "w");
+    const rows = mcpPanelRows(hostFor(registry), "w");
     const row = rows.find((r) => r.kind === "server");
     expect(row).toEqual({
       kind: "server",
@@ -165,16 +211,19 @@ describe("mcpPanelRows", () => {
       scope: "project",
       status: { state: "idle" },
       toolCount: undefined,
+      awaitingReview: 0,
     });
   });
 
-  test("a server with a cached catalog reports its tool count, and status follows the live clients", () => {
-    const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
-    const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
-    const clients = createMcpClients();
-    clients.status.set("exa", { state: "connected", toolCount: 1 });
+  test("a server with a cached catalog reports its tool count, and status follows the live connection", async () => {
+    const { host } = trustedExa(async () => ({
+      listTools: async () => [SEARCH_REMOTE],
+      callTool: async () => "ok",
+      close: async () => {},
+    }));
+    await exercise(host);
 
-    const rows = mcpPanelRows(registry, clients, "w");
+    const rows = mcpPanelRows(host, "w");
     const row = rows.find((r) => r.kind === "server");
     expect(row).toEqual({
       kind: "server",
@@ -182,14 +231,16 @@ describe("mcpPanelRows", () => {
       scope: "project",
       status: { state: "connected", toolCount: 1 },
       toolCount: 1,
+      awaitingReview: 0,
     });
   });
 
   test("reflects the session's registry, not disk — a later edit to servers.yaml does not change the rows", () => {
-    const { registry, worktree } = load({
+    const { worktree, configDir } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
-    const before = mcpPanelRows(registry, createMcpClients(), worktree);
+    const host = diskHost(worktree, configDir);
+    const before = mcpPanelRows(host, worktree);
 
     const filePath = join(worktree, "..", "..", ".seri", "mcp", "servers.yaml");
     writeFileSync(
@@ -197,7 +248,7 @@ describe("mcpPanelRows", () => {
       "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n  vercel:\n    url: https://mcp.vercel.com/mcp\n",
     );
 
-    const after = mcpPanelRows(registry, createMcpClients(), worktree);
+    const after = mcpPanelRows(host, worktree);
     expect(after).toEqual(before);
     expect(after.some((r) => r.kind === "server" && r.name === "vercel")).toBe(false);
   });
@@ -217,10 +268,9 @@ describe("mcpTrustWord", () => {
 describe("decideMcpCommand: list", () => {
   test("an empty registry points at /mcp add", () => {
     const { lines } = decideMcpCommand(["list"], {
-      registry: new Map(),
+      host: hostFor(new Map()),
       configDir: "c",
       worktree: "w",
-      clients: createMcpClients(),
     });
     expect(lines).toEqual(["No MCP servers configured. Add one with /mcp add <name> <url>."]);
   });
@@ -232,10 +282,9 @@ describe("decideMcpCommand: list", () => {
       ["notion", entry({ name: "notion", source: "user" })],
     ]);
     const { lines } = decideMcpCommand(["list"], {
-      registry,
+      host: hostFor(registry),
       configDir: "c",
       worktree: "w",
-      clients: createMcpClients(),
     });
     expect(lines).toEqual([expect.stringContaining("exa"), expect.stringContaining("notion")]);
 
@@ -245,60 +294,68 @@ describe("decideMcpCommand: list", () => {
     expect(lines.find((l) => l.includes("notion"))).toBe("notion  user  pending review");
   });
 
-  test("a server whose pool status is failed reports unreachable, not idle", () => {
-    const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
-    const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
-    const clients = createMcpClients();
-    clients.status.set("exa", { state: "failed", message: "connection refused" });
-
-    const { lines } = decideMcpCommand(["list"], {
-      registry,
-      configDir: "c",
-      worktree: "w",
-      clients,
+  test("a server whose connection failed reports unreachable, not idle", async () => {
+    const { host } = trustedExa(async () => {
+      throw new Error("connection refused");
     });
+    await exercise(host);
+
+    const { lines } = decideMcpCommand(["list"], { host, configDir: "c", worktree: "w" });
     expect(lines[0]).toContain("unreachable");
     expect(lines[0]).not.toContain("idle");
   });
 
-  test("a server whose pool status is needs-auth says so", () => {
-    const registry: McpRegistry = new Map([["exa", entry()]]);
-    const clients = createMcpClients();
-    clients.status.set("exa", { state: "needs-auth" });
-
-    const { lines } = decideMcpCommand(["list"], {
-      registry,
-      configDir: "c",
-      worktree: "w",
-      clients,
+  test("a trusted server whose dial asks for login says so", async () => {
+    const { host } = trustedExa(async () => {
+      throw new McpLoginRequiredError("exa");
     });
+    await exercise(host);
+
+    const { lines } = decideMcpCommand(["list"], { host, configDir: "c", worktree: "w" });
     expect(lines[0]).toContain("needs authentication");
   });
 
-  test("list and mcpPanelRows report the same status word for the same server, across all four states", () => {
-    const catalog = { server: "exa", fetchedAt: new Date().toISOString(), tools: [tool()] };
-    const registry: McpRegistry = new Map([["exa", entry({}, catalog)]]);
-    const states: McpServerStatus[] = [
-      { state: "idle" },
-      { state: "connected", toolCount: 1 },
-      { state: "needs-auth" },
-      { state: "failed", message: "connection refused" },
+  test("list and mcpPanelRows report the same status word for the same server, across all four states", async () => {
+    const cases: { status: McpServerStatus; dial: DialFn; call: boolean }[] = [
+      {
+        status: { state: "idle" },
+        dial: async () => {
+          throw new Error("not dialed");
+        },
+        call: false,
+      },
+      {
+        status: { state: "connected", toolCount: 1 },
+        dial: async () => ({
+          listTools: async () => [SEARCH_REMOTE],
+          callTool: async () => "ok",
+          close: async () => {},
+        }),
+        call: true,
+      },
+      {
+        status: { state: "needs-auth" },
+        dial: async () => {
+          throw new McpLoginRequiredError("exa");
+        },
+        call: true,
+      },
+      {
+        status: { state: "failed", message: "connection refused" },
+        dial: async () => {
+          throw new Error("connection refused");
+        },
+        call: true,
+      },
     ];
 
-    for (const status of states) {
-      const clients = createMcpClients();
-      if (status.state !== "idle") clients.status.set("exa", status);
-
-      const { lines } = decideMcpCommand(["list"], {
-        registry,
-        configDir: "c",
-        worktree: "w",
-        clients,
-      });
-      const panelRow = mcpPanelRows(registry, clients, "w").find((r) => r.kind === "server");
+    for (const item of cases) {
+      const { host } = trustedExa(item.dial);
+      if (item.call) await exercise(host);
+      const { lines } = decideMcpCommand(["list"], { host, configDir: "c", worktree: "w" });
+      const panelRow = mcpPanelRows(host, "w").find((r) => r.kind === "server");
       expect(panelRow?.kind).toBe("server");
-
-      const word = mcpStatusWord(status);
+      const word = mcpStatusWord(item.status);
       expect(lines[0]).toContain(word);
       expect(panelRow?.kind === "server" ? mcpStatusWord(panelRow.status) : undefined).toBe(word);
     }
@@ -310,12 +367,10 @@ describe("decideMcpCommand: add", () => {
     const { configDir, worktree } = makeTree({
       "project/.seri/mcp/servers.yaml": "servers:\n  other:\n    url: https://mcp.other.com/mcp\n",
     });
-    const registry: McpRegistry = new Map();
     const { lines } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
-      registry,
+      host: hostFor(new Map()),
       configDir,
       worktree,
-      clients: createMcpClients(),
     });
     expect(lines[0]).toContain("Added");
 
@@ -329,12 +384,10 @@ describe("decideMcpCommand: add", () => {
 
   test("negative control target: the profile file, specifically, is what add targets", () => {
     const { configDir } = makeTree({});
-    const registry: McpRegistry = new Map();
     decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
-      registry,
+      host: hostFor(new Map()),
       configDir,
       worktree: "w",
-      clients: createMcpClients(),
     });
     const profileFile = join(configDir, "mcp", "servers.yaml");
     expect(existsSync(profileFile)).toBe(true);
@@ -343,25 +396,22 @@ describe("decideMcpCommand: add", () => {
 
   test("rejects a non-https url without writing anything", () => {
     const { configDir } = makeTree({});
-    const registry: McpRegistry = new Map();
-    const { lines } = decideMcpCommand(["add", "exa", "http://mcp.exa.ai/mcp"], {
-      registry,
+    const { lines, wroteConfig } = decideMcpCommand(["add", "exa", "http://mcp.exa.ai/mcp"], {
+      host: hostFor(new Map()),
       configDir,
       worktree: "w",
-      clients: createMcpClients(),
     });
+    expect(wroteConfig).toBe(false);
     expect(lines[0]).toContain("https");
     expect(existsSync(join(configDir, "mcp", "servers.yaml"))).toBe(false);
   });
 
   test("rejects a bad name without writing anything", () => {
     const { configDir } = makeTree({});
-    const registry: McpRegistry = new Map();
     const { lines } = decideMcpCommand(["add", "Bad Name", "https://mcp.exa.ai/mcp"], {
-      registry,
+      host: hostFor(new Map()),
       configDir,
       worktree: "w",
-      clients: createMcpClients(),
     });
     expect(lines[0]).toContain("name");
     expect(existsSync(join(configDir, "mcp", "servers.yaml"))).toBe(false);
@@ -369,66 +419,56 @@ describe("decideMcpCommand: add", () => {
 
   test("a malformed target servers.yaml surfaces as a returned line, not a throw", () => {
     const { configDir } = makeTree({ "profile/mcp/servers.yaml": "servers:\n  exa: [unclosed\n" });
-    const registry: McpRegistry = new Map();
-    const { lines } = decideMcpCommand(["add", "vercel", "https://mcp.vercel.com/mcp"], {
-      registry,
-      configDir,
-      worktree: "w",
-      clients: createMcpClients(),
-    });
+    const { lines, wroteConfig } = decideMcpCommand(
+      ["add", "vercel", "https://mcp.vercel.com/mcp"],
+      {
+        host: hostFor(new Map()),
+        configDir,
+        worktree: "w",
+      },
+    );
+    expect(wroteConfig).toBe(false);
     expect(lines[0]).toContain("not changed");
   });
 
   test("the session that ran add can see the server without restarting", () => {
     const { configDir, worktree } = makeTree({});
-    const registry = new Map<string, McpEntry>();
-    const deps = { registry, configDir, worktree, clients: createMcpClients() };
+    const host = diskHost(worktree, configDir);
+    const deps = { host, configDir, worktree };
 
-    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], deps);
-    expect(change).toEqual({ kind: "added", entry: expect.anything() });
-    if (change?.kind === "added") registry.set(change.entry.spec.name, change.entry);
+    const { wroteConfig } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], deps);
+    expect(wroteConfig).toBe(true);
+    host.reload();
 
     expect(decideMcpCommand(["list"], deps).lines).toEqual(["exa  user  pending review"]);
-    const rows = mcpPanelRows(registry, deps.clients, worktree);
+    const rows = mcpPanelRows(host, worktree);
     expect(rows.filter((row) => row.kind === "server").map((row) => row.name)).toEqual(["exa"]);
   });
 
-  test("the entry add hands back is the entry a restart would load from the file it wrote", () => {
+  test("a reload after add matches what a restart would load from the file it wrote", () => {
     const { configDir, worktree } = makeTree({});
-    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
-      registry: new Map(),
+    const host = diskHost(worktree, configDir);
+    decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
+      host,
       configDir,
       worktree,
-      clients: createMcpClients(),
     });
+    host.reload();
     const reloaded = loadMcpRegistry({ worktree, configDir, onWarning: () => {} }).get("exa");
 
-    expect(reloaded).toBeDefined();
-    expect(change?.kind === "added" ? change.entry.spec : undefined).toEqual(
-      reloaded?.spec as McpEntry["spec"],
-    );
-  });
-
-  test("the added entry carries no catalog", () => {
-    const { configDir, worktree } = makeTree({});
-    const { change } = decideMcpCommand(["add", "exa", "https://mcp.exa.ai/mcp"], {
-      registry: new Map(),
-      configDir,
-      worktree,
-      clients: createMcpClients(),
-    });
-    expect(change?.kind === "added" ? change.entry.catalog : "not-added").toBeUndefined();
+    if (reloaded === undefined) throw new Error("reload missed exa");
+    expect(host.servers()[0]?.spec).toEqual(reloaded.spec);
+    expect(host.servers()[0]?.trusted).toBe(false);
   });
 
   test("a rejected add changes nothing about the session", () => {
     const { configDir } = makeTree({});
-    const { change } = decideMcpCommand(["add", "exa", "http://mcp.exa.ai/mcp"], {
-      registry: new Map(),
+    const { wroteConfig } = decideMcpCommand(["add", "exa", "http://mcp.exa.ai/mcp"], {
+      host: hostFor(new Map()),
       configDir,
       worktree: "w",
-      clients: createMcpClients(),
     });
-    expect(change).toBeUndefined();
+    expect(wroteConfig).toBe(false);
   });
 });
 
@@ -438,8 +478,8 @@ describe("decideMcpCommand: remove", () => {
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
 
-    const registry = loadMcpRegistry({ worktree, configDir, onWarning: () => {} });
-    const entryFromRegistry = registry.get("exa");
+    const host = diskHost(worktree, configDir);
+    const entryFromRegistry = host.servers().find((row) => row.spec.name === "exa");
     expect(entryFromRegistry).toBeDefined();
 
     writeCatalogCache(configDir, {
@@ -456,12 +496,12 @@ describe("decideMcpCommand: remove", () => {
     expect(existsSync(join(configDir, "mcp", "catalog", "exa.json"))).toBe(true);
     expect(existsSync(mcpAuthPath(configDir, "exa"))).toBe(true);
 
-    const { lines } = decideMcpCommand(["remove", "exa"], {
-      registry,
+    const { lines, wroteConfig } = decideMcpCommand(["remove", "exa"], {
+      host,
       configDir,
       worktree,
-      clients: createMcpClients(),
     });
+    expect(wroteConfig).toBe(true);
     expect(lines).toEqual(['Removed "exa", its cached catalog and its stored credentials.']);
 
     const projectFile = entryFromRegistry?.spec.filePath as string;
@@ -472,32 +512,30 @@ describe("decideMcpCommand: remove", () => {
 
   test("an unknown name returns a line rather than throwing", () => {
     const { configDir, worktree } = makeTree({});
-    const registry: McpRegistry = new Map();
-    const { lines, change } = decideMcpCommand(["remove", "ghost"], {
-      registry,
+    const { lines, wroteConfig } = decideMcpCommand(["remove", "ghost"], {
+      host: hostFor(new Map()),
       configDir,
       worktree,
-      clients: createMcpClients(),
     });
     expect(lines).toEqual(['No MCP server named "ghost".']);
-    expect(change).toBeUndefined();
+    expect(wroteConfig).toBe(false);
   });
 
   test("the session that ran remove stops listing the server", () => {
     const { configDir, worktree } = load({
       "project/.seri/mcp/servers.yaml": "servers:\n  exa:\n    url: https://mcp.exa.ai/mcp\n",
     });
-    const registry = loadMcpRegistry({ worktree, configDir, onWarning: () => {} });
-    const deps = { registry, configDir, worktree, clients: createMcpClients() };
+    const host = diskHost(worktree, configDir);
+    const deps = { host, configDir, worktree };
 
-    const { change } = decideMcpCommand(["remove", "exa"], deps);
-    expect(change).toEqual({ kind: "removed", name: "exa" });
-    if (change?.kind === "removed") registry.delete(change.name);
+    const { wroteConfig } = decideMcpCommand(["remove", "exa"], deps);
+    expect(wroteConfig).toBe(true);
+    host.reload();
 
     expect(decideMcpCommand(["list"], deps).lines).toEqual([
       "No MCP servers configured. Add one with /mcp add <name> <url>.",
     ]);
-    expect(mcpPanelRows(registry, deps.clients, worktree)).toEqual([]);
+    expect(mcpPanelRows(host, worktree)).toEqual([]);
   });
 });
 

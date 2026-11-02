@@ -3936,6 +3936,7 @@ describe("App", () => {
             scope: "project",
             status: { state: "idle" },
             toolCount: undefined,
+            awaitingReview: 0,
           },
         ],
       });

@@ -116,15 +116,9 @@ import {
   type runLoop as runLoopReal,
   usableInputTokens,
 } from "./loop/loop";
-import { closeMcpClients, createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
-import {
-  decideMcpCommand,
-  type McpRegistryChange,
-  mcpLoginLine,
-  mcpPanelRows,
-} from "./mcp/commands";
+import { createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
+import { decideMcpCommand, mcpLoginLine, mcpPanelRows } from "./mcp/commands";
 import { loginMcpServer, type McpLoginResult } from "./mcp/login";
-import { writeCatalogCache } from "./mcp/registry";
 import type { McpCatalog } from "./mcp/types";
 import {
   type ArchivistReport,
@@ -1370,11 +1364,11 @@ async function runTui(
   async function onMcpConnect(
     name: string,
   ): Promise<{ ok: true; catalog: McpCatalog } | { ok: false; message: string }> {
-    const entry = prepared.mcp.get(name);
-    if (entry === undefined) return { ok: false, message: `No MCP server named "${name}".` };
+    const server = prepared.mcp.servers().find((row) => row.spec.name === name);
+    if (server === undefined) return { ok: false, message: `No MCP server named "${name}".` };
     try {
       const dial = createSessionDial(configDir);
-      return { ok: true, catalog: await fetchCatalog(entry.spec, undefined, dial) };
+      return { ok: true, catalog: await fetchCatalog(server.spec, undefined, dial) };
     } catch (err) {
       if (isAuthRequired(err)) {
         return { ok: false, message: `"${name}" needs authentication — press a to log in.` };
@@ -1386,13 +1380,13 @@ async function runTui(
   let mcpAuthController: AbortController | undefined;
 
   async function onMcpAuth(name: string): Promise<McpLoginResult> {
-    const entry = prepared.mcp.get(name);
-    if (entry === undefined) {
+    const server = prepared.mcp.servers().find((row) => row.spec.name === name);
+    if (server === undefined) {
       return { status: "error", message: `No MCP server named "${name}".` };
     }
     const controller = new AbortController();
     mcpAuthController = controller;
-    return loginMcpServer(entry.spec, configDir, {
+    return loginMcpServer(server.spec, configDir, {
       signal: controller.signal,
       onMessage: (line) => dispatch({ type: "transcript-append", line }),
     });
@@ -1402,38 +1396,31 @@ async function runTui(
     mcpAuthController?.abort();
   }
 
-  function applyMcpChange(change: McpRegistryChange | undefined): void {
-    if (change === undefined) return;
-    if (change.kind === "added") prepared.mcp.set(change.entry.spec.name, change.entry);
-    else prepared.mcp.delete(change.name);
-  }
-
   function onMcpTrust(catalog: McpCatalog): void {
-    writeCatalogCache(configDir, catalog);
+    prepared.mcp.trust(catalog);
     const toolCount = catalog.tools.length;
     dispatch({
       type: "transcript-append",
-      line: `Trusted "${catalog.server}" and cached its ${toolCount} tool${toolCount === 1 ? "" : "s"}. It loads in the next session, or after /clear.`,
+      line: `Trusted "${catalog.server}": its ${toolCount} tool${toolCount === 1 ? "" : "s"} are available from your next message.`,
     });
   }
 
   function onMcpRemove(name: string): void {
     const worktree = checkpointTarget(liveState.session, dirs(ctx)).worktree;
     try {
-      const { lines, change } = decideMcpCommand(["remove", name], {
-        registry: prepared.mcp,
+      const { lines, wroteConfig } = decideMcpCommand(["remove", name], {
+        host: prepared.mcp,
         configDir,
         worktree,
-        clients: prepared.mcpClients,
       });
       for (const line of lines) {
         dispatch({ type: "transcript-append", line });
       }
-      applyMcpChange(change);
-      if (change !== undefined) {
+      if (wroteConfig) {
+        prepared.mcp.reload();
         dispatch({
           type: "mcp-requested",
-          rows: mcpPanelRows(prepared.mcp, prepared.mcpClients, worktree),
+          rows: mcpPanelRows(prepared.mcp, worktree),
         });
       }
     } catch (err) {
@@ -1718,7 +1705,7 @@ async function runTui(
         }
       }
       await drainArchivist(archivistState);
-      await closeMcpClients(prepared.mcpClients, printWarning);
+      await prepared.mcp.close(printWarning);
       finishQuit();
     };
     if (turnInFlight) {
@@ -1880,17 +1867,13 @@ async function runTui(
       }
     },
     "/mcp": (args) => {
-      const deps = {
-        registry: prepared.mcp,
-        configDir: ctx.configDir,
-        worktree: checkpointTarget(liveState.session, dirs(ctx)).worktree,
-        clients: prepared.mcpClients,
-      };
+      const worktree = checkpointTarget(liveState.session, dirs(ctx)).worktree;
+      const deps = { host: prepared.mcp, configDir: ctx.configDir, worktree };
       const [sub, name] = args;
       if (sub === undefined || sub === "list") {
         dispatch({
           type: "mcp-requested",
-          rows: mcpPanelRows(prepared.mcp, prepared.mcpClients, deps.worktree),
+          rows: mcpPanelRows(prepared.mcp, worktree),
         });
         return;
       }
@@ -1901,11 +1884,11 @@ async function runTui(
         return;
       }
       try {
-        const { lines, change } = decideMcpCommand(args, deps);
+        const { lines, wroteConfig } = decideMcpCommand(args, deps);
         for (const line of lines) {
           dispatch({ type: "transcript-append", line });
         }
-        applyMcpChange(change);
+        if (wroteConfig) prepared.mcp.reload();
       } catch (err) {
         dispatch({ type: "command-error", message: messageOf(err) });
       }

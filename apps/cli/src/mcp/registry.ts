@@ -253,17 +253,6 @@ export function loadMcpRegistry(opts: {
   return registry;
 }
 
-export function findMcpTool(
-  registry: McpRegistry,
-  toolName: string,
-): { entry: McpEntry; tool: McpToolInfo } | undefined {
-  for (const entry of registry.values()) {
-    const tool = entry.catalog?.tools.find((t) => t.toolName === toolName);
-    if (tool !== undefined) return { entry, tool };
-  }
-  return undefined;
-}
-
 // url + headers, never the server name: a rename is a different registry key, but swapping
 // the URL (or an auth header) under the same name is how a committed servers.yaml inherits
 // a prior /mcp trust. Name-only cache keys were that hole.
@@ -314,11 +303,6 @@ export function toolFingerprint(tool: McpToolInfo): string {
     inputSchema: tool.inputSchema,
   });
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
-}
-
-export function grantFingerprint(registry: McpRegistry, toolName: string): string | undefined {
-  const found = findMcpTool(registry, toolName);
-  return found === undefined ? undefined : toolFingerprint(found.tool);
 }
 
 function readServersDoc(filePath: string): Document {

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import type { ApprovalPrompt } from "../loop/loop";
-import { closeMcpClients } from "../mcp/client";
 import { createArchivistState, drainArchivist } from "../memory/archivist";
 import { driveLoop, exitCodeFromDriveResult } from "../runtime/drive";
 import { prepareSession } from "../runtime/prepare";
@@ -88,7 +87,7 @@ export function createAttendedExecuteTurn(opts: {
       void drainArchivist(archivistState).then(persistCursor);
       return { exitCode: exitCodeFromDriveResult(result) };
     } finally {
-      await closeMcpClients(prepared.mcpClients, (message) => printWarning(message));
+      await prepared.mcp.close((message) => printWarning(message));
     }
   };
 }

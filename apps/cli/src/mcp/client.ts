@@ -4,11 +4,13 @@ import { capToolResult } from "../capToolResult";
 import { messageOf } from "../errors";
 import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
 import { serverIdentity } from "./registry";
-import type { McpCatalog, McpServerSpec } from "./types";
+import type { McpCatalog, McpServerSpec, McpToolInfo } from "./types";
 import { mcpToolName } from "./types";
 
+export type RemoteTool = { name: string; description?: string; inputSchema: unknown };
+
 export type McpClientHandle = {
-  listTools(): Promise<readonly { name: string; description?: string; inputSchema: unknown }[]>;
+  listTools(): Promise<readonly RemoteTool[]>;
   callTool(
     name: string,
     args: Record<string, unknown>,
@@ -26,7 +28,7 @@ export type McpServerStatus =
 export type DialFn = (spec: McpServerSpec, signal?: AbortSignal) => Promise<McpClientHandle>;
 
 declare const poolKeyBrand: unique symbol;
-type McpPoolKey = string & { readonly [poolKeyBrand]: true };
+export type McpPoolKey = string & { readonly [poolKeyBrand]: true };
 
 type McpPoolSlot = {
   readonly server: string;
@@ -40,8 +42,17 @@ export type McpClients = {
   readonly status: Map<string, McpServerStatus>;
 };
 
-function poolKey(spec: Pick<McpServerSpec, "name" | "url" | "headers">): McpPoolKey {
+export function mcpPoolKey(spec: Pick<McpServerSpec, "name" | "url" | "headers">): McpPoolKey {
   return `${spec.name}@${serverIdentity(spec)}` as McpPoolKey;
+}
+
+export function toToolInfo(server: string, remote: RemoteTool): McpToolInfo {
+  return {
+    name: remote.name,
+    toolName: mcpToolName(server, remote.name),
+    description: remote.description ?? "",
+    inputSchema: remote.inputSchema,
+  };
 }
 
 export function flattenContent(result: {
@@ -104,41 +115,57 @@ export function isAuthRequired(err: unknown): boolean {
   return err instanceof UnauthorizedError || err instanceof McpLoginRequiredError;
 }
 
-function dialOnce(
+export function dialPooledClient(
   clients: McpClients,
   spec: McpServerSpec,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  onListed?: (tools: readonly RemoteTool[]) => void,
 ): Promise<McpClientHandle> {
-  const key = poolKey(spec);
+  const key = mcpPoolKey(spec);
   const existing = clients.handles.get(key);
   if (existing !== undefined) return existing.handle;
 
+  let slot: McpPoolSlot | undefined;
   const promise = clients
     .dial(spec, signal)
     .then(async (handle) => {
       try {
         const tools = await handle.listTools();
+        // A reload may have dropped this slot while the dial was in flight. Applying the
+        // list then would resurrect a server the host already forgot.
+        if (clients.handles.get(key) !== slot) {
+          try {
+            await handle.close();
+          } catch {}
+          throw new Error("connection closed");
+        }
         clients.status.set(spec.name, { state: "connected", toolCount: tools.length });
+        onListed?.(tools);
         return handle;
       } catch (err) {
-        try {
-          await handle.close();
-        } catch {}
+        if (clients.handles.get(key) === slot) {
+          try {
+            await handle.close();
+          } catch {}
+        }
         throw err;
       }
     })
     .catch((err: unknown) => {
-      clients.handles.delete(key);
-      clients.status.set(
-        spec.name,
-        isAuthRequired(err)
-          ? { state: "needs-auth" }
-          : { state: "failed", message: messageOf(err) },
-      );
+      if (clients.handles.get(key) === slot) {
+        clients.handles.delete(key);
+        clients.status.set(
+          spec.name,
+          isAuthRequired(err)
+            ? { state: "needs-auth" }
+            : { state: "failed", message: messageOf(err) },
+        );
+      }
       throw err;
     });
 
-  clients.handles.set(key, { server: spec.name, handle: promise });
+  slot = { server: spec.name, handle: promise };
+  clients.handles.set(key, slot);
   return promise;
 }
 
@@ -151,7 +178,7 @@ export async function callMcpTool(
 ): Promise<string> {
   let handle: McpClientHandle;
   try {
-    handle = await dialOnce(clients, spec, signal);
+    handle = await dialPooledClient(clients, spec, signal);
   } catch (err) {
     if (isAuthRequired(err)) {
       throw new Error(
@@ -179,12 +206,7 @@ export async function fetchCatalog(
       server: spec.name,
       identity: serverIdentity(spec),
       fetchedAt: new Date().toISOString(),
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        toolName: mcpToolName(spec.name, tool.name),
-        description: tool.description ?? "",
-        inputSchema: tool.inputSchema,
-      })),
+      tools: tools.map((tool) => toToolInfo(spec.name, tool)),
     };
   } finally {
     try {
