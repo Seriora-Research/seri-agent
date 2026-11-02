@@ -8,7 +8,12 @@ import {
   WRITE_TOOL_NAMES,
 } from "../provider/tools";
 import type { RunPolicy } from "../runtime/types";
-import type { ScheduleRecord, SessionDatabase } from "../session/database";
+import type {
+  ScheduleClaim,
+  ScheduleFireOutcome,
+  ScheduleRecord,
+  SessionDatabase,
+} from "../session/database";
 import type { SessionState } from "../session/session";
 import { TODO_TOOL_NAME } from "../todo/tool";
 
@@ -227,32 +232,23 @@ export class Scheduler {
     }
   }
 
-  private async fire(schedule: ScheduleRecord): Promise<void> {
+  private async fire(schedule: ScheduleClaim): Promise<void> {
     const session = this.mintScheduledSession(schedule);
     if (session === undefined) return;
 
     const startedAt = new Date(this.now()).toISOString();
-    const runId = randomUUID();
-    this.database.beginScheduleFire({
-      id: runId,
-      scheduleId: schedule.id,
-      sessionId: session.id,
-      startedAt,
-    });
-    const commit = (status: string, response: string | null, error: string | null): void => {
-      this.database.commitScheduleFire(
-        {
-          id: runId,
-          scheduleId: schedule.id,
-          sessionId: session.id,
-          status,
-          response,
-          error,
-          startedAt,
-          finishedAt: new Date(this.now()).toISOString(),
-        },
-        this.now(),
-      );
+    const firing = this.database.beginScheduleFire(
+      schedule.slot,
+      { runId: randomUUID(), sessionId: session.id, startedAt },
+      this.now(),
+    );
+    if (firing === undefined) return;
+    const commit = (
+      status: ScheduleFireOutcome["status"],
+      response: string | null,
+      error: string | null,
+    ): void => {
+      this.database.commitScheduleFire(firing, { status, response, error }, this.now());
     };
     try {
       const tools = createScheduledToolDefinitions(schedule.cwd);

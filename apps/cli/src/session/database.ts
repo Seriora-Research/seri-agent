@@ -17,7 +17,7 @@ import {
   type SecretTally,
   withheldToolCallIds,
 } from "./redact";
-import { advanceInterval, cadenceAfterFire } from "./scheduleCadence";
+import { advanceInterval, cadenceAfterFire, consumeSlot } from "./scheduleCadence";
 import type { SessionState } from "./session";
 
 export { advanceInterval, DATABASE_FILENAME };
@@ -311,6 +311,31 @@ export type ScheduleRunRecord = {
   finishedAt: string | null;
 };
 
+const SchedulePhase = { idle: 0, claimed: 1, firing: 2 } as const;
+
+declare const slotAtMsBrand: unique symbol;
+export type SlotAtMs = number & { readonly [slotAtMsBrand]: true };
+
+export type ScheduleSlot = { readonly scheduleId: string; readonly atMs: SlotAtMs };
+
+export type ScheduleClaim = ScheduleRecord & { readonly slot: ScheduleSlot };
+
+const nextRunAtMsAfterBegin = Symbol("nextRunAtMsAfterBegin");
+
+export type ScheduleFiring = {
+  readonly slot: ScheduleSlot;
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly startedAt: string;
+  readonly [nextRunAtMsAfterBegin]: number | null;
+};
+
+export type ScheduleFireOutcome = {
+  status: "complete" | "error";
+  response: string | null;
+  error: string | null;
+};
+
 function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
   return {
     id: row.id,
@@ -319,7 +344,7 @@ function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
     timing: JSON.parse(row.timing_json) as ScheduleRecord["timing"],
     nextRunAtMs: row.next_run_at_ms,
     enabled: row.enabled === 1,
-    running: row.running === 1,
+    running: row.running !== SchedulePhase.idle,
     createdAt: row.created_at,
     consecutiveFailures: row.consecutive_failures,
     pauseReason: row.pause_reason,
@@ -844,9 +869,18 @@ export class SessionDatabase {
     this.database
       .query(
         `INSERT INTO schedules(id, task, cwd, timing_json, next_run_at_ms, enabled, running, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.id, row.task, row.cwd, row.timingJson, row.nextRunAtMs, row.enabled, row.createdAt);
+      .run(
+        row.id,
+        row.task,
+        row.cwd,
+        row.timingJson,
+        row.nextRunAtMs,
+        row.enabled,
+        SchedulePhase.idle,
+        row.createdAt,
+      );
   }
 
   listSchedules(): ScheduleRecord[] {
@@ -895,93 +929,93 @@ export class SessionDatabase {
       this.database
         .query(
           `SELECT * FROM schedules
-            WHERE enabled = 1 AND running = 0 AND next_run_at_ms IS NOT NULL AND next_run_at_ms <= ?
+            WHERE enabled = 1 AND running = ? AND next_run_at_ms IS NOT NULL AND next_run_at_ms <= ?
             ORDER BY next_run_at_ms, id`,
         )
-        .all(nowMs) as ScheduleRow[]
+        .all(SchedulePhase.idle, nowMs) as ScheduleRow[]
     ).map(scheduleFromRow);
   }
 
   skipMissedSchedules(nowMs: number): void {
     this.database.transaction(() => {
       const inFlight = (
-        this.database.query("SELECT id FROM schedules WHERE running = 1").all() as { id: string }[]
+        this.database
+          .query("SELECT id FROM schedules WHERE running = ?")
+          .all(SchedulePhase.claimed) as { id: string }[]
       ).map((row) => row.id);
       const retry = new Set(inFlight);
-      this.database.query("UPDATE schedules SET running = 0").run();
+      this.database.query("UPDATE schedules SET running = ?").run(SchedulePhase.idle);
       for (const schedule of this.listEnabledSchedules()) {
         if (schedule.nextRunAtMs === null || schedule.nextRunAtMs > nowMs) continue;
         if (retry.has(schedule.id)) continue;
-        if (schedule.timing.kind === "once") {
-          this.database
-            .query("UPDATE schedules SET enabled = 0, next_run_at_ms = NULL WHERE id = ?")
-            .run(schedule.id);
-          continue;
-        }
+        const next = consumeSlot(schedule.timing, schedule.nextRunAtMs, nowMs);
         this.database
-          .query("UPDATE schedules SET next_run_at_ms = ? WHERE id = ?")
-          .run(
-            advanceInterval(schedule.nextRunAtMs, schedule.timing.everySeconds * 1000, nowMs),
-            schedule.id,
-          );
+          .query("UPDATE schedules SET enabled = ?, next_run_at_ms = ? WHERE id = ?")
+          .run(next.enabled ? 1 : 0, next.nextRunAtMs, schedule.id);
       }
     })();
   }
 
-  claimSchedule(id: string, nowMs: number): ScheduleRecord | undefined {
+  claimSchedule(id: string, nowMs: number): ScheduleClaim | undefined {
     return this.database.transaction(() => {
       const row = this.database
         .query(
           `SELECT * FROM schedules
-            WHERE id = ? AND enabled = 1 AND running = 0
+            WHERE id = ? AND enabled = 1 AND running = ?
               AND next_run_at_ms IS NOT NULL AND next_run_at_ms <= ?`,
         )
-        .get(id, nowMs) as ScheduleRow | null;
+        .get(id, SchedulePhase.idle, nowMs) as ScheduleRow | null;
       if (row === null) return undefined;
-      this.database.query("UPDATE schedules SET running = 1 WHERE id = ?").run(id);
-      return this.getSchedule(id);
+      this.database
+        .query("UPDATE schedules SET running = ? WHERE id = ?")
+        .run(SchedulePhase.claimed, id);
+      return {
+        ...scheduleFromRow({ ...row, running: SchedulePhase.claimed }),
+        slot: { scheduleId: id, atMs: row.next_run_at_ms as SlotAtMs },
+      };
     })();
   }
 
   clearScheduleRunning(id: string): void {
-    this.database.query("UPDATE schedules SET running = 0 WHERE id = ?").run(id);
-  }
-
-  beginScheduleFire(row: {
-    id: string;
-    scheduleId: string;
-    sessionId: string;
-    startedAt: string;
-  }): void {
     this.database
-      .query(
-        `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
-         VALUES (?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
-      )
-      .run(row.id, row.scheduleId, row.sessionId, row.startedAt);
+      .query("UPDATE schedules SET running = ? WHERE id = ?")
+      .run(SchedulePhase.idle, id);
   }
 
-  commitScheduleFire(
-    row: {
-      id: string;
-      scheduleId: string;
-      sessionId: string;
-      status: string;
-      response: string | null;
-      error: string | null;
-      startedAt: string;
-      finishedAt: string | null;
-    },
+  beginScheduleFire(
+    slot: ScheduleSlot,
+    run: { runId: string; sessionId: string; startedAt: string },
     nowMs: number,
-  ): void {
+  ): ScheduleFiring | undefined {
+    return this.database.transaction(() => {
+      const row = this.database
+        .query("SELECT * FROM schedules WHERE id = ? AND running = ? AND next_run_at_ms = ?")
+        .get(slot.scheduleId, SchedulePhase.claimed, slot.atMs) as ScheduleRow | null;
+      if (row === null) return undefined;
+      const after = consumeSlot(scheduleFromRow(row).timing, slot.atMs, nowMs);
+      this.database
+        .query("UPDATE schedules SET enabled = ?, next_run_at_ms = ?, running = ? WHERE id = ?")
+        .run(after.enabled ? 1 : 0, after.nextRunAtMs, SchedulePhase.firing, slot.scheduleId);
+      this.database
+        .query(
+          `INSERT INTO schedule_runs(id, schedule_id, session_id, status, response, error, started_at, finished_at)
+           VALUES (?, ?, ?, 'running', NULL, NULL, ?, NULL)`,
+        )
+        .run(run.runId, slot.scheduleId, run.sessionId, run.startedAt);
+      return { slot, ...run, [nextRunAtMsAfterBegin]: after.nextRunAtMs };
+    })();
+  }
+
+  commitScheduleFire(firing: ScheduleFiring, outcome: ScheduleFireOutcome, nowMs: number): void {
     this.database.transaction(() => {
+      const finishedAt = new Date(nowMs).toISOString();
       const updated = this.database
         .query(
           `UPDATE schedule_runs
               SET status = ?, response = ?, error = ?, finished_at = ?
             WHERE id = ?`,
         )
-        .run(row.status, row.response, row.error, row.finishedAt, row.id);
+        .run(outcome.status, outcome.response, outcome.error, finishedAt, firing.runId);
       if (updated.changes === 0) {
         this.database
           .query(
@@ -989,44 +1023,45 @@ export class SessionDatabase {
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            row.id,
-            row.scheduleId,
-            row.sessionId,
-            row.status,
-            row.response,
-            row.error,
-            row.startedAt,
-            row.finishedAt,
+            firing.runId,
+            firing.slot.scheduleId,
+            firing.sessionId,
+            outcome.status,
+            outcome.response,
+            outcome.error,
+            firing.startedAt,
+            finishedAt,
           );
       }
-      const schedule = this.getSchedule(row.scheduleId);
+      const schedule = this.getSchedule(firing.slot.scheduleId);
       if (schedule === undefined) return;
       const cadence = cadenceAfterFire({
         timing: schedule.timing,
         consecutiveFailures: schedule.consecutiveFailures,
-        nextRunAtMs: schedule.nextRunAtMs,
-        failed: row.status !== "complete",
-        error: row.error,
+        slotMs: firing.slot.atMs,
+        failed: outcome.status !== "complete",
+        error: outcome.error,
         nowMs,
       });
-      if (cadence.runStatus !== row.status) {
-        this.database
-          .query("UPDATE schedule_runs SET status = ? WHERE id = ?")
-          .run(cadence.runStatus, row.id);
-      }
-      this.database
+      const applied = this.database
         .query(
           `UPDATE schedules
               SET consecutive_failures = ?, pause_reason = ?, enabled = ?, next_run_at_ms = ?
-            WHERE id = ?`,
+            WHERE id = ? AND next_run_at_ms IS ?`,
         )
         .run(
           cadence.consecutiveFailures,
           cadence.pauseReason,
           cadence.enabled ? 1 : 0,
           cadence.nextRunAtMs,
-          row.scheduleId,
+          firing.slot.scheduleId,
+          firing[nextRunAtMsAfterBegin],
         );
+      if (applied.changes === 1 && cadence.runStatus !== outcome.status) {
+        this.database
+          .query("UPDATE schedule_runs SET status = ? WHERE id = ?")
+          .run(cadence.runStatus, firing.runId);
+      }
     })();
   }
 

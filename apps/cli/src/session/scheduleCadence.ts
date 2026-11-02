@@ -14,8 +14,8 @@ export type ScheduleCadence = {
 };
 
 export function advanceInterval(nextRunAtMs: number, everyMs: number, nowMs: number): number {
-  if (nextRunAtMs > nowMs) return nextRunAtMs;
-  return nextRunAtMs + (Math.floor((nowMs - nextRunAtMs) / everyMs) + 1) * everyMs;
+  const steps = Math.floor((nowMs - nextRunAtMs) / everyMs) + 1;
+  return nextRunAtMs + Math.max(1, steps) * everyMs;
 }
 
 export function scheduleFailureDelayMs(everySeconds: number, consecutiveFailures: number): number {
@@ -25,34 +25,30 @@ export function scheduleFailureDelayMs(everySeconds: number, consecutiveFailures
   return base * 2 ** exp;
 }
 
+export function consumeSlot(
+  timing: ScheduleTiming,
+  slotMs: number,
+  nowMs: number,
+): { enabled: boolean; nextRunAtMs: number | null } {
+  if (timing.kind === "once") return { enabled: false, nextRunAtMs: null };
+  return { enabled: true, nextRunAtMs: advanceInterval(slotMs, timing.everySeconds * 1000, nowMs) };
+}
+
 export function cadenceAfterFire(input: {
   timing: ScheduleTiming;
   consecutiveFailures: number;
-  nextRunAtMs: number | null;
+  slotMs: number;
   failed: boolean;
   error: string | null;
   nowMs: number;
 }): ScheduleCadence {
   const consecutiveFailures = input.failed ? input.consecutiveFailures + 1 : 0;
-  if (input.timing.kind === "once") {
+  if (input.timing.kind === "once" || !input.failed) {
     return {
+      ...consumeSlot(input.timing, input.slotMs, input.nowMs),
       consecutiveFailures,
       pauseReason: null,
-      nextRunAtMs: null,
-      enabled: false,
       runStatus: input.failed ? "error" : "complete",
-    };
-  }
-  if (!input.failed) {
-    return {
-      consecutiveFailures: 0,
-      pauseReason: null,
-      nextRunAtMs:
-        input.nextRunAtMs === null
-          ? null
-          : advanceInterval(input.nextRunAtMs, input.timing.everySeconds * 1000, input.nowMs),
-      enabled: true,
-      runStatus: "complete",
     };
   }
   const error = input.error ?? "scheduled run failed";
@@ -68,14 +64,11 @@ export function cadenceAfterFire(input: {
   return {
     consecutiveFailures,
     pauseReason: null,
-    nextRunAtMs:
-      input.nextRunAtMs === null
-        ? null
-        : advanceInterval(
-            input.nextRunAtMs,
-            scheduleFailureDelayMs(input.timing.everySeconds, consecutiveFailures),
-            input.nowMs,
-          ),
+    nextRunAtMs: advanceInterval(
+      input.slotMs,
+      scheduleFailureDelayMs(input.timing.everySeconds, consecutiveFailures),
+      input.nowMs,
+    ),
     enabled: true,
     runStatus: "error",
   };

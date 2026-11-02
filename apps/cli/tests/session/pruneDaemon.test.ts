@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DATABASE_FILENAME, SessionDatabase } from "../../src/session/database";
+import { DATABASE_FILENAME, type ScheduleClaim, SessionDatabase } from "../../src/session/database";
 import type { SessionState } from "../../src/session/session";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -37,10 +37,10 @@ function ageSession(id: string, updatedAtMs: number): void {
   raw.close();
 }
 
-function markScheduleRunning(id: string): void {
-  const raw = new Database(join(configDir, DATABASE_FILENAME));
-  raw.query("UPDATE schedules SET running = 1 WHERE id = ?").run(id);
-  raw.close();
+function claimDue(database: SessionDatabase, id = "sched"): ScheduleClaim {
+  const claim = database.claimSchedule(id, database.getSchedule(id)!.nextRunAtMs!);
+  if (claim === undefined) throw new Error(`schedule ${id} is not claimable`);
+  return claim;
 }
 
 function insertSchedule(database: SessionDatabase, id = "sched"): void {
@@ -59,19 +59,23 @@ function fireRun(
   database: SessionDatabase,
   opts: { runId: string; sessionId: string; scheduleId?: string; startedAt?: string },
 ): void {
-  database.commitScheduleFire(
+  const claim = claimDue(database, opts.scheduleId);
+  const firing = database.beginScheduleFire(
+    claim.slot,
     {
-      id: opts.runId,
-      scheduleId: opts.scheduleId ?? "sched",
+      runId: opts.runId,
       sessionId: opts.sessionId,
-      status: "complete",
-      response: "ok",
-      error: null,
       startedAt: opts.startedAt ?? new Date(NOW_MS - 31 * DAY_MS).toISOString(),
-      finishedAt: new Date(NOW_MS - 31 * DAY_MS).toISOString(),
     },
-    NOW_MS,
+    claim.slot.atMs,
   );
+  if (firing === undefined) throw new Error(`run ${opts.runId} did not begin`);
+  database.commitScheduleFire(
+    firing,
+    { status: "complete", response: "ok", error: null },
+    claim.slot.atMs,
+  );
+  database.clearScheduleRunning(claim.id);
 }
 
 describe("SessionDatabase.pruneDaemonRetention", () => {
@@ -148,7 +152,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
       database.saveSession(session("stale-fire"));
       fireRun(database, { runId: "run-stale", sessionId: "stale-fire" });
       ageSession("stale-fire", NOW_MS - 31 * DAY_MS);
-      markScheduleRunning("sched");
+      claimDue(database);
       expect(database.getSchedule("sched")?.running).toBe(true);
 
       expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["stale-fire"]);
@@ -198,12 +202,15 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
     try {
       insertSchedule(database);
       database.saveSession(session("abandoned"));
-      database.beginScheduleFire({
-        id: "run-abandoned",
-        scheduleId: "sched",
-        sessionId: "abandoned",
-        startedAt: new Date(NOW_MS - 31 * DAY_MS).toISOString(),
-      });
+      database.beginScheduleFire(
+        claimDue(database).slot,
+        {
+          runId: "run-abandoned",
+          sessionId: "abandoned",
+          startedAt: new Date(NOW_MS - 31 * DAY_MS).toISOString(),
+        },
+        NOW_MS,
+      );
       ageSession("abandoned", NOW_MS - 31 * DAY_MS);
 
       expect(database.pruneDaemonRetention(CUTOFF_MS)).toEqual(["abandoned"]);
