@@ -131,6 +131,7 @@ export function createRunScheduled(opts: {
           runArchivist: false,
           composeAskUser: false,
           askOutsideFs: false,
+          refreshSkills: false,
         },
       );
     } catch (caught) {

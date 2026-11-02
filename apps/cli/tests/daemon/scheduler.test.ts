@@ -12,9 +12,9 @@ import {
 } from "../../src/daemon/scheduler";
 import { startDaemon } from "../../src/daemon/server";
 import { createScheduledToolDefinitions, createToolDefinitions } from "../../src/provider/tools";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { SessionDatabase } from "../../src/session/database";
 import { withTodo } from "../../src/todo/tool";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 let dirs: string[] = [];
 let stop: (() => Promise<void>) | undefined;
@@ -81,6 +81,11 @@ describe("scheduled toolset", () => {
     expect(start).toBeGreaterThanOrEqual(0);
     const call = src.slice(start, src.indexOf("model: route.model", start));
     expect(call).toContain("composeSubagents: false");
+  });
+
+  test("createRunScheduled does not rescan on-disk skills into the unattended tool list", async () => {
+    const src = await Bun.file(new URL("../../src/daemon/scheduled.ts", import.meta.url)).text();
+    expect(src).toContain("refreshSkills: false");
   });
 
   test("createRunScheduled loads path denials from permissionsDir", async () => {

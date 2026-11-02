@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelMessage } from "ai";
@@ -15,24 +15,26 @@ import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
 import {
+  ARCHIVIST_TOOL_CALL_INTERVAL,
   createArchivistState,
   drainArchivist,
-  ARCHIVIST_TOOL_CALL_INTERVAL,
 } from "../../src/memory/archivist";
 import { loadMemory } from "../../src/memory/store";
 import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
+import { loadSkillRegistry } from "../../src/skills/registry";
+import { SKILL_TOOL_NAME } from "../../src/skills/tool";
 import type { ChildEventPayload } from "../../src/subagents/dispatch";
 import { type AgentSpec, builtinRegistry, composeAddendum } from "../../src/subagents/registry";
-import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
+import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
+import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
@@ -1286,6 +1288,194 @@ describe("driveLoop compaction threshold", () => {
     setConfigValue("SERI_COMPACTION_THRESHOLD", "0.25", shadowed.session.cwd);
     process.env.SERI_COMPACTION_THRESHOLD = "0.9";
     expect(await captureThreshold(shadowed)).toBe(0.9);
+  });
+});
+
+function writeProjectSkill(
+  worktree: string,
+  name: string,
+  description: string,
+  body: string,
+): string {
+  const dir = join(worktree, ".seri", "skills", name);
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "SKILL.md");
+  writeFileSync(
+    path,
+    `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`,
+  );
+  return path;
+}
+
+async function runSkillTool(
+  tools: RunLoopOpts["tools"] | undefined,
+  name: string,
+  argumentText?: string,
+): Promise<unknown> {
+  const definition = tools?.[SKILL_TOOL_NAME] as
+    | { execute: (args: unknown, options: unknown) => Promise<unknown> }
+    | undefined;
+  if (definition === undefined) throw new Error("skill tool was not composed");
+  return definition.execute(
+    { name, ...(argumentText === undefined ? {} : { arguments: argumentText }) },
+    { toolCallId: "t", messages: [] },
+  );
+}
+
+describe("driveLoop skill rescan", () => {
+  test("a SKILL.md written after prepare is on the tool and in the prompt on the next driveLoop", async () => {
+    const prepared = preparedStub();
+    const first = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: first.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(SKILL_TOOL_NAME in (first.capture()?.tools ?? {})).toBe(false);
+    expect(first.capture()?.system).not.toContain("# Skills");
+
+    writeProjectSkill(prepared.worktree, "hot", "Loads a new procedure.", "HOT-BODY-v1 $ARGUMENTS");
+
+    const second = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: second.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(SKILL_TOOL_NAME in (second.capture()?.tools ?? {})).toBe(true);
+    expect(second.capture()?.system).toContain("# Skills");
+    expect(second.capture()?.system).toContain("hot: Loads a new procedure.");
+    expect(String(await runSkillTool(second.capture()?.tools, "hot", "the diff"))).toContain(
+      "HOT-BODY-v1 the diff",
+    );
+  });
+
+  test("an edit to a loaded skill body is returned on the next driveLoop", async () => {
+    const prepared = preparedStub();
+    const path = writeProjectSkill(
+      prepared.worktree,
+      "hot",
+      "Loads a new procedure.",
+      "HOT-BODY-v1",
+    );
+    prepared.skills = loadSkillRegistry({
+      worktree: prepared.worktree,
+      configDir: prepared.session.cwd,
+      onWarning: () => {},
+    });
+
+    const first = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: first.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(String(await runSkillTool(first.capture()?.tools, "hot"))).toContain("HOT-BODY-v1");
+    expect(prepared.session.systemPrompt).toContain("hot: Loads a new procedure.");
+    const listingPrompt = prepared.session.systemPrompt;
+
+    writeFileSync(
+      path,
+      '---\nname: hot\ndescription: "Loads a new procedure."\n---\n\nHOT-BODY-v2\n',
+    );
+
+    const second = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: second.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(String(await runSkillTool(second.capture()?.tools, "hot"))).toContain("HOT-BODY-v2");
+    expect(prepared.session.systemPrompt).toBe(listingPrompt);
+    expect(second.capture()?.system).toBe(first.capture()?.system);
+  });
+
+  test("driveLoop heals a session object whose prompt lagged a prior map refresh", async () => {
+    const prepared = preparedStub();
+    writeProjectSkill(prepared.worktree, "hot", "Loads a new procedure.", "HOT-BODY-v1");
+    prepared.skills = loadSkillRegistry({
+      worktree: prepared.worktree,
+      configDir: prepared.session.cwd,
+      onWarning: () => {},
+    });
+    const liveSession = { ...prepared.session, systemPrompt: "sys" };
+    const turnPrepared = { ...prepared, session: liveSession };
+    const capture = fakeRunLoop();
+    await driveLoop(
+      turnPrepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(liveSession),
+      undefined,
+      { composeSubagents: false, runArchivist: false, bindProcessCancel: false },
+    );
+    expect(SKILL_TOOL_NAME in (capture.capture()?.tools ?? {})).toBe(true);
+    expect(capture.capture()?.system).toContain("hot: Loads a new procedure.");
+    expect(liveSession.systemPrompt).toContain("hot: Loads a new procedure.");
+    expect(prepared.session.systemPrompt).toBe("sys");
+  });
+
+  test("refreshSkills false leaves a new on-disk skill out of the tool list", async () => {
+    const prepared = preparedStub();
+    writeProjectSkill(prepared.worktree, "hot", "Loads a new procedure.", "HOT-BODY-v1");
+    const capture = fakeRunLoop();
+    await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        refreshSkills: false,
+      },
+    );
+    expect(SKILL_TOOL_NAME in (capture.capture()?.tools ?? {})).toBe(false);
+    expect(capture.capture()?.system).not.toContain("# Skills");
   });
 });
 

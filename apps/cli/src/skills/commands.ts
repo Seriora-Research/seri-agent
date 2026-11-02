@@ -95,7 +95,7 @@ export function decideSkillsCommand(args: string[], deps: SkillsCommandDeps): { 
       lines: forEachMatch(deps.configDir, rest[0] as string, "approve", false, (p) => {
         const { path } = approvePendingSkill(deps.configDir, p, deps.previewed?.get(p.id));
 
-        return [`Approved ${p.id}: wrote ${path}. It loads in the next session, or after /clear.`];
+        return [`Approved ${p.id}: wrote ${path}. It loads on the next turn.`];
       }),
     };
   }
