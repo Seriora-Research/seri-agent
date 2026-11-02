@@ -1,8 +1,8 @@
 // listTools/callTool, not toolsFromDefinitions: @ai-sdk/mcp and ai pin different @ai-sdk/provider-utils copies whose schemaSymbol unique symbols do not unify.
 import { createMCPClient, type OAuthClientProvider, UnauthorizedError } from "@ai-sdk/mcp";
 import { capToolResult } from "../capToolResult";
-import { messageOf } from "../errors";
 import { createMcpAuthProvider, McpLoginRequiredError } from "./authProvider";
+import { mcpLine } from "./endpoint";
 import { serverIdentity } from "./registry";
 import type { McpCatalog, McpServerSpec } from "./types";
 import { mcpToolName } from "./types";
@@ -41,7 +41,8 @@ export type McpClients = {
 };
 
 function poolKey(spec: Pick<McpServerSpec, "name" | "url" | "headers">): McpPoolKey {
-  return `${spec.name}@${serverIdentity(spec)}` as McpPoolKey;
+  const identity = serverIdentity({ url: spec.url.wireHref(), headers: spec.headers });
+  return `${spec.name}@${identity}` as McpPoolKey;
 }
 
 export function flattenContent(result: {
@@ -62,7 +63,7 @@ async function dialServer(
   authProvider?: OAuthClientProvider,
 ): Promise<McpClientHandle> {
   const client = await createMCPClient({
-    transport: { type: "http", url: spec.url, headers: spec.headers, authProvider },
+    transport: { type: "http", url: spec.url.wireHref(), headers: spec.headers, authProvider },
     clientName: "seri",
     initializationOptions: { signal },
   });
@@ -129,13 +130,13 @@ function dialOnce(
     })
     .catch((err: unknown) => {
       clients.handles.delete(key);
-      clients.status.set(
-        spec.name,
-        isAuthRequired(err)
-          ? { state: "needs-auth" }
-          : { state: "failed", message: messageOf(err) },
-      );
-      throw err;
+      if (isAuthRequired(err)) {
+        clients.status.set(spec.name, { state: "needs-auth" });
+        throw err;
+      }
+      const line = mcpLine`${err}`;
+      clients.status.set(spec.name, { state: "failed", message: line });
+      throw new Error(line);
     });
 
   clients.handles.set(key, { server: spec.name, handle: promise });
@@ -158,12 +159,12 @@ export async function callMcpTool(
         `MCP server "${spec.name}" needs authentication. Run /mcp auth ${spec.name}.`,
       );
     }
-    throw new Error(`MCP server "${spec.name}" is unreachable: ${messageOf(err)}`);
+    throw new Error(mcpLine`MCP server "${spec.name}" is unreachable: ${err}`);
   }
   try {
     return await handle.callTool(remoteTool, args, { signal });
   } catch (err) {
-    throw new Error(`MCP server "${spec.name}" tool "${remoteTool}" failed: ${messageOf(err)}`);
+    throw new Error(mcpLine`MCP server "${spec.name}" tool "${remoteTool}" failed: ${err}`);
   }
 }
 
@@ -172,12 +173,13 @@ export async function fetchCatalog(
   signal?: AbortSignal,
   dial: DialFn = dialServer,
 ): Promise<McpCatalog> {
-  const handle = await dial(spec, signal);
+  let handle: McpClientHandle | undefined;
   try {
+    handle = await dial(spec, signal);
     const tools = await handle.listTools();
     return {
       server: spec.name,
-      identity: serverIdentity(spec),
+      identity: serverIdentity({ url: spec.url.wireHref(), headers: spec.headers }),
       fetchedAt: new Date().toISOString(),
       tools: tools.map((tool) => ({
         name: tool.name,
@@ -186,10 +188,15 @@ export async function fetchCatalog(
         inputSchema: tool.inputSchema,
       })),
     };
+  } catch (err) {
+    if (isAuthRequired(err)) throw err;
+    throw new Error(mcpLine`${err}`);
   } finally {
-    try {
-      await handle.close();
-    } catch {}
+    if (handle !== undefined) {
+      try {
+        await handle.close();
+      } catch {}
+    }
   }
 }
 
@@ -219,7 +226,7 @@ export async function closeMcpClients(
       slot.handle.then((client) => client.close()),
       timeoutMs,
     ).catch((err: unknown) =>
-      onWarning(`could not close MCP server "${slot.server}": ${messageOf(err)}`),
+      onWarning(mcpLine`could not close MCP server "${slot.server}": ${err}`),
     ),
   );
   clients.handles.clear();

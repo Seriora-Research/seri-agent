@@ -12,8 +12,15 @@ import {
   mcpStatusWord,
   mcpTrustWord,
 } from "../../src/mcp/commands";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { loadMcpRegistry, writeCatalogCache } from "../../src/mcp/registry";
 import type { McpEntry, McpRegistry, McpToolInfo } from "../../src/mcp/types";
+
+function endpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
 
 let roots: string[] = [];
 
@@ -51,7 +58,7 @@ function entry(overrides: Partial<McpEntry["spec"]> = {}, catalog?: McpEntry["ca
   return {
     spec: {
       name: "exa",
-      url: "https://mcp.exa.ai/mcp",
+      url: endpoint("https://mcp.exa.ai/mcp"),
       headers: {},
       source: "project",
       filePath: "x/servers.yaml",
@@ -351,6 +358,20 @@ describe("decideMcpCommand: add", () => {
       clients: createMcpClients(),
     });
     expect(lines[0]).toContain("https");
+    expect(existsSync(join(configDir, "mcp", "servers.yaml"))).toBe(false);
+  });
+
+  test("a rejected http url does not print a query token", () => {
+    const { configDir } = makeTree({});
+    const { lines } = decideMcpCommand(["add", "exa", "http://host/mcp?token=SECRET"], {
+      registry: new Map(),
+      configDir,
+      worktree: "w",
+      clients: createMcpClients(),
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("https");
+    expect(text).not.toContain("SECRET");
     expect(existsSync(join(configDir, "mcp", "servers.yaml"))).toBe(false);
   });
 

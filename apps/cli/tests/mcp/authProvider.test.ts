@@ -11,6 +11,7 @@ import {
   mcpCallbackUri,
 } from "../../src/mcp/authProvider";
 import { mcpAuthPath, saveMcpServerAuth } from "../../src/mcp/authStore";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 
 const SERVER_URL = "https://mcp.exa.ai/mcp";
 
@@ -30,8 +31,10 @@ function makeConfigDir(): string {
 }
 
 function provider(configDir: string, interaction: McpAuthInteraction): OAuthClientProvider {
+  const url = McpEndpoint.tryParse(SERVER_URL);
+  if (url === undefined) throw new Error("expected the test url to parse");
   return createMcpAuthProvider({
-    spec: { name: "exa", url: SERVER_URL },
+    spec: { name: "exa", url },
     configDir,
     interaction,
   });

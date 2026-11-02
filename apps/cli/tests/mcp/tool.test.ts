@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolSet } from "ai";
 import { createMcpClients, type DialFn, type McpClientHandle } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { MCP_TOOL_NAME, mcpCallSubject, withMcp } from "../../src/mcp/tool";
 import type {
   McpCatalog,
@@ -10,8 +11,20 @@ import type {
   McpToolInfo,
 } from "../../src/mcp/types";
 
+function endpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
+
 function spec(name = "exa"): McpServerSpec {
-  return { name, url: `https://mcp.${name}.ai/mcp`, headers: {}, source: "project", filePath: "x" };
+  return {
+    name,
+    url: endpoint(`https://mcp.${name}.ai/mcp`),
+    headers: {},
+    source: "project",
+    filePath: "x",
+  };
 }
 
 function toolInfo(server: string, name: string, overrides: Partial<McpToolInfo> = {}): McpToolInfo {

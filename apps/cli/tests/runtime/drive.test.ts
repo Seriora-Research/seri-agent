@@ -11,6 +11,7 @@ import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { createMcpClients } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { toolFingerprint } from "../../src/mcp/registry";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { type McpCatalog, type McpToolInfo, mcpGrantMatches } from "../../src/mcp/types";
@@ -36,6 +37,12 @@ import { TODO_TOOL_NAME } from "../../src/todo/tool";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { expectNoBashFirstSteer } from "../agents/bashFirstSteer";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
+
+function mcpEndpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
 
 type RunLoopOpts = Parameters<typeof runLoop>[0];
 
@@ -825,7 +832,7 @@ describe("driveLoop mcp composition", () => {
         {
           spec: {
             name: "exa",
-            url: "https://mcp.exa.ai/mcp",
+            url: mcpEndpoint("https://mcp.exa.ai/mcp"),
             headers: {},
             source: "project" as const,
             filePath: "x",

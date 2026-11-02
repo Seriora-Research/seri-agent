@@ -4,16 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { auth } from "@ai-sdk/mcp";
 import { mcpCallbackUri } from "../../src/mcp/authProvider";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import { loginMcpServer } from "../../src/mcp/login";
 import type { CallbackServer, McpCallbackWait, StartCallbackServer } from "../../src/mcp/loopback";
 import type { McpServerSpec } from "../../src/mcp/types";
+
+function endpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
 
 type AuthOptions = Parameters<typeof auth>[1];
 type WaitOptions = Parameters<CallbackServer["waitForCallback"]>[0];
 
 const SPEC: McpServerSpec = {
   name: "exa",
-  url: "https://mcp.exa.ai/mcp",
+  url: endpoint("https://mcp.exa.ai/mcp"),
   headers: {},
   source: "user",
   filePath: "servers.yaml",
@@ -137,6 +144,24 @@ describe("every other ending maps to its own status, and closes the listener", (
     expect(closes).toHaveLength(1);
   });
 
+  test("a denied message does not keep credentials from an endpoint url", async () => {
+    const { listen, closes } = fakeListen({
+      kind: "denied",
+      message: "denied https://host/mcp?token=SECRET",
+    });
+    const result = await loginMcpServer(SPEC, makeConfigDir(), {
+      listen,
+      authFn: fakeAuth(["REDIRECT"]).authFn,
+      openUrl: () => {},
+    });
+
+    expect(result.status).toBe("denied");
+    if (result.status !== "denied") return;
+    expect(result.message).toContain("REDACTED");
+    expect(result.message).not.toContain("SECRET");
+    expect(closes).toHaveLength(1);
+  });
+
   test("timeout", async () => {
     const { listen, closes } = fakeListen({ kind: "timeout" });
     const result = await loginMcpServer(SPEC, makeConfigDir(), {
@@ -174,6 +199,26 @@ describe("every other ending maps to its own status, and closes the listener", (
     });
 
     expect(result).toEqual({ status: "error", message: "registration refused" });
+    expect(closes).toHaveLength(1);
+  });
+
+  test("a thrown auth error does not keep credentials from an endpoint url", async () => {
+    const { listen, closes } = fakeListen({ kind: "timeout" });
+    const authFn: typeof auth = async () => {
+      throw new Error("failed https://user:pw@host/mcp?token=SECRET");
+    };
+    const result = await loginMcpServer(SPEC, makeConfigDir(), {
+      listen,
+      authFn,
+      openUrl: () => {},
+    });
+
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).not.toContain("SECRET");
+    expect(result.message).not.toContain("pw");
+    expect(result.message).toContain("REDACTED");
+    expect(result.message).toContain("https://host/mcp");
     expect(closes).toHaveLength(1);
   });
 });

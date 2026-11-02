@@ -6,11 +6,12 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import type { CliDeps } from "../../src/cli";
 import { createAttendedExecuteTurn } from "../../src/daemon/turn";
-import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import * as mcpClient from "../../src/mcp/client";
 import { callMcpTool, type McpClientHandle, type McpClients } from "../../src/mcp/client";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import type { McpServerSpec } from "../../src/mcp/types";
 import { SessionDatabase } from "../../src/session/database";
+import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 import { fakeRunLoop } from "../cli/fakeRunLoop";
 import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
@@ -34,9 +35,11 @@ function macrotick(): Promise<void> {
 }
 
 function spec(): McpServerSpec {
+  const url = McpEndpoint.tryParse("https://127.0.0.1:1/mcp");
+  if (url === undefined) throw new Error("expected the test url to parse");
   return {
     name: "ghost",
-    url: "https://127.0.0.1:1/mcp",
+    url,
     headers: {},
     source: "project",
     filePath: "x",

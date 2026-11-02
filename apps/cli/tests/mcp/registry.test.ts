@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { McpEndpoint } from "../../src/mcp/endpoint";
 import {
   addServerToFile,
   findMcpTool,
@@ -17,6 +18,13 @@ import {
   writeCatalogCache,
 } from "../../src/mcp/registry";
 import type { McpCatalog, McpEntry, McpRegistry, McpToolInfo } from "../../src/mcp/types";
+
+function endpoint(raw: string): McpEndpoint {
+  const parsed = McpEndpoint.tryParse(raw);
+  if (parsed === undefined) throw new Error("expected the test url to parse");
+  return parsed;
+}
+
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
 
 let roots: string[] = [];
@@ -85,7 +93,7 @@ describe("loadMcpRegistry", () => {
       ),
     });
     expect(registry.size).toBe(1);
-    expect(registry.get("exa")?.spec.url).toBe("https://mcp.exa.ai/project");
+    expect(registry.get("exa")?.spec.url.wireHref()).toBe("https://mcp.exa.ai/project");
     expect(registry.get("exa")?.spec.source).toBe("project");
   });
 
@@ -138,6 +146,23 @@ describe("loadMcpRegistry", () => {
     });
     expect([...registry.keys()]).toEqual(["exa"]);
     expect(warnings.some((w) => w.includes("insecure") && w.includes("https"))).toBe(true);
+  });
+
+  test("a skipped http url does not print a query token", () => {
+    const { registry, warnings } = load({
+      "project/.seri/mcp/servers.yaml": `servers:
+  insecure:
+    url: "http://host/mcp?token=SECRET"
+  exa:
+    url: https://mcp.exa.ai/mcp
+`,
+    });
+    expect([...registry.keys()]).toEqual(["exa"]);
+    const warning = warnings.find((w) => w.includes("insecure"));
+    expect(warning).toBeDefined();
+    expect(warning ?? "").toContain("https");
+    expect(warning ?? "").toContain("skipped");
+    expect(warning ?? "").not.toContain("SECRET");
   });
 
   // biome-ignore lint/suspicious/noTemplateCurlyInString: the title names the literal config syntax under test, not an interpolation.
@@ -226,7 +251,7 @@ describe("loadMcpRegistry", () => {
       configDir,
       onWarning: (message) => warnings.push(message),
     });
-    expect(registry.get("exa")?.spec.url).toBe("https://evil.example/mcp");
+    expect(registry.get("exa")?.spec.url.wireHref()).toBe("https://evil.example/mcp");
     expect(registry.get("exa")?.catalog).toBeUndefined();
     expect(pendingMcpNames(registry)).toEqual(["exa"]);
     expect(warnings.some((w) => w.includes("exa") && w.includes("changed"))).toBe(true);
@@ -412,7 +437,7 @@ describe("MCP config expands from the turn env", () => {
         env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_HOST: "mcp.b.test" }),
       });
       expect(warnings).toEqual([]);
-      expect(specs[0]?.url).toBe("https://mcp.b.test/mcp");
+      expect(specs[0]?.url.wireHref()).toBe("https://mcp.b.test/mcp");
     } finally {
       restoreEnv("SERI_TEST_MCP_HOST", original);
     }
@@ -434,7 +459,7 @@ describe("MCP config expands from the turn env", () => {
         env: ToolSpawnEnv.exactly({ SERI_TEST_MCP_TOKEN: "acme" }),
       });
       expect(warnings).toEqual([]);
-      expect(specs[0]?.url).toBe("https://mcp.x.ai/acme/mcp");
+      expect(specs[0]?.url.wireHref()).toBe("https://mcp.x.ai/acme/mcp");
     } finally {
       restoreEnv("SERI_TEST_MCP_TOKEN", original);
     }
@@ -498,7 +523,7 @@ describe("MCP config expands from the turn env", () => {
       env: ToolSpawnEnv.exactly({}),
     });
     expect(warnings).toEqual([]);
-    expect(specs[0]?.url).toBe("https://mcp.exa.ai");
+    expect(specs[0]?.url.wireHref()).toBe("https://mcp.exa.ai");
   });
 
   test("trust follows the expanded header of the snapshot that was trusted", () => {
@@ -561,7 +586,7 @@ describe("findMcpTool", () => {
   const entry: McpEntry = {
     spec: {
       name: "exa",
-      url: "https://mcp.exa.ai/mcp",
+      url: endpoint("https://mcp.exa.ai/mcp"),
       headers: {},
       source: "project",
       filePath: "x",
@@ -622,7 +647,7 @@ describe("grantFingerprint", () => {
         {
           spec: {
             name: "exa",
-            url: "https://mcp.exa.ai/mcp",
+            url: endpoint("https://mcp.exa.ai/mcp"),
             headers: {},
             source: "project",
             filePath: "x",
