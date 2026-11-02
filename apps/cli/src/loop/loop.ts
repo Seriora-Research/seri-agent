@@ -16,6 +16,9 @@ import {
   catastrophicOf,
   destructiveIntentOf,
   followUpBlocked,
+  locationForShellCall,
+  namedPathDenialCovers,
+  namedShellPaths,
   writeFileDenialCovers,
 } from "../gate/destructiveIntent";
 import { type Consent, decideFsPolicy, reduceConsent } from "../gate/fsBoundary";
@@ -200,10 +203,14 @@ async function decidePermission(args: {
     }
   }
   if (args.workingDirectory !== undefined) {
+    const shellPaths = namedShellPaths(args.toolName, args.input, args.workingDirectory);
     const fsVerdict = decideFsPolicy({
       mode: args.mode,
       toolClass: classifyBuiltin(args.toolName),
-      location: locationForCall(args.workingDirectory, args.toolName, args.input),
+      location:
+        args.toolName === "bash" || args.toolName === "powershell"
+          ? locationForShellCall(args.workingDirectory, shellPaths)
+          : locationForCall(args.workingDirectory, args.toolName, args.input),
       consent: args.consent.current,
       standingDeny: args.standingDeny,
       hasPrompt: args.askOutsideFs,
@@ -890,7 +897,12 @@ export async function* runLoop(opts: {
 
       const pathDenied =
         denialBlocks(opts.pathDenials, subject, call.input, opts.cwd) ||
-        writeFileDenialCovers(opts.pathDenials, intent, opts.cwd);
+        writeFileDenialCovers(opts.pathDenials, intent, opts.cwd) ||
+        namedPathDenialCovers(
+          opts.pathDenials?.map((denial) => denial.pattern),
+          namedShellPaths(call.toolName, call.input, opts.cwd ?? "."),
+          opts.cwd,
+        );
 
       if (pathDenied) {
         if ((yield* flushReadBatch()) === "aborted") break;

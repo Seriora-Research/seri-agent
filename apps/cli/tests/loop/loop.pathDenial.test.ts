@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { type ToolSet, tool } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { z } from "zod";
 import { runLoop } from "../../src/loop/loop";
 import { createToolDefinitions } from "../../src/provider/tools";
 import { ToolSpawnEnv } from "../../src/tools/toolSpawnEnv";
@@ -220,6 +222,97 @@ describe("runLoop path denials", () => {
       name: "read_file",
       reason: "blocked",
     });
+  });
+
+  test("a glob deny on a secrets path blocks bash test -f of that path", async () => {
+    const secret = join(tmpDir, "secret", "key");
+    const executed: string[] = [];
+    const tools: ToolSet = {
+      bash: tool({
+        description: "run bash",
+        inputSchema: z.object({ command: z.string() }),
+        execute: async ({ command }) => {
+          executed.push(command);
+          return "yes";
+        },
+      }),
+    };
+    const command = `test -f ${secret} && echo yes`;
+    const events = await collect(
+      runLoop({
+        model: oneCallThenText("bash", { command }),
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: tmpDir,
+        pathDenials: [{ tool: "glob", pattern: `${tmpDir.replaceAll("\\", "/")}/secret/**` }],
+      }),
+    );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "bash",
+      reason: "blocked",
+    });
+    expect(deniedReason(events)).toContain("deny rule");
+  });
+
+  test("a glob deny on a secrets path blocks powershell Test-Path of that path", async () => {
+    const secret = join(tmpDir, "secret", "key");
+    const executed: string[] = [];
+    const tools: ToolSet = {
+      powershell: tool({
+        description: "run powershell",
+        inputSchema: z.object({ command: z.string() }),
+        execute: async ({ command }) => {
+          executed.push(command);
+          return "True";
+        },
+      }),
+    };
+    const command = `Test-Path -Path '${secret}'`;
+    const events = await collect(
+      runLoop({
+        model: oneCallThenText("powershell", { command }),
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: tmpDir,
+        pathDenials: [{ tool: "glob", pattern: `${tmpDir.replaceAll("\\", "/")}/secret/**` }],
+      }),
+    );
+    expect(executed).toEqual([]);
+    expect(events).toContainEqual({
+      type: "permission-denied",
+      name: "powershell",
+      reason: "blocked",
+    });
+  });
+
+  test("bash echo with no path still runs under a glob deny", async () => {
+    const executed: string[] = [];
+    const tools: ToolSet = {
+      bash: tool({
+        description: "run bash",
+        inputSchema: z.object({ command: z.string() }),
+        execute: async ({ command }) => {
+          executed.push(command);
+          return "ok";
+        },
+      }),
+    };
+    const events = await collect(
+      runLoop({
+        model: oneCallThenText("bash", { command: "echo hi" }),
+        tools,
+        messages: baseMessages,
+        permissionMode: "auto",
+        cwd: tmpDir,
+        pathDenials: [{ tool: "glob", pattern: `${tmpDir.replaceAll("\\", "/")}/secret/**` }],
+      }),
+    );
+    expect(executed).toEqual(["echo hi"]);
+    expect(events.find((event) => event.type === "permission-denied")).toBeUndefined();
   });
 
   test("a path deny does not invoke PreToolUse", async () => {
