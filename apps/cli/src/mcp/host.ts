@@ -1,7 +1,8 @@
 // One session's MCP config, trust, listings, and connections.
 // A tool reaches the model only when its remote name is in the trust ledger.
 // A live listing supplies description and inputSchema for those names, and can drop one.
-// Only trust() adds a name. Refresh does not write the catalog file.
+// Only trust() adds a name. A fingerprint change of an already-trusted name writes that
+// name's new schema through the catalog. Arrivals and removals are not written.
 import { messageOf } from "../errors";
 import type { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 import {
@@ -264,6 +265,38 @@ export function createMcpHost(opts: {
     view = next;
   }
 
+  function persistListedSchema(key: McpPoolKey): void {
+    let matched: McpEntry | undefined;
+    for (const entry of registry.values()) {
+      if (mcpPoolKey(entry.spec) === key) {
+        matched = entry;
+        break;
+      }
+    }
+    const catalog = matched?.catalog;
+    const listing = listings.get(key);
+    if (matched === undefined || catalog === undefined || listing === undefined) return;
+    let changed = false;
+    const tools = catalog.tools.map((tool) => {
+      const live = listing.byRemoteName.get(tool.name);
+      if (live === undefined) return tool;
+      const next = { ...toToolInfo(matched.spec.name, live), toolName: tool.toolName };
+      if (toolFingerprint(next) !== toolFingerprint(tool)) changed = true;
+      return next;
+    });
+    if (!changed) return;
+    const nextCatalog: McpCatalog = {
+      server: catalog.server,
+      identity: catalog.identity,
+      fetchedAt: new Date().toISOString(),
+      tools,
+    };
+    opts.store.writeTrust(nextCatalog);
+    const nextRegistry = new Map(registry);
+    nextRegistry.set(matched.spec.name, { spec: matched.spec, catalog: nextCatalog });
+    registry = nextRegistry;
+  }
+
   function observe(key: McpPoolKey, issued: number, remote: readonly RemoteTool[]): boolean {
     // Request order, not arrival order. A slow reply must not overwrite a newer list.
     if ((listings.get(key)?.stamp ?? -1) >= issued) return false;
@@ -271,6 +304,7 @@ export function createMcpHost(opts: {
     for (const tool of remote) byRemoteName.set(tool.name, tool);
     listings.set(key, { stamp: issued, byRemoteName });
     recompute();
+    persistListedSchema(key);
     return true;
   }
 

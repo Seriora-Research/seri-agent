@@ -120,6 +120,7 @@ function memoryStore(spec: McpServerSpec, ledger: readonly RemoteTool[] | undefi
   return {
     store,
     writes: () => writes,
+    ledger: (name: string) => ledgers.get(name),
     setSpec: (next: McpServerSpec) => specs.set(next.name, next),
     removeServer: (name: string) => specs.delete(name),
   };
@@ -162,7 +163,14 @@ describe("a running session sees server tool-list changes from the next turn", (
     expect(t2.notices).toEqual([expect.stringContaining("updated web_search")]);
     expect(matchMcpGrants([v1Grant], t2.tools).allowed).toEqual([]);
     expect(matchMcpGrants([v1Grant], t2.tools).stale).toEqual(["mcp_exa_web_search"]);
-    expect(disk.writes()).toBe(seededWrites);
+    expect(disk.writes()).toBe(seededWrites + 1);
+    expect(disk.ledger("exa")?.tools.map((tool) => tool.name).sort()).toEqual([
+      "get_contents",
+      "web_search",
+    ]);
+    expect(JSON.stringify(disk.ledger("exa")?.tools.find((tool) => tool.name === "web_search"))).toContain(
+      "region",
+    );
     expect(await t2.call("mcp_exa_web_search", { query: "q", region: "eu" }, undefined)).toBe(
       "ok:web_search",
     );
@@ -186,8 +194,10 @@ describe("a running session sees server tool-list changes from the next turn", (
 
   test("a tool the server dropped leaves the next turn, and a call from history says removed", async () => {
     const server = fakeServer([SEARCH_V1, CONTENTS]);
-    const host = hostFor(server, memoryStore(EXA, [SEARCH_V1, CONTENTS]).store);
+    const disk = memoryStore(EXA, [SEARCH_V1, CONTENTS]);
+    const host = hostFor(server, disk.store);
     await (await host.beginTurn(undefined)).call("mcp_exa_get_contents", {}, undefined);
+    const writesAfterDial = disk.writes();
 
     server.set([SEARCH_V1]);
     const t2 = await host.beginTurn(undefined);
@@ -198,6 +208,11 @@ describe("a running session sees server tool-list changes from the next turn", (
       'MCP tool "mcp_exa_get_contents" was removed: server "exa" no longer offers it.',
     );
     expect(server.stats.calls).toEqual(["get_contents"]);
+    expect(disk.writes()).toBe(writesAfterDial);
+    expect(disk.ledger("exa")?.tools.map((tool) => tool.name).sort()).toEqual([
+      "get_contents",
+      "web_search",
+    ]);
   });
 
   test("the first dial's listing refuses a drifted tool for this frozen turn; siblings still run", async () => {
@@ -220,8 +235,10 @@ describe("a running session sees server tool-list changes from the next turn", (
 
   test("a new tool on a trusted server is never exposed, and no saved grant can authorize it", async () => {
     const server = fakeServer([SEARCH_V1, CONTENTS, DELETE_ALL]);
-    const host = hostFor(server, memoryStore(EXA, [SEARCH_V1, CONTENTS]).store);
+    const disk = memoryStore(EXA, [SEARCH_V1, CONTENTS]);
+    const host = hostFor(server, disk.store);
     await (await host.beginTurn(undefined)).call("mcp_exa_web_search", { query: "q" }, undefined);
+    const writesAfterDial = disk.writes();
     const t2 = await host.beginTurn(undefined);
 
     expect(names(t2.tools)).not.toContain("mcp_exa_delete_all");
@@ -237,6 +254,11 @@ describe("a running session sees server tool-list changes from the next turn", (
       'no MCP tool named "mcp_exa_delete_all" is available this session',
     );
     expect(server.stats.calls).not.toContain("delete_all");
+    expect(disk.writes()).toBe(writesAfterDial);
+    expect(disk.ledger("exa")?.tools.map((tool) => tool.name).sort()).toEqual([
+      "get_contents",
+      "web_search",
+    ]);
 
     const t3 = await host.beginTurn(undefined);
     expect(t3.notices).toEqual([]);
