@@ -14,6 +14,7 @@ import type { AutoModeOnBlock, ToolCallClassifier } from "../gate/classifier";
 import type { Consent } from "../gate/fsBoundary";
 import type { PathDenial, PermissionMode } from "../gate/gate";
 import type { LoopEvent, runLoop } from "../loop/loop";
+import { isStopReason, type StopReason, stopReasonOf } from "../loop/timeLimit";
 import type { CostReport } from "../provider/cost";
 import type { RouteCredential } from "../provider/routing";
 import { DISPATCH_TOOL_NAME } from "../provider/tools";
@@ -36,7 +37,7 @@ const CANCELLED_SUMMARY = "cancelled before it produced a summary";
 const OVERFLOW_SUMMARY = `not run: this dispatch already used its ${MAX_TASKS_PER_DISPATCH}-task limit; re-dispatch this task on its own`;
 
 type DoneReason = Extract<LoopEvent, { type: "done" }>["reason"];
-type FinishedReason = Exclude<DoneReason, "aborted" | "model-refusal">;
+type FinishedReason = Exclude<DoneReason, StopReason | "model-refusal">;
 
 export type SubagentUsage = {
   inputTokens?: number;
@@ -185,7 +186,7 @@ function fallbackSummary(
   mode: PermissionMode,
   containmentDenied: boolean,
 ): string {
-  if (doneReason === "aborted") return CANCELLED_SUMMARY;
+  if (isStopReason(doneReason)) return CANCELLED_SUMMARY;
   if (doneReason === "model-refusal") return "the model refused";
   if (deniedCount > 0) {
     if (containmentDenied) {
@@ -424,7 +425,7 @@ function toStartedOutcome(settlement: ChildSettlement): StartedOutcome {
     };
   }
   const { summary, usage, toolCallsMade, doneReason } = settlement;
-  if (doneReason === "aborted") {
+  if (isStopReason(doneReason)) {
     return { status: "cancelled", summary, usage, toolCallsMade };
   }
   if (doneReason === undefined || doneReason === "model-refusal") {
@@ -544,7 +545,7 @@ async function runAgentChild(opts: {
     });
     try {
       if (outcome.status === "failed") emit({ type: "error", error: outcome.summary });
-      else emit({ type: "done", reason: "aborted" });
+      else emit({ type: "done", reason: stopReasonOf(opts.signal) });
     } catch (emitError) {
       void emitError;
     }
