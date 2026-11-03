@@ -102,6 +102,20 @@ describe("withStallDeadlines in runLoop", () => {
     expect(events.some((event) => event.type === "done")).toBe(false);
   });
 
+  test("a provider error part is output, so it is not held for a first-byte retry", async () => {
+    const scripted = scriptedModel([
+      { kind: "stall-after", parts: [{ type: "error", error: new Error("provider exploded") }] },
+    ]);
+
+    const events = await turn(withStallDeadlines(scripted.model, FAST));
+
+    expect(scripted.signals).toHaveLength(1);
+    expect(events.filter((event) => event.type === "error")).toEqual([
+      { type: "error", error: expect.stringMatching(/provider exploded/) },
+    ]);
+    expect(events.some((event) => event.type === "done")).toBe(false);
+  });
+
   test("a stream that stalls after reasoning-start is not retried, because thinking has begun", async () => {
     const scripted = scriptedModel([
       { kind: "stall-after", parts: [{ type: "reasoning-start", id: "r1" }] },

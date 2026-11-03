@@ -103,23 +103,12 @@ export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
 }
 
-/**
- * One scripted provider request. Every script that waits ends with an AbortError once its
- * request's signal aborts.
- * hang: never answers. silent: opens a stream that sends `stream-start`, then nothing.
- * stall-after: streams `parts`, then nothing. reply: streams `parts` and closes, and a generate
- * call answers with their text.
- */
 export type CallScript =
   | { readonly kind: "hang" }
   | { readonly kind: "silent" }
   | { readonly kind: "stall-after"; readonly parts: readonly LanguageModelV4StreamPart[] }
   | { readonly kind: "reply"; readonly parts: readonly LanguageModelV4StreamPart[] };
 
-/**
- * `signals[i]` is the abortSignal the i-th request received. A request past the end of
- * `scripts` throws, so an unexpected retry fails the test.
- */
 export function scriptedModel(scripts: readonly CallScript[]): {
   readonly model: MockLanguageModelV4;
   readonly signals: readonly AbortSignal[];

@@ -21,11 +21,12 @@ export type StallDeadlines = {
   readonly idleMs: number;
 };
 
+const HIDDEN_REASONING_FIRST_BYTE_MS = 300_000;
+const RESPONSES_API_REASONING_IDLE_MS = 300_000;
+
 const DEFAULT_STALL_DEADLINES: StallDeadlines = {
-  // Routes that hide reasoning send no part until the reasoning is done.
-  firstByteMs: 300_000,
-  // Responses-API reasoning can sit silent between `reasoning-start` and the answer.
-  idleMs: 300_000,
+  firstByteMs: HIDDEN_REASONING_FIRST_BYTE_MS,
+  idleMs: RESPONSES_API_REASONING_IDLE_MS,
 };
 
 /**
@@ -72,47 +73,38 @@ function parseStallDeadlines(deadlines: StallDeadlines): StallDeadlines {
   return deadlines;
 }
 
-/**
- * silent: the connection is open, nothing more. Held before the first output and never resets a
- * deadline. live: the model produced something. final: the reply is complete, so a later stall
- * closes the stream instead of failing it.
- */
-type Pulse = "silent" | "live" | "final";
+type Pulse = "hold" | "output" | "complete";
 
-// One row per provider part type, so a part type added by `ai` fails the build here.
 const PART_PULSE = {
-  "stream-start": "silent",
-  "response-metadata": "silent",
-  raw: "silent",
-  "text-start": "silent",
-  "text-delta": "live",
-  "text-end": "silent",
-  // A model that has started thinking is working; a retry would throw that work away.
-  "reasoning-start": "live",
-  "reasoning-delta": "live",
-  "reasoning-end": "silent",
-  "tool-input-start": "silent",
-  "tool-input-delta": "live",
-  "tool-input-end": "silent",
-  "tool-approval-request": "live",
-  "tool-call": "live",
-  "tool-result": "live",
-  custom: "live",
-  file: "live",
-  "reasoning-file": "live",
-  source: "live",
-  // runLoop's overflow and credit retries read a provider error; holding it would delay them.
-  error: "live",
-  finish: "final",
+  "stream-start": "hold",
+  "response-metadata": "hold",
+  raw: "hold",
+  "text-start": "hold",
+  "text-delta": "output",
+  "text-end": "hold",
+  "reasoning-start": "output",
+  "reasoning-delta": "output",
+  "reasoning-end": "hold",
+  "tool-input-start": "hold",
+  "tool-input-delta": "output",
+  "tool-input-end": "hold",
+  "tool-approval-request": "output",
+  "tool-call": "output",
+  "tool-result": "output",
+  custom: "output",
+  file: "output",
+  "reasoning-file": "output",
+  source: "output",
+  error: "output",
+  finish: "complete",
 } as const satisfies Record<LanguageModelV4StreamPart["type"], Pulse>;
 
 function pulseOf(part: LanguageModelV4StreamPart): Pulse {
-  return "delta" in part && part.delta.length === 0 ? "silent" : PART_PULSE[part.type];
+  return "delta" in part && part.delta.length === 0 ? "hold" : PART_PULSE[part.type];
 }
 
 type Attempt = 1 | 2;
 
-/** A first-byte stall carries attempt 2, because attempt 1 retries instead of failing. */
 type Stall = { readonly phase: "first-byte"; readonly attempt: 2 } | { readonly phase: "idle" };
 
 class ModelStallError extends Error {
@@ -132,7 +124,6 @@ function duration(ms: number): string {
   return `${ms}ms`;
 }
 
-/** One provider request. Aborting it tears down that request's fetch and nothing else. */
 type ProviderRequest = {
   readonly signal: AbortSignal;
   readonly expire: () => void;
@@ -150,10 +141,6 @@ type Raced<T> = { readonly kind: "value"; readonly value: T } | { readonly kind:
 
 const EXPIRED = { kind: "expired" } as const;
 
-/**
- * Starts `next` and waits at most `remainingMs` for it. Its rejection passes through unchanged. A
- * caller abort rejects with the caller's reason, and wins over a deadline that lands with it.
- */
 async function raceNext<T>(
   next: () => PromiseLike<T>,
   remainingMs: number,
@@ -166,7 +153,6 @@ async function raceNext<T>(
   let abort: AbortRegistration | undefined;
   const deadline = new Promise<typeof EXPIRED>((resolve) => {
     timer = setTimeout(() => resolve(EXPIRED), remainingMs);
-    timer.unref();
   });
   const aborted = new Promise<never>((_, reject) => {
     if (caller !== undefined) abort = onAbort(caller, () => reject(abortedError(caller)));
@@ -174,9 +160,8 @@ async function raceNext<T>(
   try {
     const first = await Promise.race([settled, deadline, aborted]);
     if (first.kind === "value") return first;
-    // A value that settles in the same turn as the deadline still counts.
-    const late = await Promise.race([settled, EXPIRED]);
-    if (late.kind === "value") return late;
+    const alreadySettled = await Promise.race([settled, EXPIRED]);
+    if (alreadySettled.kind === "value") return alreadySettled;
     if (caller?.aborted) throw abortedError(caller);
     pending.catch(() => {});
     return EXPIRED;
@@ -200,10 +185,6 @@ async function retryOnce<T>(
   }
 }
 
-/**
- * Reads until the first part that is not silent, or until the body closes, holding every part
- * read so far. Holding them is what keeps a retry out of the caller's stream.
- */
 async function awaitFirstOutput(
   inner: LanguageModelV4,
   params: LanguageModelV4CallOptions,
@@ -221,8 +202,8 @@ async function awaitFirstOutput(
   if (opened.kind === "expired") return opened;
   const reader = opened.value.stream.getReader();
   const held: LanguageModelV4StreamPart[] = [];
-  let pulse: Pulse = "silent";
-  while (pulse === "silent") {
+  let pulse: Pulse = "hold";
+  while (pulse === "hold") {
     const next = await raceNext(() => reader.read(), remainingMs(), caller);
     if (next.kind === "expired") {
       reader.cancel().catch(() => {});
@@ -270,9 +251,9 @@ function watchedStream(
       }
       controller.enqueue(next.value.value);
       const pulse = pulseOf(next.value.value);
-      if (pulse === "final") finished = true;
+      if (pulse === "complete") finished = true;
       remainingMs =
-        pulse === "silent"
+        pulse === "hold"
           ? Math.max(0, remainingMs - (performance.now() - started))
           : deadlines.idleMs;
     },
