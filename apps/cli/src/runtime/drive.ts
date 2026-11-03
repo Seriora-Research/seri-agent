@@ -28,6 +28,7 @@ import {
   type LoopEvent,
   runLoop as runLoopReal,
 } from "../loop/loop";
+import { armTimeLimit, type MaxDuration, stopReasonOf } from "../loop/timeLimit";
 import { grantFingerprint } from "../mcp/registry";
 import { mcpCallSubject, withMcp } from "../mcp/tool";
 import {
@@ -132,6 +133,8 @@ export type DriveLoopOptions = {
   askOutsideFs?: boolean;
   onArchivist?: (report: ArchivistReport) => void;
   refreshSkills?: boolean;
+  /** Wall-clock budget for this one call, counted from when driveLoop arms it. Omit for no limit. */
+  maxDuration?: MaxDuration;
 };
 
 export function exitCodeFromDriveResult(result: DriveLoopResult): 0 | 1 {
@@ -427,7 +430,7 @@ export async function driveLoop(
     yield { type: "tool-result", name: DISPATCH_TOOL_NAME, result };
     yield { type: "messages-updated", messages: [...session.messages, ...rows] };
     if (controller.signal.aborted || row.status === "cancelled") {
-      yield { type: "done", reason: "aborted" };
+      yield { type: "done", reason: stopReasonOf(controller.signal) };
       return;
     }
     if (row.status === "failed") {
@@ -437,6 +440,7 @@ export async function driveLoop(
     yield { type: "done", reason: "no-tool-call" };
   }
 
+  const disarmTimeLimit = armTimeLimit(controller, driveOpts.maxDuration);
   try {
     for await (const event of driveOpts.directDispatch !== undefined
       ? directDispatchEvents(driveOpts.directDispatch)
@@ -561,6 +565,7 @@ export async function driveLoop(
     }
   } finally {
     unregisterCancel();
+    disarmTimeLimit();
   }
 
   return {
