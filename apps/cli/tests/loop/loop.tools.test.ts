@@ -1095,6 +1095,50 @@ describe("runLoop", () => {
         expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
       });
 
+      test("a limit that passes during onBeforeCompact does not start the summarizer", async () => {
+        const controller = armedController();
+        const totalIterations = 25;
+        const compactAtIteration = 11;
+        const model = new MockLanguageModelV4({
+          doStream: Array.from({ length: totalIterations }, (_, i) =>
+            instantStream(
+              toolCallChunks(
+                `call-${i}`,
+                "write_file",
+                { path: "a.txt" },
+                usage(i === compactAtIteration ? 6000 : 100, 10),
+              ),
+            ),
+          ),
+          doGenerate: async () => {
+            throw new Error("summarizer must not run");
+          },
+        });
+
+        const events = await collect(
+          runLoop({
+            model,
+            tools: makeTools(async () => "ok"),
+            messages: baseMessages,
+            permissionMode: "auto",
+            maxIterations: totalIterations,
+            contextWindowSize: 10_000,
+            compactionThreshold: 0.5,
+            preserveRecentTokens: 80,
+            signal: controller.signal,
+            onBeforeCompact: async () => {
+              limitPasses();
+            },
+          }),
+        );
+
+        expect(model.doGenerateCalls).toHaveLength(0);
+        expect(model.doStreamCalls).toHaveLength(compactAtIteration + 1);
+        expect(events.find((e) => e.type === "compacted")).toBeUndefined();
+        expect(events.find((e) => e.type === "error")).toBeUndefined();
+        expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+      });
+
       test("a limit that passes during compaction ends timed-out instead of starting another turn", async () => {
         const controller = armedController();
         const totalIterations = 25;

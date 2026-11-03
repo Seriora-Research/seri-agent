@@ -1261,6 +1261,38 @@ describe("driveLoop planMode", () => {
     expect(result.doneReason).toBe("plan-submitted");
     expect(result.submittedPlan).toEqual(plan);
   });
+
+  test("a timed-out run after submit_plan does not return submittedPlan", async () => {
+    const prepared = withWriteTools();
+    const plan = { path: "/tmp/p.md", title: "T", markdown: "# T\n" };
+    const capture = fakeRunLoop([
+      { type: "tool-result", name: SUBMIT_PLAN_TOOL_NAME, result: plan },
+      { type: "done", reason: "timed-out" },
+    ]);
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    expect(result.doneReason).toBe("timed-out");
+    expect(result.submittedPlan).toBeUndefined();
+  });
 });
 
 describe("driveLoop ask_user", () => {

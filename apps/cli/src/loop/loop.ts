@@ -506,6 +506,10 @@ export async function* runLoop(opts: {
     const evictBoundary = findSafeEvictionBoundary(window, preserveRecentTokens);
     if (evictBoundary === null) return "skipped";
     if (opts.onBeforeCompact !== undefined) await opts.onBeforeCompact();
+    if (opts.signal?.aborted) {
+      yield { type: "done", reason: stopReasonOf(opts.signal) };
+      return "aborted";
+    }
     try {
       const compacted = await compactMessages(
         window,
@@ -602,6 +606,10 @@ export async function* runLoop(opts: {
         : undefined;
 
     streamAttempt: while (true) {
+      if (opts.signal?.aborted) {
+        yield { type: "done", reason: stopReasonOf(opts.signal) };
+        return;
+      }
       text = "";
       toolCalls.length = 0;
       modelCallStarts = 0;

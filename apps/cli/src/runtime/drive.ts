@@ -576,6 +576,6 @@ export async function driveLoop(
     archivist,
     directSummary,
     ranAnyTurn: true,
-    submittedPlan,
+    submittedPlan: doneReason === "plan-submitted" ? submittedPlan : undefined,
   };
 }
