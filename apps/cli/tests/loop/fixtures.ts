@@ -1,6 +1,8 @@
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import type { LanguageModelV4CallOptions, LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import { type ModelMessage, simulateReadableStream, type ToolSet, tool } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { z } from "zod";
+import { abortedError, onAbort } from "../../src/abort";
 import type { LoopEvent } from "../../src/loop/loop";
 
 export function usage(inputTotal: number, outputTotal: number) {
@@ -99,6 +101,84 @@ export function multiToolCallChunks(
 
 export function streamResult(chunks: LanguageModelV4StreamPart[], chunkDelayInMs?: number) {
   return { stream: simulateReadableStream({ chunks, chunkDelayInMs }) };
+}
+
+/**
+ * One scripted provider request. Every script that waits ends with an AbortError once its
+ * request's signal aborts.
+ * hang: never answers. silent: opens a stream that sends `stream-start`, then nothing.
+ * stall-after: streams `parts`, then nothing. reply: streams `parts` and closes, and a generate
+ * call answers with their text.
+ */
+export type CallScript =
+  | { readonly kind: "hang" }
+  | { readonly kind: "silent" }
+  | { readonly kind: "stall-after"; readonly parts: readonly LanguageModelV4StreamPart[] }
+  | { readonly kind: "reply"; readonly parts: readonly LanguageModelV4StreamPart[] };
+
+/**
+ * `signals[i]` is the abortSignal the i-th request received. A request past the end of
+ * `scripts` throws, so an unexpected retry fails the test.
+ */
+export function scriptedModel(scripts: readonly CallScript[]): {
+  readonly model: MockLanguageModelV4;
+  readonly signals: readonly AbortSignal[];
+} {
+  const signals: AbortSignal[] = [];
+  const begin = (options: LanguageModelV4CallOptions) => {
+    const signal = options.abortSignal;
+    if (signal === undefined)
+      throw new Error("scriptedModel needs an abortSignal on every request");
+    const script = scripts[signals.length];
+    if (script === undefined) {
+      throw new Error(`scriptedModel has no script for request ${signals.length + 1}`);
+    }
+    signals.push(signal);
+    return { script, signal };
+  };
+  const untilAborted = (signal: AbortSignal) =>
+    new Promise<never>((_, reject) => {
+      onAbort(signal, () => reject(abortedError(signal)));
+    });
+  const stream = (
+    parts: readonly LanguageModelV4StreamPart[],
+    signal: AbortSignal,
+    closes: boolean,
+  ) =>
+    new ReadableStream<LanguageModelV4StreamPart>({
+      start(controller) {
+        for (const part of parts) controller.enqueue(part);
+        if (closes) controller.close();
+        else onAbort(signal, () => controller.error(abortedError(signal)));
+      },
+    });
+  const model = new MockLanguageModelV4({
+    doStream: async (options) => {
+      const { script, signal } = begin(options);
+      switch (script.kind) {
+        case "hang":
+          return untilAborted(signal);
+        case "silent":
+          return { stream: stream([{ type: "stream-start", warnings: [] }], signal, false) };
+        case "stall-after":
+          return { stream: stream(script.parts, signal, false) };
+        case "reply":
+          return { stream: stream(script.parts, signal, true) };
+      }
+    },
+    doGenerate: async (options) => {
+      const { script, signal } = begin(options);
+      if (script.kind !== "reply") return untilAborted(signal);
+      const text = script.parts.flatMap((part) => (part.type === "text-delta" ? [part.delta] : []));
+      return {
+        content: [{ type: "text", text: text.join("") }],
+        finishReason: { unified: "stop", raw: undefined },
+        usage: usage(5, 5),
+        warnings: [],
+      };
+    },
+  });
+  return { model, signals };
 }
 
 export function repeatedWriteCalls(turns: number) {
