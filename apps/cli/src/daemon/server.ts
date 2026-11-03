@@ -186,7 +186,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
         const path = url.pathname;
 
         if (req.method === "GET" && path === "/v1/health") {
-          return json(200, { v: 1, pid: process.pid });
+          return json(200, { v: 1, pid: process.pid, maxDuration: true });
         }
 
         if (req.method === "POST" && path === "/v1/turns") {

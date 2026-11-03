@@ -81,6 +81,8 @@ export type DaemonDescriptor = {
 export type HealthResponse = {
   v: 1;
   pid: number;
+  /** Present when this daemon honors `maxDurationSeconds` on turns and schedules. */
+  maxDuration?: true;
 };
 
 export type ScheduleTiming =

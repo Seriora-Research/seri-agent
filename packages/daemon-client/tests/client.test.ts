@@ -91,6 +91,122 @@ describe("daemon-client", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("startTurn without maxDurationSeconds does not GET /v1/health", async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        paths.push(url.pathname);
+        if (url.pathname === "/v1/turns") {
+          return sseResponse([
+            {
+              v: 1,
+              sessionId: "s",
+              turnId: "t",
+              seq: 1,
+              event: { type: "turn-complete", exitCode: 0 },
+            },
+          ]);
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    const client = new DaemonClient({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      token: "secret-token",
+    });
+    await Array.fromAsync(client.startTurn({ task: "x" }));
+    server.stop();
+    expect(paths).toEqual(["/v1/turns"]);
+  });
+
+  test("startTurn with maxDurationSeconds refuses a daemon that does not advertise the limit", async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        paths.push(url.pathname);
+        if (url.pathname === "/v1/health") return Response.json({ v: 1, pid: 7 });
+        return new Response("no", { status: 404 });
+      },
+    });
+    const client = new DaemonClient({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      token: "secret-token",
+    });
+    await expect(
+      Array.fromAsync(client.startTurn({ task: "x", maxDurationSeconds: 2 })),
+    ).rejects.toThrow("this daemon does not honor a wall-clock limit");
+    server.stop();
+    expect(paths).toEqual(["/v1/health"]);
+  });
+
+  test("startTurn with maxDurationSeconds POSTs after a daemon that advertises the limit", async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        paths.push(url.pathname);
+        if (url.pathname === "/v1/health")
+          return Response.json({ v: 1, pid: 7, maxDuration: true });
+        if (url.pathname === "/v1/turns") {
+          return sseResponse([
+            {
+              v: 1,
+              sessionId: "s",
+              turnId: "t",
+              seq: 1,
+              event: { type: "turn-complete", exitCode: 0 },
+            },
+          ]);
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    const client = new DaemonClient({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      token: "secret-token",
+    });
+    await Array.fromAsync(client.startTurn({ task: "x", maxDurationSeconds: 2 }));
+    server.stop();
+    expect(paths).toEqual(["/v1/health", "/v1/turns"]);
+  });
+
+  test("createSchedule with maxDurationSeconds refuses a daemon that does not advertise the limit", async () => {
+    const paths: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        paths.push(url.pathname);
+        if (url.pathname === "/v1/health") return Response.json({ v: 1, pid: 7 });
+        return new Response("no", { status: 404 });
+      },
+    });
+    const client = new DaemonClient({
+      endpoint: `http://127.0.0.1:${server.port}`,
+      token: "secret-token",
+    });
+    await expect(
+      client.createSchedule({
+        task: "x",
+        cwd: "/tmp",
+        timing: { kind: "once", at: "2099-01-01T00:00:00.000Z" },
+        allowModelReads: true,
+        maxDurationSeconds: 2,
+      }),
+    ).rejects.toThrow("this daemon does not honor a wall-clock limit");
+    server.stop();
+    expect(paths).toEqual(["/v1/health"]);
+  });
+
   test("snapshotProcessEnv copies string values and drops unset keys", () => {
     expect(snapshotProcessEnv({ FOO: "b", EMPTY: undefined, PATH: "/bin" })).toEqual({
       FOO: "b",

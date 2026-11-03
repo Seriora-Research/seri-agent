@@ -1237,6 +1237,9 @@ describe("run (serve / exec)", () => {
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const url =
         input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/health") {
+        return Response.json({ v: 1, pid: 1, maxDuration: true });
+      }
       if (url.pathname === "/v1/turns") {
         turnBodies.push(JSON.parse(String(init?.body)));
         const events = [
@@ -1268,6 +1271,44 @@ describe("run (serve / exec)", () => {
     }
     expect(turnBodies[0]?.maxDurationSeconds).toBe(900);
     expect(turnBodies[1]).not.toHaveProperty("maxDurationSeconds");
+  });
+
+  test("`seri exec --max-duration` against an older daemon exits 1 and does not start a turn", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const paths: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      paths.push(url.pathname);
+      if (url.pathname === "/v1/health") return Response.json({ v: 1, pid: 1 });
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const errors: string[] = [];
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = (message?: unknown) => {
+      errors.push(String(message));
+    };
+    console.log = () => {};
+    try {
+      expect(
+        await run(["exec", "--max-duration", "2", "report"], {
+          fetch: fetchImpl,
+          authConfigDir: getConfigDir(),
+        }),
+      ).toBe(1);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(paths).toEqual(["/v1/health"]);
+    expect(errors.join("\n")).toContain("this daemon does not honor a wall-clock limit");
   });
 
   test("`seri exec` omits profile when the process profile is default", async () => {

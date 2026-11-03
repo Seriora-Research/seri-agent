@@ -64,7 +64,10 @@ export class DaemonClient {
   }
 
   startTurn(request: TurnRequest): AsyncIterable<DaemonEvent> {
-    return this.stream("POST", "/v1/turns", request);
+    if (request.maxDurationSeconds === undefined) {
+      return this.stream("POST", "/v1/turns", request);
+    }
+    return this.turnStream(request);
   }
 
   events(turnId: string, after?: number): AsyncIterable<DaemonEvent> {
@@ -96,6 +99,7 @@ export class DaemonClient {
   }
 
   async createSchedule(request: ScheduleRequest): Promise<unknown> {
+    if (request.maxDurationSeconds !== undefined) await this.requireMaxDuration();
     const response = await this.request("POST", "/v1/schedules", request);
     return response.json();
   }
@@ -121,6 +125,20 @@ export class DaemonClient {
 
   authorizationHeader(): string {
     return `Bearer ${this.token}`;
+  }
+
+  private async requireMaxDuration(): Promise<void> {
+    const health = await this.health();
+    if (health.maxDuration !== true) {
+      throw new Error(
+        "this daemon does not honor a wall-clock limit. Restart seri serve from this binary",
+      );
+    }
+  }
+
+  private async *turnStream(request: TurnRequest): AsyncGenerator<DaemonEvent> {
+    await this.requireMaxDuration();
+    yield* this.stream("POST", "/v1/turns", request);
   }
 
   private async request(method: string, path: string, body?: unknown): Promise<Response> {
