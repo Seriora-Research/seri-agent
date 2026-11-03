@@ -893,6 +893,7 @@ async function handleExecCommand(
   positionals: string[],
   deps: CliDeps,
   promptChannel: PromptChannel,
+  maxDuration: MaxDuration | undefined,
 ): Promise<number | undefined> {
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
@@ -931,6 +932,7 @@ async function handleExecCommand(
       env: snapshotProcessEnv(),
       ...(source === "default" ? {} : { profile }),
       ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
+      ...(maxDuration === undefined ? {} : { maxDurationSeconds: maxDuration }),
     })) {
       turnId = event.turnId;
       if (cancelRequested) {
@@ -2406,7 +2408,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps, promptChannel);
+  const exec = verbEscaped
+    ? undefined
+    : await handleExecCommand(positionals, deps, promptChannel, maxDuration);
   if (exec !== undefined) return exec;
 
   const doctor = verbEscaped

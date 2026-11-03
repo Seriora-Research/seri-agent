@@ -82,6 +82,7 @@ export function createAttendedExecuteTurn(opts: {
           bindProcessCancel: false,
           composeSubagents: true,
           onArchivist: persistCursor,
+          maxDuration: input.maxDuration,
         },
       );
       persistCursor();

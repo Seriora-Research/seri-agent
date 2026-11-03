@@ -9,6 +9,7 @@ import {
 } from "@seri/daemon-client";
 import type { PermissionMode } from "../gate/gate";
 import type { LoopEvent } from "../loop/loop";
+import type { MaxDuration } from "../loop/timeLimit";
 import type { PromptChannel } from "../permissions/promptChannel";
 import { hydrateBinaryArtifacts } from "../session/artifacts";
 import type { SessionDatabase } from "../session/database";
@@ -35,6 +36,7 @@ export type ExecuteTurnInput = {
   permissionMode: PermissionMode;
   promptChannel?: PromptChannel;
   signal: AbortSignal;
+  maxDuration?: MaxDuration;
   emitLoop: (event: { type: string } & Record<string, unknown>) => void;
   requestApproval: (requestId: string, toolName: string, args: unknown) => Promise<ApprovalAnswer>;
 };
@@ -103,6 +105,7 @@ export class DaemonSessionManager {
     promptChannel?: PromptChannel;
     env: ToolSpawnEnv;
     permissionsDir?: string;
+    maxDuration?: MaxDuration;
   }): Promise<{ turnId: string; sessionId: string; subscribe: (send: Subscriber) => () => void }> {
     const session = this.resolveSession(request);
     const turnId = randomUUID();
@@ -138,6 +141,7 @@ export class DaemonSessionManager {
           request.promptChannel,
           request.env,
           request.permissionsDir,
+          request.maxDuration,
         );
       })
       .catch(() => {});
@@ -275,6 +279,7 @@ export class DaemonSessionManager {
     promptChannel: PromptChannel | undefined,
     env: ToolSpawnEnv,
     permissionsDir: string | undefined,
+    maxDuration: MaxDuration | undefined,
   ): Promise<void> {
     const emit = (event: DaemonEvent["event"]) => {
       handle.seq += 1;
@@ -305,6 +310,7 @@ export class DaemonSessionManager {
         permissionMode: permissionMode ?? session.permissionMode,
         promptChannel,
         signal: handle.abort.signal,
+        maxDuration,
         emitLoop: (value) => {
           if (value.type === "messages-updated") return;
           emit({ type: "loop", value: value as PublicLoopEvent });

@@ -40,6 +40,14 @@ function makeDir(): string {
   return dir;
 }
 
+async function* keepsWorking(opts: RunLoopOpts): AsyncGenerator<LoopEvent> {
+  yield { type: "text-delta", text: "partial" };
+  await new Promise<void>((resolve) => {
+    opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+  yield { type: "done", reason: stopReasonOf(opts.signal) };
+}
+
 function pathWithWrapperFirst(wrapperDir: string): string {
   return `${wrapperDir}${delimiter}${process.env.PATH ?? ""}`;
 }
@@ -172,16 +180,35 @@ describe("production daemon wiring", () => {
     expect(runs.runs[0]?.response).toBe("ok");
   });
 
+  test("an attended turn that keeps working stops at its maxDurationSeconds and completes with exit 1", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      deps: {
+        runLoop: keepsWorking,
+        getGroqModel: () =>
+          new MockLanguageModelV4({
+            doStream: async () => streamResult(textOnlyChunks("ok")),
+          }),
+        loadAgentsFile: () => "",
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const events = (
+      await Array.fromAsync(
+        client.startTurn({ task: "keep working", cwd: makeDir(), maxDurationSeconds: 1 }),
+      )
+    ).map((envelope) => envelope.event);
+    expect(events).toContainEqual({ type: "loop", value: { type: "done", reason: "timed-out" } });
+    expect(events.at(-1)).toEqual({ type: "turn-complete", exitCode: 1 });
+  }, 10_000);
+
   test("a scheduled fire that keeps working stops at its maxDurationSeconds and records timed-out", async () => {
     const configDir = makeDir();
     process.env.HOME = configDir;
-    async function* keepsWorking(opts: RunLoopOpts): AsyncGenerator<LoopEvent> {
-      yield { type: "text-delta", text: "partial" };
-      await new Promise<void>((resolve) => {
-        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
-      yield { type: "done", reason: stopReasonOf(opts.signal) };
-    }
     const now = Date.parse("2026-01-01T00:00:00.000Z");
     const daemon = await startDaemon({
       configDir,

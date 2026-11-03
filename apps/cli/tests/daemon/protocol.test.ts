@@ -104,6 +104,50 @@ describe("turnRequestSchema profile", () => {
   });
 });
 
+describe("turnRequestSchema maxDurationSeconds", () => {
+  test("omitted is no limit; a whole number of seconds is kept", () => {
+    const omitted = turnRequestSchema.safeParse({ task: "hi" });
+    expect(omitted.success).toBe(true);
+    if (!omitted.success) return;
+    expect(omitted.data.maxDurationSeconds).toBeUndefined();
+
+    const limited = turnRequestSchema.safeParse({ task: "hi", maxDurationSeconds: 900 });
+    expect(limited.success).toBe(true);
+    if (!limited.success) return;
+    expect(limited.data).toMatchObject({ maxDurationSeconds: 900 });
+  });
+
+  test.each([0, -1, 1.5, 2147484, "900", null])("rejects %p", (value) => {
+    expect(turnRequestSchema.safeParse({ task: "hi", maxDurationSeconds: value }).success).toBe(
+      false,
+    );
+  });
+
+  test("POST /v1/turns with an out-of-range maxDurationSeconds is 400 and does not start a turn", async () => {
+    const configDir = makeDir();
+    let started = 0;
+    const daemon = await startDaemon({
+      configDir,
+      executeTurn: async (input) => {
+        started += 1;
+        return idleTurn(input);
+      },
+    });
+    stop = daemon.stop;
+    const response = await fetch(`${daemon.endpoint}/v1/turns`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${daemon.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ task: "hi", maxDurationSeconds: 0 }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid turn request" });
+    expect(started).toBe(0);
+  });
+});
+
 describe("resolveTurnPermissionsDir", () => {
   const originalHome = process.env.HOME;
 

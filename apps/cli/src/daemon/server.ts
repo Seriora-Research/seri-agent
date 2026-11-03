@@ -209,6 +209,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<StartedDaem
               promptChannel: parsed.data.permissionPrompts === "none" ? "none" : undefined,
               env: parsed.data.env,
               permissionsDir: turnPermissionsDir,
+              maxDuration: parsed.data.maxDurationSeconds,
             });
             return sseResponse(started.subscribe, req.signal);
           } catch (error) {
