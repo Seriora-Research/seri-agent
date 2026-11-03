@@ -1236,6 +1236,38 @@ describe("runLoop", () => {
         ]);
       });
 
+      test("a user cancel after a terminal tool answered ends aborted, not plan-submitted", async () => {
+        const controller = new AbortController();
+        const model = new MockLanguageModelV4({
+          doStream: [
+            streamResult(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
+          ],
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: {
+            submit_plan: tool({
+              description: "submit a plan",
+              inputSchema: z.object({ title: z.string(), markdown: z.string() }),
+              execute: async () => ({ path: "/tmp/p.md", title: "T", markdown: "# T" }),
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          terminalTools: new Set(["submit_plan"]),
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-result") controller.abort();
+        }
+
+        expect(events.filter((e) => e.type === "done")).toEqual([
+          { type: "done", reason: "aborted" },
+        ]);
+      });
+
       test("a user cancel after the last allowed turn's tools answered ends aborted, not max-iterations", async () => {
         const controller = new AbortController();
         const model = new MockLanguageModelV4({
