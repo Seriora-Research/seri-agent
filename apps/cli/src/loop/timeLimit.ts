@@ -5,7 +5,6 @@ export type MaxDuration = number & { readonly [maxDurationBrand]: true };
 const MAX_DURATION_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
 
 const STOP_REASONS = ["aborted", "timed-out"] as const;
-/** A `done` reason caused by the consumer's AbortSignal, not by the model or the gate. */
 export type StopReason = (typeof STOP_REASONS)[number];
 
 class TimeLimitReached extends Error {
@@ -19,7 +18,6 @@ function isMaxDuration(seconds: number): seconds is MaxDuration {
   return Number.isSafeInteger(seconds) && seconds >= 1 && seconds <= MAX_DURATION_SECONDS;
 }
 
-/** argv passes the raw flag string (the `--max-turns` grammar); JSON boundaries pass a number. */
 export function parseMaxDuration(raw: string | number): MaxDuration | { error: string } {
   const seconds = typeof raw === "number" ? raw : /^[1-9]\d*$/.test(raw) ? Number(raw) : Number.NaN;
   if (isMaxDuration(seconds)) return seconds;
@@ -36,7 +34,6 @@ export function armTimeLimit(
   return () => clearTimeout(timer);
 }
 
-/** Only meaningful once `signal.aborted` is true. Any reason other than this module's own is a user cancel. */
 export function stopReasonOf(signal: AbortSignal | undefined): StopReason {
   return signal?.reason instanceof TimeLimitReached ? "timed-out" : "aborted";
 }

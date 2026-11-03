@@ -133,7 +133,6 @@ export type DriveLoopOptions = {
   askOutsideFs?: boolean;
   onArchivist?: (report: ArchivistReport) => void;
   refreshSkills?: boolean;
-  /** Wall-clock budget for this one call, counted from when driveLoop arms it. Omit for no limit. */
   maxDuration?: MaxDuration;
 };
 

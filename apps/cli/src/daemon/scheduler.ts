@@ -46,7 +46,6 @@ export type ScheduledRunInput = {
   maxDuration?: MaxDuration;
 };
 
-/** `timedOut` is set only by a run that ended `done: timed-out`; it then also carries `error`. */
 export type ScheduledRunResult = { response?: string; error?: string; timedOut?: true };
 
 export type RunScheduled = (input: ScheduledRunInput) => Promise<ScheduledRunResult>;

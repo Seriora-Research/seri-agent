@@ -149,7 +149,6 @@ export function createRunScheduled(opts: {
   };
 }
 
-/** The limit outranks an error latched earlier: that error was mid-run, the limit is how the run ended. */
 export function scheduledRunResult(run: {
   doneReason: DriveLoopResult["doneReason"];
   response: string;

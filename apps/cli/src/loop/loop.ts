@@ -105,7 +105,6 @@ export type LoopEvent =
   | { type: "tool-allowed"; name: string }
   | { type: "compaction-held"; reason: "yield-low"; message: string }
   | { type: "message-trimmed"; trims: readonly MessageTrim[] }
-  // A StopReason is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
       reason:
@@ -132,7 +131,6 @@ export type ApprovalPrompt = (
   detail?: ApprovalDetail,
 ) => Promise<ApprovalAnswer>;
 
-// The row is persisted, so a resumed model reads which cause cut its call off.
 const CANCELLED_ROW: Record<StopReason, (subject: string) => string> = {
   aborted: (subject) => `Tool "${subject}" was cancelled by the user before it completed.`,
   "timed-out": (subject) =>
@@ -1097,7 +1095,7 @@ export async function* runLoop(opts: {
     appendMessage({ role: "tool", content: toolResults });
     yield messagesUpdated();
 
-    if (unanswered.length > 0) {
+    if (unanswered.length > 0 || opts.signal?.aborted) {
       yield { type: "done", reason: stopReasonOf(opts.signal) };
       return;
     }

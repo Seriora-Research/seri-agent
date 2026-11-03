@@ -981,7 +981,6 @@ describe("runLoop", () => {
         jest.advanceTimersByTime(60_000);
       }
 
-      // simulateReadableStream waits on setTimeout between chunks, which fake timers never fire.
       function instantStream(chunks: LanguageModelV4StreamPart[]) {
         return {
           stream: new ReadableStream<LanguageModelV4StreamPart>({
@@ -1150,6 +1149,38 @@ describe("runLoop", () => {
           messages: baseMessages,
           permissionMode: "auto",
           maxIterations: 1,
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-result") limitPasses();
+        }
+
+        expect(events.filter((e) => e.type === "done")).toEqual([
+          { type: "done", reason: "timed-out" },
+        ]);
+      });
+
+      test("a limit that passes after a terminal tool answered ends timed-out, not plan-submitted", async () => {
+        const controller = armedController();
+        const model = new MockLanguageModelV4({
+          doStream: [
+            instantStream(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
+          ],
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: {
+            submit_plan: tool({
+              description: "submit a plan",
+              inputSchema: z.object({ title: z.string(), markdown: z.string() }),
+              execute: async () => ({ path: "/tmp/p.md", title: "T", markdown: "# T" }),
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          terminalTools: new Set(["submit_plan"]),
           signal: controller.signal,
         })) {
           events.push(event);
