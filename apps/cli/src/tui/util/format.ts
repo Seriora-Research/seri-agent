@@ -161,6 +161,7 @@ export function formatDoneLine(
       head = "done";
       break;
     case "aborted":
+    case "timed-out":
     case "max-iterations":
     case "repeated-denials":
     case "destructive-denied":

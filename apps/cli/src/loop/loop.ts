@@ -73,6 +73,7 @@ import {
   snapshotOf,
   windowOf,
 } from "./conversation";
+import { type StopReason, stopReasonOf } from "./timeLimit";
 
 export { DEFAULT_PRESERVE_RECENT_TOKENS } from "./compaction";
 
@@ -104,13 +105,13 @@ export type LoopEvent =
   | { type: "tool-allowed"; name: string }
   | { type: "compaction-held"; reason: "yield-low"; message: string }
   | { type: "message-trimmed"; trims: readonly MessageTrim[] }
-  // "aborted" is a `done` reason, not `error`, so printers do not send AbortError to stderr.
+  // A StopReason is a `done` reason, not `error`, so printers do not send AbortError to stderr.
   | {
       type: "done";
       reason:
         | "no-tool-call"
         | "max-iterations"
-        | "aborted"
+        | StopReason
         | "repeated-denials"
         | "destructive-denied"
         | "plan-submitted";
@@ -130,6 +131,13 @@ export type ApprovalPrompt = (
   signal?: AbortSignal,
   detail?: ApprovalDetail,
 ) => Promise<ApprovalAnswer>;
+
+// The row is persisted, so a resumed model reads which cause cut its call off.
+const CANCELLED_ROW: Record<StopReason, (subject: string) => string> = {
+  aborted: (subject) => `Tool "${subject}" was cancelled by the user before it completed.`,
+  "timed-out": (subject) =>
+    `Tool "${subject}" was cancelled because the run reached its time limit before it completed.`,
+};
 
 const DEFAULT_MAX_ITERATIONS = 500;
 const MAX_CONSECUTIVE_DENIALS = 3;
@@ -534,7 +542,7 @@ export async function* runLoop(opts: {
       return "ok";
     } catch (err) {
       if (opts.signal?.aborted) {
-        yield { type: "done", reason: "aborted" };
+        yield { type: "done", reason: stopReasonOf(opts.signal) };
         return "aborted";
       }
       yield { type: "error", error: errorText(err) };
@@ -553,7 +561,7 @@ export async function* runLoop(opts: {
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     if (opts.signal?.aborted) {
-      yield { type: "done", reason: "aborted" };
+      yield { type: "done", reason: stopReasonOf(opts.signal) };
       return;
     }
 
@@ -721,7 +729,7 @@ export async function* runLoop(opts: {
       } catch (err) {
         // On cancel, ai@7.0.48 fullStream yields `abort` and closes; `await result.usage` rejects with AbortError.
         if (opts.signal?.aborted) {
-          yield { type: "done", reason: "aborted" };
+          yield { type: "done", reason: stopReasonOf(opts.signal) };
           return;
         }
         if (!overflowRetried && isContextOverflowError(err)) {
@@ -1081,7 +1089,7 @@ export async function* runLoop(opts: {
       toolResults.push(
         recordToolResult(call, {
           type: "execution-denied",
-          reason: `Tool "${subject}" was cancelled by the user before it completed.`,
+          reason: CANCELLED_ROW[stopReasonOf(opts.signal)](subject),
         }),
       );
     }
@@ -1090,7 +1098,7 @@ export async function* runLoop(opts: {
     yield messagesUpdated();
 
     if (unanswered.length > 0) {
-      yield { type: "done", reason: "aborted" };
+      yield { type: "done", reason: stopReasonOf(opts.signal) };
       return;
     }
 
@@ -1116,5 +1124,8 @@ export async function* runLoop(opts: {
     }
   }
 
-  yield { type: "done", reason: "max-iterations" };
+  yield {
+    type: "done",
+    reason: opts.signal?.aborted ? stopReasonOf(opts.signal) : "max-iterations",
+  };
 }

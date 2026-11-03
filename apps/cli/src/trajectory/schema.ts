@@ -1,4 +1,5 @@
 import type { LanguageModelUsage } from "ai";
+import type { StopReason } from "../loop/timeLimit";
 import type { CostReport } from "../provider/cost";
 import type { SamplingRecord } from "../provider/sampling";
 import type { CheckOutcome } from "../verify/outcome";
@@ -56,7 +57,7 @@ export type TrajectoryKind =
       reason:
         | "no-tool-call"
         | "max-iterations"
-        | "aborted"
+        | StopReason
         | "repeated-denials"
         | "destructive-denied"
         | "plan-submitted";

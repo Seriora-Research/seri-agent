@@ -19,7 +19,7 @@ afterEach(() => {
 
 describe("parseMaxDuration", () => {
   test.each(["1", "60", "2147483"])("argv %p parses to that many seconds", (raw) => {
-    expect(parseMaxDuration(raw)).toBe(Number(raw));
+    expect<unknown>(parseMaxDuration(raw)).toBe(Number(raw));
   });
 
   test.each(["0", "abc", "1.5", "-1", "01", " 60", "1e3", "2147484", ""])(
@@ -32,7 +32,7 @@ describe("parseMaxDuration", () => {
   );
 
   test("a wire number in range parses", () => {
-    expect(parseMaxDuration(900)).toBe(900);
+    expect<unknown>(parseMaxDuration(900)).toBe(900);
   });
 
   test.each([0, 1.5, -1, 2147484, Number.NaN, Number.POSITIVE_INFINITY])(

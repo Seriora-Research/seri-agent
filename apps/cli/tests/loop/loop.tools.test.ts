@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ import type { ToolCallClassifier } from "../../src/gate/classifier";
 import { createHookRunner } from "../../src/hooks/gate";
 import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
 import { type ApprovalAnswer, type LoopEvent, runLoop } from "../../src/loop/loop";
+import { armTimeLimit, type MaxDuration, parseMaxDuration } from "../../src/loop/timeLimit";
 import { MCP_TOOL_NAME, mcpCallSubject } from "../../src/mcp/tool";
 import { toolDefinitions } from "../../src/provider/tools";
 import { isBashAvailable } from "../../src/tools/bash";
@@ -953,6 +954,387 @@ describe("runLoop", () => {
       expect(after).toEqual([]);
       expect(phase).toEqual([]);
       expect(events.at(-1)).toEqual({ type: "done", reason: "aborted" });
+    });
+
+    describe("time limit", () => {
+      const TIME_LIMIT_ROW = (subject: string) =>
+        `Tool "${subject}" was cancelled because the run reached its time limit before it completed.`;
+
+      function seconds(n: number): MaxDuration {
+        const parsed = parseMaxDuration(n);
+        if (typeof parsed === "object") throw new Error(parsed.error);
+        return parsed;
+      }
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      function armedController(): AbortController {
+        jest.useFakeTimers();
+        const controller = new AbortController();
+        armTimeLimit(controller, seconds(60));
+        return controller;
+      }
+
+      function limitPasses(): void {
+        jest.advanceTimersByTime(60_000);
+      }
+
+      // simulateReadableStream waits on setTimeout between chunks, which fake timers never fire.
+      function instantStream(chunks: LanguageModelV4StreamPart[]) {
+        return {
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
+            start(stream) {
+              for (const chunk of chunks) stream.enqueue(chunk);
+              stream.close();
+            },
+          }),
+        };
+      }
+
+      function waitsForAbort(started: string[]): ToolSet {
+        return {
+          write_file: tool({
+            description: "write a file",
+            inputSchema: z.object({ path: z.string() }),
+            execute: async (input: { path: string }, options) => {
+              started.push(input.path);
+              return await new Promise<string>((_resolve, reject) => {
+                const cancel = (): void => reject(new Error("cancelled"));
+                options.abortSignal?.addEventListener("abort", cancel, { once: true });
+                if (options.abortSignal?.aborted === true) cancel();
+              });
+            },
+          }),
+        };
+      }
+
+      test("a limit that passes mid-stream ends done: timed-out with no error", async () => {
+        const controller = armedController();
+        const model = new MockLanguageModelV4({
+          doStream: async (options) => ({
+            stream: new ReadableStream<LanguageModelV4StreamPart>({
+              start(stream) {
+                stream.enqueue({ type: "text-start", id: "1" });
+                stream.enqueue({ type: "text-delta", id: "1", delta: "half a " });
+                options.abortSignal?.addEventListener(
+                  "abort",
+                  () => stream.error(options.abortSignal?.reason),
+                  { once: true },
+                );
+              },
+            }),
+          }),
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "text-delta") limitPasses();
+        }
+
+        expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+        expect(events.find((e) => e.type === "error")).toBeUndefined();
+        expect(events.find((e) => e.type === "messages-updated")).toBeUndefined();
+      });
+
+      test("a limit that passes during a tool call closes every call with a time-limit row", async () => {
+        const controller = armedController();
+        const started: string[] = [];
+        const model = new MockLanguageModelV4({ doStream: [instantStream(twoToolCalls())] });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: waitsForAbort(started),
+          messages: baseMessages,
+          permissionMode: "auto",
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-call") limitPasses();
+        }
+
+        expect(started).toEqual(["a.txt"]);
+        expect(toolRowOf(events).outputs).toEqual([
+          { type: "execution-denied", reason: TIME_LIMIT_ROW("write_file") },
+          { type: "execution-denied", reason: TIME_LIMIT_ROW("write_file") },
+        ]);
+        expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+      });
+
+      test("a limit that passes after a completed tool phase opens no further model call", async () => {
+        const controller = armedController();
+        const model = new MockLanguageModelV4({
+          doStream: [
+            instantStream(toolCallChunks("call-1", "write_file", { path: "a.txt" })),
+            instantStream(textOnlyChunks("Done")),
+          ],
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-result") limitPasses();
+        }
+
+        expect(model.doStreamCalls).toHaveLength(1);
+        expect(toolRowOf(events).outputs.map((output) => output.type)).toEqual(["json"]);
+        expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+      });
+
+      test("a limit that passes during compaction ends timed-out instead of starting another turn", async () => {
+        const controller = armedController();
+        const totalIterations = 25;
+        const compactAtIteration = 11;
+        const model = new MockLanguageModelV4({
+          doStream: Array.from({ length: totalIterations }, (_, i) =>
+            instantStream(
+              toolCallChunks(
+                `call-${i}`,
+                "write_file",
+                { path: "a.txt" },
+                usage(i === compactAtIteration ? 6000 : 100, 10),
+              ),
+            ),
+          ),
+          doGenerate: async () => {
+            limitPasses();
+            throw new Error("The operation was aborted.");
+          },
+        });
+
+        const events = await collect(
+          runLoop({
+            model,
+            tools: makeTools(async () => "ok"),
+            messages: baseMessages,
+            permissionMode: "auto",
+            maxIterations: totalIterations,
+            contextWindowSize: 10_000,
+            compactionThreshold: 0.5,
+            preserveRecentTokens: 80,
+            signal: controller.signal,
+          }),
+        );
+
+        expect(model.doGenerateCalls).toHaveLength(1);
+        expect(model.doStreamCalls).toHaveLength(compactAtIteration + 1);
+        expect(events.find((e) => e.type === "error")).toBeUndefined();
+        expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+      });
+
+      test("a limit that passes after the last allowed turn's tools answered ends timed-out, not max-iterations", async () => {
+        const controller = armedController();
+        const model = new MockLanguageModelV4({
+          doStream: [instantStream(toolCallChunks("call-1", "write_file", { path: "a.txt" }))],
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: 1,
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-result") limitPasses();
+        }
+
+        expect(events.filter((e) => e.type === "done")).toEqual([
+          { type: "done", reason: "timed-out" },
+        ]);
+      });
+
+      test("a user cancel after the last allowed turn's tools answered ends aborted, not max-iterations", async () => {
+        const controller = new AbortController();
+        const model = new MockLanguageModelV4({
+          doStream: [streamResult(toolCallChunks("call-1", "write_file", { path: "a.txt" }))],
+        });
+
+        const events: LoopEvent[] = [];
+        for await (const event of runLoop({
+          model,
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "auto",
+          maxIterations: 1,
+          signal: controller.signal,
+        })) {
+          events.push(event);
+          if (event.type === "tool-result") controller.abort();
+        }
+
+        expect(events.filter((e) => e.type === "done")).toEqual([
+          { type: "done", reason: "aborted" },
+        ]);
+      });
+
+      type Terminal = Exclude<
+        Extract<LoopEvent, { type: "done" }>["reason"],
+        "aborted" | "timed-out" | "max-iterations"
+      >;
+      const terminals: Record<Terminal, () => Omit<Parameters<typeof runLoop>[0], "signal">> = {
+        "no-tool-call": () => ({
+          model: new MockLanguageModelV4({ doStream: [instantStream(textOnlyChunks("Done"))] }),
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+        "plan-submitted": () => ({
+          model: new MockLanguageModelV4({
+            doStream: [
+              instantStream(toolCallChunks("c1", "submit_plan", { title: "T", markdown: "# T" })),
+            ],
+          }),
+          tools: {
+            submit_plan: tool({
+              description: "submit a plan",
+              inputSchema: z.object({ title: z.string(), markdown: z.string() }),
+              execute: async () => ({ path: "/tmp/p.md", title: "T", markdown: "# T" }),
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          terminalTools: new Set(["submit_plan"]),
+        }),
+        "destructive-denied": () => ({
+          model: new MockLanguageModelV4({
+            doStream: [
+              instantStream(
+                toolCallChunks("call-1", "powershell", {
+                  command: 'Remove-Item "E:\\SS" -Recurse -Force',
+                }),
+              ),
+            ],
+          }),
+          tools: {
+            powershell: tool({
+              description: "run powershell",
+              inputSchema: z.object({ command: z.string() }),
+              execute: async () => "ok",
+            }),
+          },
+          messages: baseMessages,
+          permissionMode: "auto",
+          cwd: "/tmp/project",
+          classifyToolCall: () => ({
+            kind: "block",
+            reason: "This path is protected from removal.",
+          }),
+        }),
+        "repeated-denials": () => ({
+          model: new MockLanguageModelV4({
+            doStream: Array.from({ length: 3 }, (_, i) =>
+              instantStream(toolCallChunks(`call-${i}`, "write_file", { path: "a.txt" })),
+            ),
+          }),
+          tools: makeTools(async () => "ok"),
+          messages: baseMessages,
+          permissionMode: "approve-each",
+          approvalPrompt: async () => "no",
+        }),
+        "model-refusal": () => ({
+          model: new MockLanguageModelV4({
+            doStream: [
+              instantStream([
+                {
+                  type: "finish",
+                  finishReason: { unified: "stop", raw: undefined },
+                  usage: usage(5, 5),
+                  providerMetadata: { seri: { modelRefusal: "I can't help with that." } },
+                },
+              ]),
+            ],
+          }),
+          tools: {},
+          messages: baseMessages,
+          permissionMode: "auto",
+        }),
+      };
+
+      for (const [reason, scenario] of Object.entries(terminals)) {
+        test(`an already-yielded ${reason} keeps its reason when the limit passes after it`, async () => {
+          const controller = armedController();
+          const events: LoopEvent[] = [];
+          for await (const event of runLoop({ ...scenario(), signal: controller.signal })) {
+            events.push(event);
+            if (event.type === "done") limitPasses();
+          }
+
+          expect(controller.signal.aborted).toBe(true);
+          expect(
+            events
+              .filter((e): e is Extract<LoopEvent, { type: "done" }> => e.type === "done")
+              .map((e): string => e.reason),
+          ).toEqual([reason]);
+        });
+      }
+
+      test.skipIf(!isBashAvailable() || process.platform === "win32")(
+        "a limit kills a running bash command and records the limit as the cause",
+        async () => {
+          const controller = new AbortController();
+          const disarm = armTimeLimit(controller, seconds(1));
+          const model = new MockLanguageModelV4({
+            doStream: async () =>
+              streamResult([
+                {
+                  type: "tool-call",
+                  toolCallId: "call-1",
+                  toolName: "bash",
+                  input: JSON.stringify({ command: "sleep 30" }),
+                },
+                {
+                  type: "finish",
+                  finishReason: { unified: "tool-calls", raw: undefined },
+                  usage: usage(5, 5),
+                },
+              ]),
+          });
+
+          const started = Date.now();
+          const events: LoopEvent[] = [];
+          try {
+            for await (const event of runLoop({
+              model,
+              tools: { bash: toolDefinitions.bash },
+              messages: baseMessages,
+              permissionMode: "auto",
+              signal: controller.signal,
+            })) {
+              events.push(event);
+            }
+          } finally {
+            disarm();
+          }
+          const elapsed = Date.now() - started;
+
+          expect(elapsed).toBeGreaterThanOrEqual(900);
+          expect(elapsed).toBeLessThan(10_000);
+          expect(events.find((e) => e.type === "tool-result")).toBeUndefined();
+          expect(toolRowOf(events).outputs).toEqual([
+            { type: "execution-denied", reason: TIME_LIMIT_ROW("bash") },
+          ]);
+          expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
+        },
+        60_000,
+      );
     });
   });
 
