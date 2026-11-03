@@ -69,6 +69,7 @@ function restoreSessionStore(sessionsDir: string): void {
 
 const CLI = pathToFileURL(join(import.meta.dir, "../../src/cli.ts")).href;
 const SESSION_MODULE = pathToFileURL(join(import.meta.dir, "../../src/session/session.ts")).href;
+const TIME_LIMIT_MODULE = pathToFileURL(join(import.meta.dir, "../../src/loop/timeLimit.ts")).href;
 
 // isTTY must come from a real pty; a fake true does not prove raw-mode input.
 function childScriptCancel(dir: string): string {
@@ -821,6 +822,32 @@ function childScriptQuitMidTurn(dir: string): string {
     `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
     `});`,
     `console.log("\\nEXIT_CODE " + code);`,
+  ].join("\n");
+}
+
+function childScriptTimeLimit(dir: string): string {
+  return [
+    `process.env.HOME = ${JSON.stringify(dir)};`,
+    `process.env.GROQ_API_KEY = "fake-test-key";`,
+    `const cli = await import(${JSON.stringify(CLI)});`,
+    `const { stopReasonOf } = await import(${JSON.stringify(TIME_LIMIT_MODULE)});`,
+    `let calls = 0;`,
+    `async function* runLoopFake(opts) {`,
+    `  calls++;`,
+    `  await new Promise((resolve) => opts.signal.addEventListener("abort", resolve, { once: true }));`,
+    `  console.log("\\nRUNLOOP_STOPPED " + calls + " " + stopReasonOf(opts.signal));`,
+    `  yield { type: "done", reason: stopReasonOf(opts.signal) };`,
+    `  return opts.messages;`,
+    `}`,
+    `await cli.run(["--max-duration", "1", "do", "a", "task"], {`,
+    `  runLoop: runLoopFake,`,
+    `  getGroqModel: () => ({}),`,
+    `  loadAgentsFile: () => "",`,
+    `  isTTY: process.stdout.isTTY,`,
+    `  sessionsDir: ${JSON.stringify(join(dir, "sessions"))},`,
+    `  checkpointsDir: ${JSON.stringify(join(dir, "checkpoints"))},`,
+    `  permissionsDir: ${JSON.stringify(join(dir, "config"))},`,
+    `});`,
   ].join("\n");
 }
 
@@ -1974,6 +2001,25 @@ describe.skipIf(process.platform === "win32")("the Ink TUI on a real terminal", 
 
       await sawLine("RUNLOOP_DONE 2");
       expect(existsSync(join(dir, ".seri", "config.json"))).toBe(false);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("--max-duration cuts off each task on its own budget and the TUI stays open for the next", async () => {
+    const scriptPath = join(dir, "child-time-limit.mjs");
+    writeFileSync(scriptPath, childScriptTimeLimit(dir));
+
+    const { child, sawLine } = await startChild(scriptPath, dir);
+    try {
+      await sawLine("RUNLOOP_STOPPED 1 timed-out");
+      await sawLine("done: timed-out");
+
+      child.stdin?.write("a second task");
+      await sawLine("a second task");
+      child.stdin?.write("\r");
+
+      await sawLine("RUNLOOP_STOPPED 2 timed-out");
     } finally {
       child.kill("SIGKILL");
     }

@@ -366,6 +366,60 @@ describe("run (argv and usage errors)", () => {
     expect(capture()).toBeUndefined();
   });
 
+  test("`--max-duration 900` is accepted and is not part of the task", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--max-duration", "900", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "do a task" });
+  });
+
+  test.each(["0", "abc", "1.5", "2147484"])(
+    "`--max-duration %s` is a usage error",
+    async (value) => {
+      const { fake, capture } = fakeRunLoop();
+      const errors: string[] = [];
+      const originalError = console.error;
+      console.error = (msg: string) => errors.push(String(msg));
+      let code: number;
+      try {
+        code = await run(["--max-duration", value, "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        });
+      } finally {
+        console.error = originalError;
+      }
+
+      expect(code).toBe(2);
+      expect(capture()).toBeUndefined();
+      expect(errors[0]).toBe(
+        `Invalid --max-duration value: ${value} (must be a whole number of seconds from 1 to 2147483)`,
+      );
+    },
+  );
+
+  test("`--max-duration` with no value is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--max-duration"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+  });
+
   test("flags but no task is a usage error", async () => {
     const { fake, capture } = fakeRunLoop();
 

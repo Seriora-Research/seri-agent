@@ -45,6 +45,7 @@ import {
 } from "../../src/session/session";
 import { COMPACT_HISTORY_PREFIX } from "../../src/loop/compaction";
 import { createConversation, windowOf } from "../../src/loop/conversation";
+import { stopReasonOf } from "../../src/loop/timeLimit";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
 import {
   createTrajectoryWriter,
@@ -2703,6 +2704,37 @@ describe("run (task invocation)", () => {
     ) as { reason: string };
     expect(done.reason).toBe("aborted");
   });
+
+  test("a --max-duration run that keeps working stops at its limit, records timed-out, and exits 1", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+    async function* keepsWorking(opts: RunLoopOpts): AsyncGenerator<LoopEvent> {
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done", reason: stopReasonOf(opts.signal) };
+    }
+
+    const { code, logs } = await captureLogs(() =>
+      run(["--max-duration", "1", "do", "a", "task"], {
+        runLoop: keepsWorking,
+        loadAgentsFile: () => "",
+        loadExtensions: () => ({
+          skills: new Map(),
+          rules: new Map(),
+          hooks: { registry: new Map() },
+        }),
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(1);
+    expect(logs).toContain("\n(done: timed-out)");
+    expect(logs).toContain("The run reached its --max-duration limit, so it stopped.");
+    const done = trajectoryLines(latestSessionId()).find(
+      (line) => (line as { kind?: string }).kind === "done",
+    ) as { reason: string };
+    expect(done.reason).toBe("timed-out");
+  }, 10_000);
 
   test("child token spend is recorded as usage source child", async () => {
     process.env.GROQ_API_KEY = "fake-test-key";
