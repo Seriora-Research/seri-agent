@@ -52,6 +52,7 @@ function insertSchedule(database: SessionDatabase, id = "sched"): void {
     nextRunAtMs: NOW_MS,
     enabled: 1,
     createdAt: new Date(NOW_MS).toISOString(),
+    maxDurationSeconds: null,
   });
 }
 
@@ -285,7 +286,7 @@ describe("SessionDatabase.pruneDaemonRetention", () => {
     }
     const reopened = new SessionDatabase(configDir);
     try {
-      expect(reopened.getPragmas().userVersion).toBe(7);
+      expect(reopened.getPragmas().userVersion).toBe(8);
       expect(reopened.loadSession("gone")).toBeUndefined();
     } finally {
       reopened.close();

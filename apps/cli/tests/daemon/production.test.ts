@@ -15,7 +15,8 @@ import { resetCatalogCache } from "@seri/model-catalog";
 import { MockLanguageModelV4 } from "ai/test";
 import { MEMORIES_DIRNAME, profileDir } from "../../src/config/paths";
 import { startDaemon } from "../../src/daemon/server";
-import type { runLoop } from "../../src/loop/loop";
+import type { LoopEvent, runLoop } from "../../src/loop/loop";
+import { stopReasonOf } from "../../src/loop/timeLimit";
 import * as mcpClient from "../../src/mcp/client";
 import { serverIdentity, writeCatalogCache } from "../../src/mcp/registry";
 import { permissionsPath } from "../../src/permissions/store";
@@ -170,6 +171,54 @@ describe("production daemon wiring", () => {
     const runs = (await client.scheduleRuns(created.id)) as { runs: { response: string }[] };
     expect(runs.runs[0]?.response).toBe("ok");
   });
+
+  test("a scheduled fire that keeps working stops at its maxDurationSeconds and records timed-out", async () => {
+    const configDir = makeDir();
+    process.env.HOME = configDir;
+    async function* keepsWorking(opts: RunLoopOpts): AsyncGenerator<LoopEvent> {
+      yield { type: "text-delta", text: "partial" };
+      await new Promise<void>((resolve) => {
+        opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done", reason: stopReasonOf(opts.signal) };
+    }
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    const daemon = await startDaemon({
+      configDir,
+      idleMs: 0,
+      now: () => now,
+      tickMs: 60_000,
+      executeTurn: async (input) => {
+        input.emitLoop({ type: "done", reason: "no-tool-call" });
+        return { exitCode: 0 };
+      },
+      deps: {
+        runLoop: keepsWorking,
+        getGroqModel: () =>
+          new MockLanguageModelV4({
+            doStream: async () => streamResult(textOnlyChunks("ok")),
+          }),
+        loadAgentsFile: () => "",
+      },
+    });
+    stop = daemon.stop;
+    const client = new DaemonClient({ endpoint: daemon.endpoint, token: daemon.token });
+    const created = (await client.createSchedule({
+      task: "report",
+      cwd: makeDir(),
+      timing: { kind: "once", at: "2026-01-01T00:00:00.000Z" },
+      allowModelReads: true,
+      maxDurationSeconds: 1,
+    })) as { id: string; maxDurationSeconds: number };
+    expect(created.maxDurationSeconds).toBe(1);
+    await daemon.scheduler.tick();
+    const runs = (await client.scheduleRuns(created.id)) as {
+      runs: { status: string; response: string | null; error: string | null }[];
+    };
+    expect(runs.runs).toMatchObject([
+      { status: "timed-out", response: "partial", error: "timed out after 1 seconds" },
+    ]);
+  }, 10_000);
 
   test("default runScheduled loads AGENTS.md and USER.md edited after create", async () => {
     const configDir = makeDir();

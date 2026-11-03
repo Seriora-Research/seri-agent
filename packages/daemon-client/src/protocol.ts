@@ -90,6 +90,8 @@ export type ScheduleRequest = {
   cwd: string;
   timing: ScheduleTiming;
   allowModelReads: true;
+  /** Wall-clock limit for each fire, in whole seconds from 1 to 2147483. Omit for no limit. */
+  maxDurationSeconds?: number;
 };
 
 export function isDaemonEnvelope(value: unknown): value is DaemonEvent {

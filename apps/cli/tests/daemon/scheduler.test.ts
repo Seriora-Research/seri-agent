@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DaemonClient, type ScheduleTiming } from "@seri/daemon-client";
+import { scheduledRunResult } from "../../src/daemon/scheduled";
 import {
   assertScheduledToolset,
   parseScheduleRequest,
@@ -11,6 +12,7 @@ import {
   Scheduler,
 } from "../../src/daemon/scheduler";
 import { startDaemon } from "../../src/daemon/server";
+import { parseMaxDuration } from "../../src/loop/timeLimit";
 import { createScheduledToolDefinitions, createToolDefinitions } from "../../src/provider/tools";
 import { SessionDatabase } from "../../src/session/database";
 import { withTodo } from "../../src/todo/tool";
@@ -177,6 +179,67 @@ describe("schedule validation", () => {
         allowModelReads: true,
       }),
     ).toThrow(/explicit offset/);
+  });
+
+  const intervalRequest = {
+    task: "x",
+    cwd: "/tmp",
+    timing: { kind: "interval", everySeconds: 60 },
+    allowModelReads: true,
+  };
+
+  test("maxDurationSeconds is optional, and a whole number of seconds when present", () => {
+    expect(parseScheduleRequest(intervalRequest)).toMatchObject({ maxDurationSeconds: null });
+    expect(parseScheduleRequest({ ...intervalRequest, maxDurationSeconds: 900 })).toMatchObject({
+      maxDurationSeconds: 900,
+    });
+  });
+
+  test.each([0, -1, 1.5, 2147484, "900", null])("rejects maxDurationSeconds %p", (value) => {
+    expect(() => parseScheduleRequest({ ...intervalRequest, maxDurationSeconds: value })).toThrow(
+      "maxDurationSeconds must be a whole number of seconds from 1 to 2147483",
+    );
+  });
+});
+
+describe("scheduledRunResult", () => {
+  const limit = parseMaxDuration(900);
+  if (typeof limit === "object") throw new Error(limit.error);
+
+  test("a timed-out run keeps its partial response and reports the limit, even after an earlier error", () => {
+    expect(
+      scheduledRunResult({
+        doneReason: "timed-out",
+        response: "partial",
+        latchedError: "rg failed",
+        maxDuration: limit,
+      }),
+    ).toEqual({ response: "partial", error: "timed out after 900 seconds", timedOut: true });
+  });
+
+  test.each(["no-tool-call", "max-iterations"] as const)(
+    "a run that ended %s under a limit returns its response",
+    (doneReason) => {
+      expect(
+        scheduledRunResult({
+          doneReason,
+          response: "report",
+          latchedError: undefined,
+          maxDuration: limit,
+        }),
+      ).toEqual({ response: "report" });
+    },
+  );
+
+  test("a run that latched an error and did not time out returns the error", () => {
+    expect(
+      scheduledRunResult({
+        doneReason: "no-tool-call",
+        response: "partial",
+        latchedError: "model down",
+        maxDuration: undefined,
+      }),
+    ).toEqual({ error: "model down" });
   });
 });
 
@@ -516,6 +579,74 @@ describe("Scheduler", () => {
     expect(database.loadSession(runs[0]!.sessionId)?.id).toBe(runs[0]!.sessionId);
   });
 
+  test("a schedule's maxDurationSeconds is stored and handed to each of its fires", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = 60_000;
+    const limits = new Map<string, number | undefined>();
+    const scheduler = new Scheduler(
+      database,
+      async (input) => {
+        limits.set(input.scheduleId, input.maxDuration);
+        return { response: "ok" };
+      },
+      () => now,
+    );
+    const once = { kind: "once", at: "1970-01-01T00:01:00.000Z" } as const;
+    const limited = scheduler.create({
+      task: "limited",
+      cwd: configDir,
+      timing: once,
+      allowModelReads: true,
+      maxDurationSeconds: 900,
+    });
+    const unlimited = scheduler.create({
+      task: "unlimited",
+      cwd: configDir,
+      timing: once,
+      allowModelReads: true,
+    });
+    expect(limited).toMatchObject({ maxDurationSeconds: 900 });
+    expect(unlimited).toMatchObject({ maxDurationSeconds: null });
+    expect(openDatabase(configDir).getSchedule(limited.id)).toMatchObject({
+      maxDurationSeconds: 900,
+    });
+    await scheduler.tick();
+    expect(limits.get(limited.id)).toBe(900);
+    expect(limits.has(unlimited.id)).toBe(true);
+    expect(limits.get(unlimited.id)).toBeUndefined();
+  });
+
+  test("a fire that reached its time limit records timed-out with its partial response", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    const now = 65_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({
+        response: "partial",
+        error: "timed out after 900 seconds",
+        timedOut: true,
+      }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "once",
+      cwd: configDir,
+      timing: { kind: "once", at: "1970-01-01T00:01:05.000Z" },
+      allowModelReads: true,
+      maxDurationSeconds: 900,
+    });
+    await scheduler.tick();
+    expect(database.listScheduleRuns(created.id)).toMatchObject([
+      { status: "timed-out", response: "partial", error: "timed out after 900 seconds" },
+    ]);
+    expect(database.getSchedule(created.id)).toMatchObject({
+      enabled: false,
+      consecutiveFailures: 1,
+    });
+  });
+
   test("a tick drops stale scheduled sessions and keeps the schedule row", async () => {
     const configDir = makeDir();
     const database = openDatabase(configDir);
@@ -817,6 +948,43 @@ describe("scheduled consecutive failures", () => {
     await scheduler.tick();
     await scheduler.tick();
     expect(fires).toBe(3);
+  });
+
+  test("timed-out fires back off and pause the same as errors", async () => {
+    const configDir = makeDir();
+    const database = openDatabase(configDir);
+    let now = 150_000;
+    const scheduler = new Scheduler(
+      database,
+      async () => ({ response: "partial", error: "timed out after 900 seconds", timedOut: true }),
+      () => now,
+    );
+    const created = scheduler.create({
+      task: "slow report",
+      cwd: configDir,
+      timing: { kind: "interval", everySeconds: 60 },
+      allowModelReads: true,
+      maxDurationSeconds: 900,
+    });
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(database.getSchedule(created.id)?.nextRunAtMs).toBe(now + 60_000);
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(database.getSchedule(created.id)?.nextRunAtMs).toBe(now + 120_000);
+    now = database.getSchedule(created.id)!.nextRunAtMs!;
+    await scheduler.tick();
+    expect(database.getSchedule(created.id)).toMatchObject({
+      enabled: false,
+      nextRunAtMs: null,
+      pauseReason: "timed out after 900 seconds",
+      consecutiveFailures: 3,
+    });
+    expect(database.listScheduleRuns(created.id).map((row) => row.status)).toEqual([
+      "timed-out",
+      "timed-out",
+      "paused",
+    ]);
   });
 
   test("a later success resets the consecutive failure count before pause", async () => {

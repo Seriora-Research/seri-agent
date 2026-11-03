@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ScheduleRequest, ScheduleTiming } from "@seri/daemon-client";
 import { DEFAULT_TRAJECTORY_RETENTION_DAYS } from "../config/config";
+import { type MaxDuration, parseMaxDuration } from "../loop/timeLimit";
 import {
   createScheduledToolDefinitions,
   DISPATCH_TOOL_NAME,
@@ -42,11 +43,17 @@ export type ScheduledRunInput = {
   session: SessionState;
   tools: ReturnType<typeof createScheduledToolDefinitions>;
   policy: Extract<RunPolicy, { origin: "scheduled" }>;
+  maxDuration?: MaxDuration;
 };
 
-export type RunScheduled = (
-  input: ScheduledRunInput,
-) => Promise<{ response?: string; error?: string }>;
+/** `timedOut` is set only by a run that ended `done: timed-out`; it then also carries `error`. */
+export type ScheduledRunResult = { response?: string; error?: string; timedOut?: true };
+
+export type RunScheduled = (input: ScheduledRunInput) => Promise<ScheduledRunResult>;
+
+export type ParsedScheduleRequest = Omit<ScheduleRequest, "maxDurationSeconds"> & {
+  maxDurationSeconds: MaxDuration | null;
+};
 
 export function scheduledRunPolicy(): Extract<RunPolicy, { origin: "scheduled" }> {
   return {
@@ -80,7 +87,7 @@ export function assertScheduledToolset(
   }
 }
 
-export function parseScheduleRequest(body: unknown): ScheduleRequest {
+export function parseScheduleRequest(body: unknown): ParsedScheduleRequest {
   if (typeof body !== "object" || body === null) {
     throw new ScheduleValidationError("invalid schedule request");
   }
@@ -103,7 +110,17 @@ export function parseScheduleRequest(body: unknown): ScheduleRequest {
     cwd: record.cwd,
     timing,
     allowModelReads: true,
+    maxDurationSeconds: parseScheduleMaxDuration(record.maxDurationSeconds),
   };
+}
+
+function parseScheduleMaxDuration(value: unknown): MaxDuration | null {
+  if (value === undefined) return null;
+  const parsed = parseMaxDuration(typeof value === "number" ? value : Number.NaN);
+  if (typeof parsed === "object") {
+    throw new ScheduleValidationError(`maxDurationSeconds ${parsed.error}`);
+  }
+  return parsed;
 }
 
 function parseTiming(value: unknown): ScheduleTiming {
@@ -178,6 +195,7 @@ export class Scheduler {
       nextRunAtMs,
       enabled: 1,
       createdAt: new Date(now).toISOString(),
+      maxDurationSeconds: parsed.maxDurationSeconds,
     });
     return this.database.getSchedule(id)!;
   }
@@ -259,9 +277,10 @@ export class Scheduler {
         session,
         tools,
         policy,
+        maxDuration: schedule.maxDurationSeconds ?? undefined,
       });
       commit(
-        result.error === undefined ? "complete" : "error",
+        result.timedOut === true ? "timed-out" : result.error === undefined ? "complete" : "error",
         result.response ?? null,
         result.error ?? null,
       );
