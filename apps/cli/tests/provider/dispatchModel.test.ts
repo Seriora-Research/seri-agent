@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { streamText } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import { dispatchModel } from "../../src/provider/model";
 import type { ResolvedRoute } from "../../src/provider/routing";
+import { streamResult, textOnlyChunks } from "../loop/fixtures";
 
 describe("dispatchModel", () => {
   test("a gateway-credential route dispatches through getGatewayModel, never getModel's provider switch", () => {
@@ -12,7 +15,7 @@ describe("dispatchModel", () => {
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
     const calls: Array<{ id: string; provider: string; sessionId: string; configDir: string }> = [];
-    const model = dispatchModel(route, "test-session-id", "/tmp/config", {
+    dispatchModel(route, "test-session-id", "/tmp/config", {
       getGatewayModel: (id, provider, sessionId, configDir) => {
         calls.push({ id, provider, sessionId, configDir });
         return fakeModel;
@@ -21,7 +24,6 @@ describe("dispatchModel", () => {
         throw new Error("should not be called: a gateway route must not reach getModel's switch");
       },
     });
-    expect(model).toBe(fakeModel);
     expect(calls).toEqual([
       {
         id: "groq/shared-model",
@@ -40,13 +42,38 @@ describe("dispatchModel", () => {
       credential: "key",
     };
     const fakeModel = {} as ReturnType<typeof dispatchModel>;
-    const model = dispatchModel(route, "test-session-id", "/tmp/config", {
-      getGroqModel: () => fakeModel,
+    const calls: string[] = [];
+    dispatchModel(route, "test-session-id", "/tmp/config", {
+      getGroqModel: (id) => {
+        calls.push(id);
+        return fakeModel;
+      },
       getGatewayModel: () => {
         throw new Error("should not be called: a non-gateway route must not reach getGatewayModel");
       },
     });
-    expect(model).toBe(fakeModel);
+    expect(calls).toEqual(["some-id"]);
+  });
+
+  test("a dispatched model gives the provider its own abort signal, tied to the caller's", async () => {
+    const provider = new MockLanguageModelV4({
+      doStream: async () => streamResult(textOnlyChunks("hi")),
+    });
+    const model = dispatchModel(
+      { model: "some-id", provider: "groq", rerouted: false, credential: "key" },
+      "test-session-id",
+      "/tmp/config",
+      { getGroqModel: () => provider },
+    );
+    const caller = new AbortController();
+
+    await streamText({ model, prompt: "hi", abortSignal: caller.signal }).text;
+    const received = provider.doStreamCalls[0]?.abortSignal;
+
+    expect(received).toBeDefined();
+    expect(received).not.toBe(caller.signal);
+    caller.abort();
+    expect(received?.aborted).toBe(true);
   });
 });
 
@@ -54,7 +81,7 @@ describe("dispatchModel for a subscription route", () => {
   test("dispatches to the subscription client, never getModel's key switch", () => {
     const calls: string[] = [];
     const fake = {} as ReturnType<typeof dispatchModel>;
-    const model = dispatchModel(
+    dispatchModel(
       {
         model: "grok-4.5",
         provider: "xai",
@@ -73,7 +100,6 @@ describe("dispatchModel for a subscription route", () => {
         },
       },
     );
-    expect(model).toBe(fake);
     expect(calls).toEqual(["grok-4.5"]);
   });
 
@@ -96,7 +122,7 @@ describe("dispatchModel for a subscription route", () => {
   test("an openai subscription route dispatches to the Codex client, never getOpenAIModel", () => {
     const calls: string[] = [];
     const fake = {} as ReturnType<typeof dispatchModel>;
-    const model = dispatchModel(
+    dispatchModel(
       {
         model: "gpt-5.6-terra",
         provider: "openai",
@@ -115,7 +141,6 @@ describe("dispatchModel for a subscription route", () => {
         },
       },
     );
-    expect(model).toBe(fake);
     expect(calls).toEqual(["gpt-5.6-terra"]);
   });
 });

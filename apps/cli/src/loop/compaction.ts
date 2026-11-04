@@ -753,7 +753,11 @@ async function requestSummary(
         streamError = error;
       },
     });
-    const text = await result.text;
+    // When doStream rejects, `ai` rejects `text` with a generic NoOutputGeneratedError and hands
+    // the real error only to onError.
+    const text = await Promise.resolve(result.text).catch((err: unknown) => {
+      throw streamError ?? err;
+    });
     const reasoning = await result.reasoningText;
     const usage = await result.usage;
     return {

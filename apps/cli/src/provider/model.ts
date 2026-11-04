@@ -10,6 +10,7 @@ import { missingKeyError, PROVIDER_API_KEY_NAMES } from "./keys";
 import { getOpenAIModel as getOpenAIModelReal } from "./openai";
 import { getOpenRouterModel as getOpenRouterModelReal } from "./openrouter";
 import type { ResolvedRoute } from "./routing";
+import { withStallDeadlines } from "./stallDeadlines";
 import { getVercelModel as getVercelModelReal } from "./vercel";
 import {
   getXaiModel as getXaiModelReal,
@@ -102,6 +103,15 @@ type DispatchModelDeps = ModelDeps & {
 };
 
 export function dispatchModel(
+  route: ResolvedRoute,
+  sessionId: string,
+  configDir: string,
+  deps: DispatchModelDeps,
+): LanguageModel {
+  return withStallDeadlines(routedModel(route, sessionId, configDir, deps));
+}
+
+function routedModel(
   route: ResolvedRoute,
   sessionId: string,
   configDir: string,
