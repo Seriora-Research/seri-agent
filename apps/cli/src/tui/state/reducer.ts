@@ -5,6 +5,7 @@ import type { AskPrompt } from "../../ask-user/types";
 import { messageTrimLine, toolAllowedLine } from "../../cli/output";
 import { fileChangeFromTool, fileChangePlainText, sameHunk } from "../../fileChange";
 import type { LoopEvent } from "../../loop/loop";
+import { isStopReason } from "../../loop/timeLimit";
 import type { McpPanelRow } from "../../mcp/commands";
 import type { MemoryPanelRow } from "../../memory/commands";
 import {
@@ -412,12 +413,11 @@ function applyChildLoopEvent(child: ChildView, event: ChildEventPayload["event"]
     case "done":
       return {
         ...flushChildStreaming(child),
-        status:
-          event.reason === "aborted"
-            ? "aborted"
-            : event.reason === "model-refusal"
-              ? "error"
-              : "done",
+        status: isStopReason(event.reason)
+          ? "aborted"
+          : event.reason === "model-refusal"
+            ? "error"
+            : "done",
       };
     case "usage":
     case "compacted":

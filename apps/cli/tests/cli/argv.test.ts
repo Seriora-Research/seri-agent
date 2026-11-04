@@ -366,6 +366,60 @@ describe("run (argv and usage errors)", () => {
     expect(capture()).toBeUndefined();
   });
 
+  test("`--max-duration 900` is accepted and is not part of the task", async () => {
+    process.env.GROQ_API_KEY = "fake-test-key";
+
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--max-duration", "900", "do", "a", "task"], {
+        runLoop: fake,
+        loadAgentsFile: () => "",
+        sessionsDir,
+      }),
+    );
+
+    expect(code).toBe(0);
+    expect(capture()?.messages.at(-1)).toEqual({ role: "user", content: "do a task" });
+  });
+
+  test.each(["0", "abc", "1.5", "2147484"])(
+    "`--max-duration %s` is a usage error",
+    async (value) => {
+      const { fake, capture } = fakeRunLoop();
+      const errors: string[] = [];
+      const originalError = console.error;
+      console.error = (msg: string) => errors.push(String(msg));
+      let code: number;
+      try {
+        code = await run(["--max-duration", value, "do", "a", "task"], {
+          runLoop: fake,
+          loadAgentsFile: () => "",
+          sessionsDir,
+        });
+      } finally {
+        console.error = originalError;
+      }
+
+      expect(code).toBe(2);
+      expect(capture()).toBeUndefined();
+      expect(errors[0]).toBe(
+        `Invalid --max-duration value: ${value} (must be a whole number of seconds from 1 to 2147483)`,
+      );
+    },
+  );
+
+  test("`--max-duration` with no value is a usage error", async () => {
+    const { fake, capture } = fakeRunLoop();
+
+    const { code } = await captureLogs(() =>
+      run(["--max-duration"], { runLoop: fake, loadAgentsFile: () => "", sessionsDir }),
+    );
+
+    expect(code).toBe(2);
+    expect(capture()).toBeUndefined();
+  });
+
   test("flags but no task is a usage error", async () => {
     const { fake, capture } = fakeRunLoop();
 
@@ -1169,6 +1223,92 @@ describe("run (serve / exec)", () => {
     }
     expect(code).toBe(0);
     expect(JSON.stringify(turnBodies[0])).toContain('"permissionPrompts":"none"');
+  });
+
+  test("`seri exec --max-duration 900` POSTs maxDurationSeconds 900; without the flag it sends none", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const turnBodies: Record<string, unknown>[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      if (url.pathname === "/v1/health") {
+        return Response.json({ v: 1, pid: 1, maxDuration: true });
+      }
+      if (url.pathname === "/v1/turns") {
+        turnBodies.push(JSON.parse(String(init?.body)));
+        const events = [
+          {
+            v: 1,
+            sessionId: "s",
+            turnId: "turn-1",
+            seq: 1,
+            event: { type: "turn-complete", exitCode: 0 },
+          },
+        ];
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          status: 200,
+        });
+      }
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = () => {};
+    console.log = () => {};
+    try {
+      const deps = { fetch: fetchImpl, authConfigDir: getConfigDir() };
+      expect(await run(["exec", "--max-duration", "900", "report"], deps)).toBe(0);
+      expect(await run(["exec", "report"], deps)).toBe(0);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(turnBodies[0]?.maxDurationSeconds).toBe(900);
+    expect(turnBodies[1]).not.toHaveProperty("maxDurationSeconds");
+  });
+
+  test("`seri exec --max-duration` against an older daemon exits 1 and does not start a turn", async () => {
+    writeDaemonDescriptor(getConfigDir(), {
+      v: 1,
+      endpoint: "http://127.0.0.1:9",
+      token: "t",
+      pid: 1,
+      startedAt: new Date().toISOString(),
+    });
+    const paths: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url =
+        input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
+      paths.push(url.pathname);
+      if (url.pathname === "/v1/health") return Response.json({ v: 1, pid: 1 });
+      return new Response("no", { status: 404 });
+    }) as unknown as typeof fetch;
+    const errors: string[] = [];
+    const originalError = console.error;
+    const originalLog = console.log;
+    console.error = (message?: unknown) => {
+      errors.push(String(message));
+    };
+    console.log = () => {};
+    try {
+      expect(
+        await run(["exec", "--max-duration", "2", "report"], {
+          fetch: fetchImpl,
+          authConfigDir: getConfigDir(),
+        }),
+      ).toBe(1);
+    } finally {
+      console.error = originalError;
+      console.log = originalLog;
+    }
+    expect(paths).toEqual(["/v1/health"]);
+    expect(errors.join("\n")).toContain("this daemon does not honor a wall-clock limit");
   });
 
   test("`seri exec` omits profile when the process profile is default", async () => {

@@ -116,6 +116,7 @@ import {
   type runLoop as runLoopReal,
   usableInputTokens,
 } from "./loop/loop";
+import { type MaxDuration, parseMaxDuration } from "./loop/timeLimit";
 import { closeMcpClients, createSessionDial, fetchCatalog, isAuthRequired } from "./mcp/client";
 import {
   decideMcpCommand,
@@ -718,6 +719,7 @@ const PARSE_OPTIONS = {
   resume: { type: "string" },
   continue: { type: "boolean" },
   "max-turns": { type: "string" },
+  "max-duration": { type: "string" },
   "dangerously-skip-permissions": { type: "boolean" },
   "permission-prompts": { type: "string" },
   profile: { type: "string" },
@@ -732,6 +734,7 @@ type ParsedArgs = {
     resume?: string;
     continue?: boolean;
     "max-turns"?: string;
+    "max-duration"?: string;
     "dangerously-skip-permissions"?: boolean;
     "permission-prompts"?: string;
     profile?: string;
@@ -739,6 +742,7 @@ type ParsedArgs = {
   };
   positionals: string[];
   maxTurns: number | undefined;
+  maxDuration: MaxDuration | undefined;
   skipPermissions: boolean;
   promptChannel: PromptChannel;
   verbEscaped: boolean;
@@ -787,6 +791,15 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     maxTurns = Number(maxTurnsRaw);
   }
 
+  const maxDurationRaw = values["max-duration"];
+  let maxDuration: MaxDuration | undefined;
+  if (maxDurationRaw !== undefined) {
+    const parsed = parseMaxDuration(maxDurationRaw);
+    if (typeof parsed === "object")
+      return usageError(`Invalid --max-duration value: ${maxDurationRaw} (${parsed.error})`);
+    maxDuration = parsed;
+  }
+
   const promptChannel = parsePromptChannel(values["permission-prompts"]);
   if (typeof promptChannel === "object") return usageError(promptChannel.error);
 
@@ -807,6 +820,7 @@ function parseCliArgs(argv: string[]): ParsedArgs | number {
     values,
     positionals,
     maxTurns,
+    maxDuration,
     skipPermissions: values["dangerously-skip-permissions"] === true,
     promptChannel,
     verbEscaped,
@@ -879,6 +893,7 @@ async function handleExecCommand(
   positionals: string[],
   deps: CliDeps,
   promptChannel: PromptChannel,
+  maxDuration: MaxDuration | undefined,
 ): Promise<number | undefined> {
   if (positionals[0] !== "exec") return undefined;
   const task = positionals.slice(1).join(" ").trim();
@@ -917,6 +932,7 @@ async function handleExecCommand(
       env: snapshotProcessEnv(),
       ...(source === "default" ? {} : { profile }),
       ...(promptChannel === "none" ? { permissionPrompts: "none" as const } : {}),
+      ...(maxDuration === undefined ? {} : { maxDurationSeconds: maxDuration }),
     })) {
       turnId = event.turnId;
       if (cancelRequested) {
@@ -1100,6 +1116,7 @@ async function runTui(
   ctx: RunContext,
   deps: CliDeps,
   maxTurns: number | undefined,
+  maxDuration: MaxDuration | undefined,
   skipPermissions: boolean,
   promptChannel: PromptChannel,
   queuedTask?: string,
@@ -1651,6 +1668,7 @@ async function runTui(
               pushTranscriptLine(dispatch, report.summary, { muted: true, markdown: true });
             }
           },
+          maxDuration,
         },
       );
       usage = {
@@ -2346,7 +2364,15 @@ async function runTui(
 export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const parsed = parseCliArgs(argv);
   if (typeof parsed === "number") return parsed;
-  const { values, positionals, maxTurns, skipPermissions, promptChannel, verbEscaped } = parsed;
+  const {
+    values,
+    positionals,
+    maxTurns,
+    maxDuration,
+    skipPermissions,
+    promptChannel,
+    verbEscaped,
+  } = parsed;
 
   const info = handleInfoFlags(values);
   if (info !== undefined) return info;
@@ -2382,7 +2408,9 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
   const serve = verbEscaped ? undefined : await handleServeCommand(positionals, deps);
   if (serve !== undefined) return serve;
 
-  const exec = verbEscaped ? undefined : await handleExecCommand(positionals, deps, promptChannel);
+  const exec = verbEscaped
+    ? undefined
+    : await handleExecCommand(positionals, deps, promptChannel, maxDuration);
   if (exec !== undefined) return exec;
 
   const doctor = verbEscaped
@@ -2401,7 +2429,15 @@ export async function run(argv: string[], deps: CliDeps = {}): Promise<number> {
     if (database.configDir === configDirForStore(trajectoriesDir, "trajectories")) {
       database.importLegacyTrajectories(trajectoriesDir);
     }
-    return await finishCliRun(ctx, deps, maxTurns, skipPermissions, promptChannel, isTTY);
+    return await finishCliRun(
+      ctx,
+      deps,
+      maxTurns,
+      maxDuration,
+      skipPermissions,
+      promptChannel,
+      isTTY,
+    );
   } finally {
     database.close();
   }
@@ -2411,6 +2447,7 @@ async function finishCliRun(
   ctx: RunContext,
   deps: CliDeps,
   maxTurns: number | undefined,
+  maxDuration: MaxDuration | undefined,
   skipPermissions: boolean,
   promptChannel: PromptChannel,
   isTTY: boolean,
@@ -2448,6 +2485,7 @@ async function finishCliRun(
         ctx,
         deps,
         maxTurns,
+        maxDuration,
         skipPermissions,
         promptChannel,
         queuedTask,
@@ -2472,6 +2510,8 @@ async function finishCliRun(
           ? makeApprovalPrompt(deps.createInterface, () => prepared.session.cwd)
           : undefined,
         oneShotArchivist,
+        undefined,
+        { maxDuration },
       );
       await drainArchivist(oneShotArchivist);
       if (runResult.archivist === undefined && oneShotArchivist.lastReport !== undefined) {
@@ -2499,7 +2539,8 @@ async function finishCliRun(
   if (cost !== undefined) printCost(cost);
   if (archivist) console.log(archivistLine(archivist));
 
-  if (cancelledBy !== undefined) raiseSignal(cancelledBy);
+  // A Ctrl-C after the limit fired still fills cancelledBy, but the limit is what ended the run.
+  if (cancelledBy !== undefined && doneReason !== "timed-out") raiseSignal(cancelledBy);
 
   return exitCodeFromDriveResult(runResult);
 }

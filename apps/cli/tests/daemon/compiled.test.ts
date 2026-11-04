@@ -60,6 +60,7 @@ describe.skipIf(!existsSync(bin))("compiled seri serve", () => {
       });
       const health = await client.health();
       expect(health.v).toBe(1);
+      expect(health.maxDuration).toBe(true);
       const search = (await client.search("ready")) as { results: unknown[] };
       expect(Array.isArray(search.results)).toBe(true);
       const created = (await client.createSchedule({

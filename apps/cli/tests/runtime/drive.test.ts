@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, jest, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { loadVerifyConfig, setConfigValue } from "../../src/config/config";
 import type { PermissionMode } from "../../src/gate/gate";
 import type { HookRegistry, HookSpec } from "../../src/hooks/types";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
+import { type MaxDuration, parseMaxDuration, stopReasonOf } from "../../src/loop/timeLimit";
 import { createMcpClients } from "../../src/mcp/client";
 import { McpEndpoint } from "../../src/mcp/endpoint";
 import { toolFingerprint } from "../../src/mcp/registry";
@@ -25,7 +26,7 @@ import { loadGrants } from "../../src/permissions/store";
 import { PLAN_MODE_OVERLAY } from "../../src/plan/prompt";
 import { ASK_PLAN_QUESTIONS_TOOL_NAME, SUBMIT_PLAN_TOOL_NAME } from "../../src/plan/tools";
 import { DISPATCH_TOOL_NAME, toolDefinitions } from "../../src/provider/tools";
-import { driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
+import { type DriveLoopOptions, driveLoop, exitCodeFromDriveResult } from "../../src/runtime/drive";
 import type { PreparedRun } from "../../src/runtime/prepare";
 import type { SessionState } from "../../src/session/session";
 import { deliverSignal, onSignalCancel } from "../../src/signals";
@@ -55,9 +56,23 @@ function makeDir(): string {
 }
 
 afterEach(() => {
+  jest.useRealTimers();
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
   dirs = [];
 });
+
+function seconds(n: number): MaxDuration {
+  const parsed = parseMaxDuration(n);
+  if (typeof parsed === "object") throw new Error(parsed.error);
+  return parsed;
+}
+
+function untilAborted(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) resolve();
+    else signal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
 
 function preparedStub(): PreparedRun {
   const dir = makeDir();
@@ -341,6 +356,78 @@ describe("driveLoop options", () => {
   });
 });
 
+describe("driveLoop maxDuration", () => {
+  function drive(
+    runLoopFn: typeof runLoop,
+    driveOpts: DriveLoopOptions,
+    onEvent: (event: LoopEvent) => void = () => {},
+  ) {
+    const prepared = preparedStub();
+    return driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: runLoopFn },
+      1,
+      onEvent,
+      () => "read-only",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      { bindProcessCancel: false, runArchivist: false, ...driveOpts },
+    );
+  }
+
+  test("a run still working when its limit passes ends timed-out and exits 1", async () => {
+    jest.useFakeTimers();
+    let loopSignal: AbortSignal | undefined;
+    let started: () => void = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = drive(
+      async function* (opts) {
+        loopSignal = opts.signal;
+        started();
+        await untilAborted(opts.signal);
+        yield { type: "done", reason: stopReasonOf(opts.signal) };
+      },
+      { maxDuration: seconds(60) },
+    );
+    await running;
+    jest.advanceTimersByTime(59_999);
+    expect(loopSignal?.aborted).toBe(false);
+    jest.advanceTimersByTime(1);
+    expect(loopSignal?.aborted).toBe(true);
+
+    const result = await pending;
+    expect(result.doneReason).toBe("timed-out");
+    expect(exitCodeFromDriveResult(result)).toBe(1);
+  });
+
+  test("a run that ends before its limit disarms it", async () => {
+    jest.useFakeTimers();
+    const finishes = fakeRunLoop();
+    const result = await drive(finishes.fake, { maxDuration: seconds(60) });
+    jest.advanceTimersByTime(60_000);
+
+    expect(finishes.capture()?.signal?.aborted).toBe(false);
+    expect(result.doneReason).toBe("no-tool-call");
+  });
+
+  test("a limit that passes after the run already answered keeps its reason and exit 0", async () => {
+    jest.useFakeTimers();
+    const answered = fakeRunLoop([{ type: "done", reason: "no-tool-call" }]);
+    const result = await drive(answered.fake, { maxDuration: seconds(60) }, (event) => {
+      if (event.type === "done") jest.advanceTimersByTime(60_000);
+    });
+
+    expect(answered.capture()?.signal?.aborted).toBe(true);
+    expect(result.doneReason).toBe("no-tool-call");
+    expect(exitCodeFromDriveResult(result)).toBe(0);
+  });
+});
+
 describe("driveLoop directDispatch", () => {
   function reviewer(): AgentSpec {
     const toolNames = ["read_file", "grep"] as const;
@@ -595,6 +682,45 @@ describe("driveLoop directDispatch", () => {
     const appended = (persisted.at(-1)?.messages ?? []).slice(-3);
     expect(appended[1].role).toBe("assistant");
     expect(appended[2].role).toBe("tool");
+  });
+
+  test("a time limit mid-child ends the turn as timed-out, not aborted", async () => {
+    jest.useFakeTimers();
+    const prepared = preparedStub();
+    let started: () => void = () => {};
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const pending = driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      {
+        runLoop: async function* (opts) {
+          started();
+          await untilAborted(opts.signal);
+          yield { type: "done", reason: stopReasonOf(opts.signal) };
+        },
+      },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        maxDuration: seconds(60),
+        bindProcessCancel: false,
+        directDispatch: { agent: reviewer(), goal: "grade the diff" },
+        runArchivist: false,
+      },
+    );
+    await running;
+    jest.advanceTimersByTime(60_000);
+
+    const result = await pending;
+    expect(result.doneReason).toBe("timed-out");
+    expect(exitCodeFromDriveResult(result)).toBe(1);
   });
 
   test("a mutating agent takes the pre-dispatch snapshot, anchored where the user row lands", async () => {
@@ -1134,6 +1260,70 @@ describe("driveLoop planMode", () => {
     );
     expect(result.doneReason).toBe("plan-submitted");
     expect(result.submittedPlan).toEqual(plan);
+  });
+
+  test("a timed-out run after submit_plan does not return submittedPlan", async () => {
+    const prepared = withWriteTools();
+    const plan = { path: "/tmp/p.md", title: "T", markdown: "# T\n" };
+    const capture = fakeRunLoop([
+      { type: "tool-result", name: SUBMIT_PLAN_TOOL_NAME, result: plan },
+      { type: "done", reason: "timed-out" },
+    ]);
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    expect(result.doneReason).toBe("timed-out");
+    expect(result.submittedPlan).toBeUndefined();
+  });
+
+  test("an aborted run after submit_plan does not return submittedPlan", async () => {
+    const prepared = withWriteTools();
+    const plan = { path: "/tmp/p.md", title: "T", markdown: "# T\n" };
+    const capture = fakeRunLoop([
+      { type: "tool-result", name: SUBMIT_PLAN_TOOL_NAME, result: plan },
+      { type: "done", reason: "aborted" },
+    ]);
+    const result = await driveLoop(
+      prepared,
+      unusedCtx(prepared.session.cwd),
+      { runLoop: capture.fake },
+      1,
+      () => {},
+      () => "auto",
+      () => {},
+      async () => "no",
+      createArchivistState(prepared.session),
+      undefined,
+      {
+        composeSubagents: false,
+        runArchivist: false,
+        bindProcessCancel: false,
+        planMode: {
+          askQuestions: async () => ({ cancelled: true }),
+          configDir: prepared.session.cwd,
+        },
+      },
+    );
+    expect(result.doneReason).toBe("aborted");
+    expect(result.submittedPlan).toBeUndefined();
   });
 });
 

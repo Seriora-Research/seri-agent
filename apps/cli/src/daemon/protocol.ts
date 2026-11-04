@@ -1,6 +1,7 @@
 import type { TurnRequest } from "@seri/daemon-client";
 import { z } from "zod";
 import { profileDir, profileNameError } from "../config/paths";
+import { parseMaxDuration } from "../loop/timeLimit";
 import { isUsablePermissionsDir } from "../permissions/store";
 import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
 
@@ -12,6 +13,15 @@ const profileSchema = z
   .string()
   .min(1)
   .refine((name) => profileNameError(name) === undefined);
+
+const maxDurationSchema = z.number().transform((seconds, ctx) => {
+  const parsed = parseMaxDuration(seconds);
+  if (typeof parsed === "object") {
+    ctx.addIssue({ code: "custom", message: parsed.error });
+    return z.NEVER;
+  }
+  return parsed;
+});
 
 export const turnRequestSchema = z.object({
   task: z.string().min(1),
@@ -25,6 +35,7 @@ export const turnRequestSchema = z.object({
       vars === undefined ? ToolSpawnEnv.inherited : ToolSpawnEnv.exactly(vars),
     ),
   profile: profileSchema.optional(),
+  maxDurationSeconds: maxDurationSchema.optional(),
 });
 
 export function resolveTurnPermissionsDir(

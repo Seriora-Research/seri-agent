@@ -206,6 +206,12 @@ describe("formatDoneLine", () => {
       expected: "done: aborted",
     },
     {
+      name: "timed-out is its own failure line, not aborted",
+      reason: "timed-out",
+      tokens: exact,
+      expected: `done: timed-out · ${formatTokenProgress(exact)}`,
+    },
+    {
       name: "model-refusal is a failure line",
       reason: "model-refusal",
       expected: "done: model-refusal",

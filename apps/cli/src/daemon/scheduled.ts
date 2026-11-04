@@ -7,19 +7,20 @@ import { createCheckpointer } from "../checkpoint/checkpoint";
 import type { CliDeps, RunContext } from "../cli";
 import { printWarning } from "../cli/output";
 import { loadVerifyConfig } from "../config/config";
+import type { MaxDuration } from "../loop/timeLimit";
 import { createMcpClients, createSessionDial } from "../mcp/client";
 import { createArchivistState } from "../memory/archivist";
 import { loadMemory } from "../memory/store";
 import { loadDenials } from "../permissions/store";
 import { resolveDefaultModel } from "../provider/defaults";
 import { createRulesState } from "../rules/match";
-import { driveLoop } from "../runtime/drive";
+import { type DriveLoopResult, driveLoop } from "../runtime/drive";
 import { createSessionTrajectory, type RunSession, resolveModelRoute } from "../runtime/prepare";
 import type { SessionDatabase } from "../session/database";
 import { saveSession } from "../session/session";
 import { builtinRegistry } from "../subagents/registry";
 import { ToolSpawnEnv } from "../tools/toolSpawnEnv";
-import { assertScheduledToolset, type RunScheduled } from "./scheduler";
+import { assertScheduledToolset, type RunScheduled, type ScheduledRunResult } from "./scheduler";
 
 export function createRunScheduled(opts: {
   configDir: string;
@@ -107,8 +108,9 @@ export function createRunScheduled(opts: {
 
     let response = "";
     let error: string | undefined;
+    let result: DriveLoopResult;
     try {
-      await driveLoop(
+      result = await driveLoop(
         prepared,
         ctx,
         opts.deps,
@@ -132,12 +134,34 @@ export function createRunScheduled(opts: {
           composeAskUser: false,
           askOutsideFs: false,
           refreshSkills: false,
+          maxDuration: input.maxDuration,
         },
       );
     } catch (caught) {
       return { error: caught instanceof Error ? caught.message : String(caught) };
     }
-    if (error !== undefined) return { error };
-    return { response };
+    return scheduledRunResult({
+      doneReason: result.doneReason,
+      response,
+      latchedError: error,
+      maxDuration: input.maxDuration,
+    });
   };
+}
+
+export function scheduledRunResult(run: {
+  doneReason: DriveLoopResult["doneReason"];
+  response: string;
+  latchedError: string | undefined;
+  maxDuration: MaxDuration | undefined;
+}): ScheduledRunResult {
+  if (run.doneReason === "timed-out") {
+    return {
+      response: run.response,
+      error: `timed out after ${run.maxDuration} seconds`,
+      timedOut: true,
+    };
+  }
+  if (run.latchedError !== undefined) return { error: run.latchedError };
+  return { response: run.response };
 }

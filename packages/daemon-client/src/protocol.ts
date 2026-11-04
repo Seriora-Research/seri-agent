@@ -21,6 +21,8 @@ export type TurnRequest = {
    * Not stored on the session.
    */
   profile?: string;
+  /** Wall-clock limit for this turn's run, in whole seconds from 1 to 2147483. Omit for no limit. */
+  maxDurationSeconds?: number;
 };
 
 /** String-valued snapshot of `process.env`, dropping keys whose value is unset. */
@@ -79,6 +81,8 @@ export type DaemonDescriptor = {
 export type HealthResponse = {
   v: 1;
   pid: number;
+  /** Present when this daemon honors `maxDurationSeconds` on turns and schedules. */
+  maxDuration?: true;
 };
 
 export type ScheduleTiming =
@@ -90,6 +94,8 @@ export type ScheduleRequest = {
   cwd: string;
   timing: ScheduleTiming;
   allowModelReads: true;
+  /** Wall-clock limit for each fire, in whole seconds from 1 to 2147483. Omit for no limit. */
+  maxDurationSeconds?: number;
 };
 
 export function isDaemonEnvelope(value: unknown): value is DaemonEvent {

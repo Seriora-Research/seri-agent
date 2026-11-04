@@ -23,6 +23,7 @@ export const USAGE = `Usage:
 
 Options:
   --max-turns <n>                 stop after n model turns (default 500)
+  --max-duration <seconds>        stop after this many seconds of wall-clock time (exit 1)
   --profile <name>                use the named profile's config, auth, permissions, sessions
                                     and checkpoints (or SERI_PROFILE; the flag wins)
   --scrub                         with seri doctor, rewrite residual secret-shaped values
@@ -255,6 +256,9 @@ export function printEvent(event: LoopEvent): void {
         console.log(
           "A destructive remove or move was refused, so the run stopped instead of trying an equivalent command.",
         );
+      }
+      if (event.reason === "timed-out") {
+        console.log("The run reached its --max-duration limit, so it stopped.");
       }
       break;
     case "error":

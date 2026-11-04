@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import type { LanguageModelUsage, ModelMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import type { LoopEvent, runLoop } from "../../src/loop/loop";
 import { runLoop as realRunLoop } from "../../src/loop/loop";
+import { armTimeLimit, parseMaxDuration, stopReasonOf } from "../../src/loop/timeLimit";
 import { DISPATCH_TOOL_NAME } from "../../src/provider/tools";
 import {
   type ChildEventPayload,
@@ -56,6 +57,20 @@ function succeededRow(row: SubagentResult): Extract<SubagentResult, { status: "s
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function signalPastItsTimeLimit(): AbortSignal {
+  const limit = parseMaxDuration(1);
+  if (typeof limit === "object") throw new Error(limit.error);
+  jest.useFakeTimers();
+  try {
+    const controller = new AbortController();
+    armTimeLimit(controller, limit);
+    jest.advanceTimersByTime(1_000);
+    return controller.signal;
+  } finally {
+    jest.useRealTimers();
+  }
 }
 
 function makeBarrier(): { promise: Promise<void>; resolve: () => void } {
@@ -1605,6 +1620,40 @@ describe("per-child dispatch outcomes", () => {
       ["t1:0", "failed", "HTTP 429 crash"],
       ["t1:1", "succeeded", "summary B"],
     ]);
+  });
+
+  test("a child cut off by the parent's time limit is cancelled, not succeeded", async () => {
+    const { fake } = fakeChildLoop((opts) => ({
+      events: [{ type: "done", reason: stopReasonOf(opts.signal) }],
+    }));
+    const result = (await createDispatchTool(makeRuntime(fake)).execute(
+      { tasks: [{ role: "explore", goal: "keep going" }] },
+      dispatchOpts("t1", [], signalPastItsTimeLimit()),
+    )) as DispatchResult;
+
+    expect(result.results[0]).toMatchObject({
+      status: "cancelled",
+      summary: "cancelled before it produced a summary",
+    });
+  });
+
+  test("a child that throws after the time limit reports done timed-out to the roster", async () => {
+    const { fake } = fakeChildLoop(() => ({
+      events: [],
+      before: async () => {
+        throw new Error("HTTP 429 crash");
+      },
+    }));
+    const events: ChildEventPayload["event"][] = [];
+    const result = (await createDispatchTool(
+      makeRuntime(fake, { onChildEvent: (payload) => events.push(payload.event) }),
+    ).execute(
+      { tasks: [{ role: "explore", goal: "stop" }] },
+      dispatchOpts("t1", [], signalPastItsTimeLimit()),
+    )) as DispatchResult;
+
+    expect(result.results[0]?.status).toBe("cancelled");
+    expect(events.at(-1)).toEqual({ type: "done", reason: "timed-out" });
   });
 
   test("a throw after the abort signal is cancelled", async () => {

@@ -2373,6 +2373,17 @@ describe("tuiReducer: subagent-child-event", () => {
     expect(panel(state).subagents[0]?.status).toBe("error");
   });
 
+  test.each(["aborted", "timed-out"] as const)(
+    "a child stopped as %s is an aborted card",
+    (reason) => {
+      let state = initialTuiState(session());
+      state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));
+      state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "done", reason }));
+
+      expect(panel(state).subagents[0]?.status).toBe("aborted");
+    },
+  );
+
   test("a non-dispatch tool-result does not clear the roster", () => {
     let state = initialTuiState(session());
     state = tuiReducer(state, childEvent("t1:0", "explore", "find a", { type: "child-started" }));

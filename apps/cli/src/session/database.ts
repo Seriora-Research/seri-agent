@@ -6,6 +6,7 @@ import { atomicWriteFile, ensureOwnerOnlyDir } from "../atomicWriteFile";
 import { DATABASE_FILENAME, TRAJECTORIES_DIRNAME } from "../config/paths";
 import type { PermissionMode } from "../gate/gate";
 import { type CompactCursor, parseCompactCursor } from "../loop/conversation";
+import { type MaxDuration, parseMaxDuration } from "../loop/timeLimit";
 import type { TrajectoryHeader, TrajectoryRecord } from "../trajectory/schema";
 import { persistBinaryArtifacts, removeSessionArtifacts } from "./artifacts";
 import {
@@ -43,7 +44,7 @@ function addScan(target: SecretScan, found: SecretTally, changed: boolean): void
   }
 }
 
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 const BUSY_TIMEOUT_MS = 5_000;
 
 export function configDirForStore(dir: string, layoutLeaf: "sessions" | "trajectories"): string {
@@ -198,6 +199,12 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 8,
+    sql: `
+      ALTER TABLE schedules ADD COLUMN max_duration_seconds INTEGER;
+    `,
+  },
 ] as const;
 
 type SessionRow = {
@@ -274,6 +281,7 @@ type ScheduleRow = {
   created_at: string;
   consecutive_failures: number;
   pause_reason: string | null;
+  max_duration_seconds: number | null;
 };
 
 type ScheduleRunRow = {
@@ -298,6 +306,7 @@ export type ScheduleRecord = {
   createdAt: string;
   consecutiveFailures: number;
   pauseReason: string | null;
+  maxDurationSeconds: MaxDuration | null;
 };
 
 export type ScheduleRunRecord = {
@@ -331,10 +340,19 @@ export type ScheduleFiring = {
 };
 
 export type ScheduleFireOutcome = {
-  status: "complete" | "error";
+  status: "complete" | "error" | "timed-out";
   response: string | null;
   error: string | null;
 };
+
+function storedMaxDuration(row: ScheduleRow): MaxDuration | null {
+  if (row.max_duration_seconds === null) return null;
+  const parsed = parseMaxDuration(row.max_duration_seconds);
+  if (typeof parsed === "object") {
+    throw new Error(`Schedule "${row.id}" max_duration_seconds ${parsed.error}`);
+  }
+  return parsed;
+}
 
 function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
   return {
@@ -348,6 +366,7 @@ function scheduleFromRow(row: ScheduleRow): ScheduleRecord {
     createdAt: row.created_at,
     consecutiveFailures: row.consecutive_failures,
     pauseReason: row.pause_reason,
+    maxDurationSeconds: storedMaxDuration(row),
   };
 }
 
@@ -865,11 +884,12 @@ export class SessionDatabase {
     nextRunAtMs: number | null;
     enabled: number;
     createdAt: string;
+    maxDurationSeconds: MaxDuration | null;
   }): void {
     this.database
       .query(
-        `INSERT INTO schedules(id, task, cwd, timing_json, next_run_at_ms, enabled, running, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO schedules(id, task, cwd, timing_json, next_run_at_ms, enabled, running, created_at, max_duration_seconds)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         row.id,
@@ -880,6 +900,7 @@ export class SessionDatabase {
         row.enabled,
         SchedulePhase.idle,
         row.createdAt,
+        row.maxDurationSeconds,
       );
   }
 
@@ -1057,7 +1078,7 @@ export class SessionDatabase {
           firing.slot.scheduleId,
           firing[nextRunAtMsAfterBegin],
         );
-      if (applied.changes === 1 && cadence.runStatus !== outcome.status) {
+      if (applied.changes === 1 && cadence.runStatus === "paused") {
         this.database
           .query("UPDATE schedule_runs SET status = ? WHERE id = ?")
           .run(cadence.runStatus, firing.runId);
